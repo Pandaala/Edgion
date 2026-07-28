@@ -95,6 +95,12 @@ pub fn build_capabilities() -> &'static str {
     }
 }
 
+/// Whether this binary was compiled with the Edgion Pingora request-body
+/// capture seam. Runtime policy may still disable buffering.
+pub const fn body_buffering_compiled() -> bool {
+    cfg!(feature = "body-buffering")
+}
+
 #[cfg(any(feature = "body-buffering", feature = "upstream-pingora"))]
 pub mod api;
 #[cfg(any(feature = "body-buffering", feature = "upstream-pingora"))]
@@ -117,7 +123,7 @@ pub mod link_sys;
 pub mod observe;
 #[cfg(any(feature = "body-buffering", feature = "upstream-pingora"))]
 pub mod plugins;
-#[cfg(feature = "body-buffering")]
+#[cfg(any(feature = "body-buffering", feature = "upstream-pingora"))]
 pub mod request_body;
 #[cfg(any(feature = "body-buffering", feature = "upstream-pingora"))]
 pub mod routes;

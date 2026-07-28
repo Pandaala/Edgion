@@ -4,6 +4,12 @@
 //! request context, and body-aware plugins. It caches proxied request bodies
 //! only; proxied upstream responses remain streaming-only.
 
+pub mod config;
+mod state;
+#[cfg(feature = "body-buffering")]
 mod storage;
 
-pub use storage::{BodyStorage, BodyStorageView, DEFAULT_MEMORY_BUFFER_BYTES};
+pub use config::{ResolvedRequestBodyConfig, DEFAULT_MEMORY_BUFFER_BYTES};
+pub use state::RequestBodyState;
+#[cfg(feature = "body-buffering")]
+pub use storage::{BodyStorage, BodyStorageView};

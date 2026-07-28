@@ -215,7 +215,7 @@ Wasm 条目列在 `requestPlugins` 下且 guest 导出了 `proxy_on_request_body
 需要注意的现状与限制：
 
 - **通过可选的 `body:` 添加策略门控。** 导出的钩子会开启请求捕获；`body:` 则在 Wasm 请求头钩子之前添加通用门控。它的 `maxBodySize` 是叠加在网关物理上限之上的**单插件策略限制**，不是缓冲区分配大小：超过限制时，默认的 `onReadFailure: failClose` 返回 `413`，而 `failOpen` 会跳过整个 Wasm 条目。`conditions` 决定是否执行这层前置门控策略；条件要求跳过时，内部 Wasm 仍会因为导出的钩子而稍后捕获 body。如果 guest 没有导出 `proxy_on_request_body`，配置 `body:` 仍会在请求头钩子之前捕获，但不会运行 body 钩子。
-- **上限**：缓冲受网关级 `EdgionGatewayConfig.spec.maxBodySize` 约束，不是某个插件专属的值。
+- **上限**：缓冲受已解析的 `EdgionGatewayConfig.spec.requestBody` 策略约束，不是某个插件专属的分配值。
 - **共享且有界的捕获。** 该模式复用其他完整请求体插件使用的请求级 body 存储。捕获是懒执行的，受网关物理上限约束，超过内存阈值后会溢写磁盘，并向 guest 暴露此前插件产生的当前不可变 body 版本。网关物理上限和不符合缓冲条件的请求始终 fail-close。
 - **捕获时机取决于是否配置 `body:`。** 配置后，通用门控会先捕获并应用策略，再运行任何 Wasm 钩子；未配置时，先运行请求头钩子，只有干净的 `Continue` 才继续懒捕获并运行 body 钩子。两条路径中的 body 钩子看到的是同一个完整请求版本。未导出 `proxy_on_request_body` 的 guest 会完全跳过 body 阶段。
 

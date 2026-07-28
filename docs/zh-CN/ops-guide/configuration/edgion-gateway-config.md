@@ -71,6 +71,13 @@ spec:
     tlsProxyLogRecord: true
     rejectDuplicateHost: true
 
+  requestBody:
+    enabled: true
+    defaultMemoryBufferSize: "128KiB"
+    # maxMemoryBufferSize: "1MiB"
+    defaultMaxBodySize: "32MiB"
+    # maxBodySize: "64MiB"
+
   globalPluginsRef:
     - name: "global-cors"
       namespace: "edgion-system"
@@ -169,6 +176,18 @@ spec:
 | `tlsProxyLogRecord` | `Boolean` | `true` | 是否记录 TLS 代理连接日志 |
 | `allowLoopbackUpstream` | `Boolean` | `false` | 显式放行该 GatewayClass 的 loopback upstream；link-local / metadata 仍然拒绝 |
 | `rejectDuplicateHost` | `Boolean` | `true` | 拒绝同一 HTTP/1.1 请求里出现多于一个 `Host:` 头部行，返回 `400 Bad Request`(RFC 9110 §7.2,Host smuggling 防御)。仅在需要兼容会发重复 `Host` 行的旧式中间件时关闭 |
+
+### spec.requestBody
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `enabled` | `Boolean` | `true` | 运行时请求体捕获开关；关闭后，需要请求体的插件按正常的 body 不可用结果执行 fail-close |
+| `defaultMemoryBufferSize` | `String` | `128KiB` | 落盘前默认保留在内存中的字节数 |
+| `maxMemoryBufferSize` | `String` | 未设置 | 内存溢写阈值的业务覆盖值；未设置时使用 `defaultMemoryBufferSize` |
+| `defaultMaxBodySize` | `String` | `32MiB` | 完整请求体的默认上限 |
+| `maxBodySize` | `String` | 未设置 | 请求体物理上限的业务覆盖值；未设置时使用 `defaultMaxBodySize` |
+
+所有大小都必须是正数可读字节值，有效内存阈值不能超过有效请求体上限。Gateway 在构建监听器时解析这些值，请求热路径不会解析大小字符串。插件的 `body.maxBodySize` 可以进一步收紧该插件的限制。
 
 ### spec.globalPluginsRef
 

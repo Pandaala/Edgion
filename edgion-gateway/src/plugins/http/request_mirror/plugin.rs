@@ -217,10 +217,7 @@ impl RequestFilter for RequestMirrorPlugin {
                 return PluginRunningResult::GoodNext;
             }
         };
-        #[cfg(feature = "body-buffering")]
-        let has_committed_body = session.ctx().request_body.is_some();
-        #[cfg(not(feature = "body-buffering"))]
-        let has_committed_body = false;
+        let has_committed_body = session.ctx().request_body.has_cached_body();
 
         let committed_body = if has_committed_body {
             match session.read_request_body(None).await {

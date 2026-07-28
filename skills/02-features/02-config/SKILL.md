@@ -39,4 +39,5 @@ description: Configuration schema reference: complete field definitions for Cont
 | Global real IP extraction | EdgionGatewayConfig CRD `spec.realIp` |
 | Global security protection (XFF restriction, SNI match) | EdgionGatewayConfig CRD `spec.securityProtect` |
 | Global plugins | EdgionGatewayConfig CRD `spec.globalPluginsRef` |
+| Request-body buffering runtime policy | EdgionGatewayConfig CRD `spec.requestBody` |
 | Path normalization (reject requests containing `%2F` / invalid percent-encoding) | Gateway process YAML `path_normalization` (restart required) |

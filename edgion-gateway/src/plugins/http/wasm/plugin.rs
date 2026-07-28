@@ -259,7 +259,7 @@ impl WasmPlugin {
         if !entry.has_request_body_hook() {
             return PluginRunningResult::GoodNext;
         }
-        let cap = session.ctx().max_body_size_bytes;
+        let cap = session.ctx().request_body_config.max_body_size_bytes;
         let body = match session.read_request_body(Some(cap)).await {
             Ok(b) => b,
             // A refusal is unconditionally fail-close (design R5): the guest's
@@ -400,7 +400,7 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
     ///   (`plugin_runtime.rs`) treats that operator `body:` as the SOLE source
     ///   of truth for Wasm and passes it through as-is, which wraps this
     ///   plugin's `RequestFilter` in a `BodyGatedRequestFilter`. The gate
-    ///   buffers the body (capped by the gateway-wide `maxBodySize`) BEFORE
+    ///   buffers the body (capped by the resolved gateway-wide physical limit) BEFORE
     ///   the inner Wasm filter runs; `run_request_body_phase` then re-awaits
     ///   the same shared facade (`PluginSession::read_request_body`), which
     ///   must return the already-buffered bytes rather than re-reading the

@@ -13,8 +13,6 @@ use tokio::sync::OnceCell;
 
 use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult};
 
-pub const DEFAULT_MEMORY_BUFFER_BYTES: usize = 128 * 1024;
-
 #[derive(Clone)]
 enum BodySource {
     Memory(Bytes),
@@ -180,8 +178,8 @@ pub struct BodyStorage {
 }
 
 impl BodyStorage {
-    pub fn new(max_body_size_bytes: u64) -> (Self, Arc<BodyStorageView>) {
-        Self::with_limits(DEFAULT_MEMORY_BUFFER_BYTES, max_body_size_bytes)
+    pub fn new(memory_limit: usize, max_body_size_bytes: u64) -> (Self, Arc<BodyStorageView>) {
+        Self::with_limits(memory_limit, max_body_size_bytes)
     }
 
     #[cfg(test)]

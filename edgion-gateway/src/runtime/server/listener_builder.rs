@@ -153,6 +153,8 @@ pub fn add_http_listener(
     let preflight_handler = crate::routes::http::proxy_http::PreflightHandler::new(
         context.edgion_gateway_config.spec.preflight_policy.clone(),
     );
+    let request_body_config =
+        crate::request_body::ResolvedRequestBodyConfig::resolve(&context.edgion_gateway_config.spec.request_body);
 
     let http_route_manager =
         crate::routes::http::get_global_http_route_managers().get_or_create_listener_manager(&context.listener_key);
@@ -173,6 +175,7 @@ pub fn add_http_listener(
         },
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
+        request_body_config,
         parsed_timeouts,
         enable_http2: context.enable_http2,
         real_ip_extractor,

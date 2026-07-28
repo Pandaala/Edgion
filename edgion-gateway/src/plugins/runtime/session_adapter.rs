@@ -172,11 +172,14 @@ impl<'a> PingoraSessionAdapter<'a> {
 
     #[cfg(feature = "body-buffering")]
     async fn ensure_bodyless_request_replay_owner(&mut self) -> Result<(), BodyReadError> {
+        if !self.ctx.request_body_config.enabled {
+            return Err(BodyReadError::Unimplemented);
+        }
         if !self.ctx.request_info.in_request_body_stage {
             self.ctx.add_error(EdgionStatus::BodyRefusedStage);
             return Err(BodyReadError::NotBuffered);
         }
-        if self.ctx.request_body.is_some() {
+        if self.ctx.request_body.has_cached_body() {
             return Ok(());
         }
         if self.ctx.request_info.discover_protocol.as_deref() == Some("websocket")
@@ -193,13 +196,100 @@ impl<'a> PingoraSessionAdapter<'a> {
             return Err(BodyReadError::Incomplete);
         }
 
-        let (mut storage, view) = BodyStorage::new(self.ctx.max_body_size_bytes);
+        let (mut storage, view) = BodyStorage::new(
+            self.ctx.request_body_config.memory_buffer_bytes,
+            self.ctx.request_body_config.max_body_size_bytes,
+        );
         storage.finish().await.map_err(|_| BodyReadError::Incomplete)?;
         self.inner
             .set_bodyless_request_replay_buffer(Box::new(storage))
             .map_err(|_| BodyReadError::Incomplete)?;
-        self.ctx.request_body = Some(view);
+        self.ctx.request_body.install(view);
         Ok(())
+    }
+
+    #[cfg(all(feature = "upstream-pingora", not(feature = "body-buffering")))]
+    async fn ensure_bodyless_request_replay_owner(&mut self) -> Result<(), BodyReadError> {
+        Err(BodyReadError::Unimplemented)
+    }
+
+    #[cfg(feature = "body-buffering")]
+    async fn capture_request_body(&mut self, max_bytes: Option<u64>) -> Result<u64, BodyReadError> {
+        if let Some(len) = self.ctx.request_body.cached_len()? {
+            return Ok(len);
+        }
+        if !self.ctx.request_body_config.enabled {
+            return Err(BodyReadError::Unimplemented);
+        }
+
+        let cap = resolve_cap(max_bytes, self.ctx.request_body_config.max_body_size_bytes);
+        if self
+            .inner
+            .req_header()
+            .headers
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some_and(|declared| declared > cap)
+        {
+            return Err(BodyReadError::BufferLimitExceeded { limit: cap });
+        }
+        let expect_continue = self.inner.req_header().version == http::Version::HTTP_11
+            && self
+                .inner
+                .req_header()
+                .headers
+                .get(http::header::EXPECT)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.eq_ignore_ascii_case("100-continue"));
+        if expect_continue {
+            self.inner
+                .write_continue_response()
+                .await
+                .map_err(|_| BodyReadError::Incomplete)?;
+            // This hop has accepted the expectation. Do not forward it and
+            // provoke a second 100 response from the upstream.
+            self.inner.req_header_mut().remove_header(&http::header::EXPECT);
+        }
+
+        let (storage, view) = BodyStorage::new(
+            self.ctx.request_body_config.memory_buffer_bytes,
+            self.ctx.request_body_config.max_body_size_bytes,
+        );
+        self.inner
+            .set_request_body_buffer(Box::new(storage))
+            .map_err(|_| BodyReadError::Incomplete)?;
+
+        let mut captured = 0u64;
+        loop {
+            let chunk = match self.inner.read_request_body().await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(err) => {
+                    return Err(if matches!(err.etype(), pingora_core::ErrorType::ReadTimedout) {
+                        BodyReadError::Timeout
+                    } else {
+                        BodyReadError::Incomplete
+                    });
+                }
+            };
+            captured = captured
+                .checked_add(chunk.len() as u64)
+                .ok_or(BodyReadError::BufferLimitExceeded { limit: cap })?;
+            if captured > cap {
+                let _ = self.inner.drain_request_body().await;
+                return Err(BodyReadError::BufferLimitExceeded { limit: cap });
+            }
+        }
+
+        let len = view.len()?;
+        self.ctx.request_body.install(view);
+        Ok(len)
+    }
+
+    #[cfg(all(feature = "upstream-pingora", not(feature = "body-buffering")))]
+    async fn capture_request_body(&mut self, _max_bytes: Option<u64>) -> Result<u64, BodyReadError> {
+        Err(BodyReadError::Unimplemented)
     }
 
     /// Decide + stash a response-phase local reply. Returns `true` when a reply
@@ -880,9 +970,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         // A response-stage consumer may read a body that an earlier request
         // plugin explicitly buffered. The stage boundary forbids starting a
         // new capture; it does not invalidate the request-scoped shared cache.
-        #[cfg(feature = "body-buffering")]
-        if let Some(view) = self.ctx.request_body.as_ref() {
-            return view.len();
+        if let Some(len) = self.ctx.request_body.cached_len()? {
+            return Ok(len);
         }
 
         // `in_request_body_stage` (set at request entry, cleared in
@@ -898,9 +987,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         let past_request_stage = !self.ctx.request_info.in_request_body_stage;
         match request_admission(self.ctx, past_request_stage) {
             RequestAdmission::PassThrough => {
-                #[cfg(feature = "body-buffering")]
-                if let Some(view) = self.ctx.request_body.as_ref() {
-                    return view.len();
+                if let Some(len) = self.ctx.request_body.cached_len()? {
+                    return Ok(len);
                 }
                 Ok(0)
             }
@@ -908,89 +996,14 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 self.ctx.add_error(status);
                 Err(BodyReadError::NotBuffered)
             }
-            RequestAdmission::Buffer => {
-                #[cfg(not(feature = "body-buffering"))]
-                {
-                    let _cap = resolve_cap(max_bytes, self.ctx.max_body_size_bytes);
-                    return Err(BodyReadError::Unimplemented);
-                }
-
-                #[cfg(feature = "body-buffering")]
-                {
-                    if let Some(view) = self.ctx.request_body.as_ref() {
-                        return view.len();
-                    }
-
-                    let cap = resolve_cap(max_bytes, self.ctx.max_body_size_bytes);
-                    if self
-                        .inner
-                        .req_header()
-                        .headers
-                        .get(http::header::CONTENT_LENGTH)
-                        .and_then(|value| value.to_str().ok())
-                        .and_then(|value| value.parse::<u64>().ok())
-                        .is_some_and(|declared| declared > cap)
-                    {
-                        return Err(BodyReadError::BufferLimitExceeded { limit: cap });
-                    }
-                    let expect_continue = self.inner.req_header().version == http::Version::HTTP_11
-                        && self
-                            .inner
-                            .req_header()
-                            .headers
-                            .get(http::header::EXPECT)
-                            .and_then(|value| value.to_str().ok())
-                            .is_some_and(|value| value.eq_ignore_ascii_case("100-continue"));
-                    if expect_continue {
-                        self.inner
-                            .write_continue_response()
-                            .await
-                            .map_err(|_| BodyReadError::Incomplete)?;
-                        // This hop has accepted the expectation. Do not forward it
-                        // and provoke a second 100 response from the upstream.
-                        self.inner.req_header_mut().remove_header(&http::header::EXPECT);
-                    }
-
-                    let (storage, view) = BodyStorage::new(self.ctx.max_body_size_bytes);
-                    self.inner
-                        .set_request_body_buffer(Box::new(storage))
-                        .map_err(|_| BodyReadError::Incomplete)?;
-
-                    let mut captured = 0u64;
-                    loop {
-                        let chunk = match self.inner.read_request_body().await {
-                            Ok(Some(chunk)) => chunk,
-                            Ok(None) => break,
-                            Err(err) => {
-                                return Err(if matches!(err.etype(), pingora_core::ErrorType::ReadTimedout) {
-                                    BodyReadError::Timeout
-                                } else {
-                                    BodyReadError::Incomplete
-                                });
-                            }
-                        };
-                        captured = captured
-                            .checked_add(chunk.len() as u64)
-                            .ok_or(BodyReadError::BufferLimitExceeded { limit: cap })?;
-                        if captured > cap {
-                            let _ = self.inner.drain_request_body().await;
-                            return Err(BodyReadError::BufferLimitExceeded { limit: cap });
-                        }
-                    }
-
-                    let len = view.len()?;
-                    self.ctx.request_body = Some(view);
-                    Ok(len)
-                }
-            }
+            RequestAdmission::Buffer => self.capture_request_body(max_bytes).await,
         }
     }
 
     async fn read_request_body(&mut self, max_bytes: Option<u64>) -> BodyReadResult {
         self.ensure_request_body(max_bytes).await?;
-        #[cfg(feature = "body-buffering")]
-        if let Some(view) = self.ctx.request_body.as_ref() {
-            return view.read_all().await;
+        if let Some(body) = self.ctx.request_body.read_all().await? {
+            return Ok(body);
         }
         Ok(bytes::Bytes::new())
     }
@@ -1044,7 +1057,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 // only the downstream Session, and the upstream body arrives
                 // via the per-chunk `upstream_response_body_filter` callback.
                 // The chunk-accumulate-then-replay mechanism is P0's spike.
-                let _cap = resolve_cap(max_bytes, self.ctx.max_body_size_bytes);
+                let _cap = resolve_cap(max_bytes, self.ctx.request_body_config.max_body_size_bytes);
                 Err(BodyReadError::Unimplemented)
             }
         }
@@ -1055,54 +1068,24 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         range: std::ops::Range<usize>,
         replacement: bytes::Bytes,
     ) -> BodyReadResult {
-        #[cfg(not(feature = "body-buffering"))]
-        {
-            let _ = (range, replacement);
-            Err(BodyReadError::Unimplemented)
-        }
-        #[cfg(feature = "body-buffering")]
-        {
-            self.ensure_bodyless_request_replay_owner().await?;
-            self.ctx.replace_request_body_slice(range, replacement).await
-        }
+        self.ensure_bodyless_request_replay_owner().await?;
+        self.ctx.replace_request_body_slice(range, replacement).await
     }
 
     async fn overwrite_request_body(&mut self, body: bytes::Bytes) -> Result<(), BodyReadError> {
-        #[cfg(not(feature = "body-buffering"))]
-        {
-            let _ = body;
-            Err(BodyReadError::Unimplemented)
-        }
-        #[cfg(feature = "body-buffering")]
-        {
-            self.ensure_bodyless_request_replay_owner().await?;
-            self.ctx.overwrite_request_body(body)
-        }
+        self.ensure_bodyless_request_replay_owner().await?;
+        self.ctx.overwrite_request_body(body)
     }
 
     async fn request_body_sha256(&mut self) -> Result<[u8; 32], BodyReadError> {
-        #[cfg(not(feature = "body-buffering"))]
-        {
-            use sha2::Digest;
-            let body = self.read_request_body(None).await?;
-            Ok(sha2::Sha256::digest(body).into())
+        if !self.ctx.request_body.has_cached_body() {
+            self.ensure_request_body(None).await?;
         }
-        #[cfg(feature = "body-buffering")]
-        {
-            if self.ctx.request_body.is_none() {
-                self.ensure_request_body(None).await?;
-                if self.ctx.request_body.is_none() {
-                    use sha2::Digest;
-                    return Ok(sha2::Sha256::digest([]).into());
-                }
-            }
-            self.ctx
-                .request_body
-                .as_ref()
-                .ok_or(BodyReadError::Incomplete)?
-                .sha256()
-                .await
+        if let Some(hash) = self.ctx.request_body.sha256().await? {
+            return Ok(hash);
         }
+        use sha2::Digest;
+        Ok(sha2::Sha256::digest([]).into())
     }
 
     fn grpc_service(&self) -> Option<String> {
@@ -2171,6 +2154,33 @@ mod record_outcome_tests {
         assert_eq!(adapter.declares_body(), Some(true));
     }
 
+    #[cfg(feature = "upstream-pingora")]
+    #[tokio::test]
+    async fn stock_gateway_reports_request_body_capture_as_unimplemented() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(true);
+        ctx.request_info.in_request_body_stage = true;
+
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert_eq!(adapter.read_request_body(None).await, Err(BodyReadError::Unimplemented));
+        assert!(!ctx.request_body.has_cached_body());
+    }
+
+    #[cfg(feature = "body-buffering")]
+    #[tokio::test]
+    async fn runtime_disabled_capture_reports_unimplemented() {
+        let mut session = test_session_with_body(b"disabled").await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(true);
+        ctx.request_info.in_request_body_stage = true;
+        ctx.request_body_config.enabled = false;
+
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert_eq!(adapter.read_request_body(None).await, Err(BodyReadError::Unimplemented));
+        assert!(!ctx.request_body.has_cached_body());
+    }
+
     /// Regression pin for Finding 1: `read_request_body` must derive its
     /// stage signal from `ctx.request_info.in_request_body_stage`, not from
     /// whether a response header happens to be bound. This is the exact
@@ -2213,7 +2223,7 @@ mod record_outcome_tests {
         };
 
         assert!(body.is_empty());
-        assert!(ctx.request_body.is_none());
+        assert!(!ctx.request_body.has_cached_body());
         assert!(!ctx.edgion_status.contains(&EdgionStatus::BodyRefusedStage));
     }
 
@@ -2264,7 +2274,7 @@ mod record_outcome_tests {
         }
 
         assert_eq!(
-            ctx.request_body.as_ref().unwrap().read_all().await.unwrap(),
+            ctx.request_body.read_all().await.unwrap().unwrap(),
             Bytes::from_static(b"immutable-after-upstream")
         );
         assert!(ctx.edgion_status.contains(&EdgionStatus::BodyRefusedStage));
@@ -2305,7 +2315,7 @@ mod record_outcome_tests {
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.body_declared = Some(true);
         ctx.request_info.in_request_body_stage = true;
-        ctx.max_body_size_bytes = 4;
+        ctx.request_body_config.max_body_size_bytes = 4;
 
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert_eq!(
@@ -2339,8 +2349,11 @@ mod record_outcome_tests {
             );
         }
 
-        let view = ctx.request_body.as_ref().expect("captured body view must exist");
-        assert!(!view.is_materialized(), "streaming hash must not fill read_all cache");
+        assert_eq!(
+            ctx.request_body.cached_body_is_materialized(),
+            Some(false),
+            "streaming hash must not fill read_all cache"
+        );
     }
 
     #[tokio::test]
@@ -2395,7 +2408,7 @@ mod record_outcome_tests {
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.body_declared = Some(true);
         ctx.request_info.in_request_body_stage = true;
-        ctx.max_body_size_bytes = 4;
+        ctx.request_body_config.max_body_size_bytes = 4;
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert_eq!(
             adapter.read_request_body(None).await,

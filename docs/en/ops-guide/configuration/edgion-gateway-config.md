@@ -71,6 +71,13 @@ spec:
     tlsProxyLogRecord: true
     rejectDuplicateHost: true
 
+  requestBody:
+    enabled: true
+    defaultMemoryBufferSize: "128KiB"
+    # maxMemoryBufferSize: "1MiB"
+    defaultMaxBodySize: "32MiB"
+    # maxBodySize: "64MiB"
+
   globalPluginsRef:
     - name: "global-cors"
       namespace: "edgion-system"
@@ -176,6 +183,21 @@ Extraction logic: walk `realIpHeader` from right to left, skip addresses in any 
 | `tlsProxyLogRecord` | `Boolean` | `true` | Record TLS proxy connection logs |
 | `allowLoopbackUpstream` | `Boolean` | `false` | Explicitly allow loopback upstream addresses for this GatewayClass. Link-local / metadata ranges remain blocked |
 | `rejectDuplicateHost` | `Boolean` | `true` | Reject HTTP/1.1 requests carrying more than one `Host` header line with `400 Bad Request` (RFC 9110 §7.2 Host smuggling defense). Disable only as a transitional escape hatch for legacy middleware that emits duplicate `Host` lines |
+
+### spec.requestBody
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | `Boolean` | `true` | Runtime capture switch. When disabled, body-aware plugins fail closed with the normal body-unavailable result |
+| `defaultMemoryBufferSize` | `String` | `128KiB` | Default in-memory bytes before disk spill |
+| `maxMemoryBufferSize` | `String` | unset | Effective business override for the memory spill threshold; falls back to `defaultMemoryBufferSize` |
+| `defaultMaxBodySize` | `String` | `32MiB` | Default complete request-body cap |
+| `maxBodySize` | `String` | unset | Effective business override for the body cap; falls back to `defaultMaxBodySize` |
+
+All sizes must be positive human-readable byte sizes. The effective memory
+threshold must not exceed the effective body cap. Values are parsed when the
+listener is built, not on the request path. A plugin's `body.maxBodySize` may
+further tighten the limit for that plugin.
 
 ### spec.globalPluginsRef
 

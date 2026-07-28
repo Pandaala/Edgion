@@ -8,8 +8,9 @@
 //!
 //! - re-uses the plugin condition engine ([`PluginConditions`]) as a SECONDARY
 //!   run/skip filter deciding whether the body is required for THIS request;
-//! - buffers the body to the gateway-wide `maxBodySize` (the buffer is NOT sized
-//!   by any per-plugin value), then applies the plugin's own `maxBodySize` as a
+//! - buffers the body to the resolved gateway-wide physical limit (the buffer is
+//!   NOT sized by any per-plugin value), then applies the plugin's own
+//!   `maxBodySize` as a
 //!   post-read LIMIT (rejecting a body larger than that limit, for this plugin
 //!   only, independent of the shared buffer);
 //! - on a read failure / over-limit, applies the configured
@@ -24,11 +25,6 @@ use super::conditions::PluginConditions;
 use crate::resources::common::parse_byte_size;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-/// Built-in gateway-wide maximum body size (buffer + limit) when
-/// `EdgionGatewayConfig.spec.maxBodySize` is unset (32 MiB, matching Envoy's
-/// common buffer default).
-pub const DEFAULT_MAX_BODY_SIZE_BYTES: u64 = 32 * 1024 * 1024;
 
 /// What the runtime does when a body-aware plugin cannot read the body.
 ///
@@ -60,7 +56,7 @@ pub struct BodyRequirement {
     /// exceeds it, THIS plugin treats it as too-large (per `on_read_failure`),
     /// independent of every other plugin. It does NOT size the shared body
     /// buffer — how much is physically buffered is decided solely by the
-    /// gateway-wide `maxBodySize`. So multiple plugins
+    /// resolved gateway-wide physical limit. So multiple plugins
     /// can each set their own `maxBodySize` with no conflict; a plugin can only
     /// tighten (a value above the global buffer never triggers). Unset → the
     /// plugin accepts any body the gateway buffers.

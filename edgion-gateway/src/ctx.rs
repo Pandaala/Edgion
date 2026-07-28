@@ -3,8 +3,7 @@ use crate::lb::edgion_backend::EdgionBackend;
 use crate::observe::logs::LogBuffer;
 use crate::plugins::runtime::PluginRuntime;
 use crate::plugins::{EdgionPluginsLog, StageLogs};
-#[cfg(feature = "body-buffering")]
-use crate::request_body::BodyStorageView;
+use crate::request_body::RequestBodyState;
 use crate::routes::grpc::{CompiledGrpcBackend, GrpcRouteRuleUnit};
 use crate::routes::http::match_unit::CompiledBackend;
 use crate::routes::HttpRouteRuleUnit;
@@ -1033,25 +1032,16 @@ pub struct EdgionHttpContext {
     /// Link-local / metadata ranges are never allowed by this switch.
     pub allow_loopback_upstream: bool,
 
-    /// Gateway-wide maximum body size in bytes: the shared per-request body
-    /// buffer size and the global body-size limit. Populated in `new_ctx` from
-    /// `EdgionGatewayConfig.spec.maxBodySize`. A per-plugin `body.maxBodySize`
-    /// can only tighten this further, never enlarge it.
-    pub max_body_size_bytes: u64,
+    /// Resolved GatewayClass request-body policy.
+    /// Parsed when the listener is built; the request hot path only copies and
+    /// reads these numeric values.
+    pub request_body_config: crate::request_body::ResolvedRequestBodyConfig,
 
-    /// Full request body captured during the request stage. Pingora owns the
-    /// mutable capture/replay buffer; this read-only view stays available
-    /// through the final upstream-response-header plugin chain. That chain may
-    /// read the existing cache but cannot initiate capture. The view is then
-    /// released before the streamed response body begins.
-    #[cfg(feature = "body-buffering")]
-    pub request_body: Option<Arc<BodyStorageView>>,
-
-    /// Final length of a plugin-modified request body. Unlike `request_body`,
-    /// this framing fact remains available after the request-plugin stage so
-    /// every upstream retry can rebuild headers from the same final version.
-    #[cfg(feature = "body-buffering")]
-    pub modified_request_body_len: Option<u64>,
+    /// Full request-body cache and mutation framing state. The facade exists in
+    /// every Gateway flavor; only the Edgion Pingora backend can populate it.
+    /// Its read-only view stays available through the final upstream-response
+    /// header plugin chain and is then released before streaming the response.
+    pub request_body: RequestBodyState,
 
     /// Snapshot of resolved global plugin runtimes for this request, taken at
     /// `request_filter` entry. Each entry is one EdgionPlugins resource;
@@ -1129,28 +1119,19 @@ impl Default for EdgionHttpContext {
 }
 
 impl EdgionHttpContext {
-    #[cfg(feature = "body-buffering")]
     pub async fn replace_request_body_slice(
         &mut self,
         range: std::ops::Range<usize>,
         replacement: Bytes,
     ) -> crate::plugins::runtime::traits::session::BodyReadResult {
-        self.request_body
-            .as_ref()
-            .ok_or(crate::plugins::runtime::traits::session::BodyReadError::Incomplete)?
-            .replace_slice(range, replacement)
-            .await
+        self.request_body.replace_slice(range, replacement).await
     }
 
-    #[cfg(feature = "body-buffering")]
     pub fn overwrite_request_body(
         &mut self,
         body: Bytes,
     ) -> Result<(), crate::plugins::runtime::traits::session::BodyReadError> {
-        self.request_body
-            .as_ref()
-            .ok_or(crate::plugins::runtime::traits::session::BodyReadError::Incomplete)?
-            .overwrite_body(body)
+        self.request_body.overwrite(body)
     }
 
     /// Drain queued response-header ops onto the given real `ResponseHeader`,
@@ -1220,12 +1201,8 @@ impl EdgionHttpContext {
             sp_sticky_addr: None,
             sp_sticky_consumed: false,
             allow_loopback_upstream: false,
-            max_body_size_bytes:
-                edgion_resources::resources::edgion_plugins::body_requirement::DEFAULT_MAX_BODY_SIZE_BYTES,
-            #[cfg(feature = "body-buffering")]
-            request_body: None,
-            #[cfg(feature = "body-buffering")]
-            modified_request_body_len: None,
+            request_body_config: crate::request_body::ResolvedRequestBodyConfig::default(),
+            request_body: RequestBodyState::default(),
             resolved_global_plugins: None,
             resolved_gateway_plugins: None,
             resolved_route_ext_refs: None,
@@ -1822,12 +1799,12 @@ mod request_body_cap_tests {
     use pingora_core::protocols::http::RequestBodyBuffer;
 
     async fn context_with_body(body: &'static [u8], cap: u64) -> EdgionHttpContext {
-        let (mut storage, view) = BodyStorage::new(cap);
+        let (mut storage, view) = BodyStorage::new(128 * 1024, cap);
         storage.write(&Bytes::from_static(body)).await.unwrap();
         storage.finish().await.unwrap();
         let mut ctx = EdgionHttpContext::new();
-        ctx.max_body_size_bytes = cap;
-        ctx.request_body = Some(view);
+        ctx.request_body_config.max_body_size_bytes = cap;
+        ctx.request_body.install(view);
         ctx
     }
 
@@ -1836,7 +1813,7 @@ mod request_body_cap_tests {
         let mut exact = context_with_body(b"old", 4).await;
         exact.overwrite_request_body(Bytes::from_static(b"1234")).unwrap();
         assert_eq!(
-            exact.request_body.as_ref().unwrap().read_all().await.unwrap(),
+            exact.request_body.read_all().await.unwrap().unwrap(),
             Bytes::from_static(b"1234")
         );
 
@@ -1846,7 +1823,7 @@ mod request_body_cap_tests {
             Err(BodyReadError::BufferLimitExceeded { limit: 4 })
         );
         assert_eq!(
-            over.request_body.as_ref().unwrap().read_all().await.unwrap(),
+            over.request_body.read_all().await.unwrap().unwrap(),
             Bytes::from_static(b"old"),
             "a rejected mutation must leave the previous version visible"
         );
@@ -1860,7 +1837,7 @@ mod request_body_cap_tests {
             Err(BodyReadError::BufferLimitExceeded { limit: 5 })
         );
         assert_eq!(
-            ctx.request_body.as_ref().unwrap().read_all().await.unwrap(),
+            ctx.request_body.read_all().await.unwrap().unwrap(),
             Bytes::from_static(b"abcd")
         );
     }

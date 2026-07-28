@@ -1,8 +1,8 @@
 //! Human-readable byte-size parsing, shared across resource schemas.
 //!
-//! Used by both plugin `body.maxBodySize` (`edgion_plugins::body_requirement`) and
-//! the gateway-wide `EdgionGatewayConfig.spec.maxBodySize` — hence it lives
-//! in `common` rather than under a specific resource submodule.
+//! Used by both plugin `body.maxBodySize` (`edgion_plugins::body_requirement`)
+//! and `EdgionGatewayConfig.spec.requestBody` — hence it lives in `common`
+//! rather than under a specific resource submodule.
 
 /// Parse a human-readable byte-size string into bytes.
 ///

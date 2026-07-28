@@ -164,7 +164,7 @@ spec:
                         properties:
                           maxBodySize:
                             type: string
-                            description: "Per-plugin body-size LIMIT (human size '1k'/'1m'/'64M'). If the body exceeds it, only THIS plugin treats it as too-large (per onReadFailure). It does NOT size the shared buffer (that is set by the gateway-wide maxBodySize); multiple plugins can each set their own with no conflict. Usually left unset."
+                            description: "Per-plugin body-size LIMIT (human size '1k'/'1m'/'64M'). If the body exceeds it, only THIS plugin treats it as too-large (per onReadFailure). It does NOT size the shared buffer (that is bounded by the resolved Gateway request-body policy); multiple plugins can each set their own with no conflict. Usually left unset."
                           onReadFailure:
                             type: string
                             enum: [failClose, failOpen]

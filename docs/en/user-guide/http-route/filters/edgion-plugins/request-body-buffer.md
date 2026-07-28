@@ -28,6 +28,12 @@ entry-level `body` block optionally adds conditions and a logical size limit.
 Capture uses the gateway's single shared `BodyStorage`, including its
 memory-to-disk spill behavior and physical body cap.
 
+`EdgionGatewayConfig.spec.requestBody` controls whether capture is available,
+the default memory spill threshold, and the physical body cap. Its optional
+maximum fields override the corresponding defaults. Disabling capture makes
+this plugin fail closed with the normal body-unavailable response; bodyless
+requests still use the canonical empty body.
+
 A late consumer never starts body capture. If no earlier plugin populated the
 cache—for example because `RequestBodyBuffer` was absent or its body conditions
 skipped—the late read of a request that declared a body fails according to that

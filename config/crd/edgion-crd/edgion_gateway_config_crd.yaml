@@ -190,10 +190,28 @@ spec:
                       description: "Reject HTTP/1.1 requests with more than one Host header (default true)"
                       default: true
 
-                maxBodySize:
-                  type: string
-                  description: "Gateway-wide maximum HTTP body size buffered for body-aware plugins (human size, e.g. '32MiB'). The shared per-request buffer size and global body-size limit; a per-plugin body.maxBodySize can only tighten it, never enlarge it. Default 32MiB."
-                  default: "32MiB"
+                requestBody:
+                  type: object
+                  description: "GatewayClass-wide request-body buffering policy."
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: true
+                      description: "Runtime capture switch. A body-capable binary still refuses capture when false."
+                    defaultMemoryBufferSize:
+                      type: string
+                      default: "128KiB"
+                      description: "Default request-body bytes retained in memory before spilling to disk."
+                    maxMemoryBufferSize:
+                      type: string
+                      description: "Optional business override for the in-memory spill threshold."
+                    defaultMaxBodySize:
+                      type: string
+                      default: "32MiB"
+                      description: "Default complete request-body cap."
+                    maxBodySize:
+                      type: string
+                      description: "Optional business override for the complete request-body cap."
 
                 # ============================================
                 # Global Plugins Reference

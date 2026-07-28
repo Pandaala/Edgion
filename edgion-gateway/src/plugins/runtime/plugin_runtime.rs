@@ -1675,6 +1675,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn request_body_buffer_fails_closed_when_capture_is_unimplemented() {
+        use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+        use crate::EdgionHttpContext;
+
+        let entry = RequestFilterEntry::new(EdgionPlugin::RequestBodyBuffer(Default::default()));
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[entry], "default");
+        assert!(errors.is_empty(), "unexpected build errors: {errors:?}");
+
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+        assert_eq!(filter.name(), "RequestBodyBuffer");
+
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session
+            .expect_read_request_body()
+            .returning(|_| Err(BodyReadError::Unimplemented));
+        session
+            .expect_add_error()
+            .withf(|status| *status == edgion_resources::EdgionStatus::BodyReadUnimplemented)
+            .times(1)
+            .returning(|_| ());
+
+        let mut log = PluginLog::new("RequestBodyBuffer");
+        let result = filter.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn add_from_request_filters_wraps_wasm_with_operator_body() {
         // Wasm has no INTRINSIC body_requirement() (the guest's hooks are only
         // known after module load), so it opts into request buffer mode purely

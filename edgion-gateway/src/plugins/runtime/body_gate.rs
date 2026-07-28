@@ -10,8 +10,9 @@
 //!    re-using the same condition engine as the entry-level `conditions`). When
 //!    it says "skip", the body is not required for THIS request and the inner
 //!    plugin runs without body enforcement.
-//! 2. Otherwise buffers the body to the SHARED gateway-wide size (`maxBodySize`,
-//!    not any per-plugin value) via the lazy [`PluginSession::read_request_body`]
+//! 2. Otherwise buffers the body to the SHARED resolved gateway-wide physical
+//!    limit, not any per-plugin value, via the lazy
+//!    [`PluginSession::read_request_body`]
 //!    / `read_response_body` (OpenResty `ngx.req.read_body`-style), then applies
 //!    the plugin's own `maxBodySize` LIMIT to the result (a body larger than the
 //!    plugin's limit → too-large for THAT plugin only). The inner plugin re-reads
@@ -39,11 +40,11 @@ use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{BodyReadFailureMode, BodyRequirement};
 use edgion_resources::EdgionStatus;
 
-/// How much to physically buffer: the gateway-wide `maxBodySize`. This is a
+/// How much to physically buffer: the resolved gateway-wide body limit. This is a
 /// SHARED per-request size — it does not depend on any per-plugin `maxBodySize`
 /// (that is a per-plugin limit, not a buffer knob).
 fn buffer_cap(session: &dyn PluginSession) -> u64 {
-    session.ctx().max_body_size_bytes
+    session.ctx().request_body_config.max_body_size_bytes
 }
 
 /// The per-plugin body-size limit in bytes, if set and valid. A zero/unparseable

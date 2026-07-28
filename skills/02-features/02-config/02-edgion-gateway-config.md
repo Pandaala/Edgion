@@ -101,6 +101,14 @@ spec:
     allowLoopbackUpstream: false            # bool, explicit loopback upstream opt-in
     rejectDuplicateHost: true               # bool, reject duplicate HTTP/1.1 Host fields
 
+  # ─── Request-body buffering policy ───
+  requestBody:
+    enabled: true
+    defaultMemoryBufferSize: "128KiB"
+    # maxMemoryBufferSize: "1MiB"            # optional effective override
+    defaultMaxBodySize: "32MiB"
+    # maxBodySize: "64MiB"                   # optional effective override
+
   # ─── Global plugins ───
   globalPluginsRef:                         # Vec<PluginReference>, applied to all routes
     - name: "global-cors"
@@ -208,6 +216,21 @@ Extraction logic: traverse `realIpHeader` right-to-left, skip addresses listed i
 | `tlsProxyLogRecord` | `bool` | `true` | Record TLS proxy connection logs |
 | `allowLoopbackUpstream` | `bool` | `false` | Explicitly allow loopback upstream; link-local / metadata are not allowed |
 | `rejectDuplicateHost` | `bool` | `true` | Reject HTTP/1.1 requests containing multiple Host field lines with 400. |
+
+### spec.requestBody
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `true` | Runtime capture switch. When false, body-aware plugins receive the normal unimplemented read error; bodyless reads remain empty. |
+| `defaultMemoryBufferSize` | `String` | `128KiB` | Default bytes retained in memory before disk spill. |
+| `maxMemoryBufferSize` | `String?` | unset | Effective business override for the memory spill threshold. Falls back to `defaultMemoryBufferSize`. |
+| `defaultMaxBodySize` | `String` | `32MiB` | Default physical complete-body cap. |
+| `maxBodySize` | `String?` | unset | Effective business override for the physical body cap. Falls back to `defaultMaxBodySize`; per-plugin `body.maxBodySize` may tighten it further for that plugin only. |
+
+All sizes must be positive human-readable byte sizes. The effective memory
+threshold must not exceed the effective body cap. The Gateway resolves these
+values when building the listener; request handling only reads resolved boolean
+and integer fields.
 
 ### spec.preflightPolicy
 

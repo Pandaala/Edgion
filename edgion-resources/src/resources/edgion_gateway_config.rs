@@ -43,12 +43,9 @@ pub struct EdgionGatewayConfigSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security_protect: Option<SecurityProtectConfig>,
 
-    /// Gateway-wide maximum HTTP body size buffered for body-aware plugins
-    /// (human size, e.g. "32MiB"). This is the shared per-request buffer size and
-    /// the global body-size limit; a per-plugin `body.maxBodySize` can only
-    /// tighten it further, never enlarge it.
-    #[serde(default = "default_max_body_size")]
-    pub max_body_size: String,
+    /// GatewayClass-wide request-body buffering policy.
+    #[serde(default)]
+    pub request_body: RequestBodyConfig,
 
     /// Global plugins references that apply to all routes using this GatewayClass
     /// These plugins are executed before route-level plugins
@@ -123,8 +120,96 @@ fn default_dns_cache_ttl() -> String {
 // Body Size Configuration
 // ============================================
 
-fn default_max_body_size() -> String {
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestBodyConfig {
+    /// Runtime switch. A body-capable binary still refuses capture when false.
+    #[serde(default = "default_request_body_enabled")]
+    pub enabled: bool,
+
+    /// Default in-memory bytes retained before spilling to disk.
+    #[serde(default = "default_memory_buffer_size")]
+    pub default_memory_buffer_size: String,
+
+    /// Optional business override for the in-memory spill threshold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_memory_buffer_size: Option<String>,
+
+    /// Default complete request-body cap.
+    #[serde(default = "default_request_body_max_size")]
+    pub default_max_body_size: String,
+
+    /// Optional business override for the complete request-body cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_body_size: Option<String>,
+}
+
+impl RequestBodyConfig {
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        let default_memory = validate_positive_byte_size(
+            Some(self.default_memory_buffer_size.as_str()),
+            "requestBody.defaultMemoryBufferSize",
+            &mut errors,
+        );
+        let memory = match self.max_memory_buffer_size.as_deref() {
+            Some(value) => validate_positive_byte_size(Some(value), "requestBody.maxMemoryBufferSize", &mut errors),
+            None => default_memory,
+        };
+        let default_body = validate_positive_byte_size(
+            Some(self.default_max_body_size.as_str()),
+            "requestBody.defaultMaxBodySize",
+            &mut errors,
+        );
+        let body = match self.max_body_size.as_deref() {
+            Some(value) => validate_positive_byte_size(Some(value), "requestBody.maxBodySize", &mut errors),
+            None => default_body,
+        };
+        if let (Some(memory), Some(body)) = (memory, body) {
+            if memory > body {
+                errors.push(
+                    "effective requestBody memory buffer size must not exceed the effective requestBody max body size"
+                        .to_string(),
+                );
+            }
+        }
+        errors
+    }
+}
+
+impl Default for RequestBodyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_request_body_enabled(),
+            default_memory_buffer_size: default_memory_buffer_size(),
+            max_memory_buffer_size: None,
+            default_max_body_size: default_request_body_max_size(),
+            max_body_size: None,
+        }
+    }
+}
+
+fn default_request_body_enabled() -> bool {
+    true
+}
+
+fn default_memory_buffer_size() -> String {
+    "128KiB".to_string()
+}
+
+fn default_request_body_max_size() -> String {
     "32MiB".to_string()
+}
+
+fn validate_positive_byte_size(value: Option<&str>, field: &str, errors: &mut Vec<String>) -> Option<u64> {
+    let value = value?;
+    match crate::resources::common::parse_byte_size(value) {
+        Some(bytes) if bytes > 0 => Some(bytes),
+        _ => {
+            errors.push(format!("{field} '{value}' is invalid (expected e.g. '128KiB')"));
+            None
+        }
+    }
 }
 
 // ============================================
@@ -402,7 +487,7 @@ impl Default for EdgionGatewayConfigSpec {
             max_retries: default_max_retries(),
             real_ip: None,
             security_protect: None,
-            max_body_size: default_max_body_size(),
+            request_body: RequestBodyConfig::default(),
             global_plugins_ref: None,
             access_log_extern: None,
             preflight_policy: None,
@@ -680,26 +765,9 @@ impl UnmaskedKeys {
 }
 
 impl EdgionGatewayConfigSpec {
-    /// Resolved gateway-wide max body size in bytes. Falls back to the built-in
-    /// default if `maxBodySize` is unparseable or zero (a `"0"` cap would reject
-    /// every body under lenient admission; `validate_max_body_size` flags it but
-    /// the resource is still synced).
-    pub fn max_body_size_bytes(&self) -> u64 {
-        crate::resources::common::parse_byte_size(&self.max_body_size)
-            .filter(|v| *v > 0)
-            .unwrap_or(crate::resources::edgion_plugins::body_requirement::DEFAULT_MAX_BODY_SIZE_BYTES)
-    }
-
-    /// Validation error for `spec.maxBodySize`, or `None` if it parses to a
-    /// positive size.
-    pub fn validate_max_body_size(&self) -> Option<String> {
-        match crate::resources::common::parse_byte_size(&self.max_body_size) {
-            Some(v) if v > 0 => None,
-            _ => Some(format!(
-                "maxBodySize '{}' is invalid (expected e.g. '32MiB')",
-                self.max_body_size
-            )),
-        }
+    /// Validate the GatewayClass-wide request-body buffering policy.
+    pub fn validate_request_body(&self) -> Vec<String> {
+        self.request_body.validate()
     }
 
     /// Validate `spec.dnsResolver` at ingest. Returns error strings suitable for
@@ -918,35 +986,60 @@ mod tests {
     }
 
     #[test]
-    fn max_body_size_default_and_parsing() {
-        // Default when unset.
+    fn request_body_defaults_are_gateway_class_policy() {
         let s: EdgionGatewayConfigSpec = serde_json::from_str("{}").unwrap();
-        assert_eq!(s.max_body_size, "32MiB");
-        assert_eq!(s.max_body_size_bytes(), 32 * 1024 * 1024);
-        assert!(s.validate_max_body_size().is_none());
-
-        // Human size parses + round-trips through the spec.
-        let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
-            "maxBodySize": "128m"
-        }))
-        .unwrap();
-        assert_eq!(s.max_body_size_bytes(), 128 * 1024 * 1024);
-        assert!(s.validate_max_body_size().is_none());
+        assert!(s.request_body.enabled);
+        assert_eq!(s.request_body.default_memory_buffer_size, "128KiB");
+        assert_eq!(s.request_body.default_max_body_size, "32MiB");
+        assert!(s.validate_request_body().is_empty());
     }
 
     #[test]
-    fn max_body_size_unparseable_or_zero_falls_back_to_builtin() {
-        for bad in ["garbage", "0", "0KiB"] {
-            let s = EdgionGatewayConfigSpec {
-                max_body_size: bad.to_string(),
-                ..Default::default()
-            };
-            // Accessor falls back to the built-in default (never a 0 cap that
-            // would 413 every body)...
-            assert_eq!(s.max_body_size_bytes(), 32 * 1024 * 1024, "for {bad:?}");
-            // ...but validation surfaces the error for operator feedback.
-            assert!(s.validate_max_body_size().is_some(), "validation for {bad:?}");
-        }
+    fn request_body_overrides_parse_and_validate() {
+        let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "requestBody": {
+                "maxMemoryBufferSize": "256KiB",
+                "maxBodySize": "8MiB"
+            }
+        }))
+        .unwrap();
+        let request_body = s.request_body;
+        assert_eq!(request_body.max_memory_buffer_size.as_deref(), Some("256KiB"));
+        assert_eq!(request_body.max_body_size.as_deref(), Some("8MiB"));
+        assert!(request_body.validate().is_empty());
+    }
+
+    #[test]
+    fn request_body_rejects_invalid_and_inverted_limits() {
+        let invalid: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "requestBody": {
+                "maxMemoryBufferSize": "garbage",
+                "maxBodySize": "0"
+            }
+        }))
+        .unwrap();
+        assert_eq!(invalid.validate_request_body().len(), 2);
+
+        let invalid_override: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "requestBody": {
+                "maxMemoryBufferSize": "garbage",
+                "maxBodySize": "1"
+            }
+        }))
+        .unwrap();
+        assert_eq!(invalid_override.validate_request_body().len(), 1);
+
+        let inverted: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "requestBody": {
+                "maxMemoryBufferSize": "2MiB",
+                "maxBodySize": "1MiB"
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            inverted.validate_request_body(),
+            vec!["effective requestBody memory buffer size must not exceed the effective requestBody max body size"]
+        );
     }
 
     #[test]

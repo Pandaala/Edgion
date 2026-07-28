@@ -8,7 +8,6 @@ use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 use std::time::Instant;
 
-#[cfg(feature = "body-buffering")]
 #[inline]
 fn release_late_request_body_view(ctx: &mut EdgionHttpContext) {
     // The final response-header plugin chain is the last supported late
@@ -16,7 +15,7 @@ fn release_late_request_body_view(ctx: &mut EdgionHttpContext) {
     // cannot retain spilled-body file descriptors or materialized bytes for
     // the lifetime of the response. Retry early returns deliberately occur
     // before this point and keep the view for the next attempt.
-    ctx.request_body = None;
+    ctx.request_body.release_view();
 }
 
 #[inline]
@@ -272,7 +271,6 @@ pub fn upstream_response_filter(
         }
     }
 
-    #[cfg(feature = "body-buffering")]
     release_late_request_body_view(ctx);
 
     Ok(())
@@ -288,18 +286,21 @@ mod tests {
 
     #[tokio::test]
     async fn final_response_header_stage_releases_request_body_view() {
-        let (mut storage, view) = BodyStorage::new(64);
+        let (mut storage, view) = BodyStorage::new(64, 64);
         storage.write(&Bytes::from_static(b"cached")).await.unwrap();
         storage.finish().await.unwrap();
+        let mut request_body = crate::request_body::RequestBodyState::default();
+        request_body.install(view);
+        request_body.overwrite(Bytes::from_static(b"edited")).unwrap();
 
         let mut ctx = EdgionHttpContext {
-            request_body: Some(view),
-            modified_request_body_len: Some(6),
+            request_body,
             ..Default::default()
         };
+        assert_eq!(ctx.request_body.modified_len_for_framing().unwrap(), Some(6));
         release_late_request_body_view(&mut ctx);
 
-        assert!(ctx.request_body.is_none());
-        assert_eq!(ctx.modified_request_body_len, Some(6));
+        assert!(!ctx.request_body.has_cached_body());
+        assert_eq!(ctx.request_body.modified_len_for_framing().unwrap(), Some(6));
     }
 }

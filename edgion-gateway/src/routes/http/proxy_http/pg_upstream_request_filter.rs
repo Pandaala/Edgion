@@ -47,7 +47,6 @@ pub async fn upstream_request_filter(
 
     apply_upstream_authority(upstream_request, ctx);
 
-    #[cfg(feature = "body-buffering")]
     sync_body_framing_headers(upstream_request, ctx)?;
 
     // Body proxying is about to begin: both backendRef-scoped request-plugin
@@ -62,29 +61,18 @@ pub async fn upstream_request_filter(
     Ok(())
 }
 
-#[cfg(feature = "body-buffering")]
 fn sync_body_framing_headers(
     upstream_request: &mut RequestHeader,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<()> {
-    let len = match ctx.modified_request_body_len {
-        Some(len) => len,
-        None => {
-            let Some(body) = &ctx.request_body else {
-                return Ok(());
-            };
-            if !body.is_modified() {
-                return Ok(());
-            }
-            let len = body.len().map_err(|_| {
-                pingora_core::Error::explain(
-                    pingora_core::ErrorType::InternalError,
-                    "modified request body length is unavailable",
-                )
-            })?;
-            ctx.modified_request_body_len = Some(len);
-            len
-        }
+    let Some(len) = ctx.request_body.modified_len_for_framing().map_err(|_| {
+        pingora_core::Error::explain(
+            pingora_core::ErrorType::InternalError,
+            "modified request body length is unavailable",
+        )
+    })?
+    else {
+        return Ok(());
     };
     upstream_request.remove_header(&http::header::TRANSFER_ENCODING);
     upstream_request
@@ -145,13 +133,15 @@ mod body_framing_tests {
 
     #[tokio::test]
     async fn mutation_sets_content_length_and_removes_transfer_encoding() {
-        let (mut storage, view) = BodyStorage::new(64);
+        let (mut storage, view) = BodyStorage::new(64, 64);
         storage.write(&Bytes::from_static(b"old")).await.unwrap();
         storage.finish().await.unwrap();
-        view.overwrite_body(Bytes::from_static(b"new-body")).unwrap();
+        let mut request_body = crate::request_body::RequestBodyState::default();
+        request_body.install(view);
+        request_body.overwrite(Bytes::from_static(b"new-body")).unwrap();
 
         let mut ctx = EdgionHttpContext {
-            request_body: Some(view),
+            request_body,
             ..Default::default()
         };
         let mut request = pingora_http::RequestHeader::build("POST", b"/", None).unwrap();
@@ -162,7 +152,7 @@ mod body_framing_tests {
         assert_eq!(request.headers.get("content-length").unwrap(), "8");
         assert!(!request.headers.contains_key("transfer-encoding"));
 
-        ctx.request_body = None;
+        ctx.request_body.release_view();
         let mut retry_request = pingora_http::RequestHeader::build("POST", b"/", None).unwrap();
         retry_request.insert_header("transfer-encoding", "chunked").unwrap();
         retry_request.insert_header("content-length", "3").unwrap();

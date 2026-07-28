@@ -257,6 +257,17 @@ These are architectural boundaries, not implementation suggestions:
    (normally a 1 MiB global/configured limit), enforced while streaming the
    response. Exceeding the cap fails the call; it must never silently truncate,
    fall back to an uncapped read, or change the main upstream response policy.
+4. **Keep `body-buffering` feature branches at the transport boundary.** Plugin
+   schema/registration, body gates, context consumers, and routes are
+   flavor-agnostic. Only Pingora source selection, the request-body backend,
+   adapter capture/replay helpers, and fork-only tests may branch. Stock capture
+   returns `BodyReadError::Unimplemented`; bodyless reads remain empty.
+5. **Resolve request-body policy before the request hot path.**
+   `EdgionGatewayConfig.spec.requestBody` is the single runtime policy source
+   for the switch, defaults, and business overrides. Parse and resolve it when
+   building the listener, then copy the resolved boolean and byte counts into
+   each request context. Never parse sizes, lock, or consult process-global
+   configuration while handling a request.
 
 ## Cross-cutting unification rules
 
