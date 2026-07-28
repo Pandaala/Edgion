@@ -1,18 +1,59 @@
 use crate::link_sys::providers::webhook::manager::configure_webhook_global_max;
+use crate::request_body::ResolvedRequestBodyConfig;
+use arc_swap::ArcSwap;
 use edgion_common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
 use edgion_resources::prelude_resources::EdgionGatewayConfig;
 use kube::ResourceExt;
-use parking_lot::RwLock;
+use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Global store for EdgionGatewayConfig resources (keyed by key_name())
-static EDGION_GATEWAY_CONFIG_STORE: std::sync::LazyLock<RwLock<HashMap<String, EdgionGatewayConfig>>> =
-    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+struct EdgionGatewayConfigSnapshot {
+    configs: HashMap<String, EdgionGatewayConfig>,
+    request_body_configs: HashMap<String, ResolvedRequestBodyConfig>,
+}
+
+impl EdgionGatewayConfigSnapshot {
+    fn new(configs: HashMap<String, EdgionGatewayConfig>) -> Self {
+        let request_body_configs = configs
+            .values()
+            .map(|config| {
+                (
+                    config.name_any(),
+                    ResolvedRequestBodyConfig::resolve(&config.spec.request_body),
+                )
+            })
+            .collect();
+        Self {
+            configs,
+            request_body_configs,
+        }
+    }
+
+    fn empty() -> Self {
+        Self::new(HashMap::new())
+    }
+}
+
+/// Global EdgionGatewayConfig store and its request-path-ready derived policy.
+///
+/// Both views are published in one immutable snapshot so an EGC update cannot
+/// expose a new resource paired with an old request-body policy. Human-readable
+/// body sizes are parsed while constructing the snapshot, never per request.
+static EDGION_GATEWAY_CONFIG_STORE: std::sync::LazyLock<ArcSwap<EdgionGatewayConfigSnapshot>> =
+    std::sync::LazyLock::new(|| ArcSwap::from_pointee(EdgionGatewayConfigSnapshot::empty()));
+
+/// Serialize snapshot read-modify-write cycles.
+///
+/// The normal ClientCache callback path is already per-kind serial, but
+/// ConfHandler is Send + Sync and may gain another rebuild trigger. Keeping the
+/// guarantee here prevents a later concurrent writer from publishing a snapshot
+/// derived from stale state. Request readers never acquire this lock.
+static EDGION_GATEWAY_CONFIG_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Count EdgionGatewayConfig resources in the store
 pub fn count_edgion_gateway_configs() -> usize {
-    EDGION_GATEWAY_CONFIG_STORE.read().len()
+    EDGION_GATEWAY_CONFIG_STORE.load().configs.len()
 }
 
 /// Query EdgionGatewayConfig by name (cluster-scoped: key == name).
@@ -20,7 +61,7 @@ pub fn count_edgion_gateway_configs() -> usize {
 /// against the conf_sync ClientCache, not this store.
 #[cfg(test)]
 pub fn get_edgion_gateway_config_by_name(name: &str) -> Option<EdgionGatewayConfig> {
-    EDGION_GATEWAY_CONFIG_STORE.read().get(name).cloned()
+    EDGION_GATEWAY_CONFIG_STORE.load().configs.get(name).cloned()
 }
 
 /// List all EdgionGatewayConfig resources.
@@ -28,9 +69,23 @@ pub fn get_edgion_gateway_config_by_name(name: &str) -> Option<EdgionGatewayConf
 /// against the conf_sync ClientCache, not this store.
 #[cfg(test)]
 pub fn list_edgion_gateway_configs() -> Vec<EdgionGatewayConfig> {
-    let mut items: Vec<EdgionGatewayConfig> = EDGION_GATEWAY_CONFIG_STORE.read().values().cloned().collect();
+    let mut items: Vec<EdgionGatewayConfig> = EDGION_GATEWAY_CONFIG_STORE.load().configs.values().cloned().collect();
     items.sort_by(|a, b| a.name_any().cmp(&b.name_any()));
     items
+}
+
+/// Load the request-body policy referenced by a listener's GatewayClass.
+///
+/// `None`, a missing EGC, and a deleted EGC all resolve to the built-in safe
+/// default. The hot path performs one ArcSwap load, one bounded map lookup, and
+/// copies the compact resolved value.
+#[inline]
+pub fn get_resolved_request_body_config(config_name: Option<&str>) -> ResolvedRequestBodyConfig {
+    let snapshot = EDGION_GATEWAY_CONFIG_STORE.load();
+    config_name
+        .and_then(|name| snapshot.request_body_configs.get(name))
+        .copied()
+        .unwrap_or_default()
 }
 
 /// The data-plane default DNS resolver (`spec.dnsResolver`) from the effectively
@@ -41,7 +96,8 @@ pub fn list_edgion_gateway_configs() -> Vec<EdgionGatewayConfig> {
 /// choice is stable across restarts when more than one EGC sets a default.
 pub fn get_egc_dns_resolver_default() -> Option<edgion_resources::resources::edgion_gateway_config::DnsResolverConfig> {
     EDGION_GATEWAY_CONFIG_STORE
-        .read()
+        .load()
+        .configs
         .iter()
         .filter(|(_, egc)| egc.spec.dns_resolver.is_some())
         .min_by(|a, b| a.0.cmp(b.0))
@@ -149,14 +205,15 @@ fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) {
 
 impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
     fn full_set(&self, data: &HashMap<String, Arc<EdgionGatewayConfig>>) {
+        let _write_guard = EDGION_GATEWAY_CONFIG_WRITE_LOCK.lock();
         tracing::info!(
             count = data.len(),
             "EdgionGatewayConfig full_set: received {} EdgionGatewayConfig resources",
             data.len()
         );
-        let mut store = EDGION_GATEWAY_CONFIG_STORE.write();
-        *store = arc_map_to_owned(data);
-        recompute_global_config(&store);
+        let configs = arc_map_to_owned(data);
+        recompute_global_config(&configs);
+        EDGION_GATEWAY_CONFIG_STORE.store(Arc::new(EdgionGatewayConfigSnapshot::new(configs)));
     }
 
     fn partial_update(
@@ -165,7 +222,8 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         update: HashMap<String, Arc<EdgionGatewayConfig>>,
         remove: HashSet<String>,
     ) {
-        let mut store = EDGION_GATEWAY_CONFIG_STORE.write();
+        let _write_guard = EDGION_GATEWAY_CONFIG_WRITE_LOCK.lock();
+        let mut configs = EDGION_GATEWAY_CONFIG_STORE.load_full().configs.clone();
 
         if !add.is_empty() {
             tracing::info!(
@@ -175,7 +233,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             );
             for (key, config) in add {
                 tracing::debug!(key = %key, name = %config.name_any(), "EdgionGatewayConfig added");
-                store.insert(key, (*config).clone());
+                configs.insert(key, (*config).clone());
             }
         }
 
@@ -187,7 +245,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             );
             for (key, config) in update {
                 tracing::debug!(key = %key, name = %config.name_any(), "EdgionGatewayConfig updated");
-                if store.insert(key.clone(), (*config).clone()).is_none() {
+                if configs.insert(key.clone(), (*config).clone()).is_none() {
                     tracing::warn!(key = %key, "EdgionGatewayConfig update: key not found in store, inserting");
                 }
             }
@@ -201,7 +259,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             );
             for key in &remove {
                 tracing::debug!(key = %key, "EdgionGatewayConfig removed");
-                if store.remove(key).is_none() {
+                if configs.remove(key).is_none() {
                     tracing::debug!(key = %key, "EdgionGatewayConfig remove: key not found in store");
                 }
             }
@@ -210,7 +268,8 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         // Recompute the process-global values from the post-mutation store so the
         // result is deterministic across instances and the delete path restores
         // the default once no config carries the field.
-        recompute_global_config(&store);
+        recompute_global_config(&configs);
+        EDGION_GATEWAY_CONFIG_STORE.store(Arc::new(EdgionGatewayConfigSnapshot::new(configs)));
     }
 }
 
@@ -251,7 +310,8 @@ mod tests {
     }
 
     fn clear_store() {
-        EDGION_GATEWAY_CONFIG_STORE.write().clear();
+        let _write_guard = EDGION_GATEWAY_CONFIG_WRITE_LOCK.lock();
+        EDGION_GATEWAY_CONFIG_STORE.store(Arc::new(EdgionGatewayConfigSnapshot::empty()));
     }
 
     #[test]
@@ -358,6 +418,101 @@ mod tests {
         // must not panic
         handler.partial_update(HashMap::new(), HashMap::new(), remove);
         assert_eq!(count_edgion_gateway_configs(), 0);
+    }
+
+    #[test]
+    fn request_body_policy_updates_and_deletion_restores_defaults() {
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        let handler = EdgionGatewayConfigHandler::new();
+
+        let mut initial = make_config("body-policy");
+        initial.spec.request_body.enabled = false;
+        initial.spec.request_body.max_memory_buffer_size = Some("256KiB".to_string());
+        initial.spec.request_body.max_body_size = Some("1MiB".to_string());
+        let mut add = HashMap::new();
+        add.insert("body-policy".to_string(), Arc::new(initial));
+        handler.partial_update(add, HashMap::new(), HashSet::new());
+
+        let resolved = get_resolved_request_body_config(Some("body-policy"));
+        assert!(!resolved.enabled);
+        assert_eq!(resolved.memory_buffer_bytes, 256 * 1024);
+        assert_eq!(resolved.max_body_size_bytes, 1024 * 1024);
+
+        let mut updated = make_config("body-policy");
+        updated.spec.request_body.max_memory_buffer_size = Some("512KiB".to_string());
+        updated.spec.request_body.max_body_size = Some("2MiB".to_string());
+        let mut update = HashMap::new();
+        update.insert("body-policy".to_string(), Arc::new(updated));
+        handler.partial_update(HashMap::new(), update, HashSet::new());
+
+        let resolved = get_resolved_request_body_config(Some("body-policy"));
+        assert_eq!(resolved.memory_buffer_bytes, 512 * 1024);
+        assert_eq!(resolved.max_body_size_bytes, 2 * 1024 * 1024);
+
+        handler.partial_update(
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::from(["body-policy".to_string()]),
+        );
+        assert_eq!(
+            get_resolved_request_body_config(Some("body-policy")),
+            ResolvedRequestBodyConfig::default()
+        );
+    }
+
+    #[test]
+    fn request_body_policy_snapshot_falls_back_for_invalid_synced_sizes() {
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        let handler = EdgionGatewayConfigHandler::new();
+
+        let mut config = make_config("invalid-body-policy");
+        config.spec.request_body.max_memory_buffer_size = Some("invalid".to_string());
+        config.spec.request_body.max_body_size = Some("0".to_string());
+        let mut data = HashMap::new();
+        data.insert("invalid-body-policy".to_string(), Arc::new(config));
+        handler.full_set(&data);
+
+        assert_eq!(
+            get_resolved_request_body_config(Some("invalid-body-policy")),
+            ResolvedRequestBodyConfig::default()
+        );
+    }
+
+    #[test]
+    fn concurrent_partial_updates_preserve_every_key() {
+        use std::sync::{Arc as StdArc, Barrier};
+
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+
+        const WRITERS: usize = 16;
+        let barrier = StdArc::new(Barrier::new(WRITERS + 1));
+        let mut handles = Vec::with_capacity(WRITERS);
+        for index in 0..WRITERS {
+            let barrier = StdArc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                let name = format!("concurrent-{index}");
+                let mut add = HashMap::new();
+                add.insert(name.clone(), Arc::new(make_config(&name)));
+                barrier.wait();
+                EdgionGatewayConfigHandler::new().partial_update(add, HashMap::new(), HashSet::new());
+            }));
+        }
+
+        barrier.wait();
+        for handle in handles {
+            handle.join().expect("concurrent policy writer must not panic");
+        }
+
+        assert_eq!(count_edgion_gateway_configs(), WRITERS);
+        for index in 0..WRITERS {
+            assert!(
+                get_edgion_gateway_config_by_name(&format!("concurrent-{index}")).is_some(),
+                "concurrent writer entry must survive"
+            );
+        }
     }
 
     #[test]

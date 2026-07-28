@@ -42,6 +42,9 @@ pub struct ListenerContext {
     pub listener_key: ListenerKey,
     pub access_logger: Arc<AccessLogger>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
+    /// Name of the EGC referenced by this listener's GatewayClass.
+    /// `None` means the GatewayClass uses built-in defaults.
+    pub request_body_config_name: Option<String>,
     pub server_conf: Arc<ServerConf>,
     /// Whether to enable HTTP/2 support (from Gateway annotation)
     pub enable_http2: bool,
@@ -153,9 +156,6 @@ pub fn add_http_listener(
     let preflight_handler = crate::routes::http::proxy_http::PreflightHandler::new(
         context.edgion_gateway_config.spec.preflight_policy.clone(),
     );
-    let request_body_config =
-        crate::request_body::ResolvedRequestBodyConfig::resolve(&context.edgion_gateway_config.spec.request_body);
-
     let http_route_manager =
         crate::routes::http::get_global_http_route_managers().get_or_create_listener_manager(&context.listener_key);
     let grpc_route_manager =
@@ -175,7 +175,7 @@ pub fn add_http_listener(
         },
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
-        request_body_config,
+        request_body_config_name: context.request_body_config_name.clone(),
         parsed_timeouts,
         enable_http2: context.enable_http2,
         real_ip_extractor,

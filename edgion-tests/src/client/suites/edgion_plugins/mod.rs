@@ -60,7 +60,9 @@ pub use basic_auth::{
     BasicAuthDynamicGroupedInitialTestSuite, BasicAuthDynamicGroupedUpdateTestSuite, BasicAuthDynamicInitialTestSuite,
     BasicAuthDynamicUpdateTestSuite, BasicAuthTestSuite,
 };
-pub use body_plugins::{BodyDynamicInitialTestSuite, BodyDynamicUpdateTestSuite, BodyPluginsTestSuite};
+pub use body_plugins::{
+    BodyDynamicCappedTestSuite, BodyDynamicInitialTestSuite, BodyDynamicUpdateTestSuite, BodyPluginsTestSuite,
+};
 pub use canary::{CanaryHotSwapFinalTestSuite, CanaryHotSwapInitialTestSuite, CanaryTestSuite};
 pub use cors::CorsPluginTestSuite;
 pub use csrf::CsrfTestSuite;

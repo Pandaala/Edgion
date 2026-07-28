@@ -214,6 +214,15 @@ impl<'a> PingoraSessionAdapter<'a> {
     }
 
     #[cfg(feature = "body-buffering")]
+    fn reject_over_limit_request_body(&mut self, limit: u64) -> BodyReadError {
+        // HTTP/1.x cannot be reused with unread request bytes. For HTTP/2 this
+        // is intentionally a no-op: after the 413 response closes its send
+        // side, dropping the request session resets only the unfinished stream.
+        self.inner.set_keepalive(None);
+        BodyReadError::BufferLimitExceeded { limit }
+    }
+
+    #[cfg(feature = "body-buffering")]
     async fn capture_request_body(&mut self, max_bytes: Option<u64>) -> Result<u64, BodyReadError> {
         if let Some(len) = self.ctx.request_body.cached_len()? {
             return Ok(len);
@@ -232,7 +241,7 @@ impl<'a> PingoraSessionAdapter<'a> {
             .and_then(|value| value.parse::<u64>().ok())
             .is_some_and(|declared| declared > cap)
         {
-            return Err(BodyReadError::BufferLimitExceeded { limit: cap });
+            return Err(self.reject_over_limit_request_body(cap));
         }
         let expect_continue = self.inner.req_header().version == http::Version::HTTP_11
             && self
@@ -273,12 +282,12 @@ impl<'a> PingoraSessionAdapter<'a> {
                     });
                 }
             };
-            captured = captured
-                .checked_add(chunk.len() as u64)
-                .ok_or(BodyReadError::BufferLimitExceeded { limit: cap })?;
+            captured = match captured.checked_add(chunk.len() as u64) {
+                Some(total) => total,
+                None => return Err(self.reject_over_limit_request_body(cap)),
+            };
             if captured > cap {
-                let _ = self.inner.drain_request_body().await;
-                return Err(BodyReadError::BufferLimitExceeded { limit: cap });
+                return Err(self.reject_over_limit_request_body(cap));
             }
         }
 
@@ -1836,7 +1845,13 @@ mod tests {
 mod record_outcome_tests {
     use super::*;
     #[cfg(feature = "body-buffering")]
+    use crate::plugins::http::RequestBodyBuffer as RequestBodyBufferPlugin;
+    #[cfg(feature = "body-buffering")]
+    use crate::plugins::runtime::{BodyGatedRequestFilter, RequestFilter};
+    #[cfg(feature = "body-buffering")]
     use crate::request_body::DEFAULT_MEMORY_BUFFER_BYTES;
+    #[cfg(feature = "body-buffering")]
+    use edgion_resources::resources::edgion_plugins::BodyRequirement;
     use edgion_resources::resources::edgion_plugins::{DyeOutcome, DyeSuite};
     #[cfg(feature = "body-buffering")]
     use sha2::Digest;
@@ -2312,6 +2327,7 @@ mod record_outcome_tests {
     #[tokio::test]
     async fn read_request_body_global_cap_is_hard_failure() {
         let mut session = test_session_with_body(b"12345678").await;
+        assert!(session.get_keepalive().is_some());
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.body_declared = Some(true);
         ctx.request_info.in_request_body_stage = true;
@@ -2321,6 +2337,44 @@ mod record_outcome_tests {
         assert_eq!(
             adapter.read_request_body(None).await,
             Err(BodyReadError::BufferLimitExceeded { limit: 4 })
+        );
+        assert!(
+            session.get_keepalive().is_none(),
+            "an unread over-limit HTTP/1 body must make the connection non-reusable"
+        );
+    }
+
+    #[cfg(feature = "body-buffering")]
+    #[tokio::test]
+    async fn chunked_physical_cap_rejects_without_waiting_for_eof() {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(
+                b"POST /body-test HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n\
+                  5\r\n12345\r\n",
+            )
+            .await
+            .expect("write an over-limit chunk without the terminating chunk");
+        session.read_request().await.expect("read chunked request headers");
+        assert!(session.get_keepalive().is_some());
+
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(true);
+        ctx.request_info.in_request_body_stage = true;
+        ctx.request_body_config.max_body_size_bytes = 4;
+        let result = tokio::time::timeout(std::time::Duration::from_millis(100), async {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            adapter.read_request_body(None).await
+        })
+        .await
+        .expect("over-limit detection must not wait for request-body EOF");
+
+        assert_eq!(result, Err(BodyReadError::BufferLimitExceeded { limit: 4 }));
+        assert!(
+            session.get_keepalive().is_none(),
+            "the partially unread HTTP/1 request must disable connection reuse"
         );
     }
 
@@ -2353,6 +2407,48 @@ mod record_outcome_tests {
             ctx.request_body.cached_body_is_materialized(),
             Some(false),
             "streaming hash must not fill read_all cache"
+        );
+    }
+
+    #[cfg(feature = "body-buffering")]
+    #[tokio::test]
+    async fn request_body_buffer_gate_preserves_disk_spill_without_materializing() {
+        let body = vec![b'x'; DEFAULT_MEMORY_BUFFER_BYTES + 1];
+        let mut session = test_session_with_body(&body).await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(true);
+        ctx.request_info.in_request_body_stage = true;
+
+        {
+            let gate = BodyGatedRequestFilter::new(RequestBodyBufferPlugin::create(), BodyRequirement::fail_close());
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            let mut log = PluginLog::new("RequestBodyBuffer");
+            assert_eq!(
+                gate.run_request(&mut adapter, &mut log).await,
+                PluginRunningResult::GoodNext
+            );
+        }
+
+        assert_eq!(
+            ctx.request_body.cached_body_is_materialized(),
+            Some(false),
+            "the no-op prebuffer plugin must leave a disk-backed body on disk"
+        );
+
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            assert_eq!(
+                adapter
+                    .read_request_body(None)
+                    .await
+                    .expect("a later byte consumer must still read the captured body"),
+                Bytes::from(body)
+            );
+        }
+        assert_eq!(
+            ctx.request_body.cached_body_is_materialized(),
+            Some(true),
+            "the spill should materialize only when a later consumer requests all bytes"
         );
     }
 

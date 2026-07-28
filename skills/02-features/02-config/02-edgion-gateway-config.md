@@ -229,8 +229,9 @@ Extraction logic: traverse `realIpHeader` right-to-left, skip addresses listed i
 
 All sizes must be positive human-readable byte sizes. The effective memory
 threshold must not exceed the effective body cap. The Gateway resolves these
-values when building the listener; request handling only reads resolved boolean
-and integer fields.
+values when publishing an `EdgionGatewayConfig` update. Each new request copies
+the resolved boolean and integer fields from an immutable snapshot; it never
+parses sizes or takes a blocking lock.
 
 ### spec.preflightPolicy
 

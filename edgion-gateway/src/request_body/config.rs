@@ -4,11 +4,11 @@ use edgion_resources::resources::edgion_gateway_config::RequestBodyConfig;
 pub const DEFAULT_MEMORY_BUFFER_BYTES: usize = 128 * 1024;
 pub const DEFAULT_MAX_BODY_SIZE_BYTES: u64 = 32 * 1024 * 1024;
 
-/// Request-body policy resolved once when an HTTP listener is built.
+/// Request-body policy resolved when an EdgionGatewayConfig snapshot is built.
 ///
-/// All human-readable sizes are parsed before the request path. Each request
-/// copies this compact value into its context and performs only direct field
-/// reads.
+/// All human-readable sizes are parsed on the configuration update path. Each
+/// request copies this compact value from the immutable EGC snapshot into its
+/// context and performs only direct field reads afterward.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedRequestBodyConfig {
     pub enabled: bool,

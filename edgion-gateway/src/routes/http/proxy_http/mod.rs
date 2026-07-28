@@ -61,8 +61,9 @@ pub struct EdgionHttpProxy {
     /// Global gateway configuration
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
 
-    /// Request-body buffering policy resolved once for this listener.
-    pub request_body_config: crate::request_body::ResolvedRequestBodyConfig,
+    /// EGC name used to load the pre-resolved request-body policy for each new
+    /// request. `None` selects the built-in default.
+    pub request_body_config_name: Option<String>,
 
     /// Pre-parsed timeout configurations (always has default values if not configured)
     pub parsed_timeouts: ParsedTimeouts,

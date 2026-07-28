@@ -1,8 +1,10 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use bytes::Bytes;
 use chrono::Utc;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
+use std::future::poll_fn;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -94,6 +96,100 @@ async fn raw_chunked_request(target_host: &str, host: &str, path: &str, chunks: 
         .map_err(|_| "Timed out waiting for chunked request response".to_string())?
         .map_err(|error| format!("Response read failed: {error}"))?;
     Ok(String::from_utf8_lossy(&response).into_owned())
+}
+
+async fn raw_unfinished_chunked_request(target_host: &str, host: &str, chunk: &[u8]) -> Result<String, String> {
+    let mut stream = TcpStream::connect(format!("{target_host}:31180"))
+        .await
+        .map_err(|error| format!("TCP connect failed: {error}"))?;
+    let headers = format!(
+        "POST /echo HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n"
+    );
+    stream
+        .write_all(headers.as_bytes())
+        .await
+        .map_err(|error| format!("Header write failed: {error}"))?;
+    stream
+        .write_all(format!("{:X}\r\n", chunk.len()).as_bytes())
+        .await
+        .map_err(|error| format!("Chunk prefix write failed: {error}"))?;
+    stream
+        .write_all(chunk)
+        .await
+        .map_err(|error| format!("Chunk write failed: {error}"))?;
+    stream
+        .write_all(b"\r\n")
+        .await
+        .map_err(|error| format!("Chunk suffix write failed: {error}"))?;
+
+    let mut response = Vec::new();
+    tokio::time::timeout(Duration::from_secs(2), stream.read_to_end(&mut response))
+        .await
+        .map_err(|_| "Gateway did not reject and close an unfinished over-limit chunked request".to_string())?
+        .map_err(|error| format!("Response read failed: {error}"))?;
+    Ok(String::from_utf8_lossy(&response).into_owned())
+}
+
+async fn h2_unfinished_over_limit_request(target_host: &str) -> Result<(), String> {
+    let stream = TcpStream::connect(format!("{target_host}:31180"))
+        .await
+        .map_err(|error| format!("TCP connect failed: {error}"))?;
+    let (mut sender, connection) = h2::client::handshake(stream)
+        .await
+        .map_err(|error| format!("HTTP/2 handshake failed: {error}"))?;
+    let connection_task = tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let request = http::Request::builder()
+        .method(http::Method::POST)
+        .uri("http://body-dynamic.example.com:31180/echo")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(())
+        .map_err(|error| format!("Build HTTP/2 request failed: {error}"))?;
+    let (response, mut request_body) = sender
+        .send_request(request, false)
+        .map_err(|error| format!("Send HTTP/2 request headers failed: {error}"))?;
+    request_body
+        .send_data(Bytes::from_static(b"{\"payload\":\"larger-than-cap\"}"), false)
+        .map_err(|error| format!("Send over-limit HTTP/2 DATA failed: {error}"))?;
+
+    let response = tokio::time::timeout(Duration::from_secs(2), response)
+        .await
+        .map_err(|_| "Gateway did not reject an unfinished over-limit HTTP/2 stream".to_string())?
+        .map_err(|error| format!("Read HTTP/2 rejection failed: {error}"))?;
+    if response.status() != http::StatusCode::PAYLOAD_TOO_LARGE {
+        connection_task.abort();
+        return Err(format!("Expected HTTP/2 413, got {}", response.status()));
+    }
+
+    let reset_reason = tokio::time::timeout(Duration::from_secs(2), poll_fn(|cx| request_body.poll_reset(cx)))
+        .await
+        .map_err(|_| "Gateway did not reset the unfinished HTTP/2 request stream".to_string())?
+        .map_err(|error| format!("Read HTTP/2 stream reset failed: {error}"))?;
+    if reset_reason != h2::Reason::NO_ERROR {
+        connection_task.abort();
+        return Err(format!("Expected HTTP/2 NO_ERROR reset, got {reset_reason:?}"));
+    }
+
+    sender = sender
+        .ready()
+        .await
+        .map_err(|error| format!("HTTP/2 connection was closed with the rejected stream: {error}"))?;
+    let follow_up = http::Request::builder()
+        .method(http::Method::GET)
+        .uri("http://unmatched-after-body-limit.example.com:31180/")
+        .body(())
+        .map_err(|error| format!("Build follow-up HTTP/2 request failed: {error}"))?;
+    let (follow_up, _) = sender
+        .send_request(follow_up, true)
+        .map_err(|error| format!("Send follow-up HTTP/2 request failed: {error}"))?;
+    tokio::time::timeout(Duration::from_secs(2), follow_up)
+        .await
+        .map_err(|_| "Follow-up HTTP/2 stream did not receive a response".to_string())?
+        .map_err(|error| format!("Follow-up HTTP/2 stream failed: {error}"))?;
+    connection_task.abort();
+    Ok(())
 }
 
 async fn poll_mirrored_body(ctx: &TestContext, trace_id: &str) -> Result<String, String> {
@@ -902,6 +998,74 @@ fn body_dynamic_update_case() -> TestCase {
     )
 }
 
+fn body_dynamic_capped_case() -> TestCase {
+    TestCase::new(
+        "body_dynamic_capped",
+        "A hot-reloaded gateway body cap rejects the next oversized request",
+        |ctx| {
+            Box::pin(async move {
+                let start = Instant::now();
+                match ctx
+                    .http_client
+                    .post(format!("http://{}:31180/echo", ctx.target_host))
+                    .header("host", "body-dynamic.example.com")
+                    .header("content-type", "application/json")
+                    .body(r#"{"version":"client","discard":"remove-me"}"#)
+                    .send()
+                    .await
+                {
+                    Ok(response) if response.status().as_u16() == 413 => TestResult::passed(start.elapsed()),
+                    Ok(response) => {
+                        TestResult::failed(start.elapsed(), format!("Expected 413, got {}", response.status()))
+                    }
+                    Err(error) => TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
+                }
+            })
+        },
+    )
+}
+
+fn body_dynamic_unfinished_h1_case() -> TestCase {
+    TestCase::new(
+        "body_dynamic_unfinished_h1",
+        "An over-limit HTTP/1.1 chunked request receives 413 and closes without waiting for EOF",
+        |ctx| {
+            Box::pin(async move {
+                let start = Instant::now();
+                match raw_unfinished_chunked_request(
+                    &ctx.target_host,
+                    "body-dynamic.example.com",
+                    b"{\"payload\":\"larger-than-cap\"}",
+                )
+                .await
+                {
+                    Ok(response) if response.contains(" 413 ") => TestResult::passed(start.elapsed()),
+                    Ok(response) => {
+                        TestResult::failed(start.elapsed(), format!("Expected HTTP/1.1 413, got {response:?}"))
+                    }
+                    Err(error) => TestResult::failed(start.elapsed(), error),
+                }
+            })
+        },
+    )
+}
+
+fn body_dynamic_unfinished_h2_case() -> TestCase {
+    TestCase::new(
+        "body_dynamic_unfinished_h2",
+        "An over-limit HTTP/2 stream receives 413 and resets without closing the shared connection",
+        |ctx| {
+            Box::pin(async move {
+                let start = Instant::now();
+                match h2_unfinished_over_limit_request(&ctx.target_host).await {
+                    Ok(()) => TestResult::passed(start.elapsed()),
+                    Err(error) => TestResult::failed(start.elapsed(), error),
+                }
+            })
+        },
+    )
+}
+
 pub struct BodyDynamicInitialTestSuite;
 
 impl TestSuite for BodyDynamicInitialTestSuite {
@@ -911,6 +1075,22 @@ impl TestSuite for BodyDynamicInitialTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![body_dynamic_initial_case()]
+    }
+}
+
+pub struct BodyDynamicCappedTestSuite;
+
+impl TestSuite for BodyDynamicCappedTestSuite {
+    fn name(&self) -> &str {
+        "Request Body Dynamic - Capped Phase"
+    }
+
+    fn test_cases(&self) -> Vec<TestCase> {
+        vec![
+            body_dynamic_capped_case(),
+            body_dynamic_unfinished_h1_case(),
+            body_dynamic_unfinished_h2_case(),
+        ]
     }
 }
 

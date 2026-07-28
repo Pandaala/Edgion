@@ -196,8 +196,9 @@ Extraction logic: walk `realIpHeader` from right to left, skip addresses in any 
 
 All sizes must be positive human-readable byte sizes. The effective memory
 threshold must not exceed the effective body cap. Values are parsed when the
-listener is built, not on the request path. A plugin's `body.maxBodySize` may
-further tighten the limit for that plugin.
+configuration update is published. Each new request copies the resolved policy
+from an immutable snapshot without parsing sizes or taking a blocking lock. A
+plugin's `body.maxBodySize` may further tighten the limit for that plugin.
 
 ### spec.globalPluginsRef
 

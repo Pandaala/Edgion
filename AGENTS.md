@@ -265,9 +265,10 @@ These are architectural boundaries, not implementation suggestions:
 5. **Resolve request-body policy before the request hot path.**
    `EdgionGatewayConfig.spec.requestBody` is the single runtime policy source
    for the switch, defaults, and business overrides. Parse and resolve it when
-   building the listener, then copy the resolved boolean and byte counts into
-   each request context. Never parse sizes, lock, or consult process-global
-   configuration while handling a request.
+   publishing the immutable EdgionGatewayConfig runtime snapshot, then copy the
+   resolved boolean and byte counts into each request context. The request path
+   may perform one lock-free snapshot load and bounded lookup; it must never
+   parse sizes or take a blocking lock.
 
 ## Cross-cutting unification rules
 

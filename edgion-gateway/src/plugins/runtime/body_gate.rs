@@ -12,11 +12,11 @@
 //!    plugin runs without body enforcement.
 //! 2. Otherwise buffers the body to the SHARED resolved gateway-wide physical
 //!    limit, not any per-plugin value, via the lazy
-//!    [`PluginSession::read_request_body`]
+//!    [`PluginSession::ensure_request_body`]
 //!    / `read_response_body` (OpenResty `ngx.req.read_body`-style), then applies
 //!    the plugin's own `maxBodySize` LIMIT to the result (a body larger than the
-//!    plugin's limit → too-large for THAT plugin only). The inner plugin re-reads
-//!    the now-cached bytes.
+//!    plugin's limit → too-large for THAT plugin only). The inner plugin reads
+//!    the now-cached bytes only when its implementation needs them.
 //! 3. On a refusal (`NotBuffered`) or gateway-wide physical cap
 //!    (`BufferLimitExceeded`) rejects unconditionally: in both cases there is
 //!    no forwarding copy of the original body, so fail-open is impossible.
@@ -57,9 +57,10 @@ fn plugin_limit_bytes(requirement: &BodyRequirement) -> Option<u64> {
     }
 }
 
-/// Apply the per-plugin `maxBodySize` limit to an already-read body: if the body
-/// is larger than the plugin's own limit, that plugin (and only that plugin)
-/// treats it as too-large. `None` = within the limit / no limit, run the plugin.
+/// Apply the per-plugin `maxBodySize` limit to an already-captured body: if the
+/// body is larger than the plugin's own limit, that plugin (and only that
+/// plugin) treats it as too-large. `None` = within the limit / no limit, run
+/// the plugin.
 pub(crate) fn over_plugin_limit_len(requirement: &BodyRequirement, body_len: u64) -> Option<BodyReadError> {
     plugin_limit_bytes(requirement).and_then(|limit| (body_len > limit).then_some(BodyReadError::TooLarge { limit }))
 }
@@ -104,13 +105,14 @@ impl RequestFilter for BodyGatedRequestFilter {
         // false and Edgion never sets. Verified for plain and RFC 8441 h2
         // extended CONNECT. Do not set that option without revisiting this.
 
-        // 2. Buffer the body to the shared (gateway-wide) size, then apply this
-        //    plugin's own `maxBodySize` limit. The inner plugin re-reads the
-        //    now-cached bytes.
+        // 2. Buffer the body to the shared (gateway-wide) size without
+        //    materializing a disk spill, then apply this plugin's own
+        //    `maxBodySize` limit. The inner plugin reads the cached bytes only
+        //    when its implementation needs them.
         let cap = buffer_cap(session);
-        let read_result = session.read_request_body(Some(cap)).await;
-        match read_result {
-            Ok(body) => match over_plugin_limit_len(&self.requirement, body.len() as u64) {
+        let capture_result = session.ensure_request_body(Some(cap)).await;
+        match capture_result {
+            Ok(body_len) => match over_plugin_limit_len(&self.requirement, body_len) {
                 Some(err) => body_read_failure_result(session, &self.requirement, log, &err),
                 None => self.inner.run_request(session, log).await,
             },
@@ -248,7 +250,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A mock session that carries a default ctx (so cap resolution has what
-    /// it needs). Tests layer a `read_request_body` expectation on top.
+    /// it needs). Tests layer an `ensure_request_body` expectation on top.
     fn base_session() -> MockPluginSession {
         let mut session = MockPluginSession::new();
         session.expect_ctx().return_const(EdgionHttpContext::new());
@@ -281,7 +283,8 @@ mod tests {
         }
     }
 
-    // The default session returns Unimplemented for read_request_body.
+    // The default session delegates ensure_request_body to read_request_body,
+    // which returns Unimplemented.
     #[tokio::test]
     async fn fail_close_returns_500_and_skips_inner() {
         let inner = CountingFilter::new();
@@ -289,7 +292,7 @@ mod tests {
 
         let mut session = base_session();
         session
-            .expect_read_request_body()
+            .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::Unimplemented));
 
         let mut log = PluginLog::new("test");
@@ -310,7 +313,7 @@ mod tests {
 
         let mut session = base_session();
         session
-            .expect_read_request_body()
+            .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::TooLarge { limit: 1024 }));
 
         let mut log = PluginLog::new("test");
@@ -335,7 +338,7 @@ mod tests {
 
         let mut session = base_session();
         session
-            .expect_read_request_body()
+            .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::Unimplemented));
 
         let mut log = PluginLog::new("test");
@@ -354,7 +357,7 @@ mod tests {
 
         let mut session = base_session();
         session
-            .expect_read_request_body()
+            .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::BufferLimitExceeded { limit: 1024 }));
 
         let mut log = PluginLog::new("test");
@@ -373,9 +376,7 @@ mod tests {
         let gate = BodyGatedRequestFilter::new(Box::new(inner), BodyRequirement::fail_close());
 
         let mut session = base_session();
-        session
-            .expect_read_request_body()
-            .returning(|_| Ok(Bytes::from_static(b"{}")));
+        session.expect_ensure_request_body().returning(|_| Ok(2));
 
         let mut log = PluginLog::new("test");
         let result = gate.run_request(&mut session, &mut log).await;
@@ -386,7 +387,7 @@ mod tests {
     async fn secondary_skip_runs_inner_without_buffering() {
         let inner = CountingFilter::new();
         // Secondary run-condition: method must be POST. Request is GET → skip →
-        // body not required → inner runs, read_request_body is never called.
+        // body not required → inner runs, ensure_request_body is never called.
         let req = BodyRequirement {
             conditions: Some(PluginConditions {
                 skip: None,
@@ -405,7 +406,7 @@ mod tests {
 
         let mut session = MockPluginSession::new();
         session.expect_key_get().return_const(Some("GET".to_string()));
-        // read_request_body must NOT be called; no expectation set.
+        // ensure_request_body must NOT be called; no expectation set.
 
         let mut log = PluginLog::new("test");
         let result = gate.run_request(&mut session, &mut log).await;
@@ -441,7 +442,7 @@ mod tests {
         let mut session = base_session();
         session.expect_key_get().return_const(Some("POST".to_string()));
         session
-            .expect_read_request_body()
+            .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::Unimplemented));
 
         let mut log = PluginLog::new("test");
@@ -467,9 +468,7 @@ mod tests {
         let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), req);
 
         let mut session = base_session();
-        session
-            .expect_read_request_body()
-            .returning(|_| Ok(Bytes::from_static(&[0u8; 100])));
+        session.expect_ensure_request_body().returning(|_| Ok(100));
 
         let mut log = PluginLog::new("test");
         let result = gate.run_request(&mut session, &mut log).await;
@@ -491,9 +490,7 @@ mod tests {
         let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), req);
 
         let mut session = base_session();
-        session
-            .expect_read_request_body()
-            .returning(|_| Ok(Bytes::from_static(b"small")));
+        session.expect_ensure_request_body().returning(|_| Ok(5));
 
         let mut log = PluginLog::new("test");
         let result = gate.run_request(&mut session, &mut log).await;
@@ -510,9 +507,7 @@ mod tests {
         };
         let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), req);
         let mut session = base_session();
-        session
-            .expect_read_request_body()
-            .returning(|_| Ok(Bytes::from_static(&[0u8; 100])));
+        session.expect_ensure_request_body().returning(|_| Ok(100));
 
         let mut log = PluginLog::new("test");
         let result = gate.run_request(&mut session, &mut log).await;
@@ -530,8 +525,8 @@ mod tests {
             let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), req);
             let mut session = base_session();
             session
-                .expect_read_request_body()
-                .returning(move |_| Ok(Bytes::from_static(body)));
+                .expect_ensure_request_body()
+                .returning(move |_| Ok(body.len() as u64));
             let mut log = PluginLog::new("test");
             gate.run_request(&mut session, &mut log).await
         }
@@ -655,7 +650,7 @@ mod tests {
         let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
         let mut session = base_session();
         session
-            .expect_read_request_body()
+            .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::Timeout));
 
         let mut log = PluginLog::new("test");
@@ -682,7 +677,7 @@ mod tests {
 
         let mut session = base_session();
         session
-            .expect_read_request_body()
+            .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::NotBuffered));
 
         let mut log = PluginLog::new("test");
@@ -738,7 +733,7 @@ mod tests {
 
         let mut session = base_session();
         session
-            .expect_read_request_body()
+            .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::Timeout));
 
         let mut log = PluginLog::new("test");
@@ -775,7 +770,7 @@ mod tests {
         let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
         let mut session = session_expecting_error(EdgionStatus::BodyReadTooLarge);
         session
-            .expect_read_request_body()
+            .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::TooLarge { limit: 1024 }));
 
         let mut log = PluginLog::new("test");
@@ -787,7 +782,7 @@ mod tests {
         let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
         let mut session = session_expecting_error(EdgionStatus::BodyReadTimeout);
         session
-            .expect_read_request_body()
+            .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::Timeout));
 
         let mut log = PluginLog::new("test");
@@ -799,7 +794,7 @@ mod tests {
         let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
         let mut session = session_expecting_error(EdgionStatus::BodyReadAborted);
         session
-            .expect_read_request_body()
+            .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::Incomplete));
 
         let mut log = PluginLog::new("test");
@@ -811,7 +806,7 @@ mod tests {
         let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
         let mut session = session_expecting_error(EdgionStatus::BodyReadUnimplemented);
         session
-            .expect_read_request_body()
+            .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::Unimplemented));
 
         let mut log = PluginLog::new("test");
@@ -828,7 +823,7 @@ mod tests {
         session.expect_ctx().return_const(EdgionHttpContext::new());
         session.expect_add_error().times(0);
         session
-            .expect_read_request_body()
+            .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::NotBuffered));
 
         let mut log = PluginLog::new("test");

@@ -14,13 +14,21 @@ fn update_suite() -> Box<dyn TestSuite> {
     Box::new(suites::BodyDynamicUpdateTestSuite)
 }
 
+fn capped_suite() -> Box<dyn TestSuite> {
+    Box::new(suites::BodyDynamicCappedTestSuite)
+}
+
 static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
         name: "initial",
         factory: initial_suite,
     },
     PhaseSuite {
-        name: "update",
+        name: "capped",
+        factory: capped_suite,
+    },
+    PhaseSuite {
+        name: "restored",
         factory: update_suite,
     },
 ];
@@ -29,8 +37,10 @@ fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>>
     Box::pin(async move {
         let scenario = SCENARIO;
         ctx.assert_phase(scenario, "initial").await?;
-        ctx.apply_dir("updates/").await?;
-        ctx.wait_phase(scenario, "update", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/to_capped").await?;
+        ctx.wait_phase(scenario, "capped", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/to_restored").await?;
+        ctx.wait_phase(scenario, "restored", Duration::from_secs(15)).await?;
         Ok(())
     })
 }

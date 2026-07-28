@@ -71,9 +71,9 @@ pub use gateway::{
 pub use edgion_plugins::{
     AccessLogExternTestSuite, AllConditionsTestSuite, AllEndpointStatusTestSuite, BandwidthLimitTestSuite,
     BasicAuthDynamicGroupedInitialTestSuite, BasicAuthDynamicGroupedUpdateTestSuite, BasicAuthDynamicInitialTestSuite,
-    BasicAuthDynamicUpdateTestSuite, BasicAuthTestSuite, BodyDynamicInitialTestSuite, BodyDynamicUpdateTestSuite,
-    BodyPluginsTestSuite, CanaryHotSwapFinalTestSuite, CanaryHotSwapInitialTestSuite, CanaryTestSuite,
-    CorsPluginTestSuite, CsrfTestSuite, CtxSetTestSuite, DirectEndpointTestSuite, DslBodyTestSuite,
+    BasicAuthDynamicUpdateTestSuite, BasicAuthTestSuite, BodyDynamicCappedTestSuite, BodyDynamicInitialTestSuite,
+    BodyDynamicUpdateTestSuite, BodyPluginsTestSuite, CanaryHotSwapFinalTestSuite, CanaryHotSwapInitialTestSuite,
+    CanaryTestSuite, CorsPluginTestSuite, CsrfTestSuite, CtxSetTestSuite, DirectEndpointTestSuite, DslBodyTestSuite,
     DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite, DslTestSuite,
     DynamicExternalUpstreamTestSuite, DynamicInternalUpstreamTestSuite, EdgionConfigDataFlapInitialTestSuite,
     EdgionConfigDataFlapInvalidTestSuite, EdgionConfigDataFlapValidTestSuite, EdgionConfigDataManagedTestSuite,

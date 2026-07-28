@@ -30,16 +30,17 @@ analogous to `SecretRefManager`" are **not accepted**.
 
 ## Core Rationale
 
-**1. The data plane already consumes both resources directly via gRPC sync — functional behavior is correct.**
+**1. The data plane consumes both resources directly via gRPC sync.**
 
 `EdgionGatewayConfig` and `GatewayClass` are each independently synced resource kinds with their own
 gateway-side stores (`EDGION_GATEWAY_CONFIG_STORE` + `ConfHandler` in
 `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs`; the GatewayClass store likewise). The
 data plane reads them at listener-build time via `config_client.get_gateway_class()` /
-`get_edgion_gateway_config()` (`edgion-gateway/src/runtime/server/base.rs:110-129`). When either resource
-changes, the gateway receives the gRPC event and rebuilds its listener config (timeout / retry /
-connection settings) from the new values. No controller-side Gateway requeue is needed for the config
-to take effect.
+`get_edgion_gateway_config()` (`edgion-gateway/src/runtime/server/base.rs`). Runtime consumers that
+support hot reload update directly from their EGC ConfHandler: request-body policy is published in the
+immutable EGC snapshot and process-global aggregates are recomputed there. This does not rebuild the
+Pingora listener, and listener-frozen fields need their own explicit hot-reload mechanism. No
+controller-side Gateway requeue is needed or capable of updating those live data-plane objects.
 
 **2. The controller-side Gateway handler derives no status from these resources — a requeue changes nothing.**
 
@@ -87,6 +88,7 @@ Re-open this decision only if:
 - `tasks/review-envoy/controller-06-egc-gc-no-downstream-requeue.md` (closed 2026-05-29, ⚠️ accepted tradeoff).
 - Requeue inventory: `skills/01-architecture/01-controller/06-requeue-mechanism.md` (GatewayClass /
   EdgionGatewayConfig rows: "referenced by Gateway; no requeue").
-- Data-plane consumption: `edgion-gateway/src/runtime/server/base.rs:110-129`.
+- Data-plane consumption: `edgion-gateway/src/runtime/server/base.rs`.
+- Request-body hot reload: `skills/04-review/architecture/request-body-policy-egc-hot-reload.md`.
 - Contrast with the genuine cascading-requeue case: `handler-requeue-rule.md` (handlers that call
   `lookup_gateway()` / `get_secret()` in `parse()` MUST register and requeue — these two do not).

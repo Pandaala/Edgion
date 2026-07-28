@@ -187,7 +187,7 @@ spec:
 | `defaultMaxBodySize` | `String` | `32MiB` | 完整请求体的默认上限 |
 | `maxBodySize` | `String` | 未设置 | 请求体物理上限的业务覆盖值；未设置时使用 `defaultMaxBodySize` |
 
-所有大小都必须是正数可读字节值，有效内存阈值不能超过有效请求体上限。Gateway 在构建监听器时解析这些值，请求热路径不会解析大小字符串。插件的 `body.maxBodySize` 可以进一步收紧该插件的限制。
+所有大小都必须是正数可读字节值，有效内存阈值不能超过有效请求体上限。Gateway 在发布配置更新时解析这些值；每个新请求从不可变快照复制已解析策略，不会解析大小字符串或获取阻塞锁。插件的 `body.maxBodySize` 可以进一步收紧该插件的限制。
 
 ### spec.globalPluginsRef
 
