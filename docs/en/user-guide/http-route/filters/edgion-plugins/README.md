@@ -17,6 +17,7 @@ HTTP Route-level plugins provided by Edgion, configured via the `EdgionPlugins` 
 | [dye.md](dye.md) | Traffic-tagging headers (entry-level `dye` — outcome vocabulary, value templates, anti-spoof strip) |
 | [dynamic-upstream.md](dynamic-upstream.md) | Dynamic upstream selection |
 | [forward-auth.md](forward-auth.md) | External authentication delegation |
+| [form-json-transform.md](form-json-transform.md) | Convert bounded request bodies between flat form URL encoding and JSON |
 | [ext-proc.md](ext-proc.md) | External processing over gRPC (Envoy ext_proc compatible) |
 | [global-access-control.md](global-access-control.md) | CDN/origin lockdown: composite IP-CIDR + secret-header allow-list with profile hot-swap |
 | [header-cert-auth.md](header-cert-auth.md) | Header/certificate authentication |

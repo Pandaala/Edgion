@@ -323,11 +323,44 @@ impl WasmPlugin {
         lease
             .state_mut()
             .begin_phase(WasmPhase::RequestBody, request_headers, Vec::new(), props);
-        lease.state_mut().request_body = body.to_vec();
+        {
+            let state = lease.state_mut();
+            state.request_body = body.to_vec();
+            state.request_body_limit = usize::try_from(cap).unwrap_or(usize::MAX);
+        }
         let action = match lease.call_on_request_body(size, true) {
             Ok(a) => a,
             Err(_) => return self.fail_mode(session, log, "trap"),
         };
+        if lease.state().local_response.is_some() {
+            // The proxied request has ended. Finish the deliberate local
+            // response without attempting an irrelevant BodyStorage write.
+            return self.finish_phase(lease, session, log, action, false);
+        }
+        let request_body = {
+            let state = lease.state_mut();
+            state
+                .request_body_modified
+                .then(|| bytes::Bytes::from(std::mem::take(&mut state.request_body)))
+        };
+        if let Some(body) = request_body {
+            if let Err(error) = session.overwrite_request_body(body).await {
+                session.add_error(match error {
+                    BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
+                        EdgionStatus::BodyReadTooLarge
+                    }
+                    BodyReadError::StorageFailure => EdgionStatus::BodyCaptureStorageFailed,
+                    BodyReadError::Timeout => EdgionStatus::BodyReadTimeout,
+                    BodyReadError::Incomplete => EdgionStatus::BodyReadAborted,
+                    BodyReadError::Unimplemented => EdgionStatus::BodyReadUnimplemented,
+                    BodyReadError::NotBuffered => EdgionStatus::BodyRefusedStage,
+                });
+                return self.fail_mode(session, log, "body mutation");
+            }
+        }
+        // Apply request-header operations only after the Body generation is
+        // committed. On fail-open publication failure, neither half of a
+        // guest's logically coupled Content-Type/body rewrite leaks through.
         self.finish_phase(lease, session, log, action, false)
     }
 
@@ -420,8 +453,9 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
     ///   stream. On success, wasm drives `proxy_on_request_body` **once** with
     ///   the full body (`body_size` = full length, `end_of_stream = true`,
     ///   `get_buffer_bytes(HttpRequestBody)` returns the whole thing), and the
-    ///   guest can deny via `proxy_send_local_response` — this is the only body
-    ///   path that can deny the request. Without an operator `body:` block the
+    ///   guest can deny via `proxy_send_local_response` or atomically publish
+    ///   a staged request-body rewrite — this is the only body path that can
+    ///   deny or rewrite the request. Without an operator `body:` block the
     ///   gate is never installed and `run_request_body_phase` still calls
     ///   `read_request_body` ungated (see that method's doc for why). A
     ///   `NotBuffered` refusal (the gate was never installed / the request is
@@ -1705,6 +1739,56 @@ mod tests {
         (i32.const 0)))
     "#;
 
+    const GUEST_REQUEST_BODY_REWRITE: &str = r#"
+    (module
+      (import "env" "proxy_set_buffer_bytes"
+        (func $set (param i32 i32 i32 i32 i32) (result i32)))
+      (import "env" "proxy_replace_header_map_value"
+        (func $set_hdr (param i32 i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 0) "XYZ")
+      (data (i32.const 16) "x-body-rewritten")
+      (data (i32.const 40) "yes")
+      (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32) (i32.const 0))
+      (func (export "proxy_on_request_body") (param i32 i32 i32) (result i32)
+        (drop (call $set (i32.const 0) (i32.const 1) (i32.const 2)
+                         (i32.const 0) (i32.const 3)))
+        (drop (call $set_hdr (i32.const 0) (i32.const 16) (i32.const 16)
+                             (i32.const 40) (i32.const 3)))
+        (i32.const 0)))
+    "#;
+
+    const GUEST_REQUEST_BODY_REWRITE_THEN_DENY: &str = r#"
+    (module
+      (import "env" "proxy_set_buffer_bytes"
+        (func $set (param i32 i32 i32 i32 i32) (result i32)))
+      (import "env" "proxy_send_local_response"
+        (func $deny (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 0) "XYZ")
+      (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32) (i32.const 0))
+      (func (export "proxy_on_request_body") (param i32 i32 i32) (result i32)
+        (drop (call $set (i32.const 0) (i32.const 1) (i32.const 2)
+                         (i32.const 0) (i32.const 3)))
+        (drop (call $deny (i32.const 403) (i32.const 0) (i32.const 0)
+                          (i32.const 0) (i32.const 0) (i32.const 0)
+                          (i32.const 0) (i32.const 0)))
+        (i32.const 0)))
+    "#;
+
+    const GUEST_REQUEST_BODY_REWRITE_THEN_TRAP: &str = r#"
+    (module
+      (import "env" "proxy_set_buffer_bytes"
+        (func $set (param i32 i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 0) "XYZ")
+      (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32) (i32.const 0))
+      (func (export "proxy_on_request_body") (param i32 i32 i32) (result i32)
+        (drop (call $set (i32.const 0) (i32.const 1) (i32.const 2)
+                         (i32.const 0) (i32.const 3)))
+        unreachable))
+    "#;
+
     /// Request-phase mock with a ctx (for the body-size cap resolution) and a
     /// single scripted `read_request_body` outcome. Built standalone rather
     /// than on `base_mock` so this is the only `read_request_body` expectation
@@ -1738,6 +1822,122 @@ mod tests {
                 status: 403,
                 body: None
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn request_body_guest_commits_rewrite_to_shared_body() {
+        let f = write_temp_wasm(GUEST_REQUEST_BODY_REWRITE);
+        let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+        let mut session = body_mock(Ok(bytes::Bytes::from_static(b"abcdef")));
+        session
+            .expect_overwrite_request_body()
+            .withf(|body| body.as_ref() == b"aXYZdef")
+            .times(1)
+            .returning(|_| Ok(()));
+        session
+            .expect_set_request_header()
+            .withf(|name, value| name == "x-body-rewritten" && value == "yes")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let mut log = PluginLog::new("Wasm");
+
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+    }
+
+    #[tokio::test]
+    async fn request_body_local_response_skips_irrelevant_rewrite_publication() {
+        let f = write_temp_wasm(GUEST_REQUEST_BODY_REWRITE_THEN_DENY);
+        let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+        let mut session = body_mock(Ok(bytes::Bytes::from_static(b"abcdef")));
+        let mut log = PluginLog::new("Wasm");
+
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 403,
+                body: None,
+            },
+            "a BodyStorage write must not replace a deliberate local denial"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_body_trap_discards_staged_rewrite() {
+        let f = write_temp_wasm(GUEST_REQUEST_BODY_REWRITE_THEN_TRAP);
+        let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+        let mut session = body_mock(Ok(bytes::Bytes::from_static(b"abcdef")));
+        session.expect_overwrite_request_body().times(0);
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "trap")
+            .times(1)
+            .return_const(());
+        let mut log = PluginLog::new("Wasm");
+
+        assert!(matches!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse { status: 500, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn request_body_publication_failure_is_fail_closed_and_observable() {
+        let f = write_temp_wasm(GUEST_REQUEST_BODY_REWRITE);
+        let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+        let mut session = body_mock(Ok(bytes::Bytes::from_static(b"abcdef")));
+        session
+            .expect_overwrite_request_body()
+            .withf(|body| body.as_ref() == b"aXYZdef")
+            .times(1)
+            .returning(|_| Err(BodyReadError::StorageFailure));
+        session.expect_set_request_header().times(0);
+        session
+            .expect_add_error()
+            .withf(|status| *status == edgion_resources::EdgionStatus::BodyCaptureStorageFailed)
+            .times(1)
+            .return_const(());
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "body-mutation")
+            .times(1)
+            .return_const(());
+        let mut log = PluginLog::new("Wasm");
+
+        assert!(matches!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse { status: 500, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn request_body_publication_fail_open_leaks_no_partial_header_commit() {
+        let f = write_temp_wasm(GUEST_REQUEST_BODY_REWRITE);
+        let plugin = WasmPlugin::create_request(&config_for(f.path(), true)).expect("plugin");
+        let mut session = body_mock(Ok(bytes::Bytes::from_static(b"abcdef")));
+        session
+            .expect_overwrite_request_body()
+            .times(1)
+            .returning(|_| Err(BodyReadError::StorageFailure));
+        session.expect_set_request_header().times(0);
+        session
+            .expect_add_error()
+            .withf(|status| *status == edgion_resources::EdgionStatus::BodyCaptureStorageFailed)
+            .times(1)
+            .return_const(());
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailOpen) && value == "body-mutation")
+            .times(1)
+            .return_const(());
+        let mut log = PluginLog::new("Wasm");
+
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
         );
     }
 

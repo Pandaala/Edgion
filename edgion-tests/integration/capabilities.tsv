@@ -7,4 +7,5 @@ suite	EdgionPlugins/DslBody	body-buffering
 suite	EdgionPlugins/BodyPlugins	body-buffering
 suite	EdgionPlugins/JsonSchemaValidation	body-buffering
 dynamic	JsonSchemaValidationDynamic	body-buffering
+dynamic	FormJsonTransformDynamic	body-buffering
 dynamic	BodyDynamic	body-buffering

@@ -33,7 +33,7 @@ pub use entry::{
     UpstreamResponseFilterEntry,
 };
 pub use plugin_configs::{
-    bounded_json_body_validation_errors, parse_json_instance, profile_json_value, CompiledJsonSchema,
+    bounded_structured_body_validation_errors, parse_json_instance, profile_json_value, CompiledJsonSchema,
     ParsedJsonInstance,
 };
 pub use plugin_configs::{
@@ -44,21 +44,21 @@ pub use plugin_configs::{
     DirectEndpointOnMissing, DomainTarget, DslConfig, DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch,
     DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, EndpointAuthMethod, EndpointExtract, ExtProcConfig,
     ExtUpstreamExtract, ExtUpstreamOnMissing, ExtUpstreamOnNoMatch, ExtractConfig, FaultHeaderEntry,
-    FaultInjectionConfig, ForwardAuthConfig, ForwardAuthDecision, HashAlgorithm, HashCalcConfig, HeaderActions,
-    HeaderCertAuthConfig, HeaderEntry, HeaderRename, HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup,
-    HmacCredential, HttpMethod, InstanceValidationError, IpRestrictionConfig, IpSource, JsonBodyRewrite,
-    JsonLiteralValue, JsonPatchOperation, JsonSchemaValidationConfig, JsonValueProfile, JweContentEncryption,
-    JweDecryptConfig, JweKeyManagement, JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup, KeyAuthConfig, KeyMetadata,
-    LdapAuthConfig, LimitHeaderNames, LogExtSource, LruCacheConfig, MappingConfig, MockConfig, OnMissing, OnMissingKey,
-    OnRedisFailure, OpenidConnectConfig, ProxyRewriteConfig, RateLimitAlgorithm, RateLimitConfig, RateLimitPolicy,
-    RateLimitRedisConfig, RealIpConfig, RegexUri, RegionDef, RegionRouteConfig, ReplaceConfig, RequestBodyBufferConfig,
-    RequestRestrictionConfig, ResolvedBasicAuthUser, ResolvedJweCredential, ResolvedJwtCredential,
-    ResolvedJwtIssuerGroup, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionMode,
-    RestrictionRule, RestrictionSource, RouteRule, RuleGroup, SanType, SchemaComplexityProfile, StrictJsonError,
-    TemplateSegment, TemplateVarType, TransformConfig, TransformType, UnauthAction, UpstreamHeaderConfig,
-    VerificationMode, ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES, MAX_JSON_INSTANCE_DEPTH,
-    MAX_JSON_INSTANCE_NODES, MAX_JSON_PATCH_OPERATIONS, MAX_JSON_PATCH_PLAN_BYTES, MAX_JSON_POINTER_BYTES,
-    MAX_JSON_POINTER_TOKENS,
+    FaultInjectionConfig, FormJsonDirection, FormJsonTransformConfig, ForwardAuthConfig, ForwardAuthDecision,
+    HashAlgorithm, HashCalcConfig, HeaderActions, HeaderCertAuthConfig, HeaderEntry, HeaderRename, HmacAlgorithm,
+    HmacAuthConfig, HmacAuthSecretGroup, HmacCredential, HttpMethod, InstanceValidationError, IpRestrictionConfig,
+    IpSource, JsonBodyRewrite, JsonLiteralValue, JsonPatchOperation, JsonSchemaValidationConfig, JsonValueProfile,
+    JweContentEncryption, JweDecryptConfig, JweKeyManagement, JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup,
+    KeyAuthConfig, KeyMetadata, LdapAuthConfig, LimitHeaderNames, LogExtSource, LruCacheConfig, MappingConfig,
+    MockConfig, OnMissing, OnMissingKey, OnRedisFailure, OpenidConnectConfig, ProxyRewriteConfig, RateLimitAlgorithm,
+    RateLimitConfig, RateLimitPolicy, RateLimitRedisConfig, RealIpConfig, RegexUri, RegionDef, RegionRouteConfig,
+    ReplaceConfig, RequestBodyBufferConfig, RequestRestrictionConfig, ResolvedBasicAuthUser, ResolvedJweCredential,
+    ResolvedJwtCredential, ResolvedJwtIssuerGroup, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig,
+    RestrictionMode, RestrictionRule, RestrictionSource, RouteRule, RuleGroup, SanType, SchemaComplexityProfile,
+    StrictJsonError, TemplateSegment, TemplateVarType, TransformConfig, TransformType, UnauthAction,
+    UpstreamHeaderConfig, VerificationMode, ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES,
+    MAX_JSON_INSTANCE_DEPTH, MAX_JSON_INSTANCE_NODES, MAX_JSON_PATCH_OPERATIONS, MAX_JSON_PATCH_PLAN_BYTES,
+    MAX_JSON_POINTER_BYTES, MAX_JSON_POINTER_TOKENS,
 };
 pub use plugin_validation::PluginValidation;
 pub use validate::{applicable_stages_by_name, StageSet, HTTP_PLUGIN_STAGE_EXCEPTIONS};

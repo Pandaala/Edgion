@@ -26,6 +26,10 @@
 //! - `x-wasm-read-callout: 1` -> read the shared `calloutticks` counter into
 //!   request header `x-wasm-calloutticks` (proves the tick-phase callout loop:
 //!   on_tick dispatch -> root-context callback -> shared-data write).
+//! - `x-wasm-rewrite-body: 1` -> the request-body hook exercises replace,
+//!   insert, append, and delete against a body of at least six bytes.
+//! - `x-wasm-append-body: 1` -> append `created` to the request body, including
+//!   a bodyless request.
 //! - otherwise -> add request header `x-wasm-added: yes`.
 //!
 //! Response phase (`on_http_response_headers`): add `x-wasm-resp: yes`.
@@ -243,6 +247,16 @@ impl HttpContext for HeaderDemo {
     }
 
     fn on_http_request_body(&mut self, body_size: usize, end_of_stream: bool) -> Action {
+        if self.get_http_request_header("x-wasm-rewrite-body").as_deref() == Some("1") && body_size >= 6 {
+            self.set_http_request_body(1, 2, b"XYZ");
+            self.set_http_request_body(1, 0, b"+");
+            if let Some(body) = self.get_http_request_body(0, usize::MAX) {
+                self.set_http_request_body(body.len(), 0, b"!");
+            }
+            self.set_http_request_body(2, 3, b"");
+        } else if self.get_http_request_header("x-wasm-append-body").as_deref() == Some("1") {
+            self.set_http_request_body(body_size, 0, b"created");
+        }
         // Headers and body phases use distinct guest contexts, so identify
         // counter-read probes from the headers copied into this body phase.
         if self.get_http_request_header("x-wasm-read-request-body").as_deref() != Some("1") {

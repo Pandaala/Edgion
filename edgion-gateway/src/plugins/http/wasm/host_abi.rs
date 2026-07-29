@@ -189,15 +189,23 @@ pub struct HostState {
     callouts_dispatched: u32,
     next_callout_token: u32,
 
-    // ---- Body observation state (read-only chunk window) ----
+    // ---- Body state ----
     /// Current response-body chunk exposed via
     /// `get_buffer_bytes(HttpResponseBody)`. Never buffers across chunks.
     pub body_chunk: Vec<u8>,
 
     /// Full request body staged for buffer mode, exposed via
     /// `get_buffer_bytes(HttpRequestBody)`. Populated once from the body gate's
-    /// buffered bytes; never a per-chunk window.
+    /// buffered bytes; never a per-chunk window. Request-body mutations are
+    /// applied to this staging buffer and published atomically after the guest
+    /// hook returns.
     pub request_body: Vec<u8>,
+    /// Gateway physical Body cap resolved for the current request-body phase.
+    /// Zero outside that phase.
+    pub request_body_limit: usize,
+    /// Whether `proxy_set_buffer_bytes(HttpRequestBody, ...)` changed the
+    /// staging buffer during the current hook.
+    pub request_body_modified: bool,
 
     /// Guest-requested tick period in ms (0 = no tick). Module-lifetime
     /// state (typically set during `on_configure`), NOT reset per phase;
@@ -262,6 +270,8 @@ impl HostState {
         self.next_callout_token = 1;
         self.body_chunk.clear();
         self.request_body.clear();
+        self.request_body_limit = 0;
+        self.request_body_modified = false;
         self.retained_bytes = 0;
         self.retained_ops = 0;
     }
@@ -423,6 +433,57 @@ fn slice_buffer(data: &[u8], start: usize, max_size: usize) -> Vec<u8> {
     let start = start.min(data.len());
     let end = data.len().min(start.saturating_add(max_size));
     data[start..end].to_vec()
+}
+
+/// Apply the proxy-wasm range-replacement contract to the staged request Body.
+///
+/// The range must be fully contained in the current buffer. `size == 0`
+/// inserts, `start == len && size == 0` appends, an empty replacement deletes,
+/// and all other calls replace exactly `size` bytes. The physical output cap
+/// is checked before `splice`, so every rejected operation is atomic.
+fn request_body_replacement_range(
+    state: &HostState,
+    start: usize,
+    size: usize,
+    replacement_len: usize,
+) -> Result<std::ops::Range<usize>, i32> {
+    if state.phase != WasmPhase::RequestBody {
+        return Err(STATUS_BAD_ARGUMENT);
+    }
+    let end = start.checked_add(size).ok_or(STATUS_BAD_ARGUMENT)?;
+    if start > state.request_body.len() || end > state.request_body.len() {
+        return Err(STATUS_BAD_ARGUMENT);
+    }
+    let new_len = state
+        .request_body
+        .len()
+        .checked_sub(size)
+        .and_then(|len| len.checked_add(replacement_len))
+        .ok_or(STATUS_INTERNAL_FAILURE)?;
+    if new_len > state.request_body_limit {
+        return Err(STATUS_INTERNAL_FAILURE);
+    }
+    Ok(start..end)
+}
+
+fn replace_request_body_buffer(state: &mut HostState, start: usize, size: usize, replacement: Vec<u8>) -> i32 {
+    let range = match request_body_replacement_range(state, start, size, replacement.len()) {
+        Ok(range) => range,
+        Err(status) => return status,
+    };
+    // The staging Vec is already bounded by the request physical Body cap.
+    // Charge only structural operation overhead here: charging replacement
+    // bytes cumulatively would reject repeated same-size rewrites even though
+    // the host retains only the final bounded staging buffer.
+    if let Err(status) = state.charge_abi(0) {
+        return status;
+    }
+    if range.is_empty() && replacement.is_empty() {
+        return STATUS_OK;
+    }
+    state.request_body.splice(range, replacement);
+    state.request_body_modified = true;
+    STATUS_OK
 }
 
 // ---------- guest memory helpers ----------
@@ -847,15 +908,42 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         },
     )?;
 
-    // Body rewrite is not supported (request-body length change would desync an
-    // already-sent Content-Length). Register a truthful stub so a guest that
-    // imports it still instantiates and a call returns a defined status
-    // instead of trapping.
     linker.func_wrap(
         "env",
         "proxy_set_buffer_bytes",
-        |_caller: Caller<'_, HostState>, _buf: i32, _start: i32, _size: i32, _ptr: i32, _len: i32| -> i32 {
-            STATUS_UNIMPLEMENTED
+        |mut caller: Caller<'_, HostState>, buf: i32, start: i32, size: i32, ptr: i32, len: i32| -> i32 {
+            if buf == BUF_HTTP_RESPONSE_BODY {
+                // Proxied upstream responses remain streaming-only and
+                // read-only. Keep this a defined ABI error rather than a trap.
+                return STATUS_UNIMPLEMENTED;
+            }
+            if buf != BUF_HTTP_REQUEST_BODY {
+                return if select_buffer(caller.data(), buf).is_some() {
+                    STATUS_BAD_ARGUMENT
+                } else {
+                    STATUS_NOT_FOUND
+                };
+            }
+            if caller.data().phase != WasmPhase::RequestBody {
+                return STATUS_BAD_ARGUMENT;
+            }
+            if len < 0 {
+                return STATUS_BAD_ARGUMENT;
+            }
+            let start = start as u32 as usize;
+            let size = size as u32 as usize;
+            // Validate the range and final output length before copying from
+            // guest memory. Any operation that can succeed is now bounded by
+            // the physical Body cap, so a malicious guest cannot force a
+            // large allocation for an obviously impossible mutation.
+            if let Err(status) = request_body_replacement_range(caller.data(), start, size, len as usize) {
+                return status;
+            }
+            let replacement = match read_guest(&mut caller, ptr, len) {
+                Ok(bytes) => bytes,
+                Err(status) => return status,
+            };
+            replace_request_body_buffer(caller.data_mut(), start, size, replacement)
         },
     )?;
 
@@ -1246,8 +1334,12 @@ mod tests {
     fn begin_phase_clears_request_body() {
         let mut state = HostState::default();
         state.request_body = vec![1, 2, 3];
+        state.request_body_limit = 9;
+        state.request_body_modified = true;
         state.begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
         assert!(state.request_body.is_empty());
+        assert_eq!(state.request_body_limit, 0);
+        assert!(!state.request_body_modified);
         assert_eq!(state.phase, WasmPhase::RequestBody);
     }
 
@@ -1362,28 +1454,113 @@ mod tests {
         assert!(state.request_headers.len() < 5000); // stopped by budget, not the cap
     }
 
-    /// `proxy_set_buffer_bytes` is not supported (body rewrite would desync an
-    /// already-sent Content-Length): the import must be registered so a guest
-    /// that links it still instantiates, and a call must return
-    /// `STATUS_UNIMPLEMENTED` rather than trapping.
+    #[test]
+    fn request_body_range_mutations_are_atomic_and_bounded() {
+        let mut state = HostState::default();
+        state.begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
+        state.request_body = b"abcdef".to_vec();
+        state.request_body_limit = 12;
+
+        assert_eq!(replace_request_body_buffer(&mut state, 0, 0, Vec::new()), STATUS_OK);
+        assert!(!state.request_body_modified, "an empty insertion is a no-op");
+        assert_eq!(
+            replace_request_body_buffer(&mut state, 1, 2, b"XYZ".to_vec()),
+            STATUS_OK
+        );
+        assert_eq!(state.request_body, b"aXYZdef");
+        assert_eq!(replace_request_body_buffer(&mut state, 1, 0, b"+".to_vec()), STATUS_OK);
+        assert_eq!(state.request_body, b"a+XYZdef");
+        let end = state.request_body.len();
+        assert_eq!(
+            replace_request_body_buffer(&mut state, end, 0, b"!".to_vec()),
+            STATUS_OK
+        );
+        assert_eq!(state.request_body, b"a+XYZdef!");
+        assert_eq!(replace_request_body_buffer(&mut state, 2, 3, Vec::new()), STATUS_OK);
+        assert_eq!(state.request_body, b"a+def!");
+
+        let before = state.request_body.clone();
+        assert_eq!(
+            replace_request_body_buffer(&mut state, before.len() + 1, 0, b"x".to_vec()),
+            STATUS_BAD_ARGUMENT
+        );
+        assert_eq!(state.request_body, before);
+        assert_eq!(
+            replace_request_body_buffer(&mut state, 0, 0, vec![b'x'; 20]),
+            STATUS_INTERNAL_FAILURE
+        );
+        assert_eq!(state.request_body, before);
+
+        // Body replacement payload is not append-only retained ABI memory.
+        // Even near the generic byte budget, an equal-size rewrite succeeds
+        // and charges only one operation's structural overhead.
+        state.retained_bytes = MAX_RETAINED_ABI_BYTES - ABI_OP_OVERHEAD_BYTES;
+        let replacement = vec![b'z'; state.request_body.len()];
+        let body_len = state.request_body.len();
+        assert_eq!(
+            replace_request_body_buffer(&mut state, 0, body_len, replacement),
+            STATUS_OK
+        );
+        assert_eq!(state.retained_bytes, MAX_RETAINED_ABI_BYTES);
+        assert!(state.request_body_modified);
+    }
+
+    /// The import remains defined for every buffer type. Request Body mutation
+    /// is enabled only during the request-body phase; response Body mutation
+    /// remains a truthful `UNIMPLEMENTED` result rather than trapping.
     const SET_BUFFER_BYTES_GUEST: &str = r#"
     (module
       (import "env" "proxy_set_buffer_bytes"
         (func $set (param i32 i32 i32 i32 i32) (result i32)))
       (memory (export "memory") 1)
+      (data (i32.const 0) "XYZ")
       (func (export "proxy_on_context_create") (param i32 i32))
       (func (export "proxy_on_vm_start") (param i32 i32) (result i32) (i32.const 1))
       (func (export "proxy_on_configure") (param i32 i32) (result i32) (i32.const 1))
-      (func (export "call") (result i32)
-        (call $set (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))
+      (func (export "call") (param i32 i32 i32 i32 i32) (result i32)
+        (call $set (local.get 0) (local.get 1) (local.get 2)
+                   (local.get 3) (local.get 4)))
     )
     "#;
 
     #[test]
-    fn set_buffer_bytes_returns_unimplemented() {
+    fn set_buffer_bytes_enforces_phase_and_buffer_type() {
         let (mut store, instance) = instantiate_guest(SET_BUFFER_BYTES_GUEST);
-        let f = instance.get_typed_func::<(), i32>(&mut store, "call").unwrap();
-        let status = f.call(&mut store, ()).unwrap();
-        assert_eq!(status, STATUS_UNIMPLEMENTED);
+        let f = instance
+            .get_typed_func::<(i32, i32, i32, i32, i32), i32>(&mut store, "call")
+            .unwrap();
+
+        assert_eq!(
+            f.call(&mut store, (BUF_HTTP_REQUEST_BODY, 0, 0, 0, 3)).unwrap(),
+            STATUS_BAD_ARGUMENT
+        );
+        store
+            .data_mut()
+            .begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
+        store.data_mut().request_body = b"abcdef".to_vec();
+        store.data_mut().request_body_limit = 16;
+        assert_eq!(
+            f.call(&mut store, (BUF_HTTP_REQUEST_BODY, 1, 2, 0, 3)).unwrap(),
+            STATUS_OK
+        );
+        assert_eq!(store.data().request_body, b"aXYZdef");
+        assert!(store.data().request_body_modified);
+        assert_eq!(
+            f.call(&mut store, (BUF_HTTP_REQUEST_BODY, 99, 0, i32::MAX, 3)).unwrap(),
+            STATUS_BAD_ARGUMENT,
+            "an impossible range must be rejected before guest-memory copying"
+        );
+        assert_eq!(
+            f.call(&mut store, (BUF_HTTP_REQUEST_BODY, 0, 0, i32::MAX, 3)).unwrap(),
+            STATUS_INVALID_MEMORY_ACCESS
+        );
+        assert_eq!(
+            f.call(&mut store, (BUF_HTTP_REQUEST_BODY, 0, 0, 0, -1)).unwrap(),
+            STATUS_BAD_ARGUMENT
+        );
+        assert_eq!(
+            f.call(&mut store, (BUF_HTTP_RESPONSE_BODY, 0, 0, 0, 0)).unwrap(),
+            STATUS_UNIMPLEMENTED
+        );
     }
 }

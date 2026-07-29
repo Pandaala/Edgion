@@ -8,11 +8,12 @@ use super::dye::DyeOutcome;
 use super::plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CanaryConfig, CorsConfig, CsrfConfig, CtxSetConfig,
     DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig, DynamicExternalUpstreamConfig,
-    DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig, ForwardAuthConfig, GlobalAccessControlConfig,
-    HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig,
-    JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig,
-    RateLimitRedisConfig, RealIpConfig, RegionRouteConfig, RequestBodyBufferConfig, RequestMirrorPluginConfig,
-    RequestRestrictionConfig, ResponseRewriteConfig, TraceContextConfig, WasmConfig, DEFAULT_INSTANCE_MAX_BYTES,
+    DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig, FormJsonTransformConfig, ForwardAuthConfig,
+    GlobalAccessControlConfig, HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig,
+    JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig,
+    ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig, RegionRouteConfig,
+    RequestBodyBufferConfig, RequestMirrorPluginConfig, RequestRestrictionConfig, ResponseRewriteConfig,
+    TraceContextConfig, WasmConfig, DEFAULT_INSTANCE_MAX_BYTES,
 };
 use crate::resources::http_route::{HTTPHeaderFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter};
 
@@ -78,6 +79,8 @@ pub enum EdgionPlugin {
     RequestBodyBuffer(RequestBodyBufferConfig),
     /// Validate a bounded JSON request body against an inline JSON Schema.
     JsonSchemaValidation(JsonSchemaValidationConfig),
+    /// Transform a bounded request body between form URL encoding and flat JSON.
+    FormJsonTransform(FormJsonTransformConfig),
     /// Response Rewrite filter (rewrite status code and headers before returning to client)
     ResponseRewrite(ResponseRewriteConfig),
     /// RateLimit filter (CMS algorithm for high-performance rate limiting)
@@ -168,6 +171,10 @@ impl EdgionPlugin {
                 max_body_size: Some(DEFAULT_INSTANCE_MAX_BYTES.to_string()),
                 ..BodyRequirement::fail_close()
             }),
+            FormJsonTransform(_) if stage == BodyStage::Request => Some(BodyRequirement {
+                max_body_size: Some(DEFAULT_INSTANCE_MAX_BYTES.to_string()),
+                ..BodyRequirement::fail_close()
+            }),
             ExtProc(cfg) if cfg.processing_mode.request_body_mode.is_buffered() && stage == BodyStage::Request => {
                 Some(BodyRequirement::fail_close())
             }
@@ -212,6 +219,7 @@ impl EdgionPlugin {
             | ProxyRewrite(_)
             | RequestBodyBuffer(_)
             | JsonSchemaValidation(_)
+            | FormJsonTransform(_)
             | RequestRestriction(_)
             | ResponseRewrite(_)
             | RateLimit(_)
@@ -272,6 +280,7 @@ impl EdgionPlugin {
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
             EdgionPlugin::RequestBodyBuffer(_) => "RequestBodyBuffer",
             EdgionPlugin::JsonSchemaValidation(_) => "JsonSchemaValidation",
+            EdgionPlugin::FormJsonTransform(_) => "FormJsonTransform",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
             EdgionPlugin::RateLimit(_) => "RateLimit",
@@ -344,6 +353,7 @@ impl EdgionPlugin {
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::ResponseRewrite(_)
             | EdgionPlugin::RateLimit(_)
             | EdgionPlugin::CtxSet(_)
@@ -395,6 +405,7 @@ impl EdgionPlugin {
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::ResponseRewrite(_)
             | EdgionPlugin::RateLimit(_)
             | EdgionPlugin::CtxSet(_)
@@ -473,6 +484,7 @@ impl EdgionPlugin {
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::ResponseRewrite(_)
             | EdgionPlugin::RateLimit(_)
             | EdgionPlugin::RateLimitRedis(_)
@@ -508,6 +520,7 @@ impl EdgionPlugin {
             EdgionPlugin::ProxyRewrite(c) => c.validation_error(),
             EdgionPlugin::RequestBodyBuffer(c) => c.validation_error(),
             EdgionPlugin::JsonSchemaValidation(c) => c.validation_error(),
+            EdgionPlugin::FormJsonTransform(c) => c.validation_error(),
             EdgionPlugin::RequestRestriction(c) => c.validation_error(),
             EdgionPlugin::RateLimit(c) => c.validation_error(),
             EdgionPlugin::RateLimitRedis(c) => c.validation_error(),
@@ -865,6 +878,7 @@ mod request_body_plugin_requirement_tests {
             r#"{"type":"ProxyRewrite","config":{"jsonBody":{"operations":[{"op":"replace","path":"/name","value":"gateway"}]}}}"#,
             r#"{"type":"ExtProc","config":{"grpcService":{"target":"processor:9000"},"processingMode":{"requestBodyMode":"BUFFERED"}}}"#,
             r#"{"type":"RequestBodyBuffer","config":{}}"#,
+            r#"{"type":"FormJsonTransform","config":{"direction":"formToJson"}}"#,
         ] {
             let plugin: EdgionPlugin = serde_json::from_str(json).expect("body plugin config parses");
             assert!(plugin.body_requirement(BodyStage::Request).is_some(), "{json}");

@@ -44,6 +44,7 @@ use crate::plugins::http::dynamic_external_upstream::DynamicExternalUpstream;
 use crate::plugins::http::dynamic_internal_upstream::DynamicInternalUpstream;
 use crate::plugins::http::ext_proc::ExtProc;
 use crate::plugins::http::fault_injection::FaultInjection;
+use crate::plugins::http::form_json_transform::FormJsonTransform;
 use crate::plugins::http::forward_auth::ForwardAuth;
 use crate::plugins::http::global_access_control::GlobalAccessControl;
 use crate::plugins::http::header_cert_auth::HeaderCertAuth;
@@ -172,6 +173,20 @@ impl PluginRuntime {
             policy_blocks: Vec::new(),
             policy_bypassed: Vec::new(),
         }
+    }
+
+    /// Whether runtime construction found a plugin that cannot be activated.
+    ///
+    /// This is queried once by the EdgionPlugins store before
+    /// [`Self::seal_fail_closed`] consumes the list. It is not a request-path
+    /// check.
+    pub(crate) fn has_invalid_plugins(&self) -> bool {
+        !self.invalid_plugins.is_empty()
+    }
+
+    /// Whether every activation failure belongs to one plugin type.
+    pub(crate) fn has_only_invalid_plugin(&self, plugin_name: &'static str) -> bool {
+        !self.invalid_plugins.is_empty() && self.invalid_plugins.iter().all(|name| *name == plugin_name)
     }
 
     /// Prepend a fail-closed `RejectFilter` to the request stage when any plugin
@@ -394,7 +409,7 @@ impl PluginRuntime {
     /// A vector of validation error messages (empty if all plugins are valid)
     pub fn add_from_request_filters(&mut self, entries: &[RequestFilterEntry], namespace: &str) -> Vec<String> {
         let mut errors = Vec::new();
-        let mut invalid_bounded_json_entries = vec![false; entries.len()];
+        let mut invalid_bounded_structured_entries = vec![false; entries.len()];
         // Freeze config validation before the bounded-body prepass. A config
         // error owns the entry and suppresses later body-policy errors, matching
         // `EdgionPlugins::validate_plugins` and avoiding Controller/Gateway
@@ -436,7 +451,8 @@ impl PluginRuntime {
                 || config_validation_errors[index].is_some()
                 || !matches!(
                     entry.plugin,
-                    EdgionPlugin::JsonSchemaValidation(_)
+                    EdgionPlugin::FormJsonTransform(_)
+                        | EdgionPlugin::JsonSchemaValidation(_)
                         | EdgionPlugin::ProxyRewrite(edgion_resources::resources::edgion_plugins::ProxyRewriteConfig {
                             json_body: Some(_),
                             ..
@@ -448,11 +464,12 @@ impl PluginRuntime {
             let Some(body) = entry.body.as_ref() else {
                 continue;
             };
-            let body_errors = edgion_resources::resources::edgion_plugins::bounded_json_body_validation_errors(body);
+            let body_errors =
+                edgion_resources::resources::edgion_plugins::bounded_structured_body_validation_errors(body);
             if body_errors.is_empty() {
                 continue;
             }
-            invalid_bounded_json_entries[index] = true;
+            invalid_bounded_structured_entries[index] = true;
             let plugin_name = Self::get_plugin_name(&entry.plugin);
             self.invalid_plugins.push(plugin_name);
             errors.extend(
@@ -464,7 +481,7 @@ impl PluginRuntime {
 
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
-                if invalid_bounded_json_entries[index] {
+                if invalid_bounded_structured_entries[index] {
                     continue;
                 }
                 // Plugin policy: a stamped entry is never instantiated and is
@@ -1125,6 +1142,9 @@ impl PluginRuntime {
                 CreateResult::Ok(Some(Box::new(JweDecrypt::new(config, namespace.to_string()))))
             }
             EdgionPlugin::JsonSchemaValidation(config) => CreateResult::Ok(JsonSchemaValidation::create(config)),
+            EdgionPlugin::FormJsonTransform(config) => {
+                CreateResult::Ok(FormJsonTransform::create(config, body_requirement))
+            }
             EdgionPlugin::HmacAuth(config) => CreateResult::Ok(Some(HmacAuth::create(config, body_requirement))),
             EdgionPlugin::HeaderCertAuth(config) => {
                 CreateResult::Ok(Some(Box::new(HeaderCertAuth::new(config, namespace.to_string()))))
@@ -1197,6 +1217,7 @@ impl PluginRuntime {
             | EdgionPlugin::JwtAuth(_)
             | EdgionPlugin::JweDecrypt(_)
             | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::HmacAuth(_)
             | EdgionPlugin::HeaderCertAuth(_)
             | EdgionPlugin::KeyAuth(_)
@@ -1261,6 +1282,7 @@ impl PluginRuntime {
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::ResponseRewrite(_)
             | EdgionPlugin::RateLimit(_)
             | EdgionPlugin::RateLimitRedis(_)
@@ -1303,6 +1325,7 @@ impl PluginRuntime {
             | EdgionPlugin::JwtAuth(_)
             | EdgionPlugin::JweDecrypt(_)
             | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::HmacAuth(_)
             | EdgionPlugin::HeaderCertAuth(_)
             | EdgionPlugin::KeyAuth(_)
@@ -1348,6 +1371,7 @@ impl PluginRuntime {
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
             EdgionPlugin::JweDecrypt(_) => "JweDecrypt",
             EdgionPlugin::JsonSchemaValidation(_) => "JsonSchemaValidation",
+            EdgionPlugin::FormJsonTransform(_) => "FormJsonTransform",
             EdgionPlugin::HmacAuth(_) => "HmacAuth",
             EdgionPlugin::HeaderCertAuth(_) => "HeaderCertAuth",
             EdgionPlugin::KeyAuth(_) => "KeyAuth",
@@ -1772,6 +1796,17 @@ mod tests {
         entry
     }
 
+    fn form_json_entry(
+        direction: edgion_resources::resources::edgion_plugins::FormJsonDirection,
+        body: Option<edgion_resources::resources::edgion_plugins::BodyRequirement>,
+    ) -> RequestFilterEntry {
+        use edgion_resources::resources::edgion_plugins::FormJsonTransformConfig;
+
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::FormJsonTransform(FormJsonTransformConfig { direction }));
+        entry.body = body;
+        entry
+    }
+
     fn assert_sealed_invalid(runtime: &mut PluginRuntime) {
         runtime.seal_fail_closed();
         assert_eq!(
@@ -1862,6 +1897,73 @@ mod tests {
     }
 
     #[test]
+    fn form_json_runtime_builds_and_rejects_fail_open_without_controller() {
+        use edgion_resources::resources::edgion_plugins::{BodyReadFailureMode, BodyRequirement, FormJsonDirection};
+
+        let mut runtime = PluginRuntime::new();
+        let errors =
+            runtime.add_from_request_filters(&[form_json_entry(FormJsonDirection::FormToJson, None)], "default");
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            runtime.request_plugins_iter().next().map(|filter| filter.name()),
+            Some("FormJsonTransform")
+        );
+
+        let body = BodyRequirement {
+            on_read_failure: BodyReadFailureMode::FailOpen,
+            ..BodyRequirement::default()
+        };
+        let mut runtime = PluginRuntime::new();
+        let errors =
+            runtime.add_from_request_filters(&[form_json_entry(FormJsonDirection::JsonToForm, Some(body))], "default");
+        assert_eq!(
+            errors,
+            vec!["requestPlugins[0] (FormJsonTransform): body.onReadFailure must be failClose"]
+        );
+        assert_eq!(runtime.request_plugins_count(), 0);
+        assert_sealed_invalid(&mut runtime);
+    }
+
+    #[tokio::test]
+    async fn form_json_stock_gate_fails_before_header_or_body_mutation() {
+        use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+        use crate::EdgionHttpContext;
+        use edgion_resources::resources::edgion_plugins::FormJsonDirection;
+
+        let mut runtime = PluginRuntime::new();
+        let errors =
+            runtime.add_from_request_filters(&[form_json_entry(FormJsonDirection::FormToJson, None)], "default");
+        assert!(errors.is_empty(), "{errors:?}");
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session
+            .expect_ensure_request_body()
+            .with(mockall::predicate::eq(Some(32 * 1024 * 1024)))
+            .return_once(|_| Err(BodyReadError::Unimplemented));
+        session
+            .expect_add_error()
+            .with(mockall::predicate::eq(
+                edgion_resources::EdgionStatus::BodyReadUnimplemented,
+            ))
+            .return_const(());
+        session.expect_request_header_values().times(0);
+        session.expect_read_request_body().times(0);
+        session.expect_overwrite_request_body().times(0);
+        session.expect_set_request_header().times(0);
+        let mut log = PluginLog::new(filter.name());
+
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None,
+            }
+        );
+    }
+
+    #[test]
     fn json_schema_invalid_body_rules_seal_fail_closed() {
         use edgion_resources::resources::edgion_plugins::BodyRequirement;
 
@@ -1898,7 +2000,7 @@ mod tests {
 
         for (body, expected_error) in cases {
             let expected_errors: Vec<String> =
-                edgion_resources::resources::edgion_plugins::bounded_json_body_validation_errors(&body)
+                edgion_resources::resources::edgion_plugins::bounded_structured_body_validation_errors(&body)
                     .into_iter()
                     .map(|error| format!("requestPlugins[0] (JsonSchemaValidation): {error}"))
                     .collect();

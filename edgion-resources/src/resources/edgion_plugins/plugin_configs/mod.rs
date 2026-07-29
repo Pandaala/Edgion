@@ -13,6 +13,7 @@ mod dynamic_external_upstream;
 mod dynamic_internal_upstream;
 mod ext_proc;
 mod fault_injection;
+mod form_json_transform;
 mod forward_auth;
 mod global_access_control;
 mod header_cert_auth;
@@ -67,13 +68,14 @@ pub use ext_proc::{BodySendMode, ExtProcConfig, GrpcServiceConfig, HeaderSendMod
 pub use fault_injection::{
     AbortConfig, DelayConfig, FaultHeaderEntry, FaultInjectionConfig, MAX_DELAY_MS as FAULT_MAX_DELAY_MS,
 };
+pub use form_json_transform::{FormJsonDirection, FormJsonTransformConfig};
 pub use forward_auth::{ForwardAuthConfig, ForwardAuthDecision};
 pub use global_access_control::{AllowOutcome, AllowProfile, AllowRuleGroup, GlobalAccessControlConfig};
 pub use header_cert_auth::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderCertAuthConfig, UpstreamHeaderConfig};
 pub use hmac_auth::{HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup, HmacCredential};
 pub use ip_restriction::{DefaultAction, IpRestrictionConfig, IpSource};
 pub use json_schema_validation::{
-    bounded_json_body_validation_errors, parse_json_instance, profile_json_value, CompiledJsonSchema,
+    bounded_structured_body_validation_errors, parse_json_instance, profile_json_value, CompiledJsonSchema,
     InstanceValidationError, JsonSchemaValidationConfig, JsonValueProfile, ParsedJsonInstance, SchemaComplexityProfile,
     StrictJsonError, ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES, MAX_JSON_INSTANCE_DEPTH,
     MAX_JSON_INSTANCE_NODES,

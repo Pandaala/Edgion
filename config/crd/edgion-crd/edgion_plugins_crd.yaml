@@ -195,6 +195,7 @@ spec:
                           - RequestRestriction
                           - RequestBodyBuffer
                           - JsonSchemaValidation
+                          - FormJsonTransform
                           - RequestHeaderModifier
                           - ResponseHeaderModifier
                           - RequestRedirect

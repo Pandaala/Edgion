@@ -7,12 +7,11 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use regex::Regex;
-use std::io::{self, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::LazyLock;
 
 use crate::link_sys::template::{evaluate_template_bounded, TemplateEvaluationError};
-use crate::plugins::http::common::json_request_headers_are_supported;
+use crate::plugins::http::common::{json_request_headers_are_supported, CappedWriter};
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
@@ -708,41 +707,11 @@ fn json_numbers_equal(left: &serde_json::Number, right: &serde_json::Number) -> 
     }
 }
 
-struct CappedJsonWriter {
-    bytes: Vec<u8>,
-    limit: usize,
-    overflowed: bool,
-}
-
-impl Write for CappedJsonWriter {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if self
-            .bytes
-            .len()
-            .checked_add(bytes.len())
-            .is_none_or(|length| length > self.limit)
-        {
-            self.overflowed = true;
-            return Err(io::Error::other("JSON output limit exceeded"));
-        }
-        self.bytes.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 fn serialize_json_capped(value: &serde_json::Value, limit: usize) -> Result<Vec<u8>, JsonRewriteFailure> {
-    let mut writer = CappedJsonWriter {
-        bytes: Vec::with_capacity(limit.min(8 * 1024)),
-        limit,
-        overflowed: false,
-    };
+    let mut writer = CappedWriter::new(limit);
     match catch_unwind(AssertUnwindSafe(|| serde_json::to_writer(&mut writer, value))) {
-        Ok(Ok(())) => Ok(writer.bytes),
-        Ok(Err(_)) if writer.overflowed => Err(JsonRewriteFailure::TooLarge),
+        Ok(Ok(())) => Ok(writer.into_inner()),
+        Ok(Err(_)) if writer.overflowed() => Err(JsonRewriteFailure::TooLarge),
         Ok(Err(_)) | Err(_) => Err(JsonRewriteFailure::Internal),
     }
 }

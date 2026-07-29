@@ -37,6 +37,48 @@ pub fn json_request_headers_are_supported(
         }
     }
 
+    supported_identity_encoding(content_encodings)
+}
+
+/// Return whether the request headers describe one supported form URL-encoded
+/// representation.
+///
+/// Only `application/x-www-form-urlencoded` is accepted. Its sole optional
+/// parameter is `charset=utf-8`. `Content-Encoding` must be absent or contain
+/// exactly one `identity` value.
+pub fn form_request_headers_are_supported(
+    content_types: Option<&[String]>,
+    content_encodings: Option<&[String]>,
+) -> bool {
+    let Some(content_types) = content_types else {
+        return false;
+    };
+    if content_types.len() != 1 {
+        return false;
+    }
+
+    let Ok(content_type) = content_types[0].trim().parse::<mime::Mime>() else {
+        return false;
+    };
+    if content_type.type_() != mime::APPLICATION || content_type.subtype().as_str() != "x-www-form-urlencoded" {
+        return false;
+    }
+
+    let mut charset_count = 0usize;
+    for (name, value) in content_type.params() {
+        if name != mime::CHARSET {
+            return false;
+        }
+        charset_count += 1;
+        if charset_count > 1 || !value.as_str().eq_ignore_ascii_case("utf-8") {
+            return false;
+        }
+    }
+
+    supported_identity_encoding(content_encodings)
+}
+
+fn supported_identity_encoding(content_encodings: Option<&[String]>) -> bool {
     let Some(content_encodings) = content_encodings else {
         return false;
     };
@@ -99,5 +141,26 @@ mod tests {
             Some(&["application/json".to_string()]),
             None
         ));
+    }
+
+    #[test]
+    fn validates_form_media_type_and_parameters() {
+        let supported = |content_type: &str, encoding: &[&str]| {
+            let content_types = vec![content_type.to_string()];
+            let content_encodings = encoding.iter().map(|value| (*value).to_string()).collect::<Vec<_>>();
+            form_request_headers_are_supported(Some(&content_types), Some(&content_encodings))
+        };
+
+        assert!(supported("application/x-www-form-urlencoded", &[]));
+        assert!(supported(
+            "APPLICATION/X-WWW-FORM-URLENCODED; charset=UTF-8",
+            &["identity"]
+        ));
+        assert!(!supported("application/x-www-form-urlencoded; version=1", &[]));
+        assert!(!supported("application/x-www-form-urlencoded; charset=latin1", &[]));
+        assert!(!supported("application/json", &[]));
+        assert!(!supported("application/x-www-form-urlencoded", &["gzip"]));
+        assert!(!form_request_headers_are_supported(None, Some(&[])));
+        assert!(!form_request_headers_are_supported(Some(&[]), None));
     }
 }

@@ -1,0 +1,120 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: form-to-json
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      config:
+        direction: formToJson
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: json-to-form
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      config:
+        direction: jsonToForm
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: form-json-rewrite-chain
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      config:
+        direction: formToJson
+    - type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: replace
+              path: /name
+              value: gateway
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: form-json-roundtrip
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      config:
+        direction: formToJson
+    - type: FormJsonTransform
+      config:
+        direction: jsonToForm
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: form-json-small-later
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      config:
+        direction: formToJson
+    - type: FormJsonTransform
+      body:
+        maxBodySize: "8"
+      config:
+        direction: jsonToForm
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: form-json-same-direction
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      config:
+        direction: formToJson
+    - type: FormJsonTransform
+      config:
+        direction: formToJson
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: form-json-spill
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      body:
+        maxBodySize: "512k"
+      config:
+        direction: formToJson
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: form-json-retry
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      config:
+        direction: formToJson
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: json-form-spill
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      body:
+        maxBodySize: "512k"
+      config:
+        direction: jsonToForm

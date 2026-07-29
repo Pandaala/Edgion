@@ -46,6 +46,17 @@ pub struct CompiledPlugins {
     /// Preparse/validation errors collected while building the runtime
     /// (surfaced into the resource's K8s status condition by the controller).
     pub preparse_errors: Vec<String>,
+    /// Whether this compiled resource is safe to activate.
+    ///
+    /// Some preparse errors only sanitize non-runtime declarations, so
+    /// `preparse_errors.is_empty()` is not an activation predicate.
+    pub is_activatable: bool,
+    /// Whether an invalid update should retain the prior activatable runtime.
+    ///
+    /// DSL source/bytecode is a compiled program, so a rejected program update
+    /// follows last-known-good publication. Other plugin configuration errors
+    /// keep the established fail-closed replacement behavior.
+    pub retain_previous_on_invalid_update: bool,
 }
 
 /// Build the compiled runtime for an EdgionPlugins resource.
@@ -158,6 +169,9 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
         errors.push(err);
     }
 
+    let is_activatable = !runtime.has_invalid_plugins();
+    let retain_previous_on_invalid_update = runtime.has_only_invalid_plugin("Dsl");
+
     // Fail closed: if any plugin (any stage) had an invalid config, prepend a
     // request-stage RejectFilter so every request through this EdgionPlugins is
     // rejected with 500 before reaching upstream, rather than silently running
@@ -171,6 +185,8 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
         spec: Arc::new(spec),
         plugin_runtime: Arc::new(runtime),
         preparse_errors: errors,
+        is_activatable,
+        retain_previous_on_invalid_update,
     })
 }
 
@@ -314,8 +330,19 @@ impl PluginStore {
         self.with_plugin(key, |c| Arc::clone(&c.plugin_runtime))
     }
 
-    /// Replace all compiled plugins atomically
-    pub fn replace_all(&self, plugins: HashMap<String, Arc<CompiledPlugins>>) {
+    /// Replace all compiled plugins atomically, retaining a last-known-good
+    /// runtime when a reconnect snapshot contains an invalid update for the
+    /// same key. Keys absent from the new snapshot are still removed.
+    pub fn replace_all(&self, mut plugins: HashMap<String, Arc<CompiledPlugins>>) {
+        let current = self.plugins.load();
+        for (key, previous) in current.iter() {
+            let Some(incoming) = plugins.get(key) else {
+                continue;
+            };
+            if incoming.retain_previous_on_invalid_update && previous.is_activatable {
+                plugins.insert(key.clone(), Arc::clone(previous));
+            }
+        }
         self.has_access_log_extern
             .store(any_declares_access_log_extern(&plugins), Ordering::Relaxed);
         self.plugins.store(Arc::new(plugins));
@@ -331,6 +358,11 @@ impl PluginStore {
             new_map.remove(key);
         }
         for (key, plugin) in add_or_update {
+            if plugin.retain_previous_on_invalid_update
+                && new_map.get(&key).is_some_and(|previous| previous.is_activatable)
+            {
+                continue;
+            }
             new_map.insert(key, plugin);
         }
 

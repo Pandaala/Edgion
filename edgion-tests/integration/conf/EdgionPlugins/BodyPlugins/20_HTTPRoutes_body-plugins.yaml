@@ -159,3 +159,141 @@ spec:
         - type: ExtensionRef
           extensionRef: {group: edgion.io, kind: EdgionPlugins, name: wasm-body}
       backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: wasm-body-retry, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["wasm-body-retry.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: wasm-body}
+      retry:
+        attempts: 2
+        codes: [503]
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: wasm-body-mirror, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["wasm-body-mirror.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: wasm-body-mirror}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: form-to-json, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["form-to-json.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: form-to-json}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: json-to-form, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["json-to-form.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: json-to-form}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: form-json-rewrite-chain, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["form-json-rewrite-chain.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: form-json-rewrite-chain}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: form-json-roundtrip, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["form-json-roundtrip.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: form-json-roundtrip}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: form-json-small-later, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["form-json-small-later.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: form-json-small-later}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: form-json-spill, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["form-json-spill.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: form-json-spill}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: form-json-same-direction, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["form-json-same-direction.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: form-json-same-direction}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: form-json-retry, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["form-json-retry.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: form-json-retry}
+      retry:
+        attempts: 2
+        codes: [503]
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: json-form-spill, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["json-form-spill.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: json-form-spill}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]

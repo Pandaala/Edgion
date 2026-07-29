@@ -358,9 +358,11 @@ impl EdgionPlugins {
                             ));
                         } else if matches!(
                             entry.plugin,
-                            EdgionPlugin::JsonSchemaValidation(_) | EdgionPlugin::ProxyRewrite(_)
+                            EdgionPlugin::FormJsonTransform(_)
+                                | EdgionPlugin::JsonSchemaValidation(_)
+                                | EdgionPlugin::ProxyRewrite(_)
                         ) {
-                            for error in super::plugin_configs::bounded_json_body_validation_errors(body) {
+                            for error in super::plugin_configs::bounded_structured_body_validation_errors(body) {
                                 errors.push(format!("{}[{}] ({}): {}", $label, i, name, error));
                             }
                         } else if let Some(err) = body.validation_error() {
@@ -437,7 +439,9 @@ impl EdgionPlugins {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resources::edgion_plugins::plugin_configs::{DslConfig, JsonSchemaValidationConfig};
+    use crate::resources::edgion_plugins::plugin_configs::{
+        DslConfig, FormJsonDirection, FormJsonTransformConfig, JsonSchemaValidationConfig,
+    };
     use crate::resources::edgion_plugins::{
         BodyReadFailureMode, BodyRequirement, EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseFilterEntry,
         ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES,
@@ -524,6 +528,63 @@ mod tests {
         RequestFilterEntry::new(EdgionPlugin::JsonSchemaValidation(JsonSchemaValidationConfig {
             schema: json!({"type": "object"}),
         }))
+    }
+
+    fn form_json_entry() -> RequestFilterEntry {
+        RequestFilterEntry::new(EdgionPlugin::FormJsonTransform(FormJsonTransformConfig {
+            direction: FormJsonDirection::FormToJson,
+        }))
+    }
+
+    #[test]
+    fn form_json_transform_defaults_to_bounded_fail_close_request_body() {
+        let entry = form_json_entry();
+        let intrinsic = entry.plugin.body_requirement(BodyStage::Request).unwrap();
+        assert_eq!(intrinsic.max_body_size_bytes(), Some(Ok(DEFAULT_INSTANCE_MAX_BYTES)));
+        assert!(intrinsic.is_fail_close());
+        assert!(intrinsic.conditions.is_none());
+        assert!(entry.plugin.body_requirement(BodyStage::Response).is_none());
+    }
+
+    #[test]
+    fn form_json_transform_rejects_conditions_fail_open_and_oversized_limit() {
+        let mut entry = form_json_entry();
+        entry.body = Some(BodyRequirement {
+            max_body_size: Some((ABSOLUTE_INSTANCE_MAX_BYTES + 1).to_string()),
+            conditions: Some(Default::default()),
+            on_read_failure: BodyReadFailureMode::FailOpen,
+        });
+        let errors = with_request_plugins(vec![entry]).validate_plugins();
+        for expected in [
+            "conditions are not supported",
+            "body.onReadFailure must be failClose",
+            "must not exceed 1MiB",
+        ] {
+            assert!(
+                errors.iter().any(|error| error.contains(expected)),
+                "missing {expected:?}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn form_json_transform_is_request_stage_only() {
+        let entry = UpstreamResponseFilterEntry::new(form_json_entry().plugin);
+        let plugins = EdgionPlugins {
+            metadata: Default::default(),
+            spec: EdgionPluginsSpec {
+                upstream_response_filter_plugins: Some(vec![entry]),
+                ..Default::default()
+            },
+            status: None,
+        };
+        let errors = plugins.validate_plugins();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("plugin is not valid for upstream response filter stage")),
+            "{errors:?}"
+        );
     }
 
     #[test]

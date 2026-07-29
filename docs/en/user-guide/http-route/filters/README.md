@@ -19,6 +19,7 @@
   - [DSL](./edgion-plugins/dsl/README.md)
   - [DynamicUpstream](./edgion-plugins/dynamic-upstream.md)
   - [ForwardAuth](./edgion-plugins/forward-auth.md)
+  - [Form/JSON Transform](./edgion-plugins/form-json-transform.md)
   - [HeaderCertAuth](./edgion-plugins/header-cert-auth.md)
   - [HmacAuth](./edgion-plugins/hmac-auth.md)
   - [IP Restriction](./edgion-plugins/ip-restriction.md)

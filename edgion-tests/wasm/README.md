@@ -21,6 +21,8 @@ request headers so unrelated scenarios never interfere.
 | request headers         | header `x-wasm-read-body: 1`       | read shared `bodybytes` counter into request header `x-wasm-bodybytes`  |
 | request headers         | header `x-wasm-read-request-body: 1` | read the shared `requestbodybytes`, `requestbodycalls`, and `requestbodyeos` counters into the corresponding `x-wasm-*` request headers |
 | request headers         | header `x-wasm-read-callout: 1`    | read shared `calloutticks` counter into request header `x-wasm-calloutticks` |
+| request body            | header `x-wasm-rewrite-body: 1`    | exercise replace, insert, append, and delete; `abcdef` becomes `a+def!` |
+| request body            | header `x-wasm-append-body: 1`     | append `created`, including to a bodyless request |
 | request headers         | otherwise                          | request header `x-wasm-added: yes` is added                             |
 | request body            | guest exports the hook and request headers continue | `on_http_request_body` runs once with the complete body and `end_of_stream = true`; for a non-empty body, add its length, callback count, and terminal count to shared `requestbodybytes`, `requestbodycalls`, and `requestbodyeos` |
 | response headers        | always                             | response header `x-wasm-resp: yes` is added                             |

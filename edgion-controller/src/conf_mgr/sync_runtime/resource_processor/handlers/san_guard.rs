@@ -187,6 +187,7 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
                         | EdgionPlugin::RequestRestriction(_)
                         | EdgionPlugin::RequestBodyBuffer(_)
                         | EdgionPlugin::JsonSchemaValidation(_)
+                        | EdgionPlugin::FormJsonTransform(_)
                         | EdgionPlugin::ResponseRewrite(_)
                         | EdgionPlugin::RateLimit(_)
                         | EdgionPlugin::RateLimitRedis(_)

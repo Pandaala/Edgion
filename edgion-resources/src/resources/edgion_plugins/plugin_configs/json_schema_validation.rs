@@ -34,13 +34,16 @@ const DRAFT_2020_12_URI: &str = "https://json-schema.org/draft/2020-12/schema";
 ///
 /// Returned fragments include the `body` field name and can be appended to an
 /// entry-specific error prefix. Multiple independent errors are preserved.
-pub fn bounded_json_body_validation_errors(body: &BodyRequirement) -> Vec<String> {
+pub fn bounded_structured_body_validation_errors(body: &BodyRequirement) -> Vec<String> {
     let mut errors = Vec::new();
     if let Some(error) = body.validation_error() {
         errors.push(format!("body: {error}"));
     }
     if body.conditions.is_some() {
         errors.push("body: conditions are not supported".to_string());
+    }
+    if !body.is_fail_close() {
+        errors.push("body.onReadFailure must be failClose".to_string());
     }
     if body
         .max_body_size_bytes()
