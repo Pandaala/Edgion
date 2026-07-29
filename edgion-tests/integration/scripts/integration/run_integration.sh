@@ -615,9 +615,18 @@ start_ldap_tls_service_if_needed() {
         return 1
     fi
 
+    local cert_script="${LDAP_TLS_COMPOSE_DIR}/make-test-certs.sh"
+    if [ ! -f "$cert_script" ] || ! bash "$cert_script"; then
+        log_error "Failed to prepare LDAP TLS test certificates"
+        return 1
+    fi
+
     log_section "LDAP TLS dependency: start TLS OpenLDAP"
     local compose_output=""
-    compose_output=$(docker compose -f "${LDAP_TLS_COMPOSE_FILE}" up -d 2>&1) || {
+    # Recreate the containers so a previously missing bind-mounted certificate
+    # (which Docker materializes as a directory) cannot poison later runs after
+    # the certificate generator repairs the host path.
+    compose_output=$(docker compose -f "${LDAP_TLS_COMPOSE_FILE}" up -d --force-recreate 2>&1) || {
         log_error "Failed to start TLS OpenLDAP via docker compose"
         echo "$compose_output"
         return 1
@@ -1082,6 +1091,8 @@ run_all_tests() {
                     run_test "Gateway_Security" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i Security" || test_failed=true
                     run_test "Gateway_RealIP" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i RealIP" || test_failed=true
                     run_test "Gateway_TLS_BackendTLS" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i TLS/BackendTLS" || test_failed=true
+        run_test "Gateway_TLS_BackendTLSGatewayCert" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i TLS/BackendTLSGatewayCert" || test_failed=true
+        run_test "Gateway_TLS_MisdirectedRequest" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i TLS/MisdirectedRequest" || test_failed=true
                     run_test "Gateway_TLS_GatewayTLS" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
                     run_test "Gateway_ListenerHostname" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i ListenerHostname" || test_failed=true
                     run_test "Gateway_AllowedRoutes_Same" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
@@ -1179,6 +1190,9 @@ run_all_tests() {
                     run_test "EdgionTls_mtls_failclose" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i mtls_failclose" || test_failed=true
                     run_test "EdgionTls_fallback_sni" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i fallback_sni" || test_failed=true
                     run_test "EdgionTls_BothAbsentParentRef" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i BothAbsentParentRef" || test_failed=true
+        run_test "EdgionTls_port_only" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i port_only" || test_failed=true
+        run_test "EdgionTls_sni_collision" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i sni_collision" || test_failed=true
+        run_test "EdgionTls_wildcard_single_label" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i wildcard_single_label" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "EdgionTls_${item_safe}" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i ${G_ITEM}" || test_failed=true
@@ -1194,6 +1208,9 @@ run_all_tests() {
                     run_test "Status_GatewayFrontendValidation" "${EDGION_TEST_CLIENT_BIN} -g -r Status -i GatewayFrontendValidation" || test_failed=true
                     run_test "Status_TLSListenerMode" "${EDGION_TEST_CLIENT_BIN} -g -r Status -i TLSListenerMode" || test_failed=true
                     run_test "Status_TLSRoute" "${EDGION_TEST_CLIENT_BIN} -g -r Status -i TLSRoute" || test_failed=true
+        run_test "Status_GRPCRoute" "${EDGION_TEST_CLIENT_BIN} -g -r Status -i GRPCRoute" || test_failed=true
+        run_test "Status_HostnameIntersection" "${EDGION_TEST_CLIENT_BIN} -g -r Status -i HostnameIntersection" || test_failed=true
+        run_test "Status_RefGrant_EdgionConfigData" "${EDGION_TEST_CLIENT_BIN} -g -r Status -i RefGrant/EdgionConfigData" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "Status_${item_safe}" "${EDGION_TEST_CLIENT_BIN} -g -r Status -i ${G_ITEM}" || test_failed=true
@@ -1271,19 +1288,43 @@ run_all_tests() {
         run_test "HTTPRoute_Filters_HeaderModifier" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Filters/HeaderModifier" || test_failed=true
         run_test "HTTPRoute_Filters_FilterConflict" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Filters/FilterConflict" || test_failed=true
         run_test "HTTPRoute_Protocol_WebSocket" "${EDGION_TEST_CLIENT_BIN} -g websocket" || test_failed=true
+        run_test "HTTPRoute_Protocol_H2C" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Protocol/H2C" || test_failed=true
+        run_test "HTTPRoute_Protocol_GrpcWeb" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Protocol/GrpcWeb" || test_failed=true
+        run_test "HTTPRoute_Protocol_H2TrailerMalformed" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Protocol/H2TrailerMalformed" || test_failed=true
         run_test "HTTPRoute_MultiPort" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i MultiPort" || test_failed=true
-        
+        run_test "HTTPRoute_Backend_LBEwma" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Backend/LBEwma" || test_failed=true
+        run_test "HTTPRoute_Backend_LBEwmaRetryOnStatus" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Backend/LBEwmaRetryOnStatus" || test_failed=true
+        run_test "HTTPRoute_Backend_PanicThreshold" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Backend/PanicThreshold" || test_failed=true
+        run_test "HTTPRoute_DanglingExtensionRef" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i DanglingExtensionRef" || test_failed=true
+        run_test "HTTPRoute_Filters_PercentMirror" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Filters/PercentMirror" || test_failed=true
+
+        # EdgionBackendTrafficPolicy Tests
+        # Ordered after the HTTPRoute/Backend block on purpose: the control-plane
+        # suite has no port_key() and resolves to HTTPRoute/Backend/CircuitBreaker's
+        # listener (31302). It is admin-API-only (12001) and cleans its policies up
+        # before and after, but running it after CircuitBreaker keeps the shared
+        # listener's owner first. The three data-plane suites each override
+        # port_key() with a listener of their own (31936 / 31942 / 31943).
+        run_test "EdgionBackendTrafficPolicy" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackendTrafficPolicy" || test_failed=true
+        run_test "EdgionBackendTrafficPolicy_UpstreamAuthority" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackendTrafficPolicy -i UpstreamAuthority" || test_failed=true
+        run_test "EdgionBackendTrafficPolicy_RetryBudget" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackendTrafficPolicy -i RetryBudget" || test_failed=true
+        run_test "EdgionBackendTrafficPolicy_ConnectTimeout" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackendTrafficPolicy -i ConnectTimeout" || test_failed=true
+
         # GRPCRoute Tests
         run_test "GRPCRoute_Basic" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Basic" || test_failed=true
         run_test "GRPCRoute_Match" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Match" || test_failed=true
         run_test "GRPCRoute_RateLimit" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i RateLimit" || test_failed=true
         run_test "GRPCRoute_Backend_SessionPersistence" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Backend/SessionPersistence" || test_failed=true
         run_test "GRPCRoute_Backend_SessionPersistenceWeighted" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Backend/SessionPersistenceWeighted" || test_failed=true
+        run_test "GRPCRoute_Delegation" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Delegation" || test_failed=true
+        run_test "GRPCRoute_UnmatchedRoute" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i UnmatchedRoute" || test_failed=true
 
         # TCPRoute Tests
         run_test "TCPRoute_Basic" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i Basic" || test_failed=true
+        run_test "TCPRoute_KeepaliveSmoke" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i KeepaliveSmoke" || test_failed=true
         run_test "TCPRoute_StreamPlugins" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i StreamPlugins" || test_failed=true
         run_test "TCPRoute_IdleTimeout" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i IdleTimeout" || test_failed=true
+        run_test "TCPRoute_GlobalConnectionIpRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i GlobalConnectionIpRestriction" || test_failed=true
         
         # TLSRoute Tests
         run_test "TLSRoute_Basic" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i Basic" || test_failed=true
@@ -1292,6 +1333,7 @@ run_all_tests() {
         run_test "TLSRoute_MultiSNI" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i MultiSNI" || test_failed=true
         run_test "TLSRoute_BothAbsentParentRef" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i BothAbsentParentRef" || test_failed=true
         run_test "TLSRoute_Passthrough" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i Passthrough" || test_failed=true
+        run_test "TLSRoute_UnknownKindBackend" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i UnknownKindBackend" || test_failed=true
 
         # UDPRoute Tests
         run_test "UDPRoute_Basic" "${EDGION_TEST_CLIENT_BIN} -g -r UDPRoute -i Basic" || test_failed=true
@@ -1301,6 +1343,8 @@ run_all_tests() {
         run_test "Gateway_Security" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i Security" || test_failed=true
         run_test "Gateway_RealIP" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i RealIP" || test_failed=true
         run_test "Gateway_TLS_BackendTLS" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i TLS/BackendTLS" || test_failed=true
+        run_test "Gateway_TLS_BackendTLSGatewayCert" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i TLS/BackendTLSGatewayCert" || test_failed=true
+        run_test "Gateway_TLS_MisdirectedRequest" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i TLS/MisdirectedRequest" || test_failed=true
         # EdgionPlugins Tests
         run_test "EdgionPlugins_DebugAccessLog" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
         run_test "EdgionPlugins_Csrf" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i Csrf" || test_failed=true
@@ -1309,6 +1353,15 @@ run_all_tests() {
         run_test "EdgionPlugins_CtxSet" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i CtxSet" || test_failed=true
         run_test "EdgionPlugins_JwtAuth" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i JwtAuth" || test_failed=true
         run_test "EdgionPlugins_JweDecrypt" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i JweDecrypt" || test_failed=true
+        run_test "EdgionPlugins_Wasm" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i Wasm" || test_failed=true
+        run_test "EdgionPlugins_TraceContext" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i TraceContext" || test_failed=true
+        run_test "EdgionPlugins_AccessLogExtern" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i AccessLogExtern" || test_failed=true
+        run_test "EdgionPlugins_MatchedRouteMeta" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i MatchedRouteMeta" || test_failed=true
+        run_test "EdgionPlugins_IpRestrictionRefs" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i IpRestrictionRefs" || test_failed=true
+        run_test "EdgionPlugins_PluginValidationStatus" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i PluginValidationStatus" || test_failed=true
+        run_test "EdgionPlugins_GlobalPluginsSnapshot" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GlobalPluginsSnapshot" || test_failed=true
+        run_test "EdgionPlugins_EdgionConfigDataManaged" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i EdgionConfigDataManaged" || test_failed=true
+        run_test "EdgionPlugins_PathNormalization_PreserveParam" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i PathNormalization/PreserveParam" || test_failed=true
         run_test "EdgionPlugins_HmacAuth" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i HmacAuth" || test_failed=true
         run_test "EdgionPlugins_HeaderCertAuth" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i HeaderCertAuth" || test_failed=true
         run_test "EdgionPlugins_KeyAuth" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i KeyAuth" || test_failed=true
@@ -1349,6 +1402,7 @@ run_all_tests() {
         run_test "EdgionPlugins_EdgionConfigDataStatus" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i EdgionConfigDataStatus" || test_failed=true
         run_test "EdgionPlugins_ResolvedRefs" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ResolvedRefs" || test_failed=true
         run_test "EdgionPlugins_WebhookKeyGet" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
+        run_test "EdgionPlugins_Cors" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i Cors" || test_failed=true
         run_test "EdgionPlugins_Dsl" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i Dsl" || test_failed=true
         run_test "EdgionPlugins_DslGrpcError" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DslGrpcError" || test_failed=true
         run_test "EdgionPlugins_DslBody" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DslBody" || test_failed=true
@@ -1380,6 +1434,9 @@ run_all_tests() {
         run_test "EdgionTls_mtls_failclose" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i mtls_failclose" || test_failed=true
         run_test "EdgionTls_fallback_sni" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i fallback_sni" || test_failed=true
         run_test "EdgionTls_BothAbsentParentRef" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i BothAbsentParentRef" || test_failed=true
+        run_test "EdgionTls_port_only" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i port_only" || test_failed=true
+        run_test "EdgionTls_sni_collision" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i sni_collision" || test_failed=true
+        run_test "EdgionTls_wildcard_single_label" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionTls -i wildcard_single_label" || test_failed=true
         
         # Controller Status Tests
         run_test "Status_RefGrant" "${EDGION_TEST_CLIENT_BIN} -g -r Status -i RefGrant" || test_failed=true
@@ -1390,6 +1447,9 @@ run_all_tests() {
         run_test "Status_GatewayFrontendValidation" "${EDGION_TEST_CLIENT_BIN} -g -r Status -i GatewayFrontendValidation" || test_failed=true
         run_test "Status_TLSListenerMode" "${EDGION_TEST_CLIENT_BIN} -g -r Status -i TLSListenerMode" || test_failed=true
         run_test "Status_TLSRoute" "${EDGION_TEST_CLIENT_BIN} -g -r Status -i TLSRoute" || test_failed=true
+        run_test "Status_GRPCRoute" "${EDGION_TEST_CLIENT_BIN} -g -r Status -i GRPCRoute" || test_failed=true
+        run_test "Status_HostnameIntersection" "${EDGION_TEST_CLIENT_BIN} -g -r Status -i HostnameIntersection" || test_failed=true
+        run_test "Status_RefGrant_EdgionConfigData" "${EDGION_TEST_CLIENT_BIN} -g -r Status -i RefGrant/EdgionConfigData" || test_failed=true
         run_test "LinkSys_Status" "${EDGION_TEST_CLIENT_BIN} -g -r LinkSys -i Status" || test_failed=true
         run_test "LinkSys_Redis" "$(linksys_redis_cmd)" || test_failed=true
 
@@ -1404,8 +1464,9 @@ run_all_tests() {
         run_dynamic_scenarios
     fi
 
-    # Run dynamic scenarios when narrow scope = Gateway or Status
-    if [ -n "$G_RESOURCE" ] && [ "$G_RESOURCE" = "Gateway" ]; then
+    # A resource-wide Gateway sweep loads the dynamic fixtures. An exact
+    # Gateway item only loads that item's fixtures and must remain isolated.
+    if [ "$G_RESOURCE" = "Gateway" ] && [ -z "$G_ITEM" ]; then
         run_dynamic_scenarios
     fi
 
@@ -1500,7 +1561,7 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/GlobalAccessControl,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/DslBody,EdgionPlugins/BodyPlugins,EdgionPlugins/JsonSchemaValidation,EdgionPlugins/AllEndpointStatus"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/GlobalAccessControl,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/DslBody,EdgionPlugins/BodyPlugins,EdgionPlugins/JsonSchemaValidation,EdgionPlugins/AllEndpointStatus,EdgionPlugins/Wasm,EdgionPlugins/TraceContext,EdgionPlugins/AccessLogExtern,EdgionPlugins/MatchedRouteMeta,EdgionPlugins/IpRestrictionRefs,EdgionPlugins/PluginValidationStatus,EdgionPlugins/GlobalPluginsSnapshot,EdgionPlugins/EdgionConfigDataManaged,EdgionPlugins/PathNormalization/PreserveParam"
                 if $FULL_TEST; then
                     suites="${suites},EdgionPlugins/LdapAuth,EdgionPlugins/LdapAuthTls"
                 fi

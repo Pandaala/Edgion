@@ -34,3 +34,11 @@ spec:
         - name: test-http
           namespace: edgion-test
           port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: "/supported-kind"
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

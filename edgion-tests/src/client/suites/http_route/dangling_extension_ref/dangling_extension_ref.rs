@@ -102,7 +102,11 @@ impl DanglingExtensionRefTestSuite {
                             Ok(resp) if resp.status().is_success() => {
                                 match resp.json::<serde_json::Value>().await {
                                     Ok(body) if body["success"].as_bool().unwrap_or(false) => {
-                                        if let Some(conditions) = body["data"]["status"]["conditions"].as_array() {
+                                        let conditions = body["data"]["status"]["parents"]
+                                            .as_array()
+                                            .and_then(|parents| parents.first())
+                                            .and_then(|parent| parent["conditions"].as_array());
+                                        if let Some(conditions) = conditions {
                                             if let Some(cond) = conditions
                                                 .iter()
                                                 .find(|c| c["type"].as_str() == Some("PartiallyInvalid"))
@@ -124,10 +128,11 @@ impl DanglingExtensionRefTestSuite {
                                                 last_err =
                                                     format!("PartiallyInvalid present but status != True: {:?}", cond);
                                             } else {
-                                                last_err = "status.conditions lacks PartiallyInvalid".to_string();
+                                                last_err =
+                                                    "status.parents[0].conditions lacks PartiallyInvalid".to_string();
                                             }
                                         } else {
-                                            last_err = "status.conditions not present".to_string();
+                                            last_err = "status.parents[0].conditions not present".to_string();
                                         }
                                     }
                                     Ok(body) => {

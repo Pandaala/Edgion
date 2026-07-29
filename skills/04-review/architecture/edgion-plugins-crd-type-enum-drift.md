@@ -40,9 +40,11 @@ Two classes of re-report are **not accepted** as drift:
 **1. The CRD enum is per-stage, mirroring `applicable_stages`, not one global list**
 
 `EdgionPlugins.spec` has four plugin-list fields, each with its own `items.properties.type`
-enum scoped to the plugins valid at that execution stage. The authoritative Rust mapping is the
-exhaustive `applicable_stages(&EdgionPlugin) -> StageSet` match (request / upstreamResponseFilter
-/ upstreamResponseBodyFilter / upstreamResponse). A reviewer who diffs the full `EdgionPlugin`
+enum scoped to the plugins valid at that execution stage. The authoritative Rust mapping is
+`HTTP_PLUGIN_STAGE_EXCEPTIONS` in `edgion_plugins/validate.rs` — a `pub const` table keyed by
+`type_name()`, listing only the plugins that are NOT request-stage-only, read through
+`applicable_stages_by_name()` (request / upstreamResponseFilter / upstreamResponseBodyFilter /
+upstreamResponse). A reviewer who diffs the full `EdgionPlugin`
 enum against just the `requestPlugins` enum will over-report — that is exactly how the original
 issue mis-counted `ResponseRewrite`/`BandwidthLimit` as "missing".
 
@@ -51,15 +53,21 @@ issue mis-counted `ResponseRewrite`/`BandwidthLimit` as "missing".
 `crd_coverage.rs` field-guards only the two fully-structural CRDs; the plugin CRD's `config` is
 `x-kubernetes-preserve-unknown-fields`, so nothing compared the discriminator enums against the
 Rust variants. The new guard `plugin_crd_type_coverage.rs` reads the variant universe from
-`schema_for!(EdgionPlugin)` and applies two checks:
+`schema_for!(EdgionPlugin)` and applies three checks:
 - Direction-1 (per-stage SUPERSET): for each stage, every variant valid at that stage appears in
   that stage's CRD enum. This is deliberately per-stage, not "appears in ≥1 enum" — a flattened
   check is fooled by the lenient request-stage entries (drop `ResponseHeaderModifier` from
   `upstreamResponseFilterPlugins` and the leftover `requestPlugins` entry would mask that it is
-  now un-appliable at its only valid stage). The per-stage applicability table mirrors the six
-  exception arms of `applicable_stages`; every other variant defaults to request-only.
+  now un-appliable at its only valid stage). Stage facts are read from
+  `applicable_stages_by_name`; the guard no longer keeps its own copy of the table.
 - Direction-2: every stage-enum entry names a real variant, with no duplicates (catches dead /
   duplicate entries).
+- Direction-3 (`response_stage_enum_entries_are_valid_at_that_stage`): every entry in a
+  *response-stage* enum is genuinely valid at that stage. Nothing else catches this — Direction-1
+  is a deliberate superset check and Direction-2 only rejects names matching no variant, so a
+  request-only plugin wrongly listed in `upstreamResponseFilterPlugins` would slip past both and
+  an operator could apply it at a stage where it silently never runs. `requestPlugins` is exempt
+  by design (see the lenient-admission note below).
 The guard is a SUPERSET check, not exact-equality: it permits the lenient extra entries
 (`ResponseHeaderModifier`/`DebugAccessLogToHeader` in `requestPlugins`) without flagging them, so
 it does not force a switch to hard admission rejection for wrong-stage placement. A future
@@ -85,8 +93,10 @@ conditions where possible, and keep the typed enum strict.
 ## Reference
 
 - CRD: `config/crd/edgion-crd/edgion_plugins_crd.yaml` (per-stage `type` enums)
-- Rust authority: `edgion-resources/src/resources/edgion_plugins/validate.rs` (`applicable_stages`),
-  `edgion_plugin.rs` (`EdgionPlugin`, `type_name`)
-- Guard: `edgion-resources/tests/plugin_crd_type_coverage.rs`
+- Rust authority: `edgion-resources/src/resources/edgion_plugins/validate.rs`
+  (`HTTP_PLUGIN_STAGE_EXCEPTIONS`, `applicable_stages_by_name`), `edgion_plugin.rs`
+  (`EdgionPlugin`, `type_name`)
+- Guard: `edgion-resources/tests/plugin_crd_type_coverage.rs`; stream family:
+  `edgion-resources/tests/stream_plugin_crd_type_coverage.rs`
 - Integration wiring: `EdgionPlugins/FaultInjection` now has a `run_test` in both sweep blocks of
   `edgion-tests/integration/scripts/integration/run_integration.sh`

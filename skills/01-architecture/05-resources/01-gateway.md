@@ -24,7 +24,11 @@ Filters by `gatewayClassName`. If `gateway_class_name` is configured as `Some(na
 ### parse
 
 1. **Clear stale references**: clear records for this Gateway from SecretRefManager and CrossNsRefManager (handles the update case)
-2. **Resolve TLS certificates**: iterate over each Listener's `tls.certificateRefs`:
+2. **Resolve the backend client certificate**: resolve
+   `spec.tls.backend.clientCertificateRef`, register it in SecretRefManager, and populate
+   `resolvedClientCertificate` for conf_sync. Cross-namespace references require a
+   ReferenceGrant.
+3. **Resolve listener TLS certificates**: iterate over each Listener's `tls.certificateRefs`:
    - Register the reference relationship in SecretRefManager (Secret changes will automatically requeue this Gateway)
    - If it is a cross-namespace reference, also register it in CrossNsRefManager
    - Read Secret data from `ctx.runtime().secret_store` and populate the resolved TLS transport field
@@ -61,6 +65,7 @@ After the Gateway resource is synced to the Gateway side, it is used to configur
 | Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
 | Gateway ← Routes | HTTPRoute/GRPCRoute/TCPRoute/TLSRoute/UDPRoute | parentRef | Routes attach to a Gateway's Listener via parentRef |
+| Gateway → Secret | Secret | `spec.tls.backend.clientCertificateRef` | Default client identity for upstream mTLS |
 | Gateway → Secret | Secret | certificateRefs | Listener TLS configuration references certificates in Secrets |
 | Gateway ← EdgionTls | EdgionTls | parentRef | EdgionTls binds to a Gateway via parentRef |
 | Gateway ← GatewayClass | GatewayClass | gatewayClassName | Gateway references a GatewayClass |

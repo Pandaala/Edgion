@@ -475,19 +475,68 @@ async fn fan_out_with_wall_timeout(
 
     loop {
         tokio::select! {
-            Some(result) = unordered.next() => {
-                results.push(result);
+            result = unordered.next() => {
+                match result {
+                    Some(result) => results.push(result),
+                    None => break,
+                }
             }
             _ = &mut deadline => {
                 let remaining = unordered.len();
-                let _ = remaining;
                 return (results, remaining > 0);
             }
-            else => break,
         }
     }
 
     (results, false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn endpoint_result(address: String) -> EndpointResult {
+        EndpointResult {
+            address,
+            status: Some(200),
+            latency_ms: 0,
+            body: Some("OK".to_string()),
+            body_truncated: false,
+            headers: None,
+            error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn fan_out_returns_when_all_requests_complete() {
+        let futures = (0..2)
+            .map(|i| async move { endpoint_result(format!("127.0.0.1:{}", 30001 + i)) })
+            .collect();
+        let start = Instant::now();
+
+        let (results, wall_timeout_hit) = fan_out_with_wall_timeout(futures, Duration::from_secs(1)).await;
+
+        assert_eq!(results.len(), 2);
+        assert!(!wall_timeout_hit);
+        assert!(start.elapsed() < Duration::from_millis(100));
+    }
+
+    #[tokio::test]
+    async fn fan_out_preserves_results_completed_before_wall_timeout() {
+        let futures = [1_u64, 500]
+            .into_iter()
+            .map(|delay_ms| async move {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                endpoint_result(format!("delay-{delay_ms}"))
+            })
+            .collect();
+
+        let (results, wall_timeout_hit) = fan_out_with_wall_timeout(futures, Duration::from_millis(50)).await;
+
+        assert!(wall_timeout_hit);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].address, "delay-1");
+    }
 }
 
 // ============================================================

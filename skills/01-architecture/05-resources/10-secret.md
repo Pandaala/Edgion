@@ -150,7 +150,7 @@ The following plaintext copies are **not** zeroized: `SecretStore` cache, `serde
 
 | Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
-| Secret → Gateway | Gateway | SecretRefManager | `certificateRefs` (TLS certificates) |
+| Secret → Gateway | Gateway | SecretRefManager | Listener `certificateRefs` and Gateway-level backend `clientCertificateRef` |
 | Secret → EdgionTls | EdgionTls | SecretRefManager | `secret_ref` / `ca_secret_ref` |
 | Secret → EdgionPlugins | EdgionPlugins | SecretRefManager | JWT / BasicAuth / HMAC / KeyAuth / OIDC, etc. |
 | Secret → EdgionAcme | EdgionAcme | SecretRefManager | `privateKeySecretRef` (account private key, `AcmeAccountResolver`) + `dns01.credentialRef` (DNS Provider API) |

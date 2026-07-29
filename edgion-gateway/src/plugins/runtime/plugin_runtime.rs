@@ -1217,8 +1217,53 @@ impl PluginRuntime {
     ) -> CreateResult<Box<dyn UpstreamResponse>> {
         match plugin {
             EdgionPlugin::ExtProc(config) => CreateResult::Ok(ExtProc::create_response(config)),
-            // Every other variant belongs to a different stage.
-            _ => CreateResult::WrongStage,
+            // Every other variant belongs to a different stage. Exhaustive
+            // (no `_`), matching the other three `create_*_from_edgion`
+            // constructors: these four matches are the runtime half of the
+            // stage table declared by `applicable_stages` in
+            // `edgion-resources/.../edgion_plugins/validate.rs`, and a `_` arm
+            // here would let a new async-stage plugin silently resolve to
+            // `WrongStage` instead of breaking the build.
+            EdgionPlugin::RequestHeaderModifier(_)
+            | EdgionPlugin::ResponseHeaderModifier(_)
+            | EdgionPlugin::RequestRedirect(_)
+            | EdgionPlugin::UrlRewrite(_)
+            | EdgionPlugin::RequestMirror(_)
+            | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::Cors(_)
+            | EdgionPlugin::Csrf(_)
+            | EdgionPlugin::IpRestriction(_)
+            | EdgionPlugin::JwtAuth(_)
+            | EdgionPlugin::JweDecrypt(_)
+            | EdgionPlugin::HmacAuth(_)
+            | EdgionPlugin::HeaderCertAuth(_)
+            | EdgionPlugin::KeyAuth(_)
+            | EdgionPlugin::LdapAuth(_)
+            | EdgionPlugin::Mock(_)
+            | EdgionPlugin::FaultInjection(_)
+            | EdgionPlugin::DebugAccessLogToHeader(_)
+            | EdgionPlugin::ProxyRewrite(_)
+            | EdgionPlugin::RequestRestriction(_)
+            | EdgionPlugin::RequestBodyBuffer(_)
+            | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::ResponseRewrite(_)
+            | EdgionPlugin::RateLimit(_)
+            | EdgionPlugin::RateLimitRedis(_)
+            | EdgionPlugin::CtxSet(_)
+            | EdgionPlugin::RealIp(_)
+            | EdgionPlugin::ForwardAuth(_)
+            | EdgionPlugin::OpenidConnect(_)
+            | EdgionPlugin::BandwidthLimit(_)
+            | EdgionPlugin::DirectEndpoint(_)
+            | EdgionPlugin::AllEndpointStatus(_)
+            | EdgionPlugin::DynamicInternalUpstream(_)
+            | EdgionPlugin::DynamicExternalUpstream(_)
+            | EdgionPlugin::Dsl(_)
+            | EdgionPlugin::RegionRoute(_)
+            | EdgionPlugin::TraceContext(_)
+            | EdgionPlugin::GlobalAccessControl(_)
+            | EdgionPlugin::Canary(_)
+            | EdgionPlugin::Wasm(_) => CreateResult::WrongStage,
         }
     }
 

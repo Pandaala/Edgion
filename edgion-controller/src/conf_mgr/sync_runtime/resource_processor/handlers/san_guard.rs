@@ -160,7 +160,50 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
                                 SAN_ENFORCED_EXT_PROC,
                             ));
                         }
-                        _ => {}
+                        // No outbound TLS `validation` block to guard. Exhaustive
+                        // (no `_`) on purpose: this is an admission gate for
+                        // "SAN pinning declared but not enforced", so a new
+                        // plugin that dials outbound TLS must be added above
+                        // rather than silently escaping the check. Mirrors the
+                        // exhaustive `SystemConfig` match in `check_link_sys_san`.
+                        EdgionPlugin::RequestHeaderModifier(_)
+                        | EdgionPlugin::ResponseHeaderModifier(_)
+                        | EdgionPlugin::RequestRedirect(_)
+                        | EdgionPlugin::UrlRewrite(_)
+                        | EdgionPlugin::RequestMirror(_)
+                        | EdgionPlugin::BasicAuth(_)
+                        | EdgionPlugin::Cors(_)
+                        | EdgionPlugin::Csrf(_)
+                        | EdgionPlugin::IpRestriction(_)
+                        | EdgionPlugin::JwtAuth(_)
+                        | EdgionPlugin::JweDecrypt(_)
+                        | EdgionPlugin::HmacAuth(_)
+                        | EdgionPlugin::HeaderCertAuth(_)
+                        | EdgionPlugin::KeyAuth(_)
+                        | EdgionPlugin::Mock(_)
+                        | EdgionPlugin::FaultInjection(_)
+                        | EdgionPlugin::DebugAccessLogToHeader(_)
+                        | EdgionPlugin::ProxyRewrite(_)
+                        | EdgionPlugin::RequestRestriction(_)
+                        | EdgionPlugin::RequestBodyBuffer(_)
+                        | EdgionPlugin::JsonSchemaValidation(_)
+                        | EdgionPlugin::ResponseRewrite(_)
+                        | EdgionPlugin::RateLimit(_)
+                        | EdgionPlugin::RateLimitRedis(_)
+                        | EdgionPlugin::CtxSet(_)
+                        | EdgionPlugin::RealIp(_)
+                        | EdgionPlugin::ForwardAuth(_)
+                        | EdgionPlugin::BandwidthLimit(_)
+                        | EdgionPlugin::DirectEndpoint(_)
+                        | EdgionPlugin::AllEndpointStatus(_)
+                        | EdgionPlugin::DynamicInternalUpstream(_)
+                        | EdgionPlugin::DynamicExternalUpstream(_)
+                        | EdgionPlugin::Dsl(_)
+                        | EdgionPlugin::RegionRoute(_)
+                        | EdgionPlugin::TraceContext(_)
+                        | EdgionPlugin::GlobalAccessControl(_)
+                        | EdgionPlugin::Canary(_)
+                        | EdgionPlugin::Wasm(_) => {}
                     }
                 }
             }

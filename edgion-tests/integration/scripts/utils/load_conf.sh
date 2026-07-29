@@ -88,6 +88,15 @@ is_runtime_generated_secret_template() {
         "Gateway/TLS/BackendTLSGatewayCert/Secret_edge_gateway-client-cert.yaml")
             return 0
             ;;
+        "EdgionPlugins/LdapAuthTls/00_Secret_default_ldap-ca-bundle.yaml")
+            return 0
+            ;;
+        "EdgionPlugins/LdapAuthTls/01_Secret_default_ldap-client-identity.yaml")
+            return 0
+            ;;
+        "EdgionPlugins/LdapAuthTls/05b_Secret_default_ldap-wrong-ca-bundle.yaml")
+            return 0
+            ;;
         "EdgionPlugins/HeaderCertAuth/01_Secret_default_header-cert-ca.yaml")
             return 0
             ;;

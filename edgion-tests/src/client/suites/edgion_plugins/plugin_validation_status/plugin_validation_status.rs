@@ -14,7 +14,7 @@
 //   08_EdgionPlugins_ep-validation-fault-injection-invalid.yaml — FaultInjection: ratio out of range + mutual exclusion
 //
 // Scenarios:
-//   1. jwt_auth_invalid          → Accepted=False/Invalid, message contains "secretRef"
+//   1. jwt_auth_invalid          → Accepted=False/Invalid, message contains "issuerGroups"
 //   2. cors_invalid              → Accepted=False/Invalid, message contains "allow_credentials"
 //   3. direct_ep_invalid         → Accepted=False/Invalid, message contains "regex"
 //   4. rate_limit_invalid        → Accepted=False/Invalid, message contains "rate"
@@ -136,7 +136,7 @@ impl PluginValidationStatusTestSuite {
             "JwtAuth 'ep-validation-jwt-auth-invalid': no credential → Accepted=False/Invalid",
             |ctx: TestContext| {
                 Box::pin(
-                    async move { assert_accepted_false(&ctx, "ep-validation-jwt-auth-invalid", "secretRef").await },
+                    async move { assert_accepted_false(&ctx, "ep-validation-jwt-auth-invalid", "issuerGroups").await },
                 )
             },
         )

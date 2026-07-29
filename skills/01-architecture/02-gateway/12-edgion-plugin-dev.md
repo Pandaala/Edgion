@@ -94,11 +94,33 @@ You typically touch at least these locations:
 1. `edgion-resources/src/resources/edgion_plugins/plugin_configs/<your_plugin>.rs`
 2. `edgion-resources/src/resources/edgion_plugins/plugin_configs/mod.rs`
 3. `edgion-resources/src/resources/edgion_plugins/mod.rs`
-4. `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs`
+4. `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs` — the enum variant plus
+   **six** exhaustive matches: `type_name`, `validation_error`, `body_requirement`,
+   `dye_capabilities`, `dye_type_prefix`, `key_header_names`. All six are exhaustive, so the
+   compiler tells you if you miss one.
 5. `edgion-gateway/src/plugins/http/<your_plugin>/mod.rs`
 6. `edgion-gateway/src/plugins/http/<your_plugin>/plugin.rs`
 7. `edgion-gateway/src/plugins/http/mod.rs`
-8. `edgion-gateway/src/plugins/runtime/plugin_runtime.rs`
+8. `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` — `get_plugin_name` plus all four
+   `create_*_from_edgion` constructors (the three where the plugin is invalid take a
+   `CreateResult::WrongStage` arm).
+
+Two more that the compiler does **not** catch:
+
+9. `config/crd/edgion-crd/edgion_plugins_crd.yaml` — add the type to the `type:` enum of every
+   stage the plugin is valid at. Miss this and the CRD prunes/rejects the plugin at admission,
+   i.e. it is un-appliable. Guarded by `edgion-resources/tests/plugin_crd_type_coverage.rs`.
+10. `edgion-resources/src/resources/edgion_plugins/validate.rs` — **only if the plugin is not
+    request-stage-only.** `HTTP_PLUGIN_STAGE_EXCEPTIONS` is the single source of truth for stage
+    applicability (request-only is the default and needs no entry); the CRD guard reads it via
+    `applicable_stages_by_name`. A key that names no real variant fails
+    `stage_exception_keys_are_real_variants`.
+
+Integration-test registration (suite module, `test_client.rs`, `run_integration.sh`,
+`capabilities.tsv`) is covered in
+[../../05-testing/01-integration-testing.md](../../05-testing/01-integration-testing.md). Note
+that a suite added to the `-r <Resource>` sweep but not the default sweep is **never run by CI** —
+`every_targeted_sweep_suite_also_runs_in_the_default_sweep` in `test_client.rs` guards that.
 
 ### If the plugin depends on a Secret
 

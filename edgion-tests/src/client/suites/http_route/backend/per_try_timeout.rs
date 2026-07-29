@@ -22,6 +22,12 @@ fn sp_token(ip: &str, port: u64) -> String {
     format!("{:016x}", u64::from_be_bytes(prefix))
 }
 
+/// Return the address-hash component from the session persistence wire token.
+/// Permanent cookies append an absolute expiry as `<addrhash>.<expiry>`.
+fn sp_wire_hash(token: &str) -> &str {
+    token.split_once('.').map_or(token, |(hash, _)| hash)
+}
+
 fn is_k8s_mode() -> bool {
     std::env::var("EDGION_TEST_K8S_MODE")
         .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
@@ -848,7 +854,7 @@ impl PerTryTimeoutTestSuite {
                     let u0 = &upstreams[0];
                     let u0_ip = u0["ip"].as_str().unwrap_or("");
                     let u0_port = u0["port"].as_u64().unwrap_or(0);
-                    if sp_token(u0_ip, u0_port) != token1 {
+                    if sp_token(u0_ip, u0_port) != sp_wire_hash(&token1) {
                         return TestResult::failed(
                             start.elapsed(),
                             format!(
@@ -870,7 +876,7 @@ impl PerTryTimeoutTestSuite {
                             format!("last upstream status expected 200, got {}", last_status),
                         );
                     }
-                    if sp_token(last_ip, last_port) != token2 {
+                    if sp_token(last_ip, last_port) != sp_wire_hash(&token2) {
                         return TestResult::failed(
                             start.elapsed(),
                             format!(
@@ -1021,7 +1027,7 @@ impl PerTryTimeoutTestSuite {
                     let last_ip = last["ip"].as_str().unwrap_or("");
                     let last_port = last["port"].as_u64().unwrap_or(0);
 
-                    if sp_token(u0_ip, u0_port) != token1 {
+                    if sp_token(u0_ip, u0_port) != sp_wire_hash(&token1) {
                         return TestResult::failed(
                             start.elapsed(),
                             format!(
@@ -1211,7 +1217,7 @@ impl PerTryTimeoutTestSuite {
                     let last = &upstreams[upstreams.len() - 1];
                     let last_ip = last["ip"].as_str().unwrap_or("");
                     let last_port = last["port"].as_u64().unwrap_or(0);
-                    if sp_token(last_ip, last_port) != token {
+                    if sp_token(last_ip, last_port) != sp_wire_hash(&token) {
                         return TestResult::failed(
                             start.elapsed(),
                             format!(

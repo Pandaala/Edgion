@@ -319,7 +319,39 @@ impl EdgionPlugin {
             // forward_auth/ldap_auth: fixed fail-close by policy (auth class never fails
             // open — the degrade switch was removed, see failure-policy-freeze design).
             EdgionPlugin::ForwardAuth(_) | EdgionPlugin::LdapAuth(_) => DYE_FAIL_CLOSE_ONLY,
-            _ => &[],
+            // Not dye-wired: no `record_outcome` call site exists in these
+            // plugins, so configuring any `dye:` outcome on them is an
+            // admission error. Exhaustive (no `_`) so a new plugin must make
+            // this choice deliberately instead of silently inheriting "no dye".
+            EdgionPlugin::RequestHeaderModifier(_)
+            | EdgionPlugin::ResponseHeaderModifier(_)
+            | EdgionPlugin::RequestRedirect(_)
+            | EdgionPlugin::UrlRewrite(_)
+            | EdgionPlugin::RequestMirror(_)
+            | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::Cors(_)
+            | EdgionPlugin::Csrf(_)
+            | EdgionPlugin::IpRestriction(_)
+            | EdgionPlugin::JwtAuth(_)
+            | EdgionPlugin::JweDecrypt(_)
+            | EdgionPlugin::HmacAuth(_)
+            | EdgionPlugin::HeaderCertAuth(_)
+            | EdgionPlugin::KeyAuth(_)
+            | EdgionPlugin::Mock(_)
+            | EdgionPlugin::FaultInjection(_)
+            | EdgionPlugin::DebugAccessLogToHeader(_)
+            | EdgionPlugin::ProxyRewrite(_)
+            | EdgionPlugin::RequestRestriction(_)
+            | EdgionPlugin::RequestBodyBuffer(_)
+            | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::ResponseRewrite(_)
+            | EdgionPlugin::RateLimit(_)
+            | EdgionPlugin::CtxSet(_)
+            | EdgionPlugin::RealIp(_)
+            | EdgionPlugin::BandwidthLimit(_)
+            | EdgionPlugin::AllEndpointStatus(_)
+            | EdgionPlugin::TraceContext(_)
+            | EdgionPlugin::GlobalAccessControl(_) => &[],
         }
     }
 
@@ -339,7 +371,38 @@ impl EdgionPlugin {
             EdgionPlugin::OpenidConnect(_) => "openid_connect",
             EdgionPlugin::ForwardAuth(_) => "forward_auth",
             EdgionPlugin::LdapAuth(_) => "ldap_auth",
-            _ => "",
+            // Not dye-wired (empty `dye_capabilities`), so no prefix is ever
+            // emitted. Exhaustive (no `_`) so wiring dye onto a new plugin
+            // cannot silently ship an unprefixed, collision-prone value.
+            EdgionPlugin::RequestHeaderModifier(_)
+            | EdgionPlugin::ResponseHeaderModifier(_)
+            | EdgionPlugin::RequestRedirect(_)
+            | EdgionPlugin::UrlRewrite(_)
+            | EdgionPlugin::RequestMirror(_)
+            | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::Cors(_)
+            | EdgionPlugin::Csrf(_)
+            | EdgionPlugin::IpRestriction(_)
+            | EdgionPlugin::JwtAuth(_)
+            | EdgionPlugin::JweDecrypt(_)
+            | EdgionPlugin::HmacAuth(_)
+            | EdgionPlugin::HeaderCertAuth(_)
+            | EdgionPlugin::KeyAuth(_)
+            | EdgionPlugin::Mock(_)
+            | EdgionPlugin::FaultInjection(_)
+            | EdgionPlugin::DebugAccessLogToHeader(_)
+            | EdgionPlugin::ProxyRewrite(_)
+            | EdgionPlugin::RequestRestriction(_)
+            | EdgionPlugin::RequestBodyBuffer(_)
+            | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::ResponseRewrite(_)
+            | EdgionPlugin::RateLimit(_)
+            | EdgionPlugin::CtxSet(_)
+            | EdgionPlugin::RealIp(_)
+            | EdgionPlugin::BandwidthLimit(_)
+            | EdgionPlugin::AllEndpointStatus(_)
+            | EdgionPlugin::TraceContext(_)
+            | EdgionPlugin::GlobalAccessControl(_) => "",
         }
     }
 
@@ -382,10 +445,49 @@ impl EdgionPlugin {
                 }
                 names
             }
-            // Canary has no key-source configuration (profile selection is
-            // driven by `activeProfile`/`activeProfileRef`, not a request key)
-            // and was never a `key_collision_error` call site.
-            _ => Vec::new(),
+            // No header-typed routing key source to protect. Canary is here
+            // deliberately: profile selection is driven by
+            // `activeProfile`/`activeProfileRef`, not a request key, and it was
+            // never a `key_collision_error` call site. Exhaustive (no `_`) so a
+            // new routing-key plugin cannot silently skip the dye/key collision
+            // check and have its own routing input stripped by a dye header.
+            EdgionPlugin::RequestHeaderModifier(_)
+            | EdgionPlugin::ResponseHeaderModifier(_)
+            | EdgionPlugin::RequestRedirect(_)
+            | EdgionPlugin::UrlRewrite(_)
+            | EdgionPlugin::RequestMirror(_)
+            | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::Cors(_)
+            | EdgionPlugin::Csrf(_)
+            | EdgionPlugin::IpRestriction(_)
+            | EdgionPlugin::JwtAuth(_)
+            | EdgionPlugin::JweDecrypt(_)
+            | EdgionPlugin::HmacAuth(_)
+            | EdgionPlugin::HeaderCertAuth(_)
+            | EdgionPlugin::KeyAuth(_)
+            | EdgionPlugin::LdapAuth(_)
+            | EdgionPlugin::Mock(_)
+            | EdgionPlugin::FaultInjection(_)
+            | EdgionPlugin::DebugAccessLogToHeader(_)
+            | EdgionPlugin::ProxyRewrite(_)
+            | EdgionPlugin::RequestRestriction(_)
+            | EdgionPlugin::RequestBodyBuffer(_)
+            | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::ResponseRewrite(_)
+            | EdgionPlugin::RateLimit(_)
+            | EdgionPlugin::RateLimitRedis(_)
+            | EdgionPlugin::CtxSet(_)
+            | EdgionPlugin::RealIp(_)
+            | EdgionPlugin::ForwardAuth(_)
+            | EdgionPlugin::OpenidConnect(_)
+            | EdgionPlugin::BandwidthLimit(_)
+            | EdgionPlugin::AllEndpointStatus(_)
+            | EdgionPlugin::Dsl(_)
+            | EdgionPlugin::TraceContext(_)
+            | EdgionPlugin::ExtProc(_)
+            | EdgionPlugin::GlobalAccessControl(_)
+            | EdgionPlugin::Canary(_)
+            | EdgionPlugin::Wasm(_) => Vec::new(),
         }
     }
 

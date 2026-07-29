@@ -31,80 +31,91 @@ use super::EdgionPlugins;
 use crate::resources::common::log_labels::LOG_LABEL_MAX_COUNT;
 
 /// Per-variant stage applicability, mirroring the four
-/// `PluginRuntime::create_*_from_edgion` matches in `edgion-gateway`. The
-/// exhaustive match means a newly added `EdgionPlugin` variant fails to compile
-/// until its stages are declared here, keeping the two in lockstep.
-#[derive(Clone, Copy)]
-struct StageSet {
-    request: bool,
-    upstream_response_filter: bool,
-    upstream_response_body_filter: bool,
-    upstream_response: bool,
+/// `PluginRuntime::create_*_from_edgion` matches in `edgion-gateway`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct StageSet {
+    pub request: bool,
+    pub upstream_response_filter: bool,
+    pub upstream_response_body_filter: bool,
+    pub upstream_response: bool,
 }
 
-/// Which execution stages a plugin variant is valid for.
+impl StageSet {
+    /// The default shape: valid only in the request stage.
+    pub const REQUEST_ONLY: StageSet = StageSet {
+        request: true,
+        upstream_response_filter: false,
+        upstream_response_body_filter: false,
+        upstream_response: false,
+    };
+
+    const fn new(
+        request: bool,
+        upstream_response_filter: bool,
+        upstream_response_body_filter: bool,
+        upstream_response: bool,
+    ) -> StageSet {
+        StageSet {
+            request,
+            upstream_response_filter,
+            upstream_response_body_filter,
+            upstream_response,
+        }
+    }
+}
+
+/// Plugin types that are NOT request-stage-only. Every `EdgionPlugin` variant
+/// absent from this table is request-stage-only.
+///
+/// This is the single source of truth for stage applicability. It is keyed by
+/// [`EdgionPlugin::type_name`] so the CRD drift guard can consume it directly
+/// instead of maintaining its own copy — the mirror table that used to live in
+/// `edgion-resources/tests/plugin_crd_type_coverage.rs` is gone.
+///
+/// Because this is a lookup rather than an exhaustive `match`, a new variant
+/// silently defaults to request-only. That default is correct for the large
+/// majority, and the case where it is not is caught two ways:
+/// `stage_exception_keys_are_real_variants` proves every key here names a real
+/// variant (read from `schema_for!(EdgionPlugin)`, i.e. the schema the CRD and
+/// `plugin_policy` actually consume), and the CRD guard's Direction-3 proves
+/// nothing reaches a response-stage CRD enum without being declared here.
+pub const HTTP_PLUGIN_STAGE_EXCEPTIONS: &[(&str, StageSet)] = &[
+    // Upstream-response-filter-stage-only plugins.
+    ("ResponseHeaderModifier", StageSet::new(false, true, false, false)),
+    ("DebugAccessLogToHeader", StageSet::new(false, true, false, false)),
+    ("ResponseRewrite", StageSet::new(false, true, false, false)),
+    // Upstream-response-body-filter-stage-only plugins.
+    ("BandwidthLimit", StageSet::new(false, false, true, false)),
+    // DSL runs in both the request and the upstream-response-filter stages.
+    ("Dsl", StageSet::new(true, true, false, false)),
+    // Wasm (proxy-wasm guest) runs in the request, upstream-response-filter,
+    // and upstream-response-body-filter (read-only observation) stages,
+    // matching its three CRD stage enum entries.
+    ("Wasm", StageSet::new(true, true, true, false)),
+    // ExtProc runs in the request stage and the async upstream-response stage.
+    ("ExtProc", StageSet::new(true, false, false, true)),
+];
+
+/// Which execution stages a plugin type name is valid for.
 ///
 /// This mirrors `edgion-gateway`'s `create_*_from_edgion` stage gating: a
 /// variant that those functions answer with `WrongStage` is `false` here. The
 /// `upstream_response` (async) stage currently accepts only `ExtProc`.
-fn applicable_stages(plugin: &EdgionPlugin) -> StageSet {
-    use EdgionPlugin::*;
-    // Tuple order: (request, upstreamResponseFilter, upstreamResponseBodyFilter, upstreamResponse)
-    let (request, upstream_response_filter, upstream_response_body_filter, upstream_response) = match plugin {
-        // Upstream-response-filter-stage-only plugins.
-        ResponseHeaderModifier(_) | DebugAccessLogToHeader(_) | ResponseRewrite(_) => (false, true, false, false),
-        // Upstream-response-body-filter-stage-only plugins.
-        BandwidthLimit(_) => (false, false, true, false),
-        // DSL runs in both the request and the upstream-response-filter stages.
-        Dsl(_) => (true, true, false, false),
-        // Wasm (proxy-wasm guest) runs in the request, upstream-response-filter,
-        // and upstream-response-body-filter (read-only observation) stages,
-        // matching its three CRD stage enum entries.
-        Wasm(_) => (true, true, true, false),
-        // ExtProc runs in the request stage and the async upstream-response stage.
-        ExtProc(_) => (true, false, false, true),
-        // Everything else is request-stage-only.
-        RequestHeaderModifier(_)
-        | RequestRedirect(_)
-        | UrlRewrite(_)
-        | RequestMirror(_)
-        | BasicAuth(_)
-        | Cors(_)
-        | Csrf(_)
-        | IpRestriction(_)
-        | JwtAuth(_)
-        | JweDecrypt(_)
-        | HmacAuth(_)
-        | HeaderCertAuth(_)
-        | KeyAuth(_)
-        | LdapAuth(_)
-        | Mock(_)
-        | ProxyRewrite(_)
-        | RequestBodyBuffer(_)
-        | JsonSchemaValidation(_)
-        | RequestRestriction(_)
-        | RateLimit(_)
-        | RateLimitRedis(_)
-        | CtxSet(_)
-        | RealIp(_)
-        | ForwardAuth(_)
-        | OpenidConnect(_)
-        | DirectEndpoint(_)
-        | AllEndpointStatus(_)
-        | DynamicInternalUpstream(_)
-        | DynamicExternalUpstream(_)
-        | FaultInjection(_)
-        | RegionRoute(_)
-        | TraceContext(_)
-        | GlobalAccessControl(_)
-        | Canary(_) => (true, false, false, false),
-    };
-    StageSet {
-        request,
-        upstream_response_filter,
-        upstream_response_body_filter,
-        upstream_response,
+pub fn applicable_stages_by_name(type_name: &str) -> StageSet {
+    let mut i = 0;
+    while i < HTTP_PLUGIN_STAGE_EXCEPTIONS.len() {
+        let (name, stages) = HTTP_PLUGIN_STAGE_EXCEPTIONS[i];
+        if name.as_bytes() == type_name.as_bytes() {
+            return stages;
+        }
+        i += 1;
     }
+    StageSet::REQUEST_ONLY
+}
+
+/// Which execution stages a plugin variant is valid for.
+fn applicable_stages(plugin: &EdgionPlugin) -> StageSet {
+    applicable_stages_by_name(plugin.type_name())
 }
 
 /// Compile + validate the regex conditions on a single entry, pushing any

@@ -671,6 +671,19 @@ generate_certs() {
             log_warning "mTLS certificatealreadyGenerateSkip"
         fi
     fi
+
+    # Generate LDAP TLS Secrets from the same ephemeral CA used by the Docker
+    # dependency. Static fixtures cannot stay in sync with gitignored cert files.
+    local ldap_tls_cert_script="${PROJECT_ROOT}/edgion-tests/integration/conf/Services/ldap-openldap-tls/make-test-certs.sh"
+    if [ -f "$ldap_tls_cert_script" ]; then
+        log_info "Run LDAP TLS certificate preparation..."
+        if EDGION_GENERATED_SECRET_DIR="$GENERATED_SECRET_DIR" bash "$ldap_tls_cert_script" > /dev/null 2>&1; then
+            log_success "LDAP TLS certificate preparation completed"
+        else
+            log_error "LDAP TLS certificate preparation failed"
+            exit 1
+        fi
+    fi
     
 }
 

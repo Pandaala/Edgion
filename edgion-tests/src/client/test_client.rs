@@ -115,7 +115,9 @@ fn missing_capability(kind: &str, id: &str) -> Result<Option<&'static str>> {
 
 #[cfg(test)]
 mod capability_tests {
-    use super::{capability_entry_applies, validate_capability_registry};
+    use super::{capability_entry_applies, resolve_suite, validate_capability_registry};
+    use edgion_tests::dynamic;
+    use std::collections::BTreeSet;
 
     #[test]
     fn empty_registry_is_valid() {
@@ -184,6 +186,257 @@ mod capability_tests {
                 "{suite} config must be included in the EdgionPlugins resource-wide load list"
             );
         }
+    }
+
+    /// Every registered suite is actually executed by some runner path.
+    ///
+    /// This is the outer guard. `every_targeted_sweep_suite_also_runs_in_the_default_sweep`
+    /// below only compares the runner's two suite lists against each other, so a
+    /// suite missing from **both** falls in its blind spot — which is exactly what
+    /// happened: 25 registered suites (including `EdgionPlugins/Wasm` and
+    /// `EdgionPlugins/TraceContext`, whole plugins with real conf fixtures) were
+    /// never executed by any runner, in either sweep, for an unknown length of time.
+    ///
+    /// Coverage is proven three ways, in order of preference:
+    ///   1. the runner invokes it — resolved through the real `resolve_suite`, so
+    ///      alias forms (`-g http-security`, `-g h2-mtls-sp`, ...) count;
+    ///   2. a dynamic scenario drives it — matched on the suite id's last segment
+    ///      against `dynamic::all()` ids, since `run_dynamic_scenarios` enumerates
+    ///      those from the registry rather than from a hardcoded list;
+    ///   3. an explicit `KNOWN_EXEMPT` entry with a stated reason.
+    #[test]
+    fn every_registered_suite_is_executed_by_some_runner_path() {
+        // Suites that no runner invokes, by decision rather than oversight.
+        // Adding an entry requires a reason; an empty list is the goal state.
+        const KNOWN_EXEMPT: &[(&str, &str)] = &[
+            ("all", "not a suite — the CLI keyword that expands to every suite"),
+            (
+                "tcp",
+                "protocol shorthand handled by the direct-mode block, not a suite id",
+            ),
+            (
+                "udp",
+                "protocol shorthand handled by the direct-mode block, not a suite id",
+            ),
+            (
+                "Services/acme",
+                "ACME has its own runner (test_acme.sh); it boots a Pebble CA and is not part of \
+                 the shared-Gateway sweep",
+            ),
+            (
+                "HTTPRoute/Protocol",
+                "parent grouping id; the concrete Protocol/* children are each invoked",
+            ),
+            (
+                "Status/ObservedGeneration",
+                "parent grouping id; the HighFrequency child runs as a dynamic scenario",
+            ),
+            (
+                "HTTPRoute/Protocol/HTTPS",
+                "alternate id for HttpsTestSuite, which the runner executes as EdgionTls/https",
+            ),
+            (
+                "GRPCRoute/TLS",
+                "alternate id for GrpcTlsTestSuite, which the runner executes as EdgionTls/grpctls",
+            ),
+            (
+                "EdgionBackendTrafficPolicy/upstream_authority",
+                "snake_case alias of EdgionBackendTrafficPolicy/UpstreamAuthority, which is invoked",
+            ),
+            ("EdgionTls", "resource-level id; every EdgionTls/* child is invoked"),
+            ("Gateway", "resource-level id; every Gateway/* child is invoked"),
+            ("GRPCRoute", "resource-level id; every GRPCRoute/* child is invoked"),
+            ("TLSRoute", "resource-level id; every TLSRoute/* child is invoked"),
+        ];
+
+        let own_src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/client/test_client.rs"));
+        let runner = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/integration/run_integration.sh"
+        ));
+
+        // Registered suite ids = the string patterns of `add_suites_for_suite`'s match arms.
+        // Match the definition at column 0, not the first textual occurrence — this
+        // test module sits above the function and mentions its name in a literal.
+        let arms_start = own_src
+            .find("\nfn add_suites_for_suite")
+            .expect("add_suites_for_suite must be defined at column 0");
+        let arms = &own_src[arms_start..];
+        let arms_end = arms.find("\n}\n").expect("add_suites_for_suite must be terminated");
+        let registered: BTreeSet<String> = arms[..arms_end]
+            .lines()
+            .filter_map(|l| {
+                let t = l.trim();
+                t.strip_prefix('"')
+                    .and_then(|r| r.find('"').map(|e| r[..e].to_string()))
+                    .filter(|s| !s.is_empty() && s.contains(|c: char| c.is_ascii_uppercase() || c == '/'))
+            })
+            .collect();
+        assert!(
+            registered.len() > 100,
+            "expected >100 registered suites, parsed {} — the arm-extraction heuristic is stale",
+            registered.len()
+        );
+
+        // What the runner actually invokes, canonicalized through resolve_suite.
+        let mut invoked: BTreeSet<String> = BTreeSet::new();
+        for (i, _) in runner.match_indices("${EDGION_TEST_CLIENT_BIN}") {
+            let rest = &runner[i + "${EDGION_TEST_CLIENT_BIN}".len()..];
+            let Some(end) = rest.find('"') else { continue };
+            let args: Vec<&str> = rest[..end].split_whitespace().collect();
+            if args.iter().any(|a| a.contains('$')) && !args.iter().any(|a| *a == "-r") {
+                continue; // dynamic `${item_safe}` invocation, nothing static to resolve
+            }
+            let val = |flag: &str| -> Option<String> {
+                args.iter()
+                    .position(|a| *a == flag)
+                    .and_then(|p| args.get(p + 1))
+                    .filter(|v| !v.starts_with('-') && !v.contains('$'))
+                    .map(|v| v.to_string())
+            };
+            let (r, it) = (val("-r"), val("-i"));
+            // `resolve_suite` short-circuits on `legacy`, so it may only be read
+            // when there is no `-r` — otherwise the first bare token is `-r`'s own
+            // value and every invocation resolves to the resource name.
+            let legacy = if r.is_some() {
+                None
+            } else {
+                args.iter()
+                    .find(|a| !a.starts_with('-') && !a.contains('$'))
+                    .map(|s| s.to_string())
+            };
+            if r.is_none() && legacy.is_none() {
+                continue;
+            }
+            invoked.insert(resolve_suite(r.as_deref(), it.as_deref(), legacy.as_deref()));
+        }
+
+        // A suite counts as dynamic-covered when a registered scenario drives it.
+        // Matched exactly, two ways, rather than by prefix — a prefix rule would
+        // let a parent id inherit a child scenario's coverage:
+        //   `conf_path == "<suite>/DynamicTest"`  (the usual layout), or
+        //   `conf_path == "<suite>Test"`          (Gateway/Dynamic -> Gateway/DynamicTest).
+        // The scenario id itself is also accepted when it equals the suite's last
+        // segment (EdgionPlugins/BasicAuthDynamic -> "BasicAuthDynamic").
+        let scenario_ids: BTreeSet<&str> = dynamic::all().iter().map(|s| s.id).collect();
+        let conf_paths: BTreeSet<&str> = dynamic::all().iter().map(|s| s.conf_path).collect();
+        let dynamic_covers = |suite: &str| -> bool {
+            scenario_ids.contains(suite.rsplit('/').next().unwrap_or(suite))
+                || conf_paths.contains(format!("{suite}/DynamicTest").as_str())
+                || conf_paths.contains(format!("{suite}Test").as_str())
+        };
+
+        let mut missing: Vec<String> = registered
+            .iter()
+            .filter(|s| !invoked.contains(*s))
+            .filter(|s| !dynamic_covers(s))
+            .filter(|s| !KNOWN_EXEMPT.iter().any(|(k, _)| k == s))
+            .cloned()
+            .collect();
+        missing.sort();
+
+        assert!(
+            missing.is_empty(),
+            "registered test suite(s) that NO runner path executes — they compile, they have conf \
+             fixtures, and they never run:\n  {missing:?}\n\
+             Fix: add a `run_test` line to run_integration.sh (both the `-r <Resource>` dispatch \
+             and the default sweep), or add a KNOWN_EXEMPT entry stating why it cannot run."
+        );
+    }
+
+    /// Every suite reachable via `-r <Resource>` must also run in the default sweep.
+    ///
+    /// `run_integration.sh` carries the suite list twice: once inside the
+    /// `case "$G_RESOURCE" in` block that serves `-r <Resource>`, and once in the
+    /// default full run. `cicd/coverage.sh` invokes the script with no arguments,
+    /// i.e. the default list — so a suite present only in the targeted block is
+    /// **never executed by CI**, and the failure is silent because the report
+    /// only counts tests that ran.
+    ///
+    /// This has already happened twice. Commit `82fcfda3` (2026-06-24) created
+    /// the duplication and added suites to the targeted block only; six suites
+    /// went unexecuted for up to five weeks (`EdgionPlugins_Cors`,
+    /// `HTTPRoute_Protocol_{H2C,GrpcWeb,H2TrailerMalformed}`,
+    /// `GRPCRoute_Delegation`, `TCPRoute_GlobalConnectionIpRestriction`). The
+    /// hardcoded three-suite check above was the first patch for one instance of
+    /// this; this test generalizes it to the whole list.
+    ///
+    /// A targeted entry may be satisfied by finer-grained default entries — the
+    /// targeted block runs bundles like `HTTPRoute_Backend` where the default
+    /// sweep runs `HTTPRoute_Backend_WeightedBackend` and friends — so an
+    /// `EXACT` or `EXACT_` prefix match both count as covered.
+    #[test]
+    fn every_targeted_sweep_suite_also_runs_in_the_default_sweep() {
+        let runner = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/integration/run_integration.sh"
+        ));
+
+        let case_start = runner
+            .find(r#"case "$G_RESOURCE" in"#)
+            .expect("run_integration.sh must contain the `case \"$G_RESOURCE\" in` dispatch block");
+        let rest = &runner[case_start..];
+        let case_len = rest
+            .lines()
+            .scan(0usize, |off, line| {
+                let here = *off;
+                *off += line.len() + 1;
+                Some((here, line))
+            })
+            .find(|(off, line)| *off > 0 && line.trim() == "esac")
+            .map(|(off, _)| off)
+            .expect("the `case \"$G_RESOURCE\"` block must be terminated by an `esac` line");
+
+        let targeted = &rest[..case_len];
+        let default_sweep = &rest[case_len..];
+
+        // Collect `run_test "<name>"` names from a region.
+        let names = |region: &str| -> Vec<String> {
+            region
+                .match_indices("run_test \"")
+                .filter_map(|(i, _)| {
+                    let after = &region[i + "run_test \"".len()..];
+                    after.find('"').map(|end| after[..end].to_string())
+                })
+                .collect()
+        };
+
+        // Suites deliberately reachable only via `-r <Resource>`. Each entry is a
+        // KNOWN COVERAGE GAP, recorded rather than silently tolerated; adding the
+        // suite to the default sweep and deleting the entry is always the fix.
+        // Empty is the goal state — keep it that way.
+        const KNOWN_TARGETED_ONLY: &[(&str, &str)] = &[];
+
+        let targeted_names = names(targeted);
+        assert!(
+            targeted_names.len() > 50,
+            "expected the targeted block to hold the bulk of the suite list, found {} — \
+             the region markers in this test are probably out of date",
+            targeted_names.len()
+        );
+
+        let mut missing: Vec<String> = targeted_names
+            .iter()
+            // `run_test "Foo_${item_safe}"` is the dynamic `-i <Item>` path, not a
+            // static suite name; there is nothing for the default sweep to match.
+            .filter(|n| !n.contains('$'))
+            .filter(|n| !KNOWN_TARGETED_ONLY.iter().any(|(known, _)| *known == n.as_str()))
+            .filter(|n| {
+                !default_sweep.contains(&format!("run_test \"{n}\""))
+                    && !default_sweep.contains(&format!("run_test \"{n}_"))
+            })
+            .cloned()
+            .collect();
+        missing.sort();
+        missing.dedup();
+
+        assert!(
+            missing.is_empty(),
+            "suite(s) runnable via `-r <Resource>` but absent from the default sweep, so \
+             `cicd/coverage.sh` never executes them:\n  {missing:?}\n\
+             Fix: add a matching `run_test` line to the default full-run block of \
+             run_integration.sh (the section after the `case \"$G_RESOURCE\"` dispatch)."
+        );
     }
 }
 

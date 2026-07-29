@@ -61,6 +61,7 @@ pub use plugin_configs::{
     MAX_JSON_POINTER_TOKENS,
 };
 pub use plugin_validation::PluginValidation;
+pub use validate::{applicable_stages_by_name, StageSet, HTTP_PLUGIN_STAGE_EXCEPTIONS};
 
 /// EdgionPlugins defines reusable plugin configurations
 #[derive(CustomResource, Serialize, Deserialize, Debug, Default, Clone, JsonSchema)]

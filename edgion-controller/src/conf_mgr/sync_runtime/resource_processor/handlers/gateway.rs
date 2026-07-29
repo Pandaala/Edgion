@@ -315,6 +315,51 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             .listener_port_manager
             .register_gateway(&gateway_key_for_port_mgr, &listener_ports);
 
+        // Resolve the Gateway-level default client identity used for upstream
+        // mTLS when a BackendTLSPolicy does not provide its own certificate.
+        if let Some(backend_tls) = g.spec.tls.as_mut().and_then(|tls| tls.backend.as_mut()) {
+            backend_tls.resolved_client_certificate = None;
+
+            if let Some(client_ref) = &backend_tls.client_certificate_ref {
+                let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("");
+                let client_ns = client_ref.namespace.as_deref().unwrap_or(gateway_ns);
+                let secret_key = format!("{client_ns}/{}", client_ref.name);
+
+                ctx.secret_ref_manager()
+                    .add_ref(secret_key.clone(), resource_ref.clone());
+
+                if client_ns != gateway_ns {
+                    cross_ns_manager.add_ref(client_ns.to_string(), cross_ns_ref.clone());
+                }
+
+                let valid_secret_ref = client_ref.kind.as_deref().unwrap_or("Secret") == "Secret"
+                    && is_core_api_group(client_ref.group.as_deref().unwrap_or(""));
+                let permitted = client_ns == gateway_ns
+                    || !is_reference_grant_validation_enabled()
+                    || ctx.runtime().ref_grant_store.check_reference_allowed(
+                        gateway_ns,
+                        "gateway.networking.k8s.io",
+                        "Gateway",
+                        client_ns,
+                        "",
+                        "Secret",
+                        Some(&client_ref.name),
+                    );
+
+                if valid_secret_ref && permitted {
+                    if let Some(secret) = ctx.runtime().secret_store.get(Some(client_ns), &client_ref.name) {
+                        backend_tls.resolved_client_certificate = Some(secret);
+                    } else {
+                        tracing::info!(
+                            gateway = %resource_ref.key(),
+                            secret_key = %secret_key,
+                            "Gateway backend client certificate Secret not found yet; it will be reprocessed when the Secret arrives"
+                        );
+                    }
+                }
+            }
+        }
+
         // Process all Listeners and resolve TLS certificates from global secret store
         if let Some(ref mut listeners) = g.spec.listeners {
             for listener in listeners.iter_mut() {
@@ -1708,15 +1753,18 @@ mod tests {
         validate_gateway_dns_resolver_ref, validate_gateway_plugin_ref, validate_gateway_stream_plugin_ref,
         GatewayHandler, GatewayResolvedRefsError,
     };
-    use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessorHandler};
+    use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler};
     use crate::conf_mgr::ControllerRuntime;
     use edgion_resources::constants::app::GATEWAY_NAME;
     use edgion_resources::prelude_resources::Gateway;
     use edgion_resources::resources::common::SecretObjectReference;
     use edgion_resources::resources::gateway::{
-        FrontendTLSValidation, GatewaySpec, GatewayTLSConfig, GatewayTlsMode, Listener as GatewayListener,
+        FrontendTLSValidation, GatewayBackendTLS, GatewaySpec, GatewaySpecTLS, GatewayTLSConfig, GatewayTlsMode,
+        Listener as GatewayListener,
     };
-    use std::collections::BTreeMap;
+    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::ByteString;
+    use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;
 
     fn make_test_gateway(ns: &str) -> Gateway {
@@ -1981,6 +2029,57 @@ mod tests {
         let refs_p2 = runtime.plugin_ref_mgr.get_refs("gw-ns/p2");
         assert_eq!(refs_p2.len(), 1, "expected one Gateway ref for gw-ns/p2");
         assert_eq!(refs_p2[0].resource_key(), "gw-ns/my-gateway");
+    }
+
+    #[tokio::test]
+    async fn gateway_backend_client_certificate_is_resolved_and_registered() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+
+        let mut secret = Secret::default();
+        secret.metadata.namespace = Some("gw-ns".to_string());
+        secret.metadata.name = Some("client-cert".to_string());
+        secret.data = Some(BTreeMap::from([
+            ("tls.crt".to_string(), ByteString(b"certificate".to_vec())),
+            ("tls.key".to_string(), ByteString(b"private-key".to_vec())),
+        ]));
+        runtime.secret_store.update(
+            HashMap::from([("gw-ns/client-cert".to_string(), secret)]),
+            &HashSet::new(),
+        );
+
+        let mut gw = make_test_gateway("gw-ns");
+        gw.metadata.name = Some("my-gateway".to_string());
+        gw.spec.tls = Some(GatewaySpecTLS {
+            backend: Some(GatewayBackendTLS {
+                client_certificate_ref: Some(SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "client-cert".to_string(),
+                    namespace: None,
+                }),
+                resolved_client_certificate: None,
+            }),
+            frontend: None,
+        });
+
+        let handler = GatewayHandler::new(None, None);
+        let ProcessResult::Continue(parsed) = handler.parse(gw, &ctx).await else {
+            panic!("Gateway parse unexpectedly skipped the resource");
+        };
+
+        assert!(
+            parsed
+                .spec
+                .tls
+                .and_then(|tls| tls.backend)
+                .and_then(|backend| backend.resolved_client_certificate)
+                .is_some(),
+            "Gateway backend client certificate must be embedded for conf_sync"
+        );
+        let refs = runtime.secret_ref_manager.get_refs("gw-ns/client-cert");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].resource_key(), "gw-ns/my-gateway");
     }
 
     fn make_gateway_with_plugin_annotation(ns: &str, annotation_value: &str) -> Gateway {
