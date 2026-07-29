@@ -2,6 +2,64 @@
 //! http.call runtime behavior with real responses requires a live HTTP server — integration tests cover that.
 
 use super::*;
+use async_trait::async_trait;
+use bytes::Bytes;
+use std::collections::VecDeque;
+
+use crate::plugins::runtime::traits::session::{BodyReadError, RequestBodySnapshotReader};
+
+struct StaticSnapshotReader {
+    len: u64,
+    chunks: VecDeque<Bytes>,
+}
+
+impl StaticSnapshotReader {
+    fn new(chunks: impl IntoIterator<Item = Bytes>) -> Self {
+        let chunks: VecDeque<_> = chunks.into_iter().collect();
+        let len = chunks.iter().map(|chunk| chunk.len() as u64).sum();
+        Self { len, chunks }
+    }
+}
+
+#[async_trait]
+impl RequestBodySnapshotReader for StaticSnapshotReader {
+    fn len(&self) -> u64 {
+        self.len
+    }
+
+    async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError> {
+        Ok(self.chunks.pop_front())
+    }
+}
+
+fn opaque_body_session(reader: StaticSnapshotReader, physical_cap: u64) -> MockPluginSession {
+    let mut session = MockPluginSession::new();
+    session.expect_declares_body().times(2).return_const(Some(true));
+    session
+        .expect_request_body_available_len()
+        .withf(|known_bodyless| !known_bodyless)
+        .return_const(Ok(reader.len()));
+    session
+        .expect_request_body_snapshot_reader()
+        .withf(|known_bodyless| !known_bodyless)
+        .times(1)
+        .return_once(move |_| Ok(Box::new(reader)));
+    let mut ctx = crate::EdgionHttpContext::new();
+    ctx.request_body_config.max_body_size_bytes = physical_cap;
+    session.expect_ctx().times(0..=1).return_const(ctx);
+    session
+}
+
+fn body_token_session(len: u64) -> MockPluginSession {
+    let mut session = MockPluginSession::new();
+    session.expect_declares_body().times(1).return_const(Some(true));
+    session
+        .expect_request_body_available_len()
+        .withf(|known_bodyless| !known_bodyless)
+        .times(1)
+        .return_const(Ok(len));
+    session
+}
 
 #[test]
 fn test_map_literal_compiles() {
@@ -114,6 +172,121 @@ fn test_http_call_with_headers_map() {
     "#;
     let result = run(source, MockPluginSession::new());
     assert_eq!(result, good_next());
+}
+
+#[test]
+fn test_http_call_rejects_body_framing_headers_before_dial() {
+    let source = r#"
+        let headers = {"Transfer-Encoding": "chunked"}
+        let http_resp = http.call("POST", "http://127.0.0.1:1", req.body, 100, headers)
+        return next()
+    "#;
+    let session = opaque_body_session(StaticSnapshotReader::new([Bytes::from_static(b"payload")]), 1024);
+    let error = run_expect_runtime_err(source, session);
+    assert!(matches!(
+        error,
+        RuntimeError::ApiError {
+            ref function,
+            ref message,
+        } if function == "http.call"
+            && message == "Content-Length and Transfer-Encoding are managed by http.call for Body payloads"
+    ));
+}
+
+#[test]
+fn test_http_call_rejects_body_above_request_cap_before_dial() {
+    let source = r#"
+        let http_resp = http.call("POST", "http://127.0.0.1:1", req.body)
+        return next()
+    "#;
+    let session = opaque_body_session(StaticSnapshotReader::new([Bytes::from_static(b"12345")]), 1024);
+    let runtime = DslRuntime {
+        max_request_body_bytes: 4,
+        ..DslRuntime::default()
+    };
+    let vm = make_vm(source);
+    let mut log = PluginLog::new("test");
+    let mut session = session;
+    let error = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(vm.execute(&mut session as &mut dyn PluginSession, &mut log, &runtime))
+        .expect_err("request Body above the http.call cap must fail before dialing");
+    assert!(matches!(
+        error,
+        RuntimeError::BodyAccess { ref message }
+            if message == "request Body exceeds http.call limit of 4 bytes"
+    ));
+}
+
+#[test]
+fn test_http_call_body_unavailable_is_hard_body_access_error() {
+    let source = r#"
+        let http_resp = http.call("POST", "http://127.0.0.1:1", req.body)
+        return next()
+    "#;
+    let mut session = MockPluginSession::new();
+    session.expect_declares_body().times(2).return_const(Some(true));
+    session.expect_request_body_available_len().return_const(Ok(7));
+    session
+        .expect_request_body_snapshot_reader()
+        .return_once(|_| Err(BodyReadError::StorageFailure));
+    let error = run_expect_runtime_err(source, session);
+    assert!(matches!(
+        error,
+        RuntimeError::BodyAccess { ref message } if message == "body capture storage failed"
+    ));
+}
+
+#[test]
+fn test_http_call_rejects_body_in_method_position() {
+    let error = run_expect_runtime_err(
+        r#"let result = http.call(req.body, "http://127.0.0.1:1", nil)"#,
+        body_token_session(7),
+    );
+    assert!(matches!(error, RuntimeError::TypeError { got: "Body", .. }));
+}
+
+#[test]
+fn test_http_call_rejects_body_in_url_position() {
+    let error = run_expect_runtime_err(
+        r#"let result = http.call("POST", req.body, nil)"#,
+        body_token_session(7),
+    );
+    assert!(matches!(error, RuntimeError::TypeError { got: "Body", .. }));
+}
+
+#[test]
+fn test_http_call_rejects_body_in_timeout_position() {
+    let error = run_expect_runtime_err(
+        r#"let result = http.call("POST", "http://127.0.0.1:1", nil, req.body)"#,
+        body_token_session(7),
+    );
+    assert!(matches!(
+        error,
+        RuntimeError::TypeError {
+            got: "Body",
+            operation: "http.call timeout_ms",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_http_call_rejects_body_in_header_value_position() {
+    let error = run_expect_runtime_err(
+        r#"let result = http.call("POST", "http://127.0.0.1:1", nil, 100, {"X-Test": req.body})"#,
+        body_token_session(7),
+    );
+    assert!(matches!(
+        error,
+        RuntimeError::TypeError {
+            got: "Body",
+            operation: "http.call headers_map",
+            ..
+        }
+    ));
 }
 
 #[test]

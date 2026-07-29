@@ -152,9 +152,10 @@ impl EdgionPlugin {
                 Some(BodyRequirement::fail_close())
             }
             ForwardAuth(cfg) if cfg.forward_body && stage == BodyStage::Request => Some(BodyRequirement::fail_close()),
-            ProxyRewrite(cfg) if cfg.json_body.is_some() && stage == BodyStage::Request => {
-                Some(BodyRequirement::fail_close())
-            }
+            ProxyRewrite(cfg) if cfg.json_body.is_some() && stage == BodyStage::Request => Some(BodyRequirement {
+                max_body_size: Some(DEFAULT_INSTANCE_MAX_BYTES.to_string()),
+                ..BodyRequirement::fail_close()
+            }),
             // RequestBodyBuffer is a non-security capture primitive. Unlike
             // auth/validation consumers, operators may narrow its capture
             // scope with `body.conditions`; an empty intrinsic condition set
@@ -759,7 +760,7 @@ mod request_body_plugin_requirement_tests {
     fn request_body_features_declare_request_only_requirements() {
         for json in [
             r#"{"type":"ForwardAuth","config":{"target":{"name":"auth","port":80},"forwardBody":true,"decision":{}}}"#,
-            r#"{"type":"ProxyRewrite","config":{"jsonBody":{"set":{"/name":"gateway"}}}}"#,
+            r#"{"type":"ProxyRewrite","config":{"jsonBody":{"operations":[{"op":"replace","path":"/name","value":"gateway"}]}}}"#,
             r#"{"type":"ExtProc","config":{"grpcService":{"target":"processor:9000"},"processingMode":{"requestBodyMode":"BUFFERED"}}}"#,
             r#"{"type":"RequestBodyBuffer","config":{}}"#,
         ] {
@@ -767,6 +768,18 @@ mod request_body_plugin_requirement_tests {
             assert!(plugin.body_requirement(BodyStage::Request).is_some(), "{json}");
             assert!(plugin.body_requirement(BodyStage::Response).is_none(), "{json}");
         }
+    }
+
+    #[test]
+    fn proxy_rewrite_json_body_defaults_to_64_kib_fail_close() {
+        let plugin: EdgionPlugin = serde_json::from_str(
+            r#"{"type":"ProxyRewrite","config":{"jsonBody":{"operations":[{"op":"add","path":"/enabled","value":true}]}}}"#,
+        )
+        .unwrap();
+        let requirement = plugin.body_requirement(BodyStage::Request).unwrap();
+        assert_eq!(requirement.max_body_size_bytes(), Some(Ok(DEFAULT_INSTANCE_MAX_BYTES)));
+        assert!(requirement.is_fail_close());
+        assert!(requirement.conditions.is_none());
     }
 
     #[test]

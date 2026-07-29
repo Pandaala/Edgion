@@ -1510,7 +1510,7 @@ if payload != nil {
 **参数**：
 - `method`（Str）— HTTP 方法，如 `"GET"`、`"POST"`、`"PUT"`
 - `url`（Str）— 包含协议和主机名的完整 URL，如 `"https://api.example.com/v1/check"`
-- `body`（Str | Nil）— 请求体；不需要请求体时传 `nil`
+- `body`（Str | Body | Nil）— 字符串请求体、不透明的 `req.body`，或以 `nil` 表示无请求体
 - `timeout_ms`（Int，可选）— 单次调用超时（毫秒）；上限为 `httpMaxTimeoutMs`（默认 5000）
 - `headers`（Map，可选）— 附加请求头，以字符串键值对 `Map` 表示
 
@@ -1518,27 +1518,35 @@ if payload != nil {
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `status` | Int | HTTP 响应状态码；调用失败（超时、连接错误、SSRF 拦截等）时为 `0` |
+| `status` | Int | HTTP 响应状态码；网络、超时、连接时出站策略拦截或响应流失败时为 `0` |
 | `body` | Str | UTF-8 响应体；失败或响应体为空时为空字符串 |
 | `headers` | Map | 响应头；键为小写头名称，值为该头名称对应的最后一个值 |
 
-**此函数永远不会抛出运行时错误。** 网络故障、超时、SSRF 拦截均返回 `status = 0` 和空 body。
+网络故障、超时、响应流失败，以及连接时被策略拒绝的 DNS 解析地址返回 `status = 0`
+和空 body。无效参数、格式错误或不支持的 URL、被 SSRF 预检查拒绝的直接 IP 字面量，
+以及不透明 `Body` 调用中由调用方提供的分帧 Header 会抛出普通 DSL 运行时错误。
+不透明 Body 的访问、读取、扫描预算和大小限制失败会抛出固定 fail-close 的
+`BodyAccess` 错误。
 
 **限制**：
-- 仅接受 `http` 和 `https` 协议；其他协议（如 `file://`、`ftp://`）返回 `status = 0`。
-- 当 `httpBlockPrivateIps: true` 时，URL host 为回环、私有、链路本地 **IP 字面量**的请求返回 `status = 0`。该守卫**仅检查 URL host 字符串，不解析 DNS 域名**，因此解析到私有地址的域名不会被此开关拦截。域名形式的 SSRF 防护应以网络层出站控制（NetworkPolicy）为主。
-- 响应体截断在 `min(httpMaxResponseBodyBytes, max_string_len)`（默认分别为 1 MiB 与 8 KiB）。两者中较小者生效，保证返回给脚本的 body 与其它 DSL 字符串值共享同一长度上限。截断为静默行为——调用仍成功，且依然不会抛出运行时错误。
+- 仅接受 `http` 和 `https` 协议；其他协议（如 `file://`、`ftp://`）会抛出错误。
+- 当 `httpBlockPrivateIps: true` 时，会拦截回环、私有、链路本地和未指定地址。直接 IP 字面量在发送前检查；域名会在 DNS 解析后，对实际用于连接的地址执行检查，重定向跳转也采用相同规则。仍建议用网络层出站控制作为纵深防御。
+- 只有第三个参数接受不透明 `Body`，通常写作 `req.body`。运行时在调用开始时取得不可变逻辑快照，从内存、溢写文件和修改分段中拉取流式发送原始字节，不会先完整物化请求体。
+- 不透明 `Body` 大小上限为 `min(httpMaxRequestBodyBytes, 网关物理请求 body 上限)`。配置默认 1 MiB，可显式提高到最多 32 MiB。从快照实际拉取的字节计入累计 `maxBodyScanPasses` 预算。
+- 不透明 `Body` 调用的调用方 Header 不得包含 `Content-Length` 或 `Transfer-Encoding`，由运行时唯一控制请求分帧。空的不透明 `Body` 发送 `Content-Length: 0`；`nil` 不附加请求体。
+- 响应体截断在 `min(httpMaxResponseBodyBytes, max_string_len)`（默认分别为 1 MiB 与 8 KiB）。两者中较小者生效，保证返回给脚本的 body 与其它 DSL 字符串值共享同一长度上限。截断为静默行为，调用仍成功。
 - 响应 `headers` Map 超过 `max_map_size` 时静默截断为前 `max_map_size` 项（SSRF / 大响应头防护）；调用仍返回成功。
 - 实际超时为 `min(timeout_ms, httpMaxTimeoutMs)`。
-- 全局客户端最多跟随 10 次重定向。当 `httpBlockPrivateIps: true` 时，同一 IP 字面量守卫会对**每一跳重定向**重新应用，因此跳到被阻断地址的 30x 会得到 `status = 0`，而非静默跟随。
+- `Str` 和 `Nil` 调用最多跟随 10 次重定向；当 `httpBlockPrivateIps: true` 时，每一跳都会应用直接 IP 字面量检查和连接时的 DNS 解析地址检查。不透明 `Body` 调用不跟随重定向，直接把 3xx 响应返回给脚本。
 
 **配置字段**（位于插件 `config` 块内）：
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `httpMaxTimeoutMs` | Integer | `5000` | 单次调用超时上限（毫秒） |
+| `httpMaxRequestBodyBytes` | Integer | `1048576` | 不透明 `Body` 请求最大字节数，范围 `1`–`33554432`，并进一步受网关物理请求 body 上限约束 |
 | `httpMaxResponseBodyBytes` | Integer | `1048576` | 响应体最大字节数；超出时截断 |
-| `httpBlockPrivateIps` | Boolean | `false` | 拦截对私有/回环/链路本地 IP 的出站调用（SSRF 防护）。仅检查 IP 字面量，不解析域名（见上方说明）。 |
+| `httpBlockPrivateIps` | Boolean | `false` | 拦截对私有/回环/链路本地/未指定 IP 的出站调用，包括在连接时检查域名解析结果 |
 
 **示例 — 调用健康检查端点并根据状态分支**：
 ```
@@ -1556,6 +1564,15 @@ let hdrs = {"Content-Type": "application/json", "X-Api-Key": req.header("X-Api-K
 let r = http.call("POST", "https://auth.example.com/verify", "{\"token\":\"abc\"}", 2000, hdrs)
 if r["status"] != 200 {
   return deny(401, "auth check failed")
+}
+```
+
+**示例 — 不完整物化请求体，流式发送当前请求 body**：
+```
+let hdrs = {"Content-Type": req.content_type}
+let r = http.call("POST", "https://scanner.example.com/check", req.body, 2000, hdrs)
+if r["status"] != 200 {
+  return deny(403, "request rejected")
 }
 ```
 
@@ -2066,7 +2083,7 @@ if sig == nil {
 | `time_now()` | 时间 | `Int` | 0 |
 | `time_format(timestamp, format)` | 时间 | `Str` | 2 |
 | `json_get(json_str, path)` | JSON | `Str\|Int\|Bool\|Nil` | 2 |
-| `http.call(method, url, body [, timeout_ms [, headers]])` | 网络 | `Map` | 2–5 |
+| `http.call(method, url, body [, timeout_ms [, headers]])` | 网络 | `Map` | 3–5 |
 | `ip_in_cidr(ip, cidr)` | 网络 | `Bool` | 2 |
 | `uuid()` | 工具 | `Str` | 0 |
 | `range(start, end)` | 工具 | `List` | 2 |

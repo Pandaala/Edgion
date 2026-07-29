@@ -256,7 +256,7 @@ impl VmState {
         Ok(())
     }
 
-    fn reserve_body_scan(&mut self, physical_cap: u64, passes: u8) -> Result<u64, RuntimeError> {
+    pub(crate) fn reserve_body_scan(&mut self, physical_cap: u64, passes: u8) -> Result<u64, RuntimeError> {
         let budget = match self.body_scan_budget {
             Some(budget) => budget,
             None => {
@@ -271,8 +271,57 @@ impl VmState {
         Ok(budget)
     }
 
-    fn refund_body_scan(&mut self, reserved: u64, scanned: u64) {
+    pub(crate) fn refund_body_scan(&mut self, reserved: u64, scanned: u64) {
         self.body_scan_budget = Some(reserved.saturating_sub(scanned));
+    }
+
+    pub(crate) fn reserve_body_scan_exact(
+        &mut self,
+        bytes: u64,
+        physical_cap: u64,
+        passes: u8,
+    ) -> Result<(), RuntimeError> {
+        let budget = match self.body_scan_budget {
+            Some(budget) => budget,
+            None => physical_cap
+                .checked_mul(u64::from(passes))
+                .ok_or_else(|| body_access_error("request body scan budget overflow"))?,
+        };
+        let remaining = budget
+            .checked_sub(bytes)
+            .ok_or_else(|| body_access_error("request body scan budget exceeded"))?;
+        self.body_scan_budget = Some(remaining);
+        Ok(())
+    }
+
+    pub(crate) fn refund_body_scan_exact(&mut self, bytes: u64) {
+        let budget = self.body_scan_budget.unwrap_or(0);
+        self.body_scan_budget = Some(budget.saturating_add(bytes));
+    }
+}
+
+#[cfg(test)]
+mod body_scan_budget_tests {
+    use super::{VmLimits, VmState};
+
+    #[test]
+    fn exact_reservation_charges_only_fetched_bytes_after_refund() {
+        let mut state = VmState::new(0, &VmLimits::default());
+
+        state.reserve_body_scan_exact(5, 16, 1).unwrap();
+        state.refund_body_scan_exact(2);
+        state.reserve_body_scan_exact(13, 16, 1).unwrap();
+
+        assert!(state.reserve_body_scan_exact(1, 16, 1).is_err());
+    }
+
+    #[test]
+    fn exact_reservation_rejects_before_overdrawing_budget() {
+        let mut state = VmState::new(0, &VmLimits::default());
+
+        assert!(state.reserve_body_scan_exact(17, 16, 1).is_err());
+        state.reserve_body_scan_exact(0, 16, 1).unwrap();
+        state.reserve_body_scan_exact(16, 16, 1).unwrap();
     }
 }
 
@@ -1191,7 +1240,7 @@ impl Vm {
                 OpCode::CallBuiltin(id, argc) => {
                     state.tick_call()?;
                     let result = if id == BuiltinId::HttpCall {
-                        self.call_builtin_http(argc, &mut state, runtime).await?
+                        self.call_builtin_http(argc, &mut state, session, runtime).await?
                     } else if id.is_redis_builtin() {
                         self.call_builtin_redis(id, argc, &mut state, runtime).await?
                     } else if id.is_body_builtin() {

@@ -9,10 +9,12 @@ spec:
       type: ProxyRewrite
       config:
         jsonBody:
-          set:
-            /payload: x
-          remove:
-            - /discard
+          operations:
+            - op: remove
+              path: /discard
+            - op: replace
+              path: /payload
+              value: x
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -25,5 +27,7 @@ spec:
       type: ProxyRewrite
       config:
         jsonBody:
-          set:
-            /payload: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+          operations:
+            - op: replace
+              path: /payload
+              value: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

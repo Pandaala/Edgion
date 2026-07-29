@@ -134,8 +134,9 @@ shape. Parse/type outcomes remain ordinary DSL semantics—for example,
 // edgion-gateway/src/plugins/http/dsl/runtime.rs
 pub struct DslRuntime {
     pub max_timeout_ms: u64,            // http.call wall-clock cap
+    pub max_request_body_bytes: usize,  // opaque request Body cap
     pub max_response_body_bytes: usize, // http.call body cap
-    pub block_private_ips: bool,        // http.call SSRF guard for IP literals
+    pub block_private_ips: bool,        // http.call literal and resolved-address guard
     pub redis_links: HashMap<String, String>, // alias → "namespace/name" for get_redis_client
     pub max_body_scan_passes: u8,       // cumulative body-scan budget in physical-cap passes
 }

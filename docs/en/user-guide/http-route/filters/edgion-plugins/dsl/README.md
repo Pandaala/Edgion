@@ -13,7 +13,7 @@ DSL is well-suited for scenarios such as pre-authorization checks, dynamic heade
 ## Features at a Glance
 
 - **Sandboxed execution**: Scripts cannot access the file system or environment variables; the runtime environment is fully controlled.
-- **Outbound HTTP calls**: Scripts can call external HTTP/HTTPS services via `http.call()`, with configurable timeouts, response size limits, and optional SSRF protection (`httpBlockPrivateIps`).
+- **Outbound HTTP calls**: Scripts can call external HTTP/HTTPS services via `http.call()`, including raw pull-streaming of the opaque `req.body`, with configurable request/response limits, timeouts, and optional SSRF protection (`httpBlockPrivateIps`).
 - **Bytecode pre-compilation**: Supports both `source` (configuration-time compilation) and `bytecode` (pre-compiled Base64) loading modes. Bytecode mode skips compilation overhead.
 - **Configurable resource limits**: Independently limit execution steps, loop iterations, call depth, and string length.
 - **Storage-transparent request bodies**: Inspect or mutate an opaque `req.body` through bounded operations without materializing disk spills into one string.
@@ -55,6 +55,7 @@ spec:
 | `maxBodyScanPasses` | Integer | `4` | Cumulative request-body scan budget, measured in physical-body-cap passes (`1`–`16`) |
 | `errorPolicy` | Enum | `Ignore` | Error policy. Allowed values: `Ignore` / `Deny` / `DenyWith` |
 | `httpMaxTimeoutMs` | Integer | `5000` | Hard cap on `http.call()` timeout per request (ms) |
+| `httpMaxRequestBodyBytes` | Integer | `1048576` | Maximum opaque `Body` sent by `http.call()` (`1`–`33554432` bytes; also capped by the gateway physical request-body limit) |
 | `httpMaxResponseBodyBytes` | Integer | `1048576` | Maximum `http.call()` response body size (bytes) |
 | `httpBlockPrivateIps` | Boolean | `false` | Block `http.call()` to private/loopback/link-local IPs |
 | `linkSysRefs` | Array\<Object\> | `[]` | List of LinkSys Redis resources. **Required** if any `redis.*` builtin appears in the script. Each `name` is the alias used as the first arg to `redis.*` calls |

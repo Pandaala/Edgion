@@ -156,9 +156,8 @@ boundary described below.
 | `StackOverflow` | Stack depth limit exceeded | Expression nesting is too deep |
 | `StringTooLong` | String length limit exceeded | Concatenation result exceeds `maxStringLen` |
 | `RegexError` | Regex failure | Regex parsing or execution failed |
-| `HttpCallError` | `http.call()` argument validation failed | Invalid URL scheme or SSRF-blocked address; the call returns `status = 0` and does **not** raise an error |
-| `ApiError` | API call failure | An exception occurred in the PluginSession interface |
-| `BodyAccess` | Request-body storage, scan, range, or mutation failure | Fixed generic fail-close response; bypasses `errorPolicy` |
+| `ApiError` | API call or argument validation failed | Includes PluginSession failures and invalid URL/method/headers or a direct IP literal rejected by the `http.call()` SSRF precheck; a DNS-resolved address rejected at dial time returns `status = 0` |
+| `BodyAccess` | Request-body storage, scan, range, mutation, or `http.call` streaming failure | Fixed generic fail-close response; bypasses `errorPolicy` |
 
 `TypeError` is the most common runtime error, typically arising when a script operates on a value that may be `nil` — for example, performing string operations on a request header that does not exist. It is recommended to perform `nil` checks on values read from external sources (such as `req.header()` and `ctx.get()`) within the script.
 
@@ -214,7 +213,14 @@ Some built-in functions have their own parameter or result limits in addition to
 | `req.header_names` / `resp.header_names` | Returns at most 256 header names | Guards against memory issues from requests with many headers |
 | `resp.set_status` | Status code must be in range 100–599 | Returns `ApiError` if out of range |
 | `range` | Generates at most 1,000 elements | Guards against large lists consuming excessive memory |
-| `http.call` | Timeout capped at `httpMaxTimeoutMs` (default 5,000 ms); response body capped at `httpMaxResponseBodyBytes` (default 1 MiB); only `http`/`https` schemes; private IPs blocked when `httpBlockPrivateIps: true` | Prevents gateway resource exhaustion and SSRF attacks |
+| `http.call` | Timeout capped at `httpMaxTimeoutMs` (default 5,000 ms); opaque `Body` capped by `min(httpMaxRequestBodyBytes, physical body cap)` (default 1 MiB, configured maximum 32 MiB); response capped at `httpMaxResponseBodyBytes` (default 1 MiB); private IPs blocked when configured | Prevents gateway resource exhaustion and SSRF attacks |
+
+When `req.body` is the third argument to `http.call`, the runtime pull-streams raw bytes
+from an immutable call-time snapshot without full materialization. Fetched bytes consume
+the cumulative body-scan budget. The caller cannot set `Content-Length` or
+`Transfer-Encoding`; an empty `Body` sends `Content-Length: 0`, while `nil` attaches no
+body. Opaque-Body calls return 3xx responses without following redirects. By contrast,
+`Str` and `Nil` calls retain the existing redirect behavior.
 
 `req.body.json_get()` accepts only a definite path rooted at `$`: `.member`, `["quoted member"]`, and non-negative `[index]` segments. Wildcards, recursive descent, filters, slices, unions, and dynamic paths are rejected at compile time.
 

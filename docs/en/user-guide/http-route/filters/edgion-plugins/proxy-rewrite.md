@@ -46,8 +46,7 @@ spec:
 | `headers.set` | Array\<Object\> | none | Set request headers (overwrite existing values) |
 | `headers.remove` | Array\<String\> | none | Remove request headers |
 | `jsonBody` | Object | none | Structurally rewrite a buffered JSON request body |
-| `jsonBody.set` | Object | `{}` | Map of existing JSON Pointer targets to replacement JSON values |
-| `jsonBody.remove` | Array\<String\> | `[]` | JSON Pointer targets to remove before applying `set` |
+| `jsonBody.operations` | Array\<Object\> | **Required** | Ordered RFC 6902 operations: `add`, `remove`, `replace`, `move`, `copy`, or `test` |
 
 ### Variable Reference
 
@@ -266,10 +265,11 @@ config:
 
 When multiple rewriting operations are configured simultaneously, the execution order is:
 
-1. **URI rewrite** (`uri` or `regexUri`)
-2. **Host rewrite**
-3. **Method rewrite**
-4. **Headers modification** (add → set → remove)
+1. **JSON body operations**, in list order
+2. **URI rewrite** (`uri` or `regexUri`)
+3. **Host rewrite**
+4. **Method rewrite**
+5. **Headers modification** (add → set → remove)
 
 ---
 
@@ -277,19 +277,74 @@ When multiple rewriting operations are configured simultaneously, the execution 
 
 ### JSON body rewrite
 
-`jsonBody` activates request buffering. Every path uses JSON Pointer syntax and
-must start with `/`. `remove` runs first; each `set` target must exist after
-removals. Invalid JSON or an invalid/missing target returns `400`.
+`jsonBody` applies an ordered RFC 6902 JSON Patch transaction. `path` and
+`from` use RFC 6901 JSON Pointer syntax; the empty pointer (`""`) identifies the
+document root. All operations must succeed before the rewritten body is
+published, so a failed later operation never exposes an earlier partial change.
+The operator schema is strict: unknown operation members are rejected instead
+of being ignored as they would be in a generic JSON Patch document.
 
 ```yaml
 config:
   jsonBody:
-    remove:
-      - /credentials/password
-    set:
-      /profile/tier: premium
-      /enabled: true
+    operations:
+      - op: test
+        path: /version
+        value: 1
+      - op: remove
+        path: /credentials/password
+      - op: replace
+        path: /profile/tier
+        value: premium
+      - op: add
+        path: /enabled
+        value: true
+      - op: copy
+        from: /profile
+        path: /profileSnapshot
+      - op: move
+        from: /legacyName
+        path: /name
 ```
+
+`add`, `replace`, and `test` require exactly one of:
+
+- `value`: a literal JSON value, including explicit `null`.
+- `valueTemplate`: a shared `${type:name}` template whose rendered result is
+  inserted as one JSON string. It is never parsed as a JSON fragment or
+  re-expanded as another template. A missing source rejects the request.
+
+Numeric `value` literals follow the Kubernetes/serde_json decoded number
+model. If the exact source decimal spelling or precision beyond that model is
+part of the application contract, encode it as a JSON string.
+
+For example:
+
+```yaml
+jsonBody:
+  operations:
+    - op: add
+      path: /tenant
+      valueTemplate: "${header:X-Tenant}"
+```
+
+The operation list is limited to 64 entries and a 64 KiB serialized plan.
+Pointers are limited to 4 KiB and 64 tokens. Request and output bodies default
+to 64 KiB; an entry-level `body.maxBodySize` may raise both limits up to the
+fixed 1 MiB ceiling. JSON nesting, node count, and mutation work are also
+bounded.
+
+Only one `application/json` or concrete `application/*+json` Content-Type is
+accepted. Charset, when present, must be UTF-8, and Content-Encoding must be
+absent or `identity`. Invalid JSON, duplicate object keys, failed operations,
+failed `test` operations, or missing template values return `400`; unsupported
+media returns `415`; input or output size violations return `413`.
+
+Body rewriting preserves parsed JSON meaning, not original whitespace,
+object-key order, or a number's original lexical representation. Numbers use
+the standard `serde_json` model, and `test` treats common parsed equivalents
+such as `1` and `1.0` as equal. Templates observe the request state from before
+URI, Host, method, and header rewrites.
 
 ### 1. URI vs regexUri Priority
 

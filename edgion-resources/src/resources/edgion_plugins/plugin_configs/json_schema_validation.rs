@@ -23,8 +23,8 @@ const MAX_PATTERN_COUNT: usize = 64;
 const MAX_PATTERN_SOURCE_BYTES: usize = 16 * 1024;
 const REGEX_SIZE_LIMIT: usize = 256 * 1024;
 const REGEX_DFA_SIZE_LIMIT: usize = 256 * 1024;
-const MAX_INSTANCE_DEPTH: usize = 64;
-const MAX_INSTANCE_NODES: u64 = 20_000;
+pub const MAX_JSON_INSTANCE_DEPTH: usize = 64;
+pub const MAX_JSON_INSTANCE_NODES: u64 = 20_000;
 const MAX_LOGICAL_DEPTH: usize = 64;
 const MAX_VALIDATION_WORK: u64 = 4_000_000;
 const DRAFT_2020_12_URI: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -33,7 +33,7 @@ const DRAFT_2020_12_URI: &str = "https://json-schema.org/draft/2020-12/schema";
 ///
 /// Returned fragments include the `body` field name and can be appended to an
 /// entry-specific error prefix. Multiple independent errors are preserved.
-pub fn json_schema_body_validation_errors(body: &BodyRequirement) -> Vec<String> {
+pub fn bounded_json_body_validation_errors(body: &BodyRequirement) -> Vec<String> {
     let mut errors = Vec::new();
     if let Some(error) = body.validation_error() {
         errors.push(format!("body: {error}"));
@@ -149,6 +149,17 @@ impl ParsedJsonInstance {
     pub fn text_bytes(&self) -> u64 {
         self.text_bytes
     }
+
+    pub fn into_value(self) -> Value {
+        self.value
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JsonValueProfile {
+    pub node_count: u64,
+    pub text_bytes: u64,
+    pub max_depth: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -190,6 +201,48 @@ pub fn parse_json_instance(bytes: &[u8]) -> Result<ParsedJsonInstance, StrictJso
     })
 }
 
+/// Validate and profile an already parsed JSON value using the same depth and
+/// node limits as [`parse_json_instance`].
+pub fn profile_json_value(value: &Value) -> Result<JsonValueProfile, StrictJsonError> {
+    let mut node_count = 0_u64;
+    let mut text_bytes = 0_u64;
+    let mut max_depth = 0_usize;
+    let mut stack = vec![(value, 1_usize)];
+
+    while let Some((value, depth)) = stack.pop() {
+        if depth > MAX_JSON_INSTANCE_DEPTH {
+            return Err(StrictJsonError::DepthLimit);
+        }
+        node_count = node_count.saturating_add(1);
+        if node_count > MAX_JSON_INSTANCE_NODES {
+            return Err(StrictJsonError::NodeLimit);
+        }
+        max_depth = max_depth.max(depth);
+        match value {
+            Value::Number(value) => text_bytes = text_bytes.saturating_add(value.to_string().len() as u64),
+            Value::String(value) => {
+                text_bytes = text_bytes.saturating_add(value.len() as u64);
+            }
+            Value::Array(values) => {
+                stack.extend(values.iter().map(|value| (value, depth + 1)));
+            }
+            Value::Object(values) => {
+                for (key, value) in values {
+                    text_bytes = text_bytes.saturating_add(key.len() as u64);
+                    stack.push((value, depth + 1));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(JsonValueProfile {
+        node_count,
+        text_bytes,
+        max_depth,
+    })
+}
+
 #[derive(Default)]
 struct ParseState {
     node_count: u64,
@@ -209,12 +262,12 @@ impl<'de> DeserializeSeed<'de> for ValueSeed<'_> {
     where
         D: Deserializer<'de>,
     {
-        if self.depth > MAX_INSTANCE_DEPTH {
+        if self.depth > MAX_JSON_INSTANCE_DEPTH {
             self.state.failure = Some(StrictJsonError::DepthLimit);
             return Err(D::Error::custom("JSON nesting limit exceeded"));
         }
         self.state.node_count = self.state.node_count.saturating_add(1);
-        if self.state.node_count > MAX_INSTANCE_NODES {
+        if self.state.node_count > MAX_JSON_INSTANCE_NODES {
             self.state.failure = Some(StrictJsonError::NodeLimit);
             return Err(D::Error::custom("JSON node limit exceeded"));
         }
@@ -280,7 +333,7 @@ impl<'de> Visitor<'de> for ValueVisitor<'_> {
     where
         A: SeqAccess<'de>,
     {
-        let mut values = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(MAX_INSTANCE_NODES as usize));
+        let mut values = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(MAX_JSON_INSTANCE_NODES as usize));
         while let Some(value) = seq.next_element_seed(ValueSeed {
             state: self.state,
             depth: self.depth + 1,
@@ -294,7 +347,7 @@ impl<'de> Visitor<'de> for ValueVisitor<'_> {
     where
         A: MapAccess<'de>,
     {
-        let capacity = map.size_hint().unwrap_or(0).min(MAX_INSTANCE_NODES as usize);
+        let capacity = map.size_hint().unwrap_or(0).min(MAX_JSON_INSTANCE_NODES as usize);
         let mut values = Map::with_capacity(capacity);
         let mut keys = HashSet::with_capacity(capacity);
         while let Some(key) = map.next_key::<String>()? {
@@ -377,9 +430,17 @@ fn validate_json_shape(root: &Value) -> Result<(), String> {
 
 fn validate_schema_policy(root: &Value) -> Result<(), String> {
     let mut stack = vec![root];
+    let mut visited = HashSet::new();
     let mut pattern_count = 0_usize;
     let mut pattern_bytes = 0_usize;
     while let Some(schema) = stack.pop() {
+        // A schema node may be reached through both its ordinary location
+        // (for example `$defs`) and one or more `$ref` values. Inspect each
+        // actual node once so references cannot hide restricted keywords while
+        // repeated references do not multiply the configured pattern quota.
+        if !visited.insert(std::ptr::from_ref(schema)) {
+            continue;
+        }
         let Value::Object(object) = schema else {
             if schema.is_boolean() {
                 continue;
@@ -415,9 +476,10 @@ fn validate_schema_policy(root: &Value) -> Result<(), String> {
                 return Err("JSON Schema '$ref' must use '#/...' JSON Pointer form".to_string());
             }
             validate_pointer_encoding(pointer)?;
-            if root.pointer(pointer).is_none() {
-                return Err("JSON Schema '$ref' target does not exist".to_string());
-            }
+            let target = root
+                .pointer(pointer)
+                .ok_or_else(|| "JSON Schema '$ref' target does not exist".to_string())?;
+            stack.push(target);
         }
         // jsonschema 0.40 compiles the attacker-controlled instance string as a
         // fancy-regex during validation. PatternOptions does not bound that
@@ -454,6 +516,14 @@ fn add_pattern(pattern: &str, count: &mut usize, bytes: &mut usize) -> Result<()
 }
 
 fn validate_pointer_encoding(pointer: &str) -> Result<(), String> {
+    // The validator URI-decodes fragments before applying JSON Pointer
+    // escapes. Keep the v1 subset unambiguous by rejecting percent-encoded
+    // fragments instead of maintaining a second URI-decoder whose target
+    // selection could drift from the engine.
+    if pointer.contains('%') {
+        return Err("JSON Schema '$ref' percent-encoded fragments are not supported".to_string());
+    }
+
     let bytes = pointer.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -519,9 +589,11 @@ fn profile_schema(
         }
     }
     // jsonschema uses pairwise deep comparisons for arrays of up to 15 items
-    // before switching to hashing. Charge the worst fixed comparison fanout.
+    // before switching to hashing. Charge the worst fixed node and text-scan
+    // fanout so long strings cannot bypass the request work budget.
     if object.get("uniqueItems").and_then(Value::as_bool) == Some(true) {
         profile.node_ops = profile.node_ops.saturating_add(15);
+        profile.scan_ops = profile.scan_ops.saturating_add(15);
     }
     // `const` and `enum` perform deep equality checks. Charge every candidate
     // JSON node and every candidate string scan so large literals cannot hide
@@ -746,6 +818,97 @@ mod tests {
     }
 
     #[test]
+    fn rejects_schema_shape_and_reference_depth_limits() {
+        let mut deep = Value::Bool(true);
+        for _ in 0..MAX_SCHEMA_DEPTH {
+            deep = json!({"allOf": [deep]});
+        }
+        assert!(config(deep).compile().unwrap_err().contains("nesting"));
+
+        let too_many_nodes = json!({"examples": vec![Value::Null; MAX_SCHEMA_NODES]});
+        assert!(config(too_many_nodes).compile().unwrap_err().contains("node"));
+
+        let mut definitions = Map::new();
+        for index in 0..=MAX_REFERENCE_DEPTH {
+            let target = if index == MAX_REFERENCE_DEPTH {
+                Value::Bool(true)
+            } else {
+                json!({"$ref": format!("#/$defs/n{}", index + 1)})
+            };
+            definitions.insert(format!("n{index}"), target);
+        }
+        assert!(config(json!({
+            "$ref": "#/$defs/n0",
+            "$defs": definitions
+        }))
+        .compile()
+        .unwrap_err()
+        .contains("reference chain"));
+    }
+
+    #[test]
+    fn referenced_annotation_data_cannot_bypass_schema_policy() {
+        for schema in [
+            json!({
+                "$ref": "#/default",
+                "default": {"format": "regex"}
+            }),
+            json!({
+                "$ref": "#/x-internal",
+                "x-internal": {"unevaluatedProperties": false}
+            }),
+            json!({
+                "$ref": "#/examples/0",
+                "examples": [{"$id": "https://example.com/hidden"}]
+            }),
+        ] {
+            assert!(config(schema).compile().is_err());
+        }
+    }
+
+    #[test]
+    fn percent_encoded_ref_cannot_select_a_different_validator_target() {
+        let error = config(json!({
+            "$ref": "#/$defs/safe%2Fname",
+            "$defs": {
+                "safe%2Fname": true,
+                "safe": {
+                    "name": {"format": "regex"}
+                }
+            }
+        }))
+        .compile()
+        .unwrap_err();
+        assert!(error.contains("percent-encoded"), "{error}");
+    }
+
+    #[test]
+    fn referenced_annotation_patterns_are_bounded_and_counted_once() {
+        let patterns: Map<String, Value> = (0..=MAX_PATTERN_COUNT)
+            .map(|i| (format!("p{i}"), Value::Bool(true)))
+            .collect();
+        assert!(config(json!({
+            "$ref": "#/default",
+            "default": {"patternProperties": patterns}
+        }))
+        .compile()
+        .unwrap_err()
+        .contains("pattern"));
+
+        config(json!({
+            "allOf": [
+                {"$ref": "#/$defs/shared"},
+                {"$ref": "#/$defs/shared"}
+            ],
+            "$defs": {
+                "shared": {"pattern": "^shared$"}
+            }
+        }))
+        .compile()
+        .unwrap();
+    }
+
+    #[test]
     fn schema_walker_ignores_keyword_like_annotation_data() {
         config(json!({
             "type": "object",
@@ -768,7 +931,11 @@ mod tests {
             StrictJsonError::Malformed
         );
 
-        let deep = format!("{}0{}", "[".repeat(MAX_INSTANCE_DEPTH), "]".repeat(MAX_INSTANCE_DEPTH));
+        let deep = format!(
+            "{}0{}",
+            "[".repeat(MAX_JSON_INSTANCE_DEPTH),
+            "]".repeat(MAX_JSON_INSTANCE_DEPTH)
+        );
         assert_eq!(
             parse_json_instance(deep.as_bytes()).unwrap_err(),
             StrictJsonError::DepthLimit
@@ -780,6 +947,24 @@ mod tests {
         let parsed = parse_json_instance(br#"{"name":"Ada","tags":["x","yz"]}"#).unwrap();
         assert_eq!(parsed.node_count(), 5);
         assert_eq!(parsed.text_bytes(), 14);
+    }
+
+    #[test]
+    fn strict_parser_rejects_instance_node_overflow() {
+        let encoded = serde_json::to_vec(&Value::Array(vec![Value::Null; MAX_JSON_INSTANCE_NODES as usize])).unwrap();
+        assert_eq!(parse_json_instance(&encoded).unwrap_err(), StrictJsonError::NodeLimit);
+    }
+
+    #[test]
+    fn strict_parser_preserves_private_token_object_keys() {
+        let parsed = parse_json_instance(br#"{"$serde_json::private::Number":"1","other":true}"#)
+            .unwrap()
+            .into_value();
+        assert_eq!(
+            parsed.pointer("/$serde_json::private::Number"),
+            Some(&Value::String("1".to_string()))
+        );
+        assert_eq!(parsed.pointer("/other"), Some(&Value::Bool(true)));
     }
 
     #[test]
@@ -814,6 +999,18 @@ mod tests {
             .unwrap_err()
             .contains("pattern"));
 
+        let half_plus_one = MAX_PATTERN_SOURCE_BYTES / 2 + 1;
+        let aggregate_patterns = Map::from_iter([
+            ("a".repeat(half_plus_one), Value::Bool(true)),
+            ("b".repeat(half_plus_one), Value::Bool(true)),
+        ]);
+        assert!(config(json!({"patternProperties": aggregate_patterns}))
+            .compile()
+            .unwrap_err()
+            .contains("pattern source"));
+
+        assert!(config(json!({"pattern": "a{1000000}"})).compile().is_err());
+
         let huge = "x".repeat(MAX_SCHEMA_BYTES);
         assert!(config(json!({"description": huge})).compile().is_err());
     }
@@ -843,10 +1040,21 @@ mod tests {
 
     #[test]
     fn profiles_unique_items_pairwise_comparison_fanout() {
-        let profile = config(json!({"type": "array", "uniqueItems": true}))
-            .compile()
-            .unwrap()
-            .profile();
+        let compiled = config(json!({"type": "array", "uniqueItems": true})).compile().unwrap();
+        let profile = compiled.profile();
         assert!(profile.node_ops >= 18, "{profile:?}");
+        assert!(profile.scan_ops >= 15, "{profile:?}");
+
+        let instance = Value::Array(
+            (0..15)
+                .map(|index| Value::String(format!("{}{:02}", "x".repeat(20_000), index)))
+                .collect(),
+        );
+        let encoded = serde_json::to_vec(&instance).unwrap();
+        let parsed = parse_json_instance(&encoded).unwrap();
+        assert_eq!(
+            compiled.validate_instance(&parsed),
+            Err(InstanceValidationError::WorkBudgetExceeded)
+        );
     }
 }

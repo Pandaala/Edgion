@@ -370,7 +370,7 @@ impl BodyPluginsTestSuite {
     fn proxy_rewrite_json_body() -> TestCase {
         TestCase::new(
             "proxy_rewrite_json_body",
-            "ProxyRewrite structurally sets and removes JSON fields",
+            "ProxyRewrite applies ordered JSON Patch operations",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -427,6 +427,130 @@ impl BodyPluginsTestSuite {
                             TestResult::failed(start.elapsed(), format!("Unexpected chunked response: {response:?}"))
                         }
                         Err(error) => TestResult::failed(start.elapsed(), error),
+                    }
+                })
+            },
+        )
+    }
+
+    fn proxy_rewrite_advanced_json_patch() -> TestCase {
+        TestCase::new(
+            "proxy_rewrite_advanced_json_patch",
+            "ProxyRewrite applies all RFC 6902 operations and a string template in order",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let response = ctx
+                        .http_client
+                        .post(format!("{}/echo", ctx.http_url()))
+                        .header("host", "json-patch-advanced.example.com")
+                        .header("content-type", "application/json")
+                        .header("x-tenant", "tenant-a")
+                        .body(
+                            r#"{"version":1,"name":"old","secret":"drop","items":["head"],"profile":{"tier":"gold"}}"#,
+                        )
+                        .send()
+                        .await;
+                    match response {
+                        Ok(response) if response.status().as_u16() == 200 => {
+                            let text = response.text().await.unwrap_or_default();
+                            let actual =
+                                echo_body(&text).and_then(|body| serde_json::from_str::<serde_json::Value>(body).ok());
+                            let expected = serde_json::json!({
+                                "version": 1,
+                                "displayName": "gateway",
+                                "items": ["head", "tail"],
+                                "profile": {"tier": "gold"},
+                                "profileSnapshot": {"tier": "gold"},
+                                "tenant": "tenant-a"
+                            });
+                            if actual == Some(expected) {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Unexpected echo: {text}"))
+                            }
+                        }
+                        Ok(response) => {
+                            TestResult::failed(start.elapsed(), format!("Expected 200, got {}", response.status()))
+                        }
+                        Err(error) => TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
+                    }
+                })
+            },
+        )
+    }
+
+    fn proxy_rewrite_patch_failure_is_atomic() -> TestCase {
+        TestCase::new(
+            "proxy_rewrite_patch_failure_is_atomic",
+            "A failed JSON Patch test rejects without forwarding a partial mutation",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let response = ctx
+                        .http_client
+                        .post(format!("{}/echo", ctx.http_url()))
+                        .header("host", "json-patch-atomic-failure.example.com")
+                        .header("content-type", "application/json")
+                        .body(r#"{"version":1,"name":"original"}"#)
+                        .send()
+                        .await;
+                    match response {
+                        Ok(response) if response.status().as_u16() == 400 => TestResult::passed(start.elapsed()),
+                        Ok(response) => {
+                            TestResult::failed(start.elapsed(), format!("Expected 400, got {}", response.status()))
+                        }
+                        Err(error) => TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
+                    }
+                })
+            },
+        )
+    }
+
+    fn proxy_rewrite_spilled_json_body() -> TestCase {
+        TestCase::new(
+            "proxy_rewrite_spilled_json_body",
+            "ProxyRewrite materializes a forced-spill body once and publishes the complete patch",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let padding = "x".repeat(256 * 1024);
+                    let request = serde_json::json!({
+                        "version": "client",
+                        "discard": "remove",
+                        "meta": {"source": "disk"},
+                        "padding": padding,
+                    });
+                    let response = ctx
+                        .http_client
+                        .post(format!("{}/echo", ctx.http_url()))
+                        .header("host", "json-patch-spill.example.com")
+                        .header("content-type", "application/json")
+                        .body(request.to_string())
+                        .send()
+                        .await;
+                    match response {
+                        Ok(response) if response.status().as_u16() == 200 => {
+                            let text = response.text().await.unwrap_or_default();
+                            let actual =
+                                echo_body(&text).and_then(|body| serde_json::from_str::<serde_json::Value>(body).ok());
+                            match actual {
+                                Some(value)
+                                    if value["version"] == "spilled"
+                                        && value.get("discard").is_none()
+                                        && value["meta"] == serde_json::json!({"source": "disk"})
+                                        && value["metaCopy"] == serde_json::json!({"source": "disk"})
+                                        && value["padding"].as_str().is_some_and(|value| value.len() == 256 * 1024) =>
+                                {
+                                    TestResult::passed(start.elapsed())
+                                }
+                                _ => TestResult::failed(start.elapsed(), format!("Unexpected echo: {text}")),
+                            }
+                        }
+                        Ok(response) => {
+                            TestResult::failed(start.elapsed(), format!("Expected 200, got {}", response.status()))
+                        }
+                        Err(error) => TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
                     }
                 })
             },
@@ -936,6 +1060,9 @@ impl TestSuite for BodyPluginsTestSuite {
             Self::forward_auth_body(),
             Self::proxy_rewrite_json_body(),
             Self::proxy_rewrite_chunked_body_reframes_upstream(),
+            Self::proxy_rewrite_advanced_json_patch(),
+            Self::proxy_rewrite_patch_failure_is_atomic(),
+            Self::proxy_rewrite_spilled_json_body(),
             Self::ext_proc_buffered_body(),
             Self::ext_proc_duplicate_header_fails_closed(),
             Self::ext_proc_wrong_phase_fails_closed(),

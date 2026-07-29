@@ -406,6 +406,9 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/health", get(health_handler))
         .route("/version", get(version_handler))
         .route("/echo", get(echo_handler).post(echo_post_handler))
+        .route("/body-digest", get(body_digest_handler).post(body_digest_handler))
+        .route("/body-redirect", get(body_redirect_handler).post(body_redirect_handler))
+        .route("/body-slow", get(body_slow_handler).post(body_slow_handler))
         .route("/request-header-test", get(header_echo_handler))
         .route("/both-headers-test", get(header_echo_handler))
         .route("/multi-request-headers", get(header_echo_handler))
@@ -598,6 +601,49 @@ async fn echo_handler(
 
 async fn echo_post_handler(Extension(server_addr): Extension<String>, body: String) -> impl IntoResponse {
     format!("Server: {}\nEcho: {}", server_addr, body)
+}
+
+async fn body_digest_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::body::to_bytes;
+    use sha2::{Digest, Sha256};
+
+    let content_length = req
+        .headers()
+        .get("content-length")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("absent")
+        .to_string();
+    let transfer_encoding = req
+        .headers()
+        .get("transfer-encoding")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("absent")
+        .to_string();
+    let body = to_bytes(req.into_body(), 32 * 1024 * 1024).await.unwrap_or_default();
+    let digest = hex::encode(Sha256::digest(&body));
+
+    (
+        [
+            ("x-body-sha256", digest),
+            ("x-body-len", body.len().to_string()),
+            ("x-content-length", content_length),
+            ("x-transfer-encoding", transfer_encoding),
+        ],
+        "body-digest",
+    )
+}
+
+async fn body_redirect_handler() -> impl IntoResponse {
+    (
+        axum::http::StatusCode::TEMPORARY_REDIRECT,
+        [("location", "/body-digest")],
+        "redirect-not-followed",
+    )
+}
+
+async fn body_slow_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    body_digest_handler(req).await
 }
 
 async fn headers_handler(req: AxumRequest<Body>) -> impl IntoResponse {

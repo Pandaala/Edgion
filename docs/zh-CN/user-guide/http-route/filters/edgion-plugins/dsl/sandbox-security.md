@@ -152,9 +152,8 @@ errorPolicy:
 | `StackOverflow` | 栈深度超限 | 表达式嵌套过深 |
 | `StringTooLong` | 字符串过长 | 字符串拼接结果超过 `maxStringLen` |
 | `RegexError` | 正则错误 | 正则解析或执行失败 |
-| `HttpCallError` | `http.call()` 参数校验失败 | URL 协议不合法或地址被 SSRF 拦截；调用返回 `status = 0`，**不会**抛出运行时错误 |
-| `ApiError` | API 调用失败 | PluginSession 接口调用异常 |
-| `BodyAccess` | 请求体存储、扫描、范围或修改失败 | 绕过 `errorPolicy`，固定返回通用 fail-close 响应 |
+| `ApiError` | API 调用或参数校验失败 | 包括 PluginSession 异常、`http.call()` 的 URL/方法/Header 无效，或直接 IP 字面量被 SSRF 预检查拒绝；连接时被拒绝的 DNS 解析地址返回 `status = 0` |
+| `BodyAccess` | 请求体存储、扫描、范围、修改或 `http.call` 流式发送失败 | 绕过 `errorPolicy`，固定返回通用 fail-close 响应 |
 
 `TypeError` 是最常见的运行时错误，通常由脚本逻辑处理了可能为 `nil` 的值（如请求头不存在时对其进行字符串操作）。建议在脚本中对从外部读取的值（`req.header()`、`ctx.get()` 等）进行 `nil` 检查。
 
@@ -210,7 +209,13 @@ DSL 插件可以在两个阶段运行，不同阶段的可用 API 有所不同�
 | `req.header_names` / `resp.header_names` | 最多返回 256 个头名称 | 防止大量请求头导致的内存问题 |
 | `resp.set_status` | 状态码范围 100–599 | 超出范围时返回 `ApiError` |
 | `range` | 最多生成 1,000 个元素 | 防止大列表占用过多内存 |
-| `http.call` | 超时上限 `httpMaxTimeoutMs`（默认 5,000 ms）；响应体上限 `httpMaxResponseBodyBytes`（默认 1 MiB）；仅支持 `http`/`https`；`httpBlockPrivateIps: true` 时拦截私有 IP | 防止网关资源耗尽和 SSRF 攻击 |
+| `http.call` | 超时上限 `httpMaxTimeoutMs`（默认 5,000 ms）；不透明 `Body` 上限为 `min(httpMaxRequestBodyBytes, 物理 body 上限)`（默认 1 MiB，配置最大 32 MiB）；响应体上限 `httpMaxResponseBodyBytes`（默认 1 MiB）；按配置拦截私有 IP | 防止网关资源耗尽和 SSRF 攻击 |
+
+以 `req.body` 作为 `http.call` 第三个参数时，运行时从调用时的不可变快照拉取流式
+发送原始字节，不会完整物化请求体。实际拉取的字节计入累计 body 扫描预算。调用方
+不能设置 `Content-Length` 或 `Transfer-Encoding`；空 `Body` 发送
+`Content-Length: 0`，`nil` 不附加 body。不透明 `Body` 调用直接返回 3xx，不跟随
+重定向；`Str` 和 `Nil` 调用保留现有重定向行为。
 
 `req.body.json_get()` 只接受以 `$` 为根的确定性路径：`.member`、`["quoted member"]` 和非负 `[index]` 段。通配符、递归下降、过滤器、切片、联合和动态路径会在编译期被拒绝。
 

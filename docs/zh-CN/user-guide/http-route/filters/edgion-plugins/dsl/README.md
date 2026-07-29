@@ -13,7 +13,7 @@ DSL 适合以下场景：权限前置检查、动态 Header 注入、协议级�
 ## 特性一览
 
 - **沙箱隔离执行**：脚本无法访问文件系统或环境变量，运行环境完全受控
-- **出站 HTTP 调用**：脚本可通过 `http.call()` 调用外部 HTTP/HTTPS 服务，支持可配置超时、响应体大小限制，以及可选的 SSRF 防护（`httpBlockPrivateIps`）
+- **出站 HTTP 调用**：脚本可通过 `http.call()` 调用外部 HTTP/HTTPS 服务，也可原始拉取流式发送不透明的 `req.body`，支持可配置的请求/响应体上限、超时，以及可选的 SSRF 防护（`httpBlockPrivateIps`）
 - **字节码预编译**：支持 `source`（配置处理时编译）和 `bytecode`（预编译 Base64）两种加载方式，字节码模式可跳过编译开销
 - **资源限制可配置**：可独立限制执行步数、循环次数、调用深度、字符串长度
 - **请求 body 存储透明**：通过有界操作检查或修改不透明的 `req.body`，磁盘溢写无需先合并为一个完整字符串
@@ -55,6 +55,7 @@ spec:
 | `maxBodyScanPasses` | Integer | ❌ | `4` | 请求 body 累计扫描预算，以物理 body 上限的完整扫描次数计，范围 `1`–`16` |
 | `errorPolicy` | String | ❌ | `Ignore` | 错误策略：`Ignore` / `Deny` / `DenyWith` |
 | `httpMaxTimeoutMs` | Integer | ❌ | `5000` | `http.call()` 单次调用超时上限（毫秒） |
+| `httpMaxRequestBodyBytes` | Integer | ❌ | `1048576` | `http.call()` 发送不透明 `Body` 的最大字节数（`1`–`33554432`，同时受网关物理请求 body 上限约束） |
 | `httpMaxResponseBodyBytes` | Integer | ❌ | `1048576` | `http.call()` 响应体最大字节数 |
 | `httpBlockPrivateIps` | Boolean | ❌ | `false` | 拦截 `http.call()` 对私有/回环/链路本地 IP 的调用 |
 | `linkSysRefs` | Vec<{namespace, name}> | ❌† | `[]` | LinkSys Redis 资源列表。每个 `name` 是作为 `redis.*` 调用第一个参数的别名 |

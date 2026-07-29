@@ -1525,7 +1525,7 @@ Sends an outbound HTTP request from the gateway to an arbitrary HTTP/HTTPS endpo
 **Parameters**:
 - `method` (Str) — HTTP method, e.g. `"GET"`, `"POST"`, `"PUT"`
 - `url` (Str) — Full URL including scheme and host, e.g. `"https://api.example.com/v1/check"`
-- `body` (Str | Nil) — Request body; pass `nil` for no body
+- `body` (Str | Body | Nil) — A string request body, the opaque `req.body`, or `nil` for no body
 - `timeout_ms` (Int, optional) — Per-request timeout in milliseconds; capped to `httpMaxTimeoutMs` (default 5000)
 - `headers` (Map, optional) — Additional request headers as a `Map` of string key-value pairs
 
@@ -1533,27 +1533,36 @@ Sends an outbound HTTP request from the gateway to an arbitrary HTTP/HTTPS endpo
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `status` | Int | HTTP response status code; `0` if the request failed (timeout, connection error, SSRF block, etc.) |
+| `status` | Int | HTTP response status code; `0` for network, timeout, dial-time egress rejection, or response-stream failure |
 | `body` | Str | Response body as UTF-8 text; empty string if the call failed or the body is empty |
 | `headers` | Map | Response headers; each key is the lowercase header name, each value is the last header value for that name |
 
-**This function never raises a runtime error.** Network failures, timeouts, and SSRF blocks all return `status = 0` with an empty body.
+Network failures, timeouts, response-stream failures, and DNS-resolved addresses
+rejected at dial time return `status = 0` with an empty body. Invalid arguments,
+malformed or unsupported URLs, direct IP literals rejected by the SSRF precheck, and
+caller-supplied framing headers on an opaque `Body` call raise normal DSL runtime
+errors. Opaque-Body access, read, scan-budget, and limit failures raise the fixed
+fail-close `BodyAccess` error.
 
 **Constraints**:
-- Only `http` and `https` URL schemes are accepted; other schemes (e.g. `file://`, `ftp://`) return `status = 0`.
-- When `httpBlockPrivateIps: true`, requests whose URL host is a loopback, private, or link-local **IP literal** return `status = 0`. The guard inspects the URL host string only — it does **not** resolve DNS names, so a hostname that resolves to a private address is not blocked by this flag. Use network-level egress controls (NetworkPolicy) as the primary defense for hostname-based SSRF.
-- The response body is truncated at `min(httpMaxResponseBodyBytes, max_string_len)` (defaults: 1 MiB and 8 KiB respectively). The stricter of the two caps wins, so the body returned to the script is bounded by the same `max_string_len` that applies to every other DSL string value. Truncation is silent — the call still succeeds and the call still does not raise.
+- Only `http` and `https` URL schemes are accepted; other schemes (e.g. `file://`, `ftp://`) raise an error.
+- When `httpBlockPrivateIps: true`, loopback, private, link-local, and unspecified destinations are blocked. Direct IP literals are rejected before sending; hostnames are checked after DNS resolution against the exact addresses used for dialing, including on redirect hops. Network-level egress controls remain recommended as defense in depth.
+- Only the third argument accepts the opaque `Body` value, normally written as `req.body`. The runtime takes an immutable call-time snapshot and pull-streams its raw bytes from memory, spill files, and mutation segments without materializing the complete body.
+- Opaque `Body` size is capped by `min(httpMaxRequestBodyBytes, gateway physical request-body cap)`. The configured field defaults to 1 MiB and may be explicitly raised to at most 32 MiB. Bytes fetched from the snapshot count against the cumulative `maxBodyScanPasses` budget.
+- On an opaque `Body` call, caller headers must not contain `Content-Length` or `Transfer-Encoding`; either header is rejected so the runtime exclusively controls request framing. An empty opaque `Body` sends `Content-Length: 0`; `nil` attaches no body.
+- The response body is truncated at `min(httpMaxResponseBodyBytes, max_string_len)` (defaults: 1 MiB and 8 KiB respectively). The stricter of the two caps wins, so the body returned to the script is bounded by the same `max_string_len` that applies to every other DSL string value. Truncation is silent and the call still succeeds.
 - The response `headers` Map is silently truncated to the first `max_map_size` entries (SSRF / large-response-header guard); the call still succeeds.
 - The actual timeout applied is `min(timeout_ms, httpMaxTimeoutMs)`.
-- At most 10 redirects are followed (global client setting). When `httpBlockPrivateIps: true`, the same IP-literal guard is re-applied to **every** redirect hop, so a 30x to a blocked address yields `status = 0` instead of silently following.
+- `Str` and `Nil` calls follow at most 10 redirects. When `httpBlockPrivateIps: true`, both the direct-literal and dial-time resolved-address checks apply to every redirect hop. Opaque `Body` calls never follow redirects and return the 3xx response directly.
 
 **Configuration fields** (inside `config`):
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `httpMaxTimeoutMs` | Integer | `5000` | Hard cap on per-call timeout (ms) |
+| `httpMaxRequestBodyBytes` | Integer | `1048576` | Maximum opaque `Body` request size; range `1`–`33554432`, further capped by the gateway physical request-body limit |
 | `httpMaxResponseBodyBytes` | Integer | `1048576` | Maximum response body size (bytes); body is truncated if exceeded |
-| `httpBlockPrivateIps` | Boolean | `false` | Block outbound calls to private/loopback/link-local IP addresses (SSRF guard). IP literals only — hostnames are not resolved (see note above). |
+| `httpBlockPrivateIps` | Boolean | `false` | Block outbound calls to private/loopback/link-local/unspecified IP addresses, including hostname results checked at dial time |
 
 **Example — call a health endpoint and branch on status**:
 ```
@@ -1571,6 +1580,15 @@ let hdrs = {"Content-Type": "application/json", "X-Api-Key": req.header("X-Api-K
 let r = http.call("POST", "https://auth.example.com/verify", "{\"token\":\"abc\"}", 2000, hdrs)
 if r["status"] != 200 {
   return deny(401, "auth check failed")
+}
+```
+
+**Example — stream the current request body without full materialization**:
+```
+let hdrs = {"Content-Type": req.content_type}
+let r = http.call("POST", "https://scanner.example.com/check", req.body, 2000, hdrs)
+if r["status"] != 200 {
+  return deny(403, "request rejected")
 }
 ```
 
@@ -2090,7 +2108,7 @@ if sig == nil {
 | `time_now()` | Time | `Int` | 0 |
 | `time_format(timestamp, format)` | Time | `Str` | 2 |
 | `json_get(json_str, path)` | JSON | `Str\|Int\|Bool\|Nil` | 2 |
-| `http.call(method, url, body [, timeout_ms [, headers]])` | Network | `Map` | 2–5 |
+| `http.call(method, url, body [, timeout_ms [, headers]])` | Network | `Map` | 3–5 |
 | `ip_in_cidr(ip, cidr)` | Network | `Bool` | 2 |
 | `uuid()` | Utility | `Str` | 0 |
 | `range(start, end)` | Utility | `List` | 2 |

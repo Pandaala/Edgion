@@ -9,7 +9,9 @@ spec:
       type: ProxyRewrite
       config:
         jsonBody:
-          set:
-            /version: updated-body-version-is-longer
-          remove:
-            - /discard
+          operations:
+            - op: remove
+              path: /discard
+            - op: replace
+              path: /version
+              value: updated-body-version-is-longer

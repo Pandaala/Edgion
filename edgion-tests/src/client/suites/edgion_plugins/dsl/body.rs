@@ -44,6 +44,39 @@ impl DslBodyTestSuite {
         })
     }
 
+    async fn post_body_http_call(
+        client: &reqwest::Client,
+        url: &str,
+        mode: &str,
+        request_body: Vec<u8>,
+        expected_body: &[u8],
+    ) -> Result<(u16, String, String), String> {
+        let expected_digest = hex::encode(Sha256::digest(expected_body));
+        let response = client
+            .post(url)
+            .header("host", "dsl-body-http-call.example.com")
+            .header("content-type", "application/octet-stream")
+            .header("x-body-mode", mode)
+            .header("x-expected-body-sha256", expected_digest)
+            .header("x-expected-body-length", expected_body.len().to_string())
+            .body(request_body)
+            .send()
+            .await
+            .map_err(|error| format!("Body http.call request failed: {error}"))?;
+        let status = response.status().as_u16();
+        let marker = response
+            .headers()
+            .get("x-body-call")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let response_body = response
+            .text()
+            .await
+            .map_err(|error| format!("Body http.call response read failed: {error}"))?;
+        Ok((status, marker, response_body))
+    }
+
     fn test_late_body_read_requires_explicit_prebuffer() -> TestCase {
         TestCase::new(
             "dsl_late_body_read_requires_explicit_prebuffer",
@@ -666,6 +699,149 @@ impl DslBodyTestSuite {
             },
         )
     }
+
+    fn test_body_http_call_memory_mutation_and_empty_framing() -> TestCase {
+        TestCase::new(
+            "dsl_body_http_call_memory_mutation_and_empty_framing",
+            "Opaque Body calls preserve raw snapshots, mutations, and explicit zero-length framing",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/echo", ctx.target_host);
+                    let scenarios = [
+                        ("http-call", b"raw-body".to_vec(), b"raw-body".to_vec()),
+                        ("http-call-mutate", b"middle".to_vec(), b"[middle]".to_vec()),
+                        ("http-call-redirect", b"no-replay".to_vec(), b"no-replay".to_vec()),
+                        ("http-call-timeout", b"timeout-body".to_vec(), b"timeout-body".to_vec()),
+                        ("http-call", Vec::new(), Vec::new()),
+                    ];
+
+                    for (mode, request_body, expected_body) in scenarios {
+                        let (status, marker, response_body) =
+                            match Self::post_body_http_call(&ctx.http_client, &url, mode, request_body, &expected_body)
+                                .await
+                            {
+                                Ok(result) => result,
+                                Err(error) => return TestResult::failed(start.elapsed(), error),
+                            };
+                        let echoed = match Self::echoed_body(&response_body) {
+                            Ok(body) => body,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        if status != 200 || marker != "ok" || echoed.as_bytes() != expected_body {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!(
+                                    "Body http.call mismatch for mode={mode}: status={status}, marker={marker:?}, expected_bytes={}, echoed_bytes={}",
+                                    expected_body.len(),
+                                    echoed.len()
+                                ),
+                            );
+                        }
+                    }
+
+                    TestResult::passed(start.elapsed())
+                })
+            },
+        )
+    }
+
+    fn test_h2_spilled_body_http_call_streaming() -> TestCase {
+        TestCase::new(
+            "dsl_h2_spilled_body_http_call_streaming",
+            "An HTTP/2 downstream request streams a 256 KiB spilled snapshot through http.call",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let gateway = match format!("{}:31180", ctx.target_host).parse() {
+                        Ok(address) => address,
+                        Err(error) => {
+                            return TestResult::failed(start.elapsed(), format!("Gateway address invalid: {error}"));
+                        }
+                    };
+                    let client = match reqwest::Client::builder()
+                        .http2_prior_knowledge()
+                        .no_proxy()
+                        .resolve("dsl-body-http-call.example.com", gateway)
+                        .build()
+                    {
+                        Ok(client) => client,
+                        Err(error) => {
+                            return TestResult::failed(start.elapsed(), format!("H2 client build failed: {error}"));
+                        }
+                    };
+                    let request_body = vec![b'x'; BODY_SIZE];
+                    let result = Self::post_body_http_call(
+                        &client,
+                        "http://dsl-body-http-call.example.com:31180/echo",
+                        "http-call",
+                        request_body.clone(),
+                        &request_body,
+                    )
+                    .await;
+                    let (status, marker, response_body) = match result {
+                        Ok(result) => result,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    let echoed = match Self::echoed_body(&response_body) {
+                        Ok(body) => body,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    if status == 200 && marker == "ok" && echoed.as_bytes() == request_body {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!("Streamed and replayed all {BODY_SIZE} bytes"),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected streamed spill success, got status={status}, marker={marker:?}, echoed_bytes={}",
+                                echoed.len()
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_body_http_call_preserves_invalid_utf8_bytes() -> TestCase {
+        TestCase::new(
+            "dsl_body_http_call_preserves_invalid_utf8_bytes",
+            "Opaque Body upload preserves non-UTF-8 bytes without decoding",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let request_body = vec![b'a', 0xff, 0x00, b'z'];
+                    let url = format!("http://{}:31180/body-digest", ctx.target_host);
+                    let result = Self::post_body_http_call(
+                        &ctx.http_client,
+                        &url,
+                        "http-call",
+                        request_body.clone(),
+                        &request_body,
+                    )
+                    .await;
+                    let (status, marker, response_body) = match result {
+                        Ok(result) => result,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+
+                    if status == 200 && marker == "ok" && response_body == "body-digest" {
+                        TestResult::passed(start.elapsed())
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected byte-preserving call success, got status={status}, marker={marker:?}, body={response_body:?}"
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for DslBodyTestSuite {
@@ -689,6 +865,9 @@ impl TestSuite for DslBodyTestSuite {
             Self::test_request_body_spill_and_replay(),
             Self::test_h2_request_body_spill_and_replay(),
             Self::test_disk_body_replays_after_upstream_retry(),
+            Self::test_body_http_call_memory_mutation_and_empty_framing(),
+            Self::test_h2_spilled_body_http_call_streaming(),
+            Self::test_body_http_call_preserves_invalid_utf8_bytes(),
         ]
     }
 }

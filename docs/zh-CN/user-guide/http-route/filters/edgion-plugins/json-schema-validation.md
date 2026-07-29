@@ -8,6 +8,8 @@
 
 `JsonSchemaValidation` 在请求到达后端前，使用内联 JSON Schema 校验 JSON 请求体。插件采用 JSON Schema Draft 2020-12，拒绝格式错误的 JSON 和重复对象键，并且不会重新编码有效请求体，原始字节会原样转发。
 
+实例和 Schema 中的数字采用标准 `serde_json` 数值模型。
+
 该插件只能用于请求阶段，并固定采用失败关闭策略。每个 `requestPlugins` 列表最多包含一个 `JsonSchemaValidation` 条目；如需组合多个约束，请在一个 Schema 内使用 `allOf` 等关键字。
 
 ## 快速开始
@@ -71,7 +73,7 @@ config:
             type: string
 ```
 
-外部引用和外部资源读取始终禁用。`$id`、`$anchor`、`$dynamicAnchor`、`$dynamicRef`、`$recursiveRef`、`unevaluatedProperties` 以及本地引用环都会被拒绝。Schema 必须完整内联且不存在引用环。
+外部引用和外部资源读取始终禁用。不支持百分号编码的引用片段，请直接使用 JSON Pointer 转义（`~0` 和 `~1`）。`$id`、`$anchor`、`$dynamicAnchor`、`$dynamicRef`、`$recursiveRef`、`unevaluatedProperties` 以及本地引用环都会被拒绝。Schema 必须完整内联且不存在引用环。
 
 ## 请求要求
 

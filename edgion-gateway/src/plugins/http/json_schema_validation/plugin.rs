@@ -8,6 +8,7 @@ use edgion_resources::resources::edgion_plugins::{
 };
 use edgion_resources::EdgionStatus;
 
+use crate::plugins::http::common::json_request_headers_are_supported;
 use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 
@@ -50,43 +51,6 @@ impl JsonSchemaValidation {
             session.add_error(status);
         }
     }
-
-    fn header_values_are_supported(content_types: Option<&[String]>, content_encodings: Option<&[String]>) -> bool {
-        let Some(content_types) = content_types else {
-            return false;
-        };
-        if content_types.len() != 1 {
-            return false;
-        }
-
-        let Ok(content_type) = content_types[0].trim().parse::<mime::Mime>() else {
-            return false;
-        };
-        let subtype = content_type.subtype();
-        let is_json = subtype == mime::JSON || (subtype.as_str() != "*" && content_type.suffix() == Some(mime::JSON));
-        if content_type.type_() != mime::APPLICATION || !is_json {
-            return false;
-        }
-
-        let mut charset_count = 0usize;
-        for (name, value) in content_type.params() {
-            if name == mime::CHARSET {
-                charset_count += 1;
-                if charset_count > 1 || !value.as_str().eq_ignore_ascii_case("utf-8") {
-                    return false;
-                }
-            }
-        }
-
-        let Some(content_encodings) = content_encodings else {
-            return false;
-        };
-        match content_encodings {
-            [] => true,
-            [value] => value.trim().eq_ignore_ascii_case("identity"),
-            _ => false,
-        }
-    }
 }
 
 #[async_trait]
@@ -121,7 +85,7 @@ impl RequestFilter for JsonSchemaValidation {
         }
         let content_types = session.request_header_values("content-type");
         let content_encodings = session.request_header_values("content-encoding");
-        if !Self::header_values_are_supported(content_types.as_deref(), content_encodings.as_deref()) {
+        if !json_request_headers_are_supported(content_types.as_deref(), content_encodings.as_deref()) {
             log.push("deny media type");
             return Self::reject(415, Some(UNSUPPORTED_MEDIA_TYPE));
         }
@@ -217,12 +181,6 @@ mod tests {
         session
     }
 
-    fn headers_are_supported(content_types: &[&str], content_encodings: &[&str]) -> bool {
-        let content_types: Vec<String> = content_types.iter().map(|value| (*value).to_string()).collect();
-        let content_encodings: Vec<String> = content_encodings.iter().map(|value| (*value).to_string()).collect();
-        JsonSchemaValidation::header_values_are_supported(Some(&content_types), Some(&content_encodings))
-    }
-
     #[tokio::test]
     async fn valid_json_passes_without_gate_materialization() {
         let filter = plugin(json!({
@@ -290,45 +248,6 @@ mod tests {
             filter.run_request(&mut session, &mut log).await,
             JsonSchemaValidation::reject(413, None)
         );
-    }
-
-    #[test]
-    fn media_type_matrix_is_strict() {
-        for accepted in [
-            "application/json",
-            "APPLICATION/JSON",
-            " application/json \t",
-            "application/problem+json",
-            "application/problem+json; charset=utf-8; version=1",
-        ] {
-            assert!(headers_are_supported(&[accepted], &[]), "{accepted}");
-        }
-
-        for rejected in [
-            "text/json",
-            "text/problem+json",
-            "application/*+json",
-            "application/json; charset=iso-8859-1",
-            "application/json, text/plain",
-        ] {
-            assert!(!headers_are_supported(&[rejected], &[]), "{rejected}");
-        }
-
-        assert!(!headers_are_supported(&[], &[]));
-        assert!(!headers_are_supported(&["application/json", "application/json"], &[]));
-        assert!(!JsonSchemaValidation::header_values_are_supported(None, Some(&[])));
-    }
-
-    #[test]
-    fn content_encoding_allows_only_absent_or_single_identity() {
-        assert!(headers_are_supported(&["application/json"], &[]));
-        assert!(headers_are_supported(&["application/json"], &["identity"]));
-        assert!(!headers_are_supported(&["application/json"], &["gzip"]));
-        assert!(!headers_are_supported(&["application/json"], &["identity, identity"]));
-        assert!(!JsonSchemaValidation::header_values_are_supported(
-            Some(&["application/json".to_string()]),
-            None
-        ));
     }
 
     #[tokio::test]

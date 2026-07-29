@@ -9,10 +9,12 @@ spec:
       type: ProxyRewrite
       config:
         jsonBody:
-          set:
-            /version: committed
-          remove:
-            - /discard
+          operations:
+            - op: remove
+              path: /discard
+            - op: replace
+              path: /version
+              value: committed
     - enable: true
       type: RequestMirror
       config:
@@ -37,8 +39,10 @@ spec:
       type: ProxyRewrite
       config:
         jsonBody:
-          set:
-            /version: committed-body-created-by-a-longer-proxy-rewrite-mutation
+          operations:
+            - op: replace
+              path: /version
+              value: committed-body-created-by-a-longer-proxy-rewrite-mutation
     - enable: true
       type: RequestMirror
       config:

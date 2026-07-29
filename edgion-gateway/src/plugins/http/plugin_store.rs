@@ -121,20 +121,21 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     // semantics and would silently wipe an appended failure value queued
     // earlier by a different entry. Runs once over all four stage arrays
     // chained, mirroring the schema-layer `EdgionPlugins::validate_plugins`
-    // check (only enabled entries participate, matching `add_from_*` above).
+    // check (only active, non-policy-stamped entries participate, matching
+    // `add_from_*` above).
     let all_dye_suites = spec
         .spec
         .request_plugins
         .iter()
         .flatten()
-        .filter(|e| e.is_enabled())
+        .filter(|e| e.is_enabled() && e.policy_action.is_none())
         .map(|e| e.dye.as_ref())
         .chain(
             spec.spec
                 .upstream_response_filter_plugins
                 .iter()
                 .flatten()
-                .filter(|e| e.is_enabled())
+                .filter(|e| e.is_enabled() && e.policy_action.is_none())
                 .map(|e| e.dye.as_ref()),
         )
         .chain(
@@ -142,7 +143,7 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
                 .upstream_response_body_filter_plugins
                 .iter()
                 .flatten()
-                .filter(|e| e.is_enabled())
+                .filter(|e| e.is_enabled() && e.policy_action.is_none())
                 .map(|e| e.dye.as_ref()),
         )
         .chain(
@@ -150,7 +151,7 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
                 .upstream_response_plugins
                 .iter()
                 .flatten()
-                .filter(|e| e.is_enabled())
+                .filter(|e| e.is_enabled() && e.policy_action.is_none())
                 .map(|e| e.dye.as_ref()),
         );
     if let Some(err) = edgion_resources::resources::edgion_plugins::dye_set_clobber_error(all_dye_suites) {
@@ -182,11 +183,10 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>) {
         ($entries:expr, $label:expr) => {
             if let Some(entries) = &mut $entries {
                 for (i, entry) in entries.iter_mut().enumerate() {
-                    // A disabled entry is never built or run (`add_from_*` skip
-                    // it), so its dormant conditions must not produce a preparse
-                    // error. Skipping keeps this in lockstep with the schema-layer
-                    // `validate_plugins` Pass 1 (enforced by the parity test).
-                    if !entry.is_enabled() {
+                    // Disabled and PluginPolicy-stamped entries are never built
+                    // or run, so dormant conditions must not produce a preparse
+                    // error. This stays in lockstep with schema validation.
+                    if !entry.is_enabled() || entry.policy_action.is_some() {
                         continue;
                     }
                     if let Some(conds) = entry.conditions.as_mut() {
@@ -228,10 +228,9 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>) {
         ($entries:expr, $label:expr) => {
             if let Some(entries) = &mut $entries {
                 for (i, entry) in entries.iter_mut().enumerate() {
-                    // A disabled entry is inert (never built/run); its dormant
-                    // body conditions must not flip Accepted=False — same rule the
-                    // enabled check above applies to entry-level conditions.
-                    if !entry.is_enabled() {
+                    // An inert entry's dormant body conditions must not flip
+                    // Accepted=False, matching the entry-level conditions rule.
+                    if !entry.is_enabled() || entry.policy_action.is_some() {
                         continue;
                     }
                     if let Some(conds) = entry.body.as_mut().and_then(|b| b.conditions.as_mut()) {
@@ -802,6 +801,19 @@ mod compile_plugins_tests {
             });
             e
         }
+        fn policy_bypassed_invalid_json_schema() -> RequestFilterEntry {
+            use edgion_resources::resources::edgion_plugins::JsonSchemaValidationConfig;
+            use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+
+            let mut entry = json_schema_entry_with_body(Some("notasize"), true);
+            entry.plugin = EdgionPlugin::JsonSchemaValidation(JsonSchemaValidationConfig {
+                schema: serde_json::json!({"$schema": "http://json-schema.org/draft-07/schema#"}),
+            });
+            entry.alias = Some("invalid alias".to_string());
+            entry.conditions = disabled_with_bad_condition().conditions;
+            entry.policy_action = Some(PluginPolicyAction::Bypass);
+            entry
+        }
         fn mk(
             request: Option<Vec<RequestFilterEntry>>,
             urf: Option<Vec<UpstreamResponseFilterEntry>>,
@@ -949,6 +961,16 @@ mod compile_plugins_tests {
                     Some(vec![
                         RequestFilterEntry::new(json_schema()),
                         RequestFilterEntry::with_enable(json_schema(), false),
+                    ]),
+                    None,
+                ),
+            ),
+            (
+                "policy_bypassed_invalid_json_schema_is_inert",
+                mk(
+                    Some(vec![
+                        policy_bypassed_invalid_json_schema(),
+                        RequestFilterEntry::new(json_schema()),
                     ]),
                     None,
                 ),

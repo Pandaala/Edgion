@@ -1,6 +1,35 @@
 //! Namespace method resolution and builtin argument arity table
 
 use super::super::bytecode::BuiltinId;
+use std::fmt;
+
+/// Canonical argument-count rule shared by source compilation and bytecode validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BuiltinArity {
+    Exact(usize),
+    RangeInclusive { min: usize, max: usize },
+    Any,
+}
+
+impl BuiltinArity {
+    pub(crate) fn accepts(self, actual: usize) -> bool {
+        match self {
+            Self::Exact(expected) => actual == expected,
+            Self::RangeInclusive { min, max } => (min..=max).contains(&actual),
+            Self::Any => true,
+        }
+    }
+}
+
+impl fmt::Display for BuiltinArity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Exact(expected) => write!(formatter, "{expected}"),
+            Self::RangeInclusive { min, max } => write!(formatter, "{min} to {max}"),
+            Self::Any => formatter.write_str("any number of"),
+        }
+    }
+}
 
 /// Resolve namespace.method to BuiltinId
 pub(super) fn resolve_namespace_method(namespace: &str, method: &str) -> Option<BuiltinId> {
@@ -86,10 +115,10 @@ pub(super) fn resolve_namespace_method(namespace: &str, method: &str) -> Option<
     }
 }
 
-/// Expected argument count for each builtin — used for compile-time validation.
-/// Returns `Some(n)` for fixed-arity builtins, `None` for variadic builtins
-/// (where the runtime reads argc from the `CallBuiltin(_, argc)` opcode).
-pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> Option<usize> {
+/// Argument-count rule for each builtin.
+pub(crate) fn builtin_arity(id: &BuiltinId) -> BuiltinArity {
+    use BuiltinArity::{Any, Exact, RangeInclusive};
+
     match id {
         // req.* read — 0-arg (field access)
         BuiltinId::ReqMethod
@@ -110,7 +139,7 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> Option<usize> {
         | BuiltinId::ReqContentLength
         | BuiltinId::ReqClientCertCn
         | BuiltinId::ReqClientCertFingerprint
-        | BuiltinId::ReqBody => Some(0),
+        | BuiltinId::ReqBody => Exact(0),
 
         // req.* read — 1-arg
         BuiltinId::ReqHeader
@@ -121,24 +150,24 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> Option<usize> {
         | BuiltinId::ReqRemoveHeader
         | BuiltinId::ReqSetUri
         | BuiltinId::ReqSetHost
-        | BuiltinId::ReqSetMethod => Some(1),
+        | BuiltinId::ReqSetMethod => Exact(1),
 
         // req.* mutation — 2-arg
-        BuiltinId::ReqSetHeader | BuiltinId::ReqAppendHeader => Some(2),
+        BuiltinId::ReqSetHeader | BuiltinId::ReqAppendHeader => Exact(2),
 
         // resp.* read
         BuiltinId::RespStatus | BuiltinId::RespHeaderNames | BuiltinId::RespContentType | BuiltinId::RespBody => {
-            Some(0)
+            Exact(0)
         }
-        BuiltinId::RespHeader | BuiltinId::RespHasHeader => Some(1),
+        BuiltinId::RespHeader | BuiltinId::RespHasHeader => Exact(1),
         // resp.* mutation — 1-arg
-        BuiltinId::RespRemoveHeader | BuiltinId::RespSetStatus => Some(1),
+        BuiltinId::RespRemoveHeader | BuiltinId::RespSetStatus => Exact(1),
         // resp.* mutation — 2-arg
-        BuiltinId::RespSetHeader | BuiltinId::RespAppendHeader => Some(2),
+        BuiltinId::RespSetHeader | BuiltinId::RespAppendHeader => Exact(2),
 
         // ctx.*
-        BuiltinId::CtxGet | BuiltinId::CtxRemove => Some(1),
-        BuiltinId::CtxSet => Some(2),
+        BuiltinId::CtxGet | BuiltinId::CtxRemove => Exact(1),
+        BuiltinId::CtxSet => Exact(2),
 
         // Utilities
         BuiltinId::Log
@@ -157,34 +186,31 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> Option<usize> {
         | BuiltinId::HexEncode
         | BuiltinId::HexDecode
         | BuiltinId::LogWarn
-        | BuiltinId::LogError => Some(1),
-        BuiltinId::Substr => Some(3),
-        BuiltinId::TimeNow | BuiltinId::Uuid => Some(0),
+        | BuiltinId::LogError => Exact(1),
+        BuiltinId::Substr => Exact(3),
+        BuiltinId::TimeNow | BuiltinId::Uuid => Exact(0),
         BuiltinId::Split | BuiltinId::HmacSha256 | BuiltinId::TimeFormat | BuiltinId::IpInCidr | BuiltinId::Join => {
-            Some(2)
+            Exact(2)
         }
-        BuiltinId::Range => Some(2),
+        BuiltinId::Range => Exact(2),
 
-        // Variadic: argc carried by the opcode itself.
-        BuiltinId::LogFmt => None,
+        BuiltinId::LogFmt => Any,
 
-        // http.call: 3-5 args — variadic, runtime validates
-        BuiltinId::HttpCall => None,
+        BuiltinId::HttpCall => RangeInclusive { min: 3, max: 5 },
 
         // redis.*: fixed-arity per function (each takes link alias as first argument)
-        BuiltinId::RedisGet => Some(2),
-        BuiltinId::RedisDel => Some(2),
-        BuiltinId::RedisExists => Some(2),
-        BuiltinId::RedisTtl => Some(2),
-        BuiltinId::RedisIncr => Some(2),
-        BuiltinId::RedisHGetAll => Some(2),
-        BuiltinId::RedisExpire => Some(3),
-        BuiltinId::RedisIncrBy => Some(3),
-        BuiltinId::RedisHGet => Some(3),
-        BuiltinId::RedisHDel => Some(3),
-        BuiltinId::RedisHExists => Some(3),
-        BuiltinId::RedisHSet => Some(4),
-        // redis.set: 3 or 4 args (link, key, value [, ttl_ms]) — variadic, runtime validates
-        BuiltinId::RedisSet => None,
+        BuiltinId::RedisGet => Exact(2),
+        BuiltinId::RedisDel => Exact(2),
+        BuiltinId::RedisExists => Exact(2),
+        BuiltinId::RedisTtl => Exact(2),
+        BuiltinId::RedisIncr => Exact(2),
+        BuiltinId::RedisHGetAll => Exact(2),
+        BuiltinId::RedisExpire => Exact(3),
+        BuiltinId::RedisIncrBy => Exact(3),
+        BuiltinId::RedisHGet => Exact(3),
+        BuiltinId::RedisHDel => Exact(3),
+        BuiltinId::RedisHExists => Exact(3),
+        BuiltinId::RedisHSet => Exact(4),
+        BuiltinId::RedisSet => RangeInclusive { min: 3, max: 4 },
     }
 }

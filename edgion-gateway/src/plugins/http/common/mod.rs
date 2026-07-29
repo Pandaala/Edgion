@@ -14,6 +14,7 @@ pub mod auth_common;
 pub mod http_client;
 pub mod http_util;
 pub mod identity_source;
+pub mod json_request;
 pub mod outbound;
 
 pub use auth_common::{resolve_claim_path, send_gateway_auth_error_response, set_claims_headers, Claims};
@@ -21,6 +22,7 @@ pub use http_client::{
     connection_listed_hop_by_hop, get_http_client, is_hop_by_hop, is_hop_by_hop_or_listed, HOP_BY_HOP_HEADERS,
 };
 pub use identity_source::extract_rule_values;
+pub use json_request::json_request_headers_are_supported;
 
 /// Outcome of resolving a rate-limit key from the configured `key` sources.
 ///

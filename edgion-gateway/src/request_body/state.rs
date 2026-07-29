@@ -5,10 +5,11 @@
 //! plugins, routing hooks, and context lifecycle code never branch on the
 //! selected Pingora source.
 
+use async_trait::async_trait;
 use bytes::Bytes;
 
 use super::operation::{BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, RawBodyScanner};
-use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult};
+use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
 
 #[cfg(feature = "body-buffering")]
 mod enabled;
@@ -49,6 +50,13 @@ impl RequestBodyState {
     /// every other missing capture is an error.
     pub fn available_len(&self, known_bodyless: bool) -> Result<u64, BodyReadError> {
         self.0.available_len(known_bodyless)
+    }
+
+    /// Capture an owned reader over the current immutable logical snapshot.
+    ///
+    /// This never initiates body capture or contiguous materialization.
+    pub fn snapshot_reader(&self, known_bodyless: bool) -> Result<Box<dyn RequestBodySnapshotReader>, BodyReadError> {
+        self.0.snapshot_reader(known_bodyless)
     }
 
     /// Record a transport-proven empty body. This is the only cached-body
@@ -159,5 +167,22 @@ impl RequestBodyState {
     #[cfg(all(test, feature = "body-buffering"))]
     pub(crate) fn cached_body_is_materialized(&self) -> Option<bool> {
         self.0.cached_body_is_materialized()
+    }
+}
+
+pub(super) fn empty_snapshot_reader() -> Box<dyn RequestBodySnapshotReader> {
+    Box::new(EmptySnapshotReader)
+}
+
+struct EmptySnapshotReader;
+
+#[async_trait]
+impl RequestBodySnapshotReader for EmptySnapshotReader {
+    fn len(&self) -> u64 {
+        0
+    }
+
+    async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError> {
+        Ok(None)
     }
 }

@@ -111,9 +111,12 @@ pub struct DslConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_max_response_body_bytes: Option<usize>,
 
-    /// When true, http.call rejects URLs whose host is a private/loopback IP literal
-    /// (covers 127.x, 10.x, 172.16-31.x, 192.168.x, 169.254.x, ::1, fc00::/7, fe80::/10).
-    /// Hostname-based SSRF still requires network-level egress controls. (default: false)
+    /// Max request body size for http.call in bytes (default: 1048576 = 1 MiB)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_max_request_body_bytes: Option<usize>,
+
+    /// When true, http.call rejects private/loopback IP literals and addresses
+    /// resolved for hostnames at dial time. (default: false)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_block_private_ips: Option<bool>,
 
@@ -220,6 +223,11 @@ impl PluginValidation for DslConfig {
                 return Some("maxBodyScanPasses must be between 1 and 16".to_string());
             }
         }
+        if let Some(bytes) = self.http_max_request_body_bytes {
+            if !(1..=33_554_432).contains(&bytes) {
+                return Some("httpMaxRequestBodyBytes must be between 1 and 33554432".to_string());
+            }
+        }
         if let Some(DslErrorPolicy::DenyWith { status, .. }) = &self.error_policy {
             if *status < 100 || *status > 599 {
                 return Some("errorPolicy denyWith status must be between 100 and 599".to_string());
@@ -302,6 +310,32 @@ mod tests {
             config.validation_error(),
             Some("maxBodyScanPasses must be between 1 and 16".to_string())
         );
+    }
+
+    #[test]
+    fn validation_error_checks_http_request_body_limit_boundaries() {
+        for bytes in [1, 33_554_432] {
+            let config = DslConfig {
+                name: "request-body-limit".to_string(),
+                source: Some("return next()".to_string()),
+                http_max_request_body_bytes: Some(bytes),
+                ..Default::default()
+            };
+            assert_eq!(config.validation_error(), None);
+        }
+
+        for bytes in [0, 33_554_433] {
+            let config = DslConfig {
+                name: "request-body-limit".to_string(),
+                source: Some("return next()".to_string()),
+                http_max_request_body_bytes: Some(bytes),
+                ..Default::default()
+            };
+            assert_eq!(
+                config.validation_error(),
+                Some("httpMaxRequestBodyBytes must be between 1 and 33554432".to_string())
+            );
+        }
     }
 
     #[test]

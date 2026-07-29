@@ -3,7 +3,7 @@
 use super::super::ast::*;
 use super::super::bytecode::*;
 use super::super::error::CompileError;
-use super::builtins::{builtin_expected_argc, resolve_namespace_method};
+use super::builtins::{builtin_arity, resolve_namespace_method};
 use super::Compiler;
 
 impl Compiler {
@@ -150,20 +150,19 @@ impl Compiler {
     }
 
     fn compile_method_call(&mut self, object: &Expr, method: &str, args: &[Expr]) -> Result<(), CompileError> {
-        // Check if object is a namespace (req, resp, ctx)
+        // Check whether the object names a builtin namespace.
         if let ExprKind::Ident(namespace) = &object.kind {
             if let Some(builtin_id) = resolve_namespace_method(namespace, method) {
                 // Validate argument count at compile time
-                if let Some(expected) = builtin_expected_argc(&builtin_id) {
-                    if args.len() != expected {
-                        return Err(CompileError::new(format!(
-                            "{}.{}() expects {} argument(s), got {}",
-                            namespace,
-                            method,
-                            expected,
-                            args.len()
-                        )));
-                    }
+                let arity = builtin_arity(&builtin_id);
+                if !arity.accepts(args.len()) {
+                    return Err(CompileError::new(format!(
+                        "{}.{}() expects {} argument(s), got {}",
+                        namespace,
+                        method,
+                        arity,
+                        args.len()
+                    )));
                 }
                 // Compile arguments onto stack
                 for arg in args {
@@ -405,50 +404,48 @@ impl Compiler {
             return Ok(());
         }
 
-        // (builtin_id, expected_argc) — None means variadic / no check
-        let (builtin_id, expected_argc): (BuiltinId, Option<usize>) = match name {
-            "log" => (BuiltinId::Log, Some(1)),
-            "len" => (BuiltinId::Len, Some(1)),
-            "substr" => (BuiltinId::Substr, Some(3)),
-            "to_int" => (BuiltinId::ToInt, Some(1)),
-            "to_str" => (BuiltinId::ToStr, Some(1)),
-            "to_upper" => (BuiltinId::ToUpper, Some(1)),
-            "to_lower" => (BuiltinId::ToLower, Some(1)),
-            "base64_encode" => (BuiltinId::Base64Encode, Some(1)),
-            "base64_decode" => (BuiltinId::Base64Decode, Some(1)),
-            "url_encode" => (BuiltinId::UrlEncode, Some(1)),
-            "url_decode" => (BuiltinId::UrlDecode, Some(1)),
-            "sha256" => (BuiltinId::Sha256, Some(1)),
-            "md5" => (BuiltinId::Md5, Some(1)),
-            "time_now" => (BuiltinId::TimeNow, Some(0)),
-            "trim" => (BuiltinId::Trim, Some(1)),
-            "split" => (BuiltinId::Split, Some(2)),
-            "range" => (BuiltinId::Range, Some(2)),
+        let builtin_id = match name {
+            "log" => BuiltinId::Log,
+            "len" => BuiltinId::Len,
+            "substr" => BuiltinId::Substr,
+            "to_int" => BuiltinId::ToInt,
+            "to_str" => BuiltinId::ToStr,
+            "to_upper" => BuiltinId::ToUpper,
+            "to_lower" => BuiltinId::ToLower,
+            "base64_encode" => BuiltinId::Base64Encode,
+            "base64_decode" => BuiltinId::Base64Decode,
+            "url_encode" => BuiltinId::UrlEncode,
+            "url_decode" => BuiltinId::UrlDecode,
+            "sha256" => BuiltinId::Sha256,
+            "md5" => BuiltinId::Md5,
+            "time_now" => BuiltinId::TimeNow,
+            "trim" => BuiltinId::Trim,
+            "split" => BuiltinId::Split,
+            "range" => BuiltinId::Range,
             // P3 utility functions
-            "hmac_sha256" => (BuiltinId::HmacSha256, Some(2)),
-            "uuid" => (BuiltinId::Uuid, Some(0)),
-            "hex_encode" => (BuiltinId::HexEncode, Some(1)),
-            "hex_decode" => (BuiltinId::HexDecode, Some(1)),
-            "time_format" => (BuiltinId::TimeFormat, Some(2)),
-            "ip_in_cidr" => (BuiltinId::IpInCidr, Some(2)),
-            "join" => (BuiltinId::Join, Some(2)),
-            "log_warn" => (BuiltinId::LogWarn, Some(1)),
-            "log_error" => (BuiltinId::LogError, Some(1)),
+            "hmac_sha256" => BuiltinId::HmacSha256,
+            "uuid" => BuiltinId::Uuid,
+            "hex_encode" => BuiltinId::HexEncode,
+            "hex_decode" => BuiltinId::HexDecode,
+            "time_format" => BuiltinId::TimeFormat,
+            "ip_in_cidr" => BuiltinId::IpInCidr,
+            "join" => BuiltinId::Join,
+            "log_warn" => BuiltinId::LogWarn,
+            "log_error" => BuiltinId::LogError,
             _ => {
                 return Err(CompileError::new(format!("unknown function: {}()", name)));
             }
         };
 
         // Validate argument count at compile time
-        if let Some(expected) = expected_argc {
-            if args.len() != expected {
-                return Err(CompileError::new(format!(
-                    "{}() expects {} argument(s), got {}",
-                    name,
-                    expected,
-                    args.len()
-                )));
-            }
+        let arity = builtin_arity(&builtin_id);
+        if !arity.accepts(args.len()) {
+            return Err(CompileError::new(format!(
+                "{}() expects {} argument(s), got {}",
+                name,
+                arity,
+                args.len()
+            )));
         }
 
         for arg in args {
@@ -492,6 +489,42 @@ mod tests {
             .constants
             .iter()
             .any(|c| matches!(c, Constant::StreamingRegex(_))));
+    }
+
+    #[test]
+    fn test_compile_enforces_ranged_builtin_arities() {
+        for source in [
+            r#"let response = http.call("POST", "https://example.com", nil)"#,
+            r#"let response = http.call("POST", "https://example.com", nil, 1000, {})"#,
+            r#"let result = redis.set("cache", "key", "value")"#,
+            r#"let result = redis.set("cache", "key", "value", 1000)"#,
+        ] {
+            let program = parse_program(source).unwrap();
+            Compiler::new().compile(&program).unwrap();
+        }
+
+        for (source, expected) in [
+            (
+                r#"let response = http.call("POST", "https://example.com")"#,
+                "http.call() expects 3 to 5 argument(s), got 2",
+            ),
+            (
+                r#"let response = http.call("POST", "https://example.com", nil, 1000, {}, "extra")"#,
+                "http.call() expects 3 to 5 argument(s), got 6",
+            ),
+            (
+                r#"let result = redis.set("cache", "key")"#,
+                "redis.set() expects 3 to 4 argument(s), got 2",
+            ),
+            (
+                r#"let result = redis.set("cache", "key", "value", 1000, "extra")"#,
+                "redis.set() expects 3 to 4 argument(s), got 5",
+            ),
+        ] {
+            let program = parse_program(source).unwrap();
+            let error = Compiler::new().compile(&program).unwrap_err().to_string();
+            assert!(error.contains(expected), "expected '{expected}', got: {error}");
+        }
     }
 
     #[test]

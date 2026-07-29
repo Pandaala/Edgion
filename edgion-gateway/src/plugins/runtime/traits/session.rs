@@ -75,6 +75,20 @@ impl std::error::Error for BodyReadError {}
 /// cloning is a refcount bump, not a copy), or the reason it is unavailable.
 pub type BodyReadResult = Result<Bytes, BodyReadError>;
 
+/// An owned reader over one immutable logical request-body snapshot.
+///
+/// Each returned chunk is bounded by the body backend. The reader owns every
+/// backing reference needed to outlive later body mutations, so consumers may
+/// safely stream it across await points without borrowing the plugin session.
+#[async_trait]
+pub trait RequestBodySnapshotReader: Send {
+    /// Exact byte length of this snapshot.
+    fn len(&self) -> u64;
+
+    /// Read the next raw byte chunk, or `None` after the complete snapshot.
+    async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError>;
+}
+
 /// Which matched route a `matched_route_meta` lookup targets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouteProto {
@@ -438,6 +452,18 @@ pub trait PluginSession: Send + Sync {
     /// the cached bytes. A transport-proven bodyless request is recorded as an
     /// empty stable source so subsequent operations share the same semantics.
     fn request_body_available_len(&mut self, _known_bodyless: bool) -> Result<u64, BodyReadError> {
+        Err(BodyReadError::Unimplemented)
+    }
+
+    /// Capture an owned reader over the current logical request-body snapshot.
+    ///
+    /// This is metadata-only and never starts transport capture or materializes
+    /// disk-backed bytes. `known_bodyless` may be true only when the transport
+    /// snapshot proved that the request has no body.
+    async fn request_body_snapshot_reader(
+        &mut self,
+        _known_bodyless: bool,
+    ) -> Result<Box<dyn RequestBodySnapshotReader>, BodyReadError> {
         Err(BodyReadError::Unimplemented)
     }
 

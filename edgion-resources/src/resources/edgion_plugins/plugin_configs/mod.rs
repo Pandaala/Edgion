@@ -73,9 +73,10 @@ pub use header_cert_auth::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderC
 pub use hmac_auth::{HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup, HmacCredential};
 pub use ip_restriction::{DefaultAction, IpRestrictionConfig, IpSource};
 pub use json_schema_validation::{
-    json_schema_body_validation_errors, parse_json_instance, CompiledJsonSchema, InstanceValidationError,
-    JsonSchemaValidationConfig, ParsedJsonInstance, SchemaComplexityProfile, StrictJsonError,
-    ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES,
+    bounded_json_body_validation_errors, parse_json_instance, profile_json_value, CompiledJsonSchema,
+    InstanceValidationError, JsonSchemaValidationConfig, JsonValueProfile, ParsedJsonInstance, SchemaComplexityProfile,
+    StrictJsonError, ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES, MAX_JSON_INSTANCE_DEPTH,
+    MAX_JSON_INSTANCE_NODES,
 };
 pub use jwe_decrypt::{JweContentEncryption, JweDecryptConfig, JweKeyManagement, ResolvedJweCredential};
 pub use jwt_auth::{JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup, ResolvedJwtCredential, ResolvedJwtIssuerGroup};
@@ -85,7 +86,11 @@ pub use linksys_ref::LinkSysRef;
 pub use lru_cache_config::LruCacheConfig;
 pub use mock::MockConfig;
 pub use openid_connect::{EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode};
-pub use proxy_rewrite::{HeaderActions, HeaderEntry, HttpMethod, JsonBodyRewrite, ProxyRewriteConfig, RegexUri};
+pub use proxy_rewrite::{
+    CompiledJsonBodyRewrite, CompiledJsonPatchOperation, CompiledJsonPatchValue, HeaderActions, HeaderEntry,
+    HttpMethod, JsonBodyRewrite, JsonLiteralValue, JsonPatchOperation, ProxyRewriteConfig, RegexUri,
+    MAX_JSON_PATCH_OPERATIONS, MAX_JSON_PATCH_PLAN_BYTES, MAX_JSON_POINTER_BYTES, MAX_JSON_POINTER_TOKENS,
+};
 pub use rate_limit::{LimitHeaderNames, OnMissingKey, RateLimitConfig, RateLimitScope};
 pub use rate_limit_redis::{OnRedisFailure, RateLimitAlgorithm, RateLimitPolicy, RateLimitRedisConfig};
 pub use real_ip::RealIpConfig;

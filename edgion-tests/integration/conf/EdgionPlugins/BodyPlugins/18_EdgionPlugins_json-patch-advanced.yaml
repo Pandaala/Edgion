@@ -1,0 +1,74 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: json-patch-advanced
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: test
+              path: /version
+              value: 1.0
+            - op: remove
+              path: /secret
+            - op: replace
+              path: /name
+              value: gateway
+            - op: add
+              path: /items/-
+              value: tail
+            - op: copy
+              from: /profile
+              path: /profileSnapshot
+            - op: move
+              from: /name
+              path: /displayName
+            - op: add
+              path: /tenant
+              valueTemplate: "${header:X-Tenant}"
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: json-patch-atomic-failure
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: replace
+              path: /name
+              value: must-not-be-published
+            - op: test
+              path: /version
+              value: 2
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: json-patch-spill
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      body:
+        maxBodySize: 512KiB
+      config:
+        jsonBody:
+          operations:
+            - op: remove
+              path: /discard
+            - op: replace
+              path: /version
+              value: spilled
+            - op: copy
+              from: /meta
+              path: /metaCopy

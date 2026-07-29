@@ -6,7 +6,7 @@ use super::super::operation::{
     empty_text_operation, BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, RawBodyScanner,
 };
 use super::super::BodyStorageView;
-use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult};
+use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
 
 #[derive(Default)]
 pub(super) struct Backend {
@@ -28,6 +28,17 @@ impl Backend {
         match self.view.as_ref() {
             Some(view) => view.len(),
             None if known_bodyless || self.known_empty => Ok(0),
+            None => Err(BodyReadError::NotBuffered),
+        }
+    }
+
+    pub(super) fn snapshot_reader(
+        &self,
+        known_bodyless: bool,
+    ) -> Result<Box<dyn RequestBodySnapshotReader>, BodyReadError> {
+        match self.view.as_ref() {
+            Some(view) => view.snapshot_reader(),
+            None if known_bodyless || self.known_empty => Ok(super::empty_snapshot_reader()),
             None => Err(BodyReadError::NotBuffered),
         }
     }

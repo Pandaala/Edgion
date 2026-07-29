@@ -11,7 +11,7 @@ use std::sync::Arc;
 use super::conditions::{EvaluationResult, PluginConditionsExt};
 use super::dye_plan::{CompiledDyePlan, CompiledDyeRule};
 use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
-use super::traits::session::{BodyReadError, BodyReadResult, RouteProto};
+use super::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader, RouteProto};
 use super::traits::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult};
 use crate::link_sys::template::evaluate_template;
 #[cfg(feature = "body-buffering")]
@@ -1124,6 +1124,16 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             self.ctx.request_body.mark_known_empty();
         }
         self.ctx.request_body.available_len(known_bodyless)
+    }
+
+    async fn request_body_snapshot_reader(
+        &mut self,
+        known_bodyless: bool,
+    ) -> Result<Box<dyn RequestBodySnapshotReader>, BodyReadError> {
+        if known_bodyless && !self.ctx.request_body.has_cached_body() {
+            self.ctx.request_body.mark_known_empty();
+        }
+        self.ctx.request_body.snapshot_reader(known_bodyless)
     }
 
     async fn request_body_clear(&mut self) -> Result<(), BodyOperationError> {
@@ -2277,6 +2287,12 @@ mod record_outcome_tests {
             let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
             assert_eq!(adapter.request_body_available_len(true), Ok(0));
             assert_eq!(adapter.request_body_available_len(false), Ok(0));
+            let mut reader = adapter
+                .request_body_snapshot_reader(false)
+                .await
+                .expect("known-empty snapshot reader");
+            assert_eq!(reader.len(), 0);
+            assert_eq!(reader.next_chunk().await, Ok(None));
         }
 
         assert!(!ctx.request_body.has_cached_body());
@@ -2300,6 +2316,10 @@ mod record_outcome_tests {
 
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert_eq!(adapter.read_request_body(None).await, Err(BodyReadError::Unimplemented));
+        assert!(matches!(
+            adapter.request_body_snapshot_reader(false).await,
+            Err(BodyReadError::Unimplemented)
+        ));
         assert!(!ctx.request_body.has_cached_body());
     }
 
@@ -2557,6 +2577,37 @@ mod record_outcome_tests {
             Some(false),
             "streaming hash must not fill read_all cache"
         );
+    }
+
+    #[cfg(feature = "body-buffering")]
+    #[tokio::test]
+    async fn request_body_snapshot_reader_streams_disk_without_materializing() {
+        let body = vec![b's'; DEFAULT_MEMORY_BUFFER_BYTES + 17];
+        let mut session = test_session_with_body(&body).await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(true);
+        ctx.request_info.in_request_body_stage = true;
+
+        let mut reader = {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            adapter
+                .ensure_request_body(None)
+                .await
+                .expect("body capture must complete");
+            adapter
+                .request_body_snapshot_reader(false)
+                .await
+                .expect("captured snapshot reader")
+        };
+        assert_eq!(reader.len(), body.len() as u64);
+
+        let mut streamed = bytes::BytesMut::new();
+        while let Some(chunk) = reader.next_chunk().await.expect("snapshot chunk") {
+            assert!(chunk.len() <= 64 * 1024);
+            streamed.extend_from_slice(&chunk);
+        }
+        assert_eq!(streamed.as_ref(), body.as_slice());
+        assert_eq!(ctx.request_body.cached_body_is_materialized(), Some(false));
     }
 
     #[cfg(feature = "body-buffering")]

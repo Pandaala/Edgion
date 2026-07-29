@@ -8,6 +8,8 @@
 
 `JsonSchemaValidation` validates an incoming JSON request body against an inline JSON Schema before the request reaches the backend. It uses JSON Schema Draft 2020-12, rejects malformed JSON and duplicate object keys, and forwards valid bodies byte-for-byte without re-encoding them.
 
+Instance and schema numbers use the standard `serde_json` number model.
+
 The plugin is request-only and fail-closed. Each `requestPlugins` list may contain at most one `JsonSchemaValidation` entry. Compose multiple constraints inside one schema with keywords such as `allOf`.
 
 ## Quick Start
@@ -74,7 +76,11 @@ config:
             type: string
 ```
 
-External references and retrieval are never allowed. `$id`, `$anchor`, `$dynamicAnchor`, `$dynamicRef`, `$recursiveRef`, `unevaluatedProperties`, and local reference cycles are rejected. Use schemas that are fully self-contained and acyclic.
+External references and retrieval are never allowed. Percent-encoded reference
+fragments are not supported; write JSON Pointer escapes (`~0` and `~1`)
+directly. `$id`, `$anchor`, `$dynamicAnchor`, `$dynamicRef`, `$recursiveRef`,
+`unevaluatedProperties`, and local reference cycles are rejected. Use schemas
+that are fully self-contained and acyclic.
 
 ## Request Requirements
 

@@ -86,6 +86,7 @@ struct Inner {
     spec: ResolverSpec,
     policy: EgressPolicy,
     ttl: Duration,
+    trace_rejections: bool,
     cache: RwLock<HashMap<String, CacheEntry>>,
 }
 
@@ -96,11 +97,31 @@ pub struct EgressResolver {
 
 impl EgressResolver {
     pub fn new(spec: ResolverSpec, policy: EgressPolicy, ttl: Duration) -> Self {
+        Self::new_with_rejection_tracing(spec, policy, ttl, true)
+    }
+
+    /// Build a resolver that records blocked-address metrics without emitting
+    /// one WARN per rejected address.
+    ///
+    /// Use this for request-derived destinations, where an untrusted caller
+    /// could otherwise amplify gateway logs by repeatedly resolving blocked
+    /// addresses.
+    pub fn new_metric_only(spec: ResolverSpec, policy: EgressPolicy, ttl: Duration) -> Self {
+        Self::new_with_rejection_tracing(spec, policy, ttl, false)
+    }
+
+    fn new_with_rejection_tracing(
+        spec: ResolverSpec,
+        policy: EgressPolicy,
+        ttl: Duration,
+        trace_rejections: bool,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 spec,
                 policy,
                 ttl,
+                trace_rejections,
                 cache: RwLock::new(HashMap::new()),
             }),
         }
@@ -151,7 +172,7 @@ impl Inner {
         );
     }
 
-    /// Drop every address the policy rejects, recording a metric and a WARN per drop.
+    /// Drop every address the policy rejects and record a metric per drop.
     fn filter_addrs(&self, host: &str, addrs: Vec<IpAddr>) -> Vec<IpAddr> {
         addrs
             .into_iter()
@@ -172,13 +193,15 @@ impl Inner {
                     IpClass::Private | IpClass::UniqueLocal | IpClass::Global => return true,
                 };
                 record_egress_blocked(reason);
-                tracing::warn!(
-                    host = %host,
-                    addr = %ip,
-                    reason,
-                    block_private = self.policy.block_private,
-                    "Outbound address rejected by egress policy"
-                );
+                if self.trace_rejections {
+                    tracing::warn!(
+                        host = %host,
+                        addr = %ip,
+                        reason,
+                        block_private = self.policy.block_private,
+                        "Outbound address rejected by egress policy"
+                    );
+                }
                 false
             })
             .collect()
@@ -249,6 +272,17 @@ mod tests {
             EgressPolicy { block_private },
             Duration::from_secs(5),
         )
+    }
+
+    #[test]
+    fn metric_only_resolver_disables_per_address_tracing() {
+        let resolver = EgressResolver::new_metric_only(
+            ResolverSpec::System,
+            EgressPolicy { block_private: true },
+            Duration::from_secs(5),
+        );
+
+        assert!(!resolver.inner.trace_rejections);
     }
 
     /// Link-local (including the cloud-metadata address) is always dropped.

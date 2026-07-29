@@ -394,12 +394,13 @@ impl PluginRuntime {
     /// A vector of validation error messages (empty if all plugins are valid)
     pub fn add_from_request_filters(&mut self, entries: &[RequestFilterEntry], namespace: &str) -> Vec<String> {
         let mut errors = Vec::new();
-        let mut invalid_json_schema_entries = vec![false; entries.len()];
+        let mut invalid_bounded_json_entries = vec![false; entries.len()];
 
         // Mirror the schema-layer JsonSchemaValidation list/entry invariants
         // before constructing any filters. The Gateway must remain fail-closed
         // even if an invalid resource reaches it without Controller admission.
-        // Disabled entries are inert and do not participate.
+        // Disabled and PluginPolicy-stamped entries are inert and do not
+        // participate.
         let json_schema_count = entries
             .iter()
             .filter(|entry| {
@@ -418,29 +419,37 @@ impl PluginRuntime {
         for (index, entry) in entries.iter().enumerate() {
             if !entry.is_enabled()
                 || entry.policy_action.is_some()
-                || !matches!(entry.plugin, EdgionPlugin::JsonSchemaValidation(_))
+                || !matches!(
+                    entry.plugin,
+                    EdgionPlugin::JsonSchemaValidation(_)
+                        | EdgionPlugin::ProxyRewrite(edgion_resources::resources::edgion_plugins::ProxyRewriteConfig {
+                            json_body: Some(_),
+                            ..
+                        })
+                )
             {
                 continue;
             }
             let Some(body) = entry.body.as_ref() else {
                 continue;
             };
-            let body_errors = edgion_resources::resources::edgion_plugins::json_schema_body_validation_errors(body);
+            let body_errors = edgion_resources::resources::edgion_plugins::bounded_json_body_validation_errors(body);
             if body_errors.is_empty() {
                 continue;
             }
-            invalid_json_schema_entries[index] = true;
-            self.invalid_plugins.push("JsonSchemaValidation");
+            invalid_bounded_json_entries[index] = true;
+            let plugin_name = Self::get_plugin_name(&entry.plugin);
+            self.invalid_plugins.push(plugin_name);
             errors.extend(
                 body_errors
                     .into_iter()
-                    .map(|error| format!("requestPlugins[{}] (JsonSchemaValidation): {}", index, error)),
+                    .map(|error| format!("requestPlugins[{}] ({}): {}", index, plugin_name, error)),
             );
         }
 
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
-                if invalid_json_schema_entries[index] {
+                if invalid_bounded_json_entries[index] {
                     continue;
                 }
                 // Plugin policy: a stamped entry is never instantiated and is
@@ -1109,7 +1118,9 @@ impl PluginRuntime {
             EdgionPlugin::LdapAuth(config) => CreateResult::Ok(LdapAuth::create(config)),
             EdgionPlugin::FaultInjection(config) => CreateResult::Ok(Some(Box::new(FaultInjection::new(config)))),
             EdgionPlugin::Mock(config) => CreateResult::Ok(Some(Box::new(Mock::new(config)))),
-            EdgionPlugin::ProxyRewrite(config) => CreateResult::Ok(Some(Box::new(ProxyRewrite::new(config)))),
+            EdgionPlugin::ProxyRewrite(config) => {
+                CreateResult::Ok(ProxyRewrite::create(config, body_requirement).map(|plugin| Box::new(plugin) as _))
+            }
             EdgionPlugin::RequestBodyBuffer(_) => CreateResult::Ok(Some(RequestBodyBuffer::create())),
             EdgionPlugin::RequestRestriction(config) => CreateResult::Ok(Some(RequestRestriction::create(config))),
             EdgionPlugin::RateLimit(config) => CreateResult::Ok(Some(RateLimit::create(config))),
@@ -1826,7 +1837,7 @@ mod tests {
 
         for (body, expected_error) in cases {
             let expected_errors: Vec<String> =
-                edgion_resources::resources::edgion_plugins::json_schema_body_validation_errors(&body)
+                edgion_resources::resources::edgion_plugins::bounded_json_body_validation_errors(&body)
                     .into_iter()
                     .map(|error| format!("requestPlugins[0] (JsonSchemaValidation): {error}"))
                     .collect();
@@ -1840,6 +1851,44 @@ mod tests {
             assert_eq!(runtime.request_plugins_count(), 0);
             assert_sealed_invalid(&mut runtime);
         }
+    }
+
+    #[test]
+    fn proxy_rewrite_bounded_body_validation_matches_consumption() {
+        use edgion_resources::resources::edgion_plugins::{BodyRequirement, JsonBodyRewrite, ProxyRewriteConfig};
+
+        let invalid_body = BodyRequirement {
+            conditions: Some(Default::default()),
+            ..BodyRequirement::default()
+        };
+        let mut consuming = RequestFilterEntry::new(EdgionPlugin::ProxyRewrite(ProxyRewriteConfig {
+            json_body: Some(JsonBodyRewrite { operations: Vec::new() }),
+            ..Default::default()
+        }));
+        consuming.body = Some(invalid_body.clone());
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[consuming], "default");
+        assert_eq!(
+            errors,
+            vec!["requestPlugins[0] (ProxyRewrite): body: conditions are not supported"]
+        );
+        assert_eq!(runtime.request_plugins_count(), 0);
+        assert_sealed_invalid(&mut runtime);
+
+        let mut uri_only = RequestFilterEntry::new(EdgionPlugin::ProxyRewrite(ProxyRewriteConfig {
+            uri: Some("/rewritten".to_string()),
+            ..Default::default()
+        }));
+        uri_only.body = Some(invalid_body);
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[uri_only], "default");
+        assert_eq!(
+            errors,
+            vec!["requestPlugins[0] (ProxyRewrite): body: plugin does not consume a body"]
+        );
+        assert!(runtime.invalid_plugins.is_empty());
+        assert_eq!(runtime.request_plugins_count(), 1);
     }
 
     #[test]

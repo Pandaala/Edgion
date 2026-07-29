@@ -17,7 +17,7 @@ use super::operation::{
     BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, BytesScanner, LossyTextScanner,
     RawBodyScanner, ScanControl, TextOperationScanner, MAX_BODY_SEGMENTS,
 };
-use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult};
+use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
 
 const SCAN_CHUNK_SIZE: usize = 64 * 1024;
 const DISK_SCAN_CONCURRENCY: usize = 32;
@@ -303,6 +303,15 @@ impl BodyStorageView {
         self.snapshot().map(|(snapshot, _)| snapshot.len)
     }
 
+    /// Capture an owned reader over the current immutable logical snapshot.
+    ///
+    /// Creating the reader does not materialize a disk-backed source. Later
+    /// mutations publish a different snapshot and cannot affect this reader.
+    pub fn snapshot_reader(&self) -> Result<Box<dyn RequestBodySnapshotReader>, BodyReadError> {
+        let (snapshot, _) = self.snapshot()?;
+        Ok(Box::new(BodySnapshotReader::new(snapshot)))
+    }
+
     pub fn is_modified(&self) -> bool {
         self.inner.mutation.read().snapshot.is_some()
     }
@@ -570,6 +579,73 @@ impl BodyStorageView {
             .await
             .map(|result| result.value)
             .map_err(operation_to_body_error)
+    }
+}
+
+struct BodySnapshotReader {
+    snapshot: Arc<BodySnapshot>,
+    segment_index: usize,
+    segment_offset: u64,
+}
+
+impl BodySnapshotReader {
+    fn new(snapshot: Arc<BodySnapshot>) -> Self {
+        Self {
+            snapshot,
+            segment_index: 0,
+            segment_offset: 0,
+        }
+    }
+}
+
+#[async_trait]
+impl RequestBodySnapshotReader for BodySnapshotReader {
+    fn len(&self) -> u64 {
+        self.snapshot.len
+    }
+
+    async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError> {
+        loop {
+            let Some(segment) = self.snapshot.segments.get(self.segment_index) else {
+                return Ok(None);
+            };
+            let segment_len = segment.len().map_err(operation_to_body_error)?;
+            if self.segment_offset == segment_len {
+                self.segment_index += 1;
+                self.segment_offset = 0;
+                continue;
+            }
+
+            let wanted = usize::try_from((segment_len - self.segment_offset).min(SCAN_CHUNK_SIZE as u64))
+                .map_err(|_| BodyReadError::Incomplete)?;
+            let chunk = match segment {
+                Segment::SourceRange { source, .. } if matches!(source.as_ref(), BodySource::Disk { .. }) => {
+                    let permit = Arc::clone(disk_scan_limiter())
+                        .acquire_owned()
+                        .await
+                        .map_err(|_| BodyReadError::Incomplete)?;
+                    let segment = segment.clone();
+                    let segment_offset = self.segment_offset;
+                    tokio::task::spawn_blocking(move || {
+                        let _permit = permit;
+                        read_segment_chunk(&segment, segment_offset, wanted)
+                    })
+                    .await
+                    .map_err(|_| BodyReadError::Incomplete)?
+                    .map_err(operation_to_body_error)?
+                }
+                _ => read_segment_chunk(segment, self.segment_offset, wanted).map_err(operation_to_body_error)?,
+            };
+            if chunk.is_empty() {
+                return Err(BodyReadError::Incomplete);
+            }
+            let chunk_len = u64::try_from(chunk.len()).map_err(|_| BodyReadError::Incomplete)?;
+            self.segment_offset = self
+                .segment_offset
+                .checked_add(chunk_len)
+                .ok_or(BodyReadError::Incomplete)?;
+            return Ok(Some(chunk));
+        }
     }
 }
 
@@ -1169,6 +1245,16 @@ mod tests {
         body.freeze()
     }
 
+    async fn read_snapshot(mut reader: Box<dyn RequestBodySnapshotReader>) -> (Vec<usize>, Bytes) {
+        let mut chunk_lengths = Vec::new();
+        let mut body = BytesMut::new();
+        while let Some(chunk) = reader.next_chunk().await.unwrap() {
+            chunk_lengths.push(chunk.len());
+            body.extend_from_slice(&chunk);
+        }
+        (chunk_lengths, body.freeze())
+    }
+
     fn disk_file(storage: &BodyStorage) -> (&NamedTempFile, &Arc<File>) {
         match &storage.storage {
             CaptureStorage::FinishedDisk { temp_file, file } => (temp_file, file),
@@ -1212,6 +1298,64 @@ mod tests {
         assert!(!view.is_materialized());
         let expected: [u8; 32] = Sha256::digest(b"prefix-body-suffix").into();
         assert_eq!(view.sha256_scan(u64::MAX).await.unwrap().value, expected);
+        assert!(!view.is_materialized());
+    }
+
+    #[tokio::test]
+    async fn snapshot_reader_streams_memory_in_bounded_chunks() {
+        let body = vec![b'm'; SCAN_CHUNK_SIZE * 2 + 17];
+        let (mut storage, view) = BodyStorage::with_memory_limit(body.len() + 1);
+        capture(&mut storage, &[&body]).await;
+
+        let reader = view.snapshot_reader().unwrap();
+        assert_eq!(reader.len(), body.len() as u64);
+        let (chunk_lengths, streamed) = read_snapshot(reader).await;
+
+        assert_eq!(chunk_lengths, vec![SCAN_CHUNK_SIZE, SCAN_CHUNK_SIZE, 17]);
+        assert_eq!(streamed.as_ref(), body.as_slice());
+        assert!(!view.is_materialized());
+    }
+
+    #[tokio::test]
+    async fn snapshot_reader_streams_spill_without_materializing() {
+        let body = vec![b'd'; SCAN_CHUNK_SIZE + 11];
+        let (mut storage, view) = BodyStorage::with_memory_limit(1);
+        capture(&mut storage, &[&body]).await;
+
+        let reader = view.snapshot_reader().unwrap();
+        assert_eq!(reader.len(), body.len() as u64);
+        let (chunk_lengths, streamed) = read_snapshot(reader).await;
+
+        assert_eq!(chunk_lengths, vec![SCAN_CHUNK_SIZE, 11]);
+        assert_eq!(streamed.as_ref(), body.as_slice());
+        assert!(!view.is_materialized());
+    }
+
+    #[tokio::test]
+    async fn snapshot_reader_remains_stable_across_mutation() {
+        let (mut storage, view) = BodyStorage::with_memory_limit(1);
+        capture(&mut storage, &[b"original"]).await;
+        let old_reader = view.snapshot_reader().unwrap();
+
+        view.prepend(Bytes::from_static(b"new-")).unwrap();
+        view.remove(4..12).unwrap();
+
+        assert_eq!(read_snapshot(old_reader).await.1, Bytes::from_static(b"original"));
+        assert_eq!(
+            read_snapshot(view.snapshot_reader().unwrap()).await.1,
+            Bytes::from_static(b"new-")
+        );
+        assert!(!view.is_materialized());
+    }
+
+    #[tokio::test]
+    async fn snapshot_reader_handles_empty_body_without_chunks() {
+        let (mut storage, view) = BodyStorage::with_memory_limit(1);
+        capture(&mut storage, &[]).await;
+
+        let reader = view.snapshot_reader().unwrap();
+        assert_eq!(reader.len(), 0);
+        assert_eq!(read_snapshot(reader).await, (Vec::new(), Bytes::new()));
         assert!(!view.is_materialized());
     }
 

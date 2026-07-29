@@ -70,6 +70,7 @@ impl DslPlugin {
         let runtime = DslRuntime {
             max_timeout_ms: config.http_max_timeout_ms.unwrap_or(5_000),
             max_response_body_bytes: config.http_max_response_body_bytes.unwrap_or(1024 * 1024),
+            max_request_body_bytes: config.http_max_request_body_bytes.unwrap_or(1024 * 1024),
             block_private_ips: config.http_block_private_ips.unwrap_or(false),
             redis_links,
             max_body_scan_passes: config.max_body_scan_passes.unwrap_or(4),
@@ -191,6 +192,17 @@ mod tests {
     fn dsl_request_filter_uses_capture_only_body_gate() {
         let filter = DslPlugin::from_config(&config("let found = req.body.contains(\"x\")")).unwrap();
         assert!(!filter.requires_materialized_request_body());
+    }
+
+    #[test]
+    fn request_body_call_limit_resolves_default_and_explicit_values() {
+        let (_, _, _, default_runtime) = DslPlugin::resolve_parts(&config("return next()")).unwrap();
+        assert_eq!(default_runtime.max_request_body_bytes, 1024 * 1024);
+
+        let mut explicit = config("return next()");
+        explicit.http_max_request_body_bytes = Some(64 * 1024);
+        let (_, _, _, explicit_runtime) = DslPlugin::resolve_parts(&explicit).unwrap();
+        assert_eq!(explicit_runtime.max_request_body_bytes, 64 * 1024);
     }
 
     #[test]

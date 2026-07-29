@@ -7,12 +7,25 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use regex::Regex;
+use std::io::{self, Write};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::LazyLock;
 
+use crate::link_sys::template::{evaluate_template_bounded, TemplateEvaluationError};
+use crate::plugins::http::common::json_request_headers_are_supported;
 use crate::plugins::runtime::log::{la, sensitive};
+use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::ProxyRewriteConfig;
+use edgion_resources::resources::edgion_plugins::{
+    profile_json_value, BodyRequirement, CompiledJsonPatchOperation, CompiledJsonPatchValue, ProxyRewriteConfig,
+    StrictJsonError, ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES,
+};
+use edgion_resources::EdgionStatus;
+
+const INVALID_REQUEST_BODY: &str = "Invalid request body";
+const UNSUPPORTED_MEDIA_TYPE: &str = "Unsupported media type";
+const MAX_MUTATION_WORK: u64 = 4_000_000;
 
 /// Regex for matching $arg_<name> variables
 static ARG_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$arg_(\w+)").unwrap());
@@ -45,19 +58,29 @@ enum TemplateContext {
 pub struct ProxyRewrite {
     name: String,
     config: ProxyRewriteConfig,
+    json_body_limit: u64,
 }
 
 impl ProxyRewrite {
-    /// Create a new ProxyRewrite plugin from configuration
-    pub fn new(config: &ProxyRewriteConfig) -> Self {
+    /// Compile a ProxyRewrite plugin for immutable runtime publication.
+    pub fn create(config: &ProxyRewriteConfig, body_requirement: Option<BodyRequirement>) -> Option<Self> {
         let mut config = config.clone();
-        // Precompile regex pattern and validate
-        config.precompile();
+        if !config.precompile() {
+            return None;
+        }
+        let json_body_limit = body_requirement
+            .as_ref()
+            .and_then(BodyRequirement::max_body_size_bytes)
+            .and_then(Result::ok)
+            .filter(|limit| *limit > 0)
+            .unwrap_or(DEFAULT_INSTANCE_MAX_BYTES)
+            .min(ABSOLUTE_INSTANCE_MAX_BYTES);
 
-        ProxyRewrite {
+        Some(ProxyRewrite {
             name: "ProxyRewrite".to_string(),
             config,
-        }
+            json_body_limit,
+        })
     }
 
     /// URL encode a string value for safe inclusion in URI query parameter.
@@ -343,83 +366,384 @@ impl ProxyRewrite {
         session: &mut dyn PluginSession,
         plugin_log: &mut PluginLog,
     ) -> Result<(), PluginRunningResult> {
-        let Some(rewrite) = &self.config.json_body else {
+        let Some(rewrite) = &self.config.compiled_json_body else {
             return Ok(());
         };
-        let body = session.read_request_body(None).await.map_err(|_| {
-            plugin_log.push_err("json body unavailable");
-            PluginRunningResult::ErrResponse {
-                status: 500,
-                body: None,
-            }
-        })?;
-        let mut value: serde_json::Value = serde_json::from_slice(&body).map_err(|_| {
-            plugin_log.push_err("json body invalid");
-            PluginRunningResult::ErrResponse {
-                status: 400,
-                body: None,
-            }
-        })?;
-
-        for pointer in &rewrite.remove {
-            remove_json_pointer(&mut value, pointer).map_err(|_| {
-                plugin_log.push_err("json remove failed");
-                PluginRunningResult::ErrResponse {
-                    status: 400,
-                    body: None,
-                }
-            })?;
-        }
-        for (pointer, replacement) in &rewrite.set {
-            let target = value.pointer_mut(pointer).ok_or_else(|| {
-                plugin_log.push_err("json set failed");
-                PluginRunningResult::ErrResponse {
-                    status: 400,
-                    body: None,
-                }
-            })?;
-            *target = replacement.clone();
+        let content_types = session.request_header_values("content-type");
+        let content_encodings = session.request_header_values("content-encoding");
+        if !json_request_headers_are_supported(content_types.as_deref(), content_encodings.as_deref()) {
+            plugin_log.push("deny media type");
+            return Err(Self::reject(415, Some(UNSUPPORTED_MEDIA_TYPE)));
         }
 
-        let body = serde_json::to_vec(&value).map_err(|_| PluginRunningResult::ErrResponse {
-            status: 500,
-            body: None,
+        let known_bodyless = session.declares_body() == Some(false);
+        let body_len = session.request_body_available_len(known_bodyless).map_err(|error| {
+            Self::record_body_error(session, &error);
+            plugin_log.push_err("body length unavailable");
+            Self::reject(500, None)
+        })?;
+        if body_len > self.json_body_limit {
+            session.add_error(EdgionStatus::BodyReadTooLarge);
+            plugin_log.push("deny body too large");
+            return Err(Self::reject(413, None));
+        }
+
+        let body = session.read_request_body(None).await.map_err(|error| {
+            Self::record_body_error(session, &error);
+            match error {
+                BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
+                    plugin_log.push("deny body too large");
+                    Self::reject(413, None)
+                }
+                _ => {
+                    plugin_log.push_err("json body unavailable");
+                    Self::reject(500, None)
+                }
+            }
+        })?;
+        if body.len() as u64 > self.json_body_limit {
+            session.add_error(EdgionStatus::BodyReadTooLarge);
+            plugin_log.push("deny body too large");
+            return Err(Self::reject(413, None));
+        }
+
+        let mut value = edgion_resources::resources::edgion_plugins::parse_json_instance(&body)
+            .map_err(|error| match error {
+                StrictJsonError::TooLarge => {
+                    session.add_error(EdgionStatus::BodyReadTooLarge);
+                    plugin_log.push("deny body too large");
+                    Self::reject(413, None)
+                }
+                _ => {
+                    plugin_log.push("deny malformed json");
+                    Self::reject(400, Some(INVALID_REQUEST_BODY))
+                }
+            })?
+            .into_value();
+
+        let mut work = 0_u64;
+        for operation in &rewrite.operations {
+            self.apply_json_operation(&mut value, operation, session, &mut work)
+                .map_err(|failure| {
+                    let (status, body) = match failure {
+                        JsonRewriteFailure::BadRequest => {
+                            plugin_log.push("deny patch operation");
+                            (400, Some(INVALID_REQUEST_BODY))
+                        }
+                        JsonRewriteFailure::TooLarge => {
+                            session.add_error(EdgionStatus::BodyReadTooLarge);
+                            plugin_log.push("deny mutation size");
+                            (413, None)
+                        }
+                        JsonRewriteFailure::Internal => {
+                            plugin_log.push_err("json patch internal");
+                            (500, None)
+                        }
+                    };
+                    Self::reject(status, body)
+                })?;
+            let profile = profile_json_value(&value).map_err(|_| {
+                plugin_log.push("deny mutation shape");
+                Self::reject(400, Some(INVALID_REQUEST_BODY))
+            })?;
+            if profile.text_bytes > self.json_body_limit {
+                session.add_error(EdgionStatus::BodyReadTooLarge);
+                plugin_log.push("deny mutation size");
+                return Err(Self::reject(413, None));
+            }
+            charge_work(&mut work, profile.node_count.saturating_add(profile.text_bytes)).map_err(|_| {
+                plugin_log.push("deny mutation work");
+                Self::reject(400, Some(INVALID_REQUEST_BODY))
+            })?;
+        }
+
+        let body = serialize_json_capped(&value, self.json_body_limit as usize).map_err(|failure| match failure {
+            JsonRewriteFailure::TooLarge => {
+                session.add_error(EdgionStatus::BodyReadTooLarge);
+                plugin_log.push("deny output too large");
+                Self::reject(413, None)
+            }
+            _ => {
+                plugin_log.push_err("json serialization failed");
+                Self::reject(500, None)
+            }
         })?;
         session
             .overwrite_request_body(Bytes::from(body))
             .await
-            .map_err(|_| PluginRunningResult::ErrResponse {
-                status: 500,
-                body: None,
+            .map_err(|error| {
+                Self::record_body_error(session, &error);
+                match error {
+                    BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
+                        plugin_log.push("deny mutation size");
+                        Self::reject(413, None)
+                    }
+                    _ => {
+                        plugin_log.push_err("body overwrite failed");
+                        Self::reject(500, None)
+                    }
+                }
             })?;
         plugin_log.push("json body rewrite");
         Ok(())
     }
-}
 
-fn decode_pointer_token(token: &str) -> String {
-    token.replace("~1", "/").replace("~0", "~")
-}
+    fn apply_json_operation(
+        &self,
+        document: &mut serde_json::Value,
+        operation: &CompiledJsonPatchOperation,
+        session: &dyn PluginSession,
+        work: &mut u64,
+    ) -> Result<(), JsonRewriteFailure> {
+        use json_patch::{
+            AddOperation, CopyOperation, MoveOperation, PatchOperation, RemoveOperation, ReplaceOperation,
+        };
 
-fn remove_json_pointer(value: &mut serde_json::Value, pointer: &str) -> Result<(), ()> {
-    let (parent, leaf) = pointer.rsplit_once('/').ok_or(())?;
-    let parent = if parent.is_empty() {
-        value
-    } else {
-        value.pointer_mut(parent).ok_or(())?
-    };
-    let leaf = decode_pointer_token(leaf);
-    match parent {
-        serde_json::Value::Object(map) => map.remove(&leaf).map(|_| ()).ok_or(()),
-        serde_json::Value::Array(items) => {
-            let index = leaf.parse::<usize>().map_err(|_| ())?;
-            if index >= items.len() {
-                return Err(());
+        let patch = match operation {
+            CompiledJsonPatchOperation::Add { path, value } => {
+                validate_add_target(document, path)?;
+                PatchOperation::Add(AddOperation {
+                    path: path.clone(),
+                    value: self.resolve_patch_value(value, session, work)?,
+                })
             }
-            items.remove(index);
-            Ok(())
+            CompiledJsonPatchOperation::Remove { path } => {
+                path.resolve(document).map_err(|_| JsonRewriteFailure::BadRequest)?;
+                PatchOperation::Remove(RemoveOperation { path: path.clone() })
+            }
+            CompiledJsonPatchOperation::Replace { path, value } => {
+                path.resolve(document).map_err(|_| JsonRewriteFailure::BadRequest)?;
+                PatchOperation::Replace(ReplaceOperation {
+                    path: path.clone(),
+                    value: self.resolve_patch_value(value, session, work)?,
+                })
+            }
+            CompiledJsonPatchOperation::Move { from, path } => {
+                from.resolve(document).map_err(|_| JsonRewriteFailure::BadRequest)?;
+                validate_add_target(document, path)?;
+                PatchOperation::Move(MoveOperation {
+                    from: from.clone(),
+                    path: path.clone(),
+                })
+            }
+            CompiledJsonPatchOperation::Copy { from, path } => {
+                let source = from.resolve(document).map_err(|_| JsonRewriteFailure::BadRequest)?;
+                let source_profile = profile_json_value(source).map_err(|_| JsonRewriteFailure::BadRequest)?;
+                charge_work(
+                    work,
+                    source_profile.node_count.saturating_add(source_profile.text_bytes),
+                )?;
+                validate_add_target(document, path)?;
+                PatchOperation::Copy(CopyOperation {
+                    from: from.clone(),
+                    path: path.clone(),
+                })
+            }
+            CompiledJsonPatchOperation::Test { path, value } => {
+                let expected = self.resolve_patch_value(value, session, work)?;
+                let actual = path.resolve(document).map_err(|_| JsonRewriteFailure::BadRequest)?;
+                if !rfc_json_equal(actual, &expected, work)? {
+                    return Err(JsonRewriteFailure::BadRequest);
+                }
+                return Ok(());
+            }
+        };
+
+        charge_work(work, patch.path().as_str().len() as u64)?;
+        match catch_unwind(AssertUnwindSafe(|| {
+            json_patch::patch_unsafe(document, std::slice::from_ref(&patch))
+        })) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => Err(JsonRewriteFailure::BadRequest),
+            Err(_) => Err(JsonRewriteFailure::Internal),
         }
-        _ => Err(()),
+    }
+
+    fn resolve_patch_value(
+        &self,
+        value: &CompiledJsonPatchValue,
+        session: &dyn PluginSession,
+        work: &mut u64,
+    ) -> Result<serde_json::Value, JsonRewriteFailure> {
+        let value = match value {
+            CompiledJsonPatchValue::Literal(value) => value.clone(),
+            CompiledJsonPatchValue::Template(template) => {
+                let value =
+                    evaluate_template_bounded(template, session, self.json_body_limit as usize).map_err(|error| {
+                        match error {
+                            TemplateEvaluationError::MissingVariable => JsonRewriteFailure::BadRequest,
+                            TemplateEvaluationError::TooLarge => JsonRewriteFailure::TooLarge,
+                        }
+                    })?;
+                serde_json::Value::String(value)
+            }
+        };
+        let profile = profile_json_value(&value).map_err(|_| JsonRewriteFailure::BadRequest)?;
+        charge_work(work, profile.node_count.saturating_add(profile.text_bytes))?;
+        Ok(value)
+    }
+
+    fn reject(status: u16, body: Option<&'static str>) -> PluginRunningResult {
+        PluginRunningResult::ErrResponse {
+            status,
+            body: body.map(str::to_owned),
+        }
+    }
+
+    fn record_body_error(session: &mut dyn PluginSession, error: &BodyReadError) {
+        let status = match error {
+            BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
+                Some(EdgionStatus::BodyReadTooLarge)
+            }
+            BodyReadError::Timeout => Some(EdgionStatus::BodyReadTimeout),
+            BodyReadError::Incomplete => Some(EdgionStatus::BodyReadAborted),
+            BodyReadError::Unimplemented => Some(EdgionStatus::BodyReadUnimplemented),
+            BodyReadError::StorageFailure => Some(EdgionStatus::BodyCaptureStorageFailed),
+            BodyReadError::NotBuffered => None,
+        };
+        if let Some(status) = status {
+            session.add_error(status);
+        }
+    }
+}
+
+fn validate_add_target(
+    document: &serde_json::Value,
+    path: &json_patch::jsonptr::Pointer,
+) -> Result<(), JsonRewriteFailure> {
+    let Some((parent, _)) = path.split_back() else {
+        return Ok(());
+    };
+    match parent.resolve(document).map_err(|_| JsonRewriteFailure::BadRequest)? {
+        serde_json::Value::Object(_) | serde_json::Value::Array(_) => Ok(()),
+        _ => Err(JsonRewriteFailure::BadRequest),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsonRewriteFailure {
+    BadRequest,
+    TooLarge,
+    Internal,
+}
+
+fn charge_work(work: &mut u64, units: u64) -> Result<(), JsonRewriteFailure> {
+    *work = work.checked_add(units).ok_or(JsonRewriteFailure::BadRequest)?;
+    if *work > MAX_MUTATION_WORK {
+        return Err(JsonRewriteFailure::BadRequest);
+    }
+    Ok(())
+}
+
+fn rfc_json_equal(
+    left: &serde_json::Value,
+    right: &serde_json::Value,
+    work: &mut u64,
+) -> Result<bool, JsonRewriteFailure> {
+    charge_work(work, 1)?;
+    match (left, right) {
+        (serde_json::Value::Null, serde_json::Value::Null) => Ok(true),
+        (serde_json::Value::Bool(left), serde_json::Value::Bool(right)) => Ok(left == right),
+        (serde_json::Value::String(left), serde_json::Value::String(right)) => Ok(left == right),
+        (serde_json::Value::Number(left), serde_json::Value::Number(right)) => Ok(json_numbers_equal(left, right)),
+        (serde_json::Value::Array(left), serde_json::Value::Array(right)) => {
+            if left.len() != right.len() {
+                return Ok(false);
+            }
+            for (left, right) in left.iter().zip(right) {
+                if !rfc_json_equal(left, right, work)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        (serde_json::Value::Object(left), serde_json::Value::Object(right)) => {
+            if left.len() != right.len() {
+                return Ok(false);
+            }
+            for (key, left_value) in left {
+                let Some(right_value) = right.get(key) else {
+                    return Ok(false);
+                };
+                if !rfc_json_equal(left_value, right_value, work)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn json_numbers_equal(left: &serde_json::Number, right: &serde_json::Number) -> bool {
+    fn integer(number: &serde_json::Number) -> Option<i128> {
+        number
+            .as_i64()
+            .map(i128::from)
+            .or_else(|| number.as_u64().map(i128::from))
+    }
+
+    fn integer_equals_float(integer: i128, float: f64) -> bool {
+        if !float.is_finite() || float.fract() != 0.0 {
+            return false;
+        }
+        if integer < 0 {
+            const MIN_I64_AS_F64: f64 = -9_223_372_036_854_775_808.0;
+            const I64_UPPER_BOUND_AS_F64: f64 = 9_223_372_036_854_775_808.0;
+            float >= MIN_I64_AS_F64 && float < I64_UPPER_BOUND_AS_F64 && i128::from(float as i64) == integer
+        } else {
+            const U64_UPPER_BOUND_AS_F64: f64 = 18_446_744_073_709_551_616.0;
+            float >= 0.0 && float < U64_UPPER_BOUND_AS_F64 && i128::from(float as u64) == integer
+        }
+    }
+
+    match (integer(left), integer(right)) {
+        (Some(left), Some(right)) => left == right,
+        (Some(integer), None) => right.as_f64().is_some_and(|float| integer_equals_float(integer, float)),
+        (None, Some(integer)) => left.as_f64().is_some_and(|float| integer_equals_float(integer, float)),
+        (None, None) => left
+            .as_f64()
+            .zip(right.as_f64())
+            .is_some_and(|(left, right)| left == right),
+    }
+}
+
+struct CappedJsonWriter {
+    bytes: Vec<u8>,
+    limit: usize,
+    overflowed: bool,
+}
+
+impl Write for CappedJsonWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .is_none_or(|length| length > self.limit)
+        {
+            self.overflowed = true;
+            return Err(io::Error::other("JSON output limit exceeded"));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn serialize_json_capped(value: &serde_json::Value, limit: usize) -> Result<Vec<u8>, JsonRewriteFailure> {
+    let mut writer = CappedJsonWriter {
+        bytes: Vec::with_capacity(limit.min(8 * 1024)),
+        limit,
+        overflowed: false,
+    };
+    match catch_unwind(AssertUnwindSafe(|| serde_json::to_writer(&mut writer, value))) {
+        Ok(Ok(())) => Ok(writer.bytes),
+        Ok(Err(_)) if writer.overflowed => Err(JsonRewriteFailure::TooLarge),
+        Ok(Err(_)) | Err(_) => Err(JsonRewriteFailure::Internal),
     }
 }
 
@@ -429,13 +753,11 @@ impl RequestFilter for ProxyRewrite {
         &self.name
     }
 
-    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        use edgion_resources::resources::edgion_plugins::PluginValidation;
-        if self.config.validation_error().is_some() {
-            plugin_log.push_err("config invalid");
-            return PluginRunningResult::GoodNext;
-        }
+    fn requires_materialized_request_body(&self) -> bool {
+        false
+    }
 
+    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         if let Err(result) = self.modify_json_body(session, plugin_log).await {
             return result;
         }
@@ -477,49 +799,276 @@ impl RequestFilter for ProxyRewrite {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
-    use edgion_resources::resources::edgion_plugins::JsonBodyRewrite;
-    use std::collections::BTreeMap;
+    use edgion_resources::resources::edgion_plugins::{JsonBodyRewrite, JsonLiteralValue, JsonPatchOperation};
+
+    fn plugin(config: &ProxyRewriteConfig) -> ProxyRewrite {
+        ProxyRewrite::create(config, None).expect("valid ProxyRewrite config")
+    }
 
     #[tokio::test]
-    async fn json_body_rewrite_sets_removes_and_overwrites_buffer() {
-        let mut set = BTreeMap::new();
-        set.insert("/name".to_string(), serde_json::json!("gateway"));
-        let plugin = ProxyRewrite::new(&ProxyRewriteConfig {
+    async fn json_body_patch_is_ordered_and_published_once() {
+        let plugin = plugin(&ProxyRewriteConfig {
             json_body: Some(JsonBodyRewrite {
-                set,
-                remove: vec!["/secret".to_string()],
+                operations: vec![
+                    JsonPatchOperation::Test {
+                        path: "/count".to_string(),
+                        value: JsonLiteralValue::new(serde_json::json!(1.0)),
+                        value_template: None,
+                    },
+                    JsonPatchOperation::Remove {
+                        path: "/secret".to_string(),
+                    },
+                    JsonPatchOperation::Replace {
+                        path: "/name".to_string(),
+                        value: JsonLiteralValue::new(serde_json::json!("gateway")),
+                        value_template: None,
+                    },
+                    JsonPatchOperation::Add {
+                        path: "/items/-".to_string(),
+                        value: JsonLiteralValue::new(serde_json::json!("tail")),
+                        value_template: None,
+                    },
+                    JsonPatchOperation::Copy {
+                        from: "/profile".to_string(),
+                        path: "/profileCopy".to_string(),
+                    },
+                    JsonPatchOperation::Move {
+                        from: "/name".to_string(),
+                        path: "/displayName".to_string(),
+                    },
+                ],
             }),
             ..Default::default()
         });
         let mut session = MockPluginSession::new();
+        session.expect_request_header_values().times(2).returning(|name| {
+            Some(match name {
+                "content-type" => vec!["application/json".to_string()],
+                "content-encoding" => Vec::new(),
+                _ => unreachable!("unexpected header"),
+            })
+        });
+        session.expect_declares_body().return_const(Some(true));
         session
-            .expect_read_request_body()
-            .returning(|_| Ok(Bytes::from_static(br#"{"name":"old","secret":"drop"}"#)));
+            .expect_request_body_available_len()
+            .with(mockall::predicate::eq(false))
+            .return_const(Ok(88));
+        session.expect_read_request_body().returning(|_| {
+            Ok(Bytes::from_static(
+                br#"{"name":"old","secret":"drop","count":1,"items":["head"],"profile":{"tier":"gold"}}"#,
+            ))
+        });
         session
             .expect_overwrite_request_body()
-            .withf(|body| body.as_ref() == br#"{"name":"gateway"}"#)
+            .times(1)
+            .withf(|body| {
+                body.as_ref()
+                    == br#"{"count":1,"displayName":"gateway","items":["head","tail"],"profile":{"tier":"gold"},"profileCopy":{"tier":"gold"}}"#
+            })
             .returning(|_| Ok(()));
         let mut log = PluginLog::new("ProxyRewrite");
 
         assert!(plugin.modify_json_body(&mut session, &mut log).await.is_ok());
         assert!(log.contains("json body rewrite"));
     }
+
+    fn json_session(body: &'static [u8], content_type: &'static str) -> MockPluginSession {
+        let mut session = MockPluginSession::new();
+        session.expect_request_header_values().times(2).returning(move |name| {
+            Some(match name {
+                "content-type" => vec![content_type.to_string()],
+                "content-encoding" => Vec::new(),
+                _ => unreachable!("unexpected header"),
+            })
+        });
+        session.expect_declares_body().return_const(Some(!body.is_empty()));
+        session
+            .expect_request_body_available_len()
+            .with(mockall::predicate::eq(false))
+            .return_const(Ok(body.len() as u64));
+        session
+            .expect_read_request_body()
+            .with(mockall::predicate::eq(None))
+            .return_once(move |_| Ok(Bytes::from_static(body)));
+        session
+    }
+
+    #[tokio::test]
+    async fn failed_operation_does_not_publish_partial_patch() {
+        let config: ProxyRewriteConfig = serde_json::from_value(serde_json::json!({
+            "jsonBody": {
+                "operations": [
+                    {"op": "replace", "path": "/name", "value": "changed"},
+                    {"op": "test", "path": "/version", "value": 2}
+                ]
+            }
+        }))
+        .unwrap();
+        let plugin = plugin(&config);
+        let mut session = json_session(br#"{"name":"original","version":1}"#, "application/json");
+        session.expect_overwrite_request_body().times(0);
+        let mut log = PluginLog::new("ProxyRewrite");
+
+        assert_eq!(
+            plugin.modify_json_body(&mut session, &mut log).await,
+            Err(PluginRunningResult::ErrResponse {
+                status: 400,
+                body: Some(INVALID_REQUEST_BODY.to_string()),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn value_template_is_a_bounded_json_string_and_missing_is_rejected() {
+        let config: ProxyRewriteConfig = serde_json::from_value(serde_json::json!({
+            "jsonBody": {
+                "operations": [
+                    {"op": "add", "path": "/tenant", "valueTemplate": "${header:X-Tenant}"}
+                ]
+            }
+        }))
+        .unwrap();
+        let plugin = plugin(&config);
+        let mut session = json_session(br#"{}"#, "application/problem+json; charset=utf-8");
+        session
+            .expect_header_value()
+            .withf(|name| name == "X-Tenant")
+            .return_const(Some(r#"${ctx:not-expanded}"#.to_string()));
+        session
+            .expect_overwrite_request_body()
+            .withf(|body| body.as_ref() == br#"{"tenant":"${ctx:not-expanded}"}"#)
+            .return_const(Ok(()));
+        let mut log = PluginLog::new("ProxyRewrite");
+        assert!(plugin.modify_json_body(&mut session, &mut log).await.is_ok());
+
+        let mut missing = json_session(br#"{}"#, "application/json");
+        missing
+            .expect_header_value()
+            .withf(|name| name == "X-Tenant")
+            .return_const(None);
+        missing.expect_overwrite_request_body().times(0);
+        let mut log = PluginLog::new("ProxyRewrite");
+        assert!(matches!(
+            plugin.modify_json_body(&mut missing, &mut log).await,
+            Err(PluginRunningResult::ErrResponse { status: 400, .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn media_type_and_output_limits_fail_before_publication() {
+        let config: ProxyRewriteConfig = serde_json::from_value(serde_json::json!({
+            "jsonBody": {
+                "operations": [
+                    {"op": "add", "path": "/expanded", "value": "a value too large for this cap"}
+                ]
+            }
+        }))
+        .unwrap();
+        let plugin = ProxyRewrite::create(
+            &config,
+            Some(BodyRequirement {
+                max_body_size: Some("16".to_string()),
+                ..BodyRequirement::fail_close()
+            }),
+        )
+        .unwrap();
+        let mut session = json_session(br#"{}"#, "application/json");
+        session.expect_add_error().return_const(());
+        session.expect_overwrite_request_body().times(0);
+        let mut log = PluginLog::new("ProxyRewrite");
+        assert!(matches!(
+            plugin.modify_json_body(&mut session, &mut log).await,
+            Err(PluginRunningResult::ErrResponse { status: 413, .. })
+        ));
+
+        let mut media = MockPluginSession::new();
+        media.expect_request_header_values().times(2).returning(|name| {
+            Some(match name {
+                "content-type" => vec!["text/plain".to_string()],
+                "content-encoding" => Vec::new(),
+                _ => unreachable!("unexpected header"),
+            })
+        });
+        media.expect_read_request_body().times(0);
+        media.expect_overwrite_request_body().times(0);
+        let mut log = PluginLog::new("ProxyRewrite");
+        assert_eq!(
+            plugin.modify_json_body(&mut media, &mut log).await,
+            Err(PluginRunningResult::ErrResponse {
+                status: 415,
+                body: Some(UNSUPPORTED_MEDIA_TYPE.to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn rfc_test_numeric_and_structural_equality() {
+        let mut work = 0;
+        assert!(rfc_json_equal(&serde_json::json!(1), &serde_json::json!(1.0), &mut work).unwrap());
+        assert!(!rfc_json_equal(
+            &serde_json::json!(9_007_199_254_740_992_u64),
+            &serde_json::json!(9_007_199_254_740_993_u64),
+            &mut work
+        )
+        .unwrap());
+        assert!(!rfc_json_equal(
+            &serde_json::json!(u64::MAX),
+            &serde_json::json!(18_446_744_073_709_551_616.0),
+            &mut work
+        )
+        .unwrap());
+        assert!(rfc_json_equal(
+            &serde_json::json!(10_000_000_000_000_000_000_u64),
+            &serde_json::json!(1e19),
+            &mut work
+        )
+        .unwrap());
+        assert!(rfc_json_equal(
+            &serde_json::json!({"a": 1, "b": [true, null]}),
+            &serde_json::json!({"b": [true, null], "a": 1.0}),
+            &mut work
+        )
+        .unwrap());
+        assert!(!rfc_json_equal(&serde_json::json!([1, 2]), &serde_json::json!([2, 1]), &mut work).unwrap());
+    }
+
+    #[test]
+    fn copy_replacing_root_uses_the_final_shape_budget() {
+        let config: ProxyRewriteConfig = serde_json::from_value(serde_json::json!({
+            "jsonBody": {
+                "operations": [
+                    {"op": "copy", "from": "/source", "path": ""}
+                ]
+            }
+        }))
+        .unwrap();
+        let plugin = plugin(&config);
+        let source = "s".repeat(10_000);
+        let mut document = serde_json::json!({
+            "padding": "p".repeat(54_000),
+            "source": source,
+        });
+        let operation = &plugin.config.compiled_json_body.as_ref().unwrap().operations[0];
+        let session = MockPluginSession::new();
+        let mut work = 0;
+
+        plugin
+            .apply_json_operation(&mut document, operation, &session, &mut work)
+            .unwrap();
+        assert_eq!(document, serde_json::Value::String(source));
+    }
+
     use edgion_resources::resources::edgion_plugins::RegexUri;
 
     #[tokio::test]
     async fn test_invalid_config() {
         use edgion_resources::resources::edgion_plugins::PluginValidation;
         let mut config = ProxyRewriteConfig {
-            uri: None,
             regex_uri: Some(RegexUri {
                 pattern: r"[invalid".to_string(), // Invalid regex
                 replacement: "/test".to_string(),
             }),
-            host: None,
-            method: None,
-            headers: None,
-            json_body: None,
-            compiled_regex: None,
+            ..Default::default()
         };
 
         // Verify config validation catches invalid regex
@@ -527,22 +1076,19 @@ mod tests {
         assert!(!is_valid);
         assert!(config.validation_error().unwrap().contains("Invalid regex"));
 
-        // Create plugin and run with invalid config
-        let plugin = ProxyRewrite::new(&ProxyRewriteConfig {
-            uri: None,
-            regex_uri: Some(RegexUri {
-                pattern: r"[invalid".to_string(),
-                replacement: "/test".to_string(),
-            }),
-            ..Default::default()
-        });
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ProxyRewrite");
-
-        // No mock expectations needed as it returns early
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
+        // Runtime publication declines an invalid configuration.
+        assert!(ProxyRewrite::create(
+            &ProxyRewriteConfig {
+                uri: None,
+                regex_uri: Some(RegexUri {
+                    pattern: r"[invalid".to_string(),
+                    replacement: "/test".to_string(),
+                }),
+                ..Default::default()
+            },
+            None,
+        )
+        .is_none());
     }
 
     #[test]
@@ -563,7 +1109,7 @@ mod tests {
     /// ordinary ASCII values (so the common `$arg_x = user-123` UX is unchanged).
     #[test]
     fn test_arg_substitution_always_url_encodes() {
-        let plugin = ProxyRewrite::new(&ProxyRewriteConfig::default());
+        let plugin = plugin(&ProxyRewriteConfig::default());
 
         // Mock returns decoded values.
         let mut mock_session = MockPluginSession::new();
@@ -609,7 +1155,7 @@ mod tests {
     /// values cause `HeaderValue::try_from` to silently drop the header.
     #[test]
     fn test_capture_substitution_url_encodes_in_header_context() {
-        let plugin = ProxyRewrite::new(&ProxyRewriteConfig::default());
+        let plugin = plugin(&ProxyRewriteConfig::default());
         let mut mock_session = MockPluginSession::new();
         // Captures don't need session lookups, but resolve_variables takes one.
         mock_session.expect_get_query_param().returning(|_| None);
@@ -646,7 +1192,7 @@ mod tests {
     /// same reason as captures.
     #[test]
     fn test_path_param_substitution_url_encodes_in_header_context() {
-        let plugin = ProxyRewrite::new(&ProxyRewriteConfig::default());
+        let plugin = plugin(&ProxyRewriteConfig::default());
         let mut mock_session = MockPluginSession::new();
         mock_session.expect_get_query_param().returning(|_| None);
         // Decoded path-param value: contains non-ASCII, control byte, reserved char.
@@ -667,7 +1213,7 @@ mod tests {
     /// while we touch resolve_variables).
     #[test]
     fn test_capture_and_path_param_url_encode_in_uri_context() {
-        let plugin = ProxyRewrite::new(&ProxyRewriteConfig::default());
+        let plugin = plugin(&ProxyRewriteConfig::default());
         let mut mock_session = MockPluginSession::new();
         mock_session.expect_get_query_param().returning(|_| None);
         mock_session.expect_get_path_param().returning(|name| match name {

@@ -9,7 +9,9 @@ spec:
       type: ProxyRewrite
       config:
         jsonBody:
-          set:
-            /name: gateway
-          remove:
-            - /secret
+          operations:
+            - op: remove
+              path: /secret
+            - op: replace
+              path: /name
+              value: gateway

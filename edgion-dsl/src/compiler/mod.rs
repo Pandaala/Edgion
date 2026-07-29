@@ -14,7 +14,7 @@ mod expr;
 mod loop_;
 mod stmt;
 
-pub(crate) use builtins::builtin_expected_argc;
+pub(crate) use builtins::builtin_arity;
 
 use std::collections::HashMap;
 

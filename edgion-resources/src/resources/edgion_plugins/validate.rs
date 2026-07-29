@@ -153,19 +153,17 @@ impl EdgionPlugins {
     pub fn validate_plugins(&self) -> Vec<String> {
         let mut errors = Vec::new();
 
-        // Pass 1: condition regex compilation/validation for ENABLED entries,
-        // in stage order — mirrors `compile_plugin_conditions`. A disabled entry
-        // (`enable: false`) is semantically inert: the gateway never builds or
-        // runs it, so its dormant `conditions` must not be able to flip the
-        // resource to `Accepted=False`. Skipping here keeps the schema layer and
-        // the gateway `compile_plugin_conditions` in lockstep (parity test in
-        // `plugin_store.rs`), and aligns HTTP with the EdgionStreamPlugins rule
-        // that a parked broken config is not a validation error.
+        // Pass 1: condition regex compilation/validation for active entries,
+        // in stage order — mirrors `compile_plugin_conditions`. Disabled and
+        // PluginPolicy-stamped entries are semantically inert: the gateway
+        // never builds or runs them, so dormant conditions must not flip the
+        // resource to `Accepted=False`. Skipping here keeps the schema layer
+        // and gateway in lockstep (parity test in `plugin_store.rs`).
         macro_rules! compile_conditions {
             ($entries:expr, $label:literal) => {
                 if let Some(entries) = &$entries {
                     for (i, entry) in entries.iter().enumerate() {
-                        if !entry.is_enabled() {
+                        if !entry.is_enabled() || entry.policy_action.is_some() {
                             continue;
                         }
                         if let Some(conds) = entry.conditions.as_ref() {
@@ -192,9 +190,9 @@ impl EdgionPlugins {
             ($entries:expr, $label:literal) => {
                 if let Some(entries) = &$entries {
                     for (i, entry) in entries.iter().enumerate() {
-                        // Disabled entries are inert — skip, matching the
-                        // entry-conditions pass and the gateway `compile_body_entries`.
-                        if !entry.is_enabled() {
+                        // Inert entries are skipped, matching the entry-level
+                        // conditions pass and gateway `compile_body_entries`.
+                        if !entry.is_enabled() || entry.policy_action.is_some() {
                             continue;
                         }
                         if let Some(conds) = entry.body.as_ref().and_then(|b| b.conditions.as_ref()) {
@@ -207,14 +205,14 @@ impl EdgionPlugins {
         compile_body_conditions!(self.spec.request_plugins, "requestPlugins");
         compile_body_conditions!(self.spec.upstream_response_plugins, "upstreamResponsePlugins");
 
-        // Pass 2: per-entry config/alias/stage validation for ENABLED entries,
+        // Pass 2: per-entry config/alias/stage validation for active entries,
         // in stage order — mirrors the four `add_from_*` paths (minus runtime
         // construction and the DSL deep checks).
         macro_rules! validate_entries {
             ($entries:expr, $label:literal, $stage_word:literal, $stage_field:ident) => {
                 if let Some(entries) = &$entries {
                     for (i, entry) in entries.iter().enumerate() {
-                        if !entry.is_enabled() {
+                        if !entry.is_enabled() || entry.policy_action.is_some() {
                             continue;
                         }
                         let name = entry.plugin.type_name();
@@ -285,21 +283,21 @@ impl EdgionPlugins {
         // rule's response header across ANY entry in this resource — success
         // renders with Set semantics and would silently wipe an appended
         // failure value queued earlier by a different entry. Runs once over
-        // all four stage arrays chained (only enabled entries participate,
-        // matching the disabled-entry-is-inert rule used throughout this pass).
+        // all four stage arrays chained (only active entries participate,
+        // matching the inert-entry rule used throughout this pass).
         let all_dye_suites = self
             .spec
             .request_plugins
             .iter()
             .flatten()
-            .filter(|e| e.is_enabled())
+            .filter(|e| e.is_enabled() && e.policy_action.is_none())
             .map(|e| e.dye.as_ref())
             .chain(
                 self.spec
                     .upstream_response_filter_plugins
                     .iter()
                     .flatten()
-                    .filter(|e| e.is_enabled())
+                    .filter(|e| e.is_enabled() && e.policy_action.is_none())
                     .map(|e| e.dye.as_ref()),
             )
             .chain(
@@ -307,7 +305,7 @@ impl EdgionPlugins {
                     .upstream_response_body_filter_plugins
                     .iter()
                     .flatten()
-                    .filter(|e| e.is_enabled())
+                    .filter(|e| e.is_enabled() && e.policy_action.is_none())
                     .map(|e| e.dye.as_ref()),
             )
             .chain(
@@ -315,7 +313,7 @@ impl EdgionPlugins {
                     .upstream_response_plugins
                     .iter()
                     .flatten()
-                    .filter(|e| e.is_enabled())
+                    .filter(|e| e.is_enabled() && e.policy_action.is_none())
                     .map(|e| e.dye.as_ref()),
             );
         if let Some(err) = dye_set_clobber_error(all_dye_suites) {
@@ -331,7 +329,10 @@ impl EdgionPlugins {
             ($entries:expr, $label:literal, $stage:expr) => {
                 if let Some(entries) = &$entries {
                     for (i, entry) in entries.iter().enumerate() {
-                        if !entry.is_enabled() || entry.plugin.validation_error().is_some() {
+                        if !entry.is_enabled()
+                            || entry.policy_action.is_some()
+                            || entry.plugin.validation_error().is_some()
+                        {
                             continue;
                         }
                         let Some(body) = entry.body.as_ref() else { continue };
@@ -344,8 +345,11 @@ impl EdgionPlugins {
                                 "{}[{}] ({}): body: plugin does not consume a body",
                                 $label, i, name
                             ));
-                        } else if matches!(entry.plugin, EdgionPlugin::JsonSchemaValidation(_)) {
-                            for error in super::plugin_configs::json_schema_body_validation_errors(body) {
+                        } else if matches!(
+                            entry.plugin,
+                            EdgionPlugin::JsonSchemaValidation(_) | EdgionPlugin::ProxyRewrite(_)
+                        ) {
+                            for error in super::plugin_configs::bounded_json_body_validation_errors(body) {
                                 errors.push(format!("{}[{}] ({}): {}", $label, i, name, error));
                             }
                         } else if let Some(err) = body.validation_error() {
@@ -363,10 +367,14 @@ impl EdgionPlugins {
         );
 
         if let Some(entries) = &self.spec.request_plugins {
-            // Disabled entries are inert and do not participate in cardinality.
+            // Inert entries do not participate in cardinality.
             let json_schema_count = entries
                 .iter()
-                .filter(|entry| entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::JsonSchemaValidation(_)))
+                .filter(|entry| {
+                    entry.is_enabled()
+                        && entry.policy_action.is_none()
+                        && matches!(entry.plugin, EdgionPlugin::JsonSchemaValidation(_))
+                })
                 .count();
             if json_schema_count > 1 {
                 errors.push(format!(
@@ -374,11 +382,11 @@ impl EdgionPlugins {
                 ));
             }
 
-            // Multiple enabled TraceContext entries would each overwrite
+            // Multiple active TraceContext entries would each overwrite
             // x-trace-id (last-write-wins), which is confusing.
             let count = entries
                 .iter()
-                .filter(|e| e.is_enabled() && e.plugin.type_name() == "TraceContext")
+                .filter(|e| e.is_enabled() && e.policy_action.is_none() && e.plugin.type_name() == "TraceContext")
                 .count();
             if count > 1 {
                 errors.push(format!(
@@ -591,6 +599,36 @@ mod tests {
                 .any(|error| error.contains("at most one JsonSchemaValidation")),
             "{errors:?}"
         );
+    }
+
+    #[test]
+    fn policy_stamped_json_schema_plugin_is_inert_for_all_validation_passes() {
+        use crate::resources::plugin_policy::PluginPolicyAction;
+
+        let mut bypassed = json_schema_entry();
+        bypassed.policy_action = Some(PluginPolicyAction::Bypass);
+        bypassed.alias = Some("invalid alias".to_string());
+        bypassed.conditions = Some(
+            serde_json::from_value(json!({
+                "run": [{
+                    "type": "keyMatch",
+                    "key": {"type": "header", "name": "X-Test"},
+                    "regex": ["("]
+                }]
+            }))
+            .unwrap(),
+        );
+        bypassed.body = Some(BodyRequirement {
+            max_body_size: Some("invalid".to_string()),
+            conditions: Some(Default::default()),
+            ..Default::default()
+        });
+        bypassed.plugin = EdgionPlugin::JsonSchemaValidation(JsonSchemaValidationConfig {
+            schema: json!({"$schema": "http://json-schema.org/draft-07/schema#"}),
+        });
+
+        let errors = with_request_plugins(vec![bypassed, json_schema_entry()]).validate_plugins();
+        assert!(errors.is_empty(), "policy-stamped entries must be inert: {errors:?}");
     }
 
     #[test]

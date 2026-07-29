@@ -230,16 +230,15 @@ impl Validator {
 
         // 6c. CallBuiltin argument count validation
         {
-            use super::compiler::builtin_expected_argc;
+            use super::compiler::builtin_arity;
             for (i, op) in script.code.iter().enumerate() {
                 if let OpCode::CallBuiltin(builtin_id, argc) = op {
-                    if let Some(expected) = builtin_expected_argc(builtin_id) {
-                        if *argc as usize != expected {
-                            errors.push(ValidationError::new(format!(
-                                "CallBuiltin {:?} at instruction {} expects {} arg(s), bytecode says {}",
-                                builtin_id, i, expected, argc
-                            )));
-                        }
+                    let arity = builtin_arity(builtin_id);
+                    if !arity.accepts(*argc as usize) {
+                        errors.push(ValidationError::new(format!(
+                            "CallBuiltin {:?} at instruction {} expects {} arg(s), bytecode says {}",
+                            builtin_id, i, arity, argc
+                        )));
                     }
                 }
             }
@@ -567,6 +566,58 @@ mod tests {
         };
         let errors = Validator::new(limits).validate(&script);
         assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+    }
+
+    #[test]
+    fn test_validate_enforces_ranged_builtin_arities() {
+        for (builtin, argc) in [
+            (BuiltinId::HttpCall, 2),
+            (BuiltinId::HttpCall, 6),
+            (BuiltinId::RedisSet, 2),
+            (BuiltinId::RedisSet, 5),
+        ] {
+            let script = CompiledScript {
+                version: BYTECODE_VERSION,
+                code: vec![OpCode::CallBuiltin(builtin, argc), OpCode::ReturnNext],
+                constants: vec![],
+                local_count: 0,
+                max_loop_depth: 0,
+                source: None,
+                source_map: None,
+            };
+            let joined = Validator::new(ValidationLimits::default())
+                .validate(&script)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("|");
+            assert!(
+                joined.contains("expects") && joined.contains(&format!("bytecode says {argc}")),
+                "expected argument-count error for {builtin:?}/{argc}, got: {joined}"
+            );
+        }
+
+        for (builtin, argc) in [
+            (BuiltinId::HttpCall, 3),
+            (BuiltinId::HttpCall, 5),
+            (BuiltinId::RedisSet, 3),
+            (BuiltinId::RedisSet, 4),
+        ] {
+            let script = CompiledScript {
+                version: BYTECODE_VERSION,
+                code: vec![OpCode::CallBuiltin(builtin, argc), OpCode::ReturnNext],
+                constants: vec![],
+                local_count: 0,
+                max_loop_depth: 0,
+                source: None,
+                source_map: None,
+            };
+            let errors = Validator::new(ValidationLimits::default()).validate(&script);
+            assert!(
+                !errors.iter().any(|error| error.to_string().contains("expects")),
+                "valid boundary rejected for {builtin:?}/{argc}: {errors:?}"
+            );
+        }
     }
 
     #[test]

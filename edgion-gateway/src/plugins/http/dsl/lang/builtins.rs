@@ -3,12 +3,17 @@
 //! Arguments are popped from the VM stack, results pushed back.
 //! Each builtin maps to exactly one PluginSession API call.
 
+use bytes::Bytes;
 use futures::StreamExt;
 use indexmap::IndexMap;
+use parking_lot::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use tokio::sync::Notify;
 
 use crate::link_sys::providers::redis::RedisLinkClient;
 use crate::link_sys::runtime::store::get_redis_client;
+use crate::plugins::runtime::traits::session::{BodyReadError, RequestBodySnapshotReader};
 use crate::plugins::runtime::{PluginLog, PluginSession};
 
 use super::super::runtime::{dsl_http_client, DslRuntime};
@@ -16,6 +21,289 @@ use super::bytecode::BuiltinId;
 use super::error::RuntimeError;
 use super::value::{BodyValue, Value};
 use super::vm::{body_access_error, RuntimeString, Vm, VmState};
+
+struct OpaqueBodyUpload {
+    body: reqwest::Body,
+    tracking: Arc<OpaqueBodyUploadState>,
+}
+
+struct OpaqueBodyUploadState {
+    len: u64,
+    fetched: AtomicU64,
+    read_error: Mutex<Option<BodyReadError>>,
+    cancelled: AtomicBool,
+    ambiguous_read_cancelled: AtomicBool,
+    reader: Mutex<OpaqueBodyReaderState>,
+    state_changed: Notify,
+}
+
+struct OpaqueBodyReaderState {
+    reader: Option<Box<dyn RequestBodySnapshotReader>>,
+    in_flight: bool,
+    finished: bool,
+    abort_handle: Option<tokio::task::AbortHandle>,
+}
+
+struct AbortTaskOnDrop<T> {
+    task: Option<tokio::task::JoinHandle<T>>,
+}
+
+impl<T> AbortTaskOnDrop<T> {
+    fn new(task: tokio::task::JoinHandle<T>) -> Self {
+        Self { task: Some(task) }
+    }
+
+    fn abort_handle(&self) -> tokio::task::AbortHandle {
+        self.task.as_ref().expect("task is present").abort_handle()
+    }
+
+    async fn join(mut self) -> Result<T, tokio::task::JoinError> {
+        let result = self.task.as_mut().expect("task is present").await;
+        self.task.take();
+        result
+    }
+}
+
+impl<T> Drop for AbortTaskOnDrop<T> {
+    fn drop(&mut self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+}
+
+impl OpaqueBodyUploadState {
+    async fn cancel_and_release_reader(&self) {
+        self.cancelled.store(true, Ordering::Release);
+
+        loop {
+            let changed = self.state_changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            let settled_reader = {
+                let mut state = self.reader.lock();
+                if state.in_flight {
+                    if let Some(handle) = &state.abort_handle {
+                        handle.abort();
+                    }
+                    None
+                } else {
+                    state.finished = true;
+                    Some(state.reader.take())
+                }
+            };
+            if let Some(reader) = settled_reader {
+                drop(reader);
+                return;
+            }
+            changed.as_mut().await;
+        }
+    }
+}
+
+struct InFlightBodyReader {
+    shared: Arc<OpaqueBodyUploadState>,
+    reader: Option<Box<dyn RequestBodySnapshotReader>>,
+    settled: bool,
+}
+
+impl InFlightBodyReader {
+    fn reader_mut(&mut self) -> &mut dyn RequestBodySnapshotReader {
+        self.reader.as_deref_mut().expect("in-flight reader is present")
+    }
+
+    fn return_to_slot(mut self) {
+        let mut state = self.shared.reader.lock();
+        state.reader = self.reader.take();
+        state.in_flight = false;
+        state.abort_handle = None;
+        self.settled = true;
+        drop(state);
+        self.shared.state_changed.notify_waiters();
+    }
+
+    fn finish(mut self) {
+        let reader = self.reader.take();
+        drop(reader);
+        let mut state = self.shared.reader.lock();
+        state.in_flight = false;
+        state.finished = true;
+        state.abort_handle = None;
+        self.settled = true;
+        drop(state);
+        self.shared.state_changed.notify_waiters();
+    }
+}
+
+impl Drop for InFlightBodyReader {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+
+        let reader = self.reader.take();
+        drop(reader);
+        self.shared.ambiguous_read_cancelled.store(true, Ordering::Release);
+        let mut state = self.shared.reader.lock();
+        state.in_flight = false;
+        state.finished = true;
+        state.abort_handle = None;
+        drop(state);
+        self.shared.state_changed.notify_waiters();
+    }
+}
+
+async fn read_opaque_body_chunk_task(mut in_flight: InFlightBodyReader) -> Result<Option<Bytes>, BodyReadError> {
+    let shared = Arc::clone(&in_flight.shared);
+    let read_result = in_flight.reader_mut().next_chunk().await;
+
+    let mut output = None;
+    let mut stream_error = None;
+    match read_result {
+        Ok(Some(chunk)) => {
+            let chunk_len = if chunk.is_empty() {
+                None
+            } else {
+                u64::try_from(chunk.len()).ok()
+            };
+            match chunk_len
+                .and_then(|chunk_len| shared.fetched.load(Ordering::Relaxed).checked_add(chunk_len))
+                .filter(|total| *total <= shared.len)
+            {
+                Some(total) => {
+                    shared.fetched.store(total, Ordering::Relaxed);
+                    output = Some(chunk);
+                }
+                None => stream_error = Some(BodyReadError::Incomplete),
+            }
+        }
+        Ok(None) => {
+            if shared.fetched.load(Ordering::Relaxed) != shared.len {
+                stream_error = Some(BodyReadError::Incomplete);
+            }
+        }
+        Err(error) => stream_error = Some(error),
+    }
+
+    if let Some(error) = &stream_error {
+        *shared.read_error.lock() = Some(error.clone());
+    }
+    let was_cancelled = shared.cancelled.load(Ordering::Acquire);
+    if was_cancelled || output.is_none() {
+        in_flight.finish();
+    } else {
+        in_flight.return_to_slot();
+    }
+
+    if let Some(error) = stream_error {
+        return Err(error);
+    }
+    if was_cancelled {
+        return Ok(None);
+    }
+    Ok(output)
+}
+
+async fn next_opaque_body_chunk(
+    shared: Arc<OpaqueBodyUploadState>,
+) -> Result<Option<(Bytes, Arc<OpaqueBodyUploadState>)>, BodyReadError> {
+    let in_flight = {
+        let mut state = shared.reader.lock();
+        if shared.cancelled.load(Ordering::Acquire) || state.finished {
+            let reader = state.reader.take();
+            state.finished = true;
+            drop(state);
+            drop(reader);
+            return Ok(None);
+        }
+        let Some(reader) = state.reader.take() else {
+            state.finished = true;
+            let error = BodyReadError::Incomplete;
+            *shared.read_error.lock() = Some(error.clone());
+            return Err(error);
+        };
+        state.in_flight = true;
+        InFlightBodyReader {
+            shared: Arc::clone(&shared),
+            reader: Some(reader),
+            settled: false,
+        }
+    };
+    if shared.cancelled.load(Ordering::Acquire) {
+        shared.ambiguous_read_cancelled.store(true, Ordering::Release);
+        in_flight.finish();
+        return Ok(None);
+    }
+
+    let task = AbortTaskOnDrop::new(tokio::spawn(read_opaque_body_chunk_task(in_flight)));
+    let abort_handle = task.abort_handle();
+    {
+        let mut state = shared.reader.lock();
+        if state.in_flight {
+            state.abort_handle = Some(abort_handle.clone());
+            if shared.cancelled.load(Ordering::Acquire) {
+                abort_handle.abort();
+            }
+        }
+    }
+
+    match task.join().await {
+        Ok(Ok(Some(chunk))) => Ok(Some((chunk, shared))),
+        Ok(Ok(None)) => Ok(None),
+        Ok(Err(error)) => Err(error),
+        Err(error) if error.is_cancelled() && shared.cancelled.load(Ordering::Acquire) => Ok(None),
+        Err(_) => {
+            let error = BodyReadError::Incomplete;
+            *shared.read_error.lock() = Some(error.clone());
+            Err(error)
+        }
+    }
+}
+
+fn opaque_body_state(reader: Box<dyn RequestBodySnapshotReader>) -> Arc<OpaqueBodyUploadState> {
+    let len = reader.len();
+    Arc::new(OpaqueBodyUploadState {
+        len,
+        fetched: AtomicU64::new(0),
+        read_error: Mutex::new(None),
+        cancelled: AtomicBool::new(false),
+        ambiguous_read_cancelled: AtomicBool::new(false),
+        reader: Mutex::new(OpaqueBodyReaderState {
+            reader: Some(reader),
+            in_flight: false,
+            finished: false,
+            abort_handle: None,
+        }),
+        state_changed: Notify::new(),
+    })
+}
+
+fn opaque_body_stream(
+    tracking: Arc<OpaqueBodyUploadState>,
+) -> impl futures::Stream<Item = Result<Bytes, BodyReadError>> + Send {
+    futures::stream::try_unfold(tracking, next_opaque_body_chunk)
+}
+
+fn opaque_body_upload(reader: Box<dyn RequestBodySnapshotReader>) -> OpaqueBodyUpload {
+    let tracking = opaque_body_state(reader);
+    let stream = opaque_body_stream(Arc::clone(&tracking));
+    OpaqueBodyUpload {
+        body: reqwest::Body::wrap_stream(stream),
+        tracking,
+    }
+}
+
+async fn settle_opaque_body_upload(tracking: &OpaqueBodyUploadState, reserved: u64) -> (u64, Option<BodyReadError>) {
+    tracking.cancel_and_release_reader().await;
+    let error = tracking.read_error.lock().clone();
+    let refund = if tracking.ambiguous_read_cancelled.load(Ordering::Acquire) {
+        0
+    } else {
+        let fetched = tracking.fetched.load(Ordering::Acquire);
+        reserved.saturating_sub(fetched)
+    };
+    (refund, error)
+}
 
 /// Build a `Map { ok: true, value: <val>, error: nil }` success response for redis.* builtins.
 fn redis_ok(value: Value) -> Value {
@@ -823,6 +1111,7 @@ impl Vm {
         &self,
         argc: u8,
         state: &mut VmState,
+        session: &mut dyn PluginSession,
         runtime: &DslRuntime,
     ) -> Result<Value, RuntimeError> {
         if !(3..=5).contains(&(argc as usize)) {
@@ -874,9 +1163,28 @@ impl Vm {
             }
         }
 
-        let body_str = match body_val {
-            Value::Nil => String::new(),
-            other => other.runtime_string()?,
+        let (opaque_reader, body_str) = match body_val {
+            Value::Body(BodyValue::Request) => {
+                let known_bodyless = session.declares_body() == Some(false);
+                (
+                    Some(
+                        session
+                            .request_body_snapshot_reader(known_bodyless)
+                            .await
+                            .map_err(|error| body_access_error(error.to_string()))?,
+                    ),
+                    None,
+                )
+            }
+            Value::Str(value) => (None, Some(value)),
+            Value::Nil => (None, None),
+            other => {
+                return Err(RuntimeError::TypeError {
+                    expected: "Str, Body, or Nil",
+                    got: other.type_name(),
+                    operation: "http.call body",
+                });
+            }
         };
 
         let timeout_ms = match timeout_val {
@@ -907,27 +1215,28 @@ impl Vm {
             }
         };
 
-        // When block_private_ips is set, select the guarded client whose redirect
-        // policy re-applies is_ssrf_blocked_ip_literal to every hop.
-        let client = dsl_http_client(runtime.block_private_ips);
-        let mut builder = client
-            .request(method, &url_str)
-            .timeout(std::time::Duration::from_millis(timeout_ms));
-
-        if !body_str.is_empty() {
-            builder = builder.body(body_str);
-        }
-
+        let mut request_headers = Vec::new();
         if let Some(hv) = headers_val {
             match hv {
                 Value::Map(m) => {
-                    for (k, v) in m.iter() {
-                        let value = v.try_as_str().map_err(|error| RuntimeError::TypeError {
+                    for (name, value) in m.iter() {
+                        if opaque_reader.is_some()
+                            && (name.eq_ignore_ascii_case("content-length")
+                                || name.eq_ignore_ascii_case("transfer-encoding"))
+                        {
+                            return Err(RuntimeError::ApiError {
+                                function: "http.call".into(),
+                                message:
+                                    "Content-Length and Transfer-Encoding are managed by http.call for Body payloads"
+                                        .to_string(),
+                            });
+                        }
+                        let value = value.try_as_str().map_err(|error| RuntimeError::TypeError {
                             expected: "a value implicitly convertible to Str",
                             got: error.got(),
                             operation: "http.call headers_map",
                         })?;
-                        builder = builder.header(k.as_str(), value);
+                        request_headers.push((name.clone(), value.to_string()));
                     }
                 }
                 Value::Nil => {}
@@ -941,6 +1250,39 @@ impl Vm {
             }
         }
 
+        let is_opaque_body = opaque_reader.is_some();
+        // Opaque Body streams are intentionally not replayed across redirects.
+        let client = dsl_http_client(runtime.block_private_ips, !is_opaque_body);
+        let mut builder = client
+            .request(method, &url_str)
+            .timeout(std::time::Duration::from_millis(timeout_ms));
+
+        for (name, value) in request_headers {
+            builder = builder.header(name, value);
+        }
+
+        let mut body_accounting = None;
+        if let Some(reader) = opaque_reader {
+            let upload = opaque_body_upload(reader);
+            let OpaqueBodyUpload { body, tracking } = upload;
+            let physical_cap = session.ctx().request_body_config.max_body_size_bytes;
+            let configured_cap = u64::try_from(runtime.max_request_body_bytes)
+                .map_err(|_| body_access_error("http.call request Body limit cannot be represented as bytes"))?;
+            let effective_cap = configured_cap.min(physical_cap);
+            if tracking.len > effective_cap {
+                return Err(body_access_error(format!(
+                    "request Body exceeds http.call limit of {effective_cap} bytes"
+                )));
+            }
+            state.reserve_body_scan_exact(tracking.len, physical_cap, runtime.max_body_scan_passes)?;
+            builder = builder.body(body).header(reqwest::header::CONTENT_LENGTH, tracking.len);
+            body_accounting = Some((tracking.len, tracking));
+        } else if let Some(body) = body_str {
+            if !body.is_empty() {
+                builder = builder.body(body.to_string());
+            }
+        }
+
         let failure_map = || {
             let mut m = IndexMap::new();
             m.insert("status".to_string(), Value::Int(0));
@@ -949,8 +1291,21 @@ impl Vm {
             Value::Map(Box::new(m))
         };
 
-        let resp = match builder.send().await {
-            Ok(r) => r,
+        let send_result = builder.send().await;
+        if let Some((reserved, tracking)) = body_accounting {
+            // A response head can arrive before an HTTP/2 request body has
+            // finished. Release the snapshot independently of whether Hyper
+            // polls its Body again: Hyper may be blocked on flow-control
+            // capacity while holding one already-buffered chunk.
+            let (refund, read_error) = settle_opaque_body_upload(&tracking, reserved).await;
+            state.refund_body_scan_exact(refund);
+            if let Some(error) = read_error {
+                return Err(body_access_error(error.to_string()));
+            }
+        }
+
+        let resp = match send_result {
+            Ok(response) => response,
             Err(_) => return Ok(failure_map()),
         };
 
@@ -1410,7 +1765,8 @@ impl Vm {
 
 /// Return true if `host` is an IP literal that must be blocked to prevent SSRF
 /// (loopback / link-local / RFC 1918 private / RFC 4193 ULA / unspecified).
-/// Hostnames are NOT resolved here — callers rely on network-level egress controls for those.
+/// Hostnames are not resolved by this helper. Guarded clients use the shared
+/// `EgressResolver` to classify their resolved addresses at dial time.
 /// IPv6 zone IDs are stripped per RFC 6874 before parsing.
 ///
 /// Exposed `pub(crate)` so the guarded DSL HTTP client's redirect policy
@@ -1600,5 +1956,184 @@ mod body_tests {
                 body: Some("Request body processing failed".to_string()),
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod opaque_body_stream_tests {
+    use super::{
+        opaque_body_state, opaque_body_stream, settle_opaque_body_upload, BodyReadError, RequestBodySnapshotReader,
+    };
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use futures::{poll, StreamExt};
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    struct ScriptedReader {
+        len: u64,
+        results: VecDeque<Result<Option<Bytes>, BodyReadError>>,
+    }
+
+    #[async_trait]
+    impl RequestBodySnapshotReader for ScriptedReader {
+        fn len(&self) -> u64 {
+            self.len
+        }
+
+        async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError> {
+            self.results.pop_front().unwrap_or(Ok(None))
+        }
+    }
+
+    #[tokio::test]
+    async fn midstream_snapshot_failure_is_recorded_after_fetched_bytes() {
+        let reader = ScriptedReader {
+            len: 8,
+            results: VecDeque::from([
+                Ok(Some(Bytes::from_static(b"abcd"))),
+                Err(BodyReadError::StorageFailure),
+            ]),
+        };
+        let tracking = opaque_body_state(Box::new(reader));
+        let mut stream = Box::pin(opaque_body_stream(Arc::clone(&tracking)));
+
+        assert_eq!(stream.next().await.unwrap().unwrap(), Bytes::from_static(b"abcd"));
+        assert!(matches!(
+            stream.next().await.unwrap(),
+            Err(BodyReadError::StorageFailure)
+        ));
+        assert_eq!(tracking.fetched.load(Ordering::Acquire), 4);
+        assert!(matches!(
+            tracking.read_error.lock().as_ref(),
+            Some(BodyReadError::StorageFailure)
+        ));
+        let (refund, error) = settle_opaque_body_upload(&tracking, 8).await;
+        assert_eq!(refund, 4);
+        assert!(matches!(error, Some(BodyReadError::StorageFailure)));
+    }
+
+    struct PendingReader {
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for PendingReader {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+
+    #[async_trait]
+    impl RequestBodySnapshotReader for PendingReader {
+        fn len(&self) -> u64 {
+            1
+        }
+
+        async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError> {
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_stops_and_drops_a_pending_snapshot_reader() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let reader = PendingReader {
+            dropped: Arc::clone(&dropped),
+        };
+        let tracking = opaque_body_state(Box::new(reader));
+        let mut stream = Box::pin(opaque_body_stream(Arc::clone(&tracking)));
+
+        let next = stream.next();
+        futures::pin_mut!(next);
+        assert!(poll!(next.as_mut()).is_pending());
+
+        let (refund, item) = tokio::join!(settle_opaque_body_upload(&tracking, 1), next.as_mut());
+        assert_eq!(refund, (0, None));
+        assert!(item.is_none());
+        assert!(dropped.load(Ordering::Acquire));
+        assert!(tracking.ambiguous_read_cancelled.load(Ordering::Acquire));
+    }
+
+    struct FirstChunkThenPendingReader {
+        first: bool,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for FirstChunkThenPendingReader {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+
+    #[async_trait]
+    impl RequestBodySnapshotReader for FirstChunkThenPendingReader {
+        fn len(&self) -> u64 {
+            128 * 1024
+        }
+
+        async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError> {
+            if self.first {
+                self.first = false;
+                return Ok(Some(Bytes::from(vec![b'x'; 64 * 1024])));
+            }
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_releases_reader_without_another_stream_poll() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let reader = FirstChunkThenPendingReader {
+            first: true,
+            dropped: Arc::clone(&dropped),
+        };
+        let tracking = opaque_body_state(Box::new(reader));
+        let mut stream = Box::pin(opaque_body_stream(Arc::clone(&tracking)));
+
+        assert_eq!(stream.next().await.unwrap().unwrap().len(), 64 * 1024);
+        let (refund, error) = settle_opaque_body_upload(&tracking, 128 * 1024).await;
+
+        assert!(dropped.load(Ordering::Acquire));
+        assert_eq!(tracking.fetched.load(Ordering::Acquire), 64 * 1024);
+        assert!(!tracking.ambiguous_read_cancelled.load(Ordering::Acquire));
+        assert_eq!(refund, 64 * 1024);
+        assert_eq!(error, None);
+    }
+
+    #[tokio::test]
+    async fn dropping_a_pending_stream_future_aborts_the_chunk_task() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let reader = PendingReader {
+            dropped: Arc::clone(&dropped),
+        };
+        let tracking = opaque_body_state(Box::new(reader));
+        let mut stream = Box::pin(opaque_body_stream(Arc::clone(&tracking)));
+
+        {
+            let next = stream.next();
+            futures::pin_mut!(next);
+            assert!(poll!(next.as_mut()).is_pending());
+        }
+        drop(stream);
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !dropped.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("dropping the upload future must abort its chunk task");
+
+        let settled = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            settle_opaque_body_upload(&tracking, 1),
+        )
+        .await
+        .expect("dropped upload future must not leave in_flight stuck");
+
+        assert_eq!(settled, (0, None));
+        assert!(dropped.load(Ordering::Acquire));
+        assert!(tracking.ambiguous_read_cancelled.load(Ordering::Acquire));
     }
 }

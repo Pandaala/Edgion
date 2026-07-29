@@ -4,7 +4,7 @@ use sha2::Digest;
 use super::super::operation::{
     empty_text_operation, BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, RawBodyScanner,
 };
-use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult};
+use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
 
 #[derive(Default)]
 pub(super) struct Backend {
@@ -23,6 +23,17 @@ impl Backend {
     pub(super) fn available_len(&self, known_bodyless: bool) -> Result<u64, BodyReadError> {
         if known_bodyless || self.known_empty {
             Ok(0)
+        } else {
+            Err(BodyReadError::Unimplemented)
+        }
+    }
+
+    pub(super) fn snapshot_reader(
+        &self,
+        known_bodyless: bool,
+    ) -> Result<Box<dyn RequestBodySnapshotReader>, BodyReadError> {
+        if known_bodyless || self.known_empty {
+            Ok(super::empty_snapshot_reader())
         } else {
             Err(BodyReadError::Unimplemented)
         }
