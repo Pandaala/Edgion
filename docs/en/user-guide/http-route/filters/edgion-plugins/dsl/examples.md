@@ -93,9 +93,9 @@ spec:
           }
 
           // Extract common claims
-          let sub = json_get(payload_json, "sub")
-          let role = json_get(payload_json, "role")
-          let tenant = json_get(payload_json, "tenant_id")
+          let sub = json_get(payload_json, "$.sub")
+          let role = json_get(payload_json, "$.role")
+          let tenant = json_get(payload_json, "$.tenant_id")
 
           if sub == nil {
             return deny(401, "JWT missing sub claim")
@@ -121,7 +121,7 @@ spec:
 Notes:
 
 - This example only performs structural parsing — **signature verification is not performed**. In production environments, signature validation should be delegated to a dedicated JWT Auth plugin; the DSL is responsible for further claim extraction after verification succeeds.
-- `json_get` returns a string or `nil`. Calling a string method on a `nil` value returns `false`, so you should always check for `nil` before use.
+- `json_get` returns the selected string, integer, boolean, serialized array/object, or `nil`. Check for `nil` before using a required claim.
 
 ---
 
@@ -387,7 +387,7 @@ Notes:
 
 ### 3.2 Request Body Size Limit
 
-Read the `Content-Length` request header and reject oversized requests before forwarding, protecting upstream services from being hit by excessively large payloads.
+Use the captured body's actual byte length and reject oversized requests before forwarding. This also covers chunked requests whose size is not known from headers.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -401,25 +401,10 @@ spec:
       config:
         name: "body-size-limit"
         source: |
-          let method = req.method()
-
-          // Only check methods that carry a request body
-          if method != "POST" && method != "PUT" && method != "PATCH" {
-            return next()
-          }
-
-          let content_length = req.content_length()
-
-          // A nil content_length means no Content-Length header is present (e.g., chunked transfer)
-          // Here we choose to pass through and let the upstream handle it
-          if content_length == nil {
-            return next()
-          }
-
           // Limit the request body to 10 MB (10 * 1024 * 1024 = 10485760)
           let max_bytes = 10485760
-          if content_length > max_bytes {
-            return deny(413, "Request entity too large: max allowed size is 10MB")
+          if req.body.byte_len() > max_bytes {
+            return deny(413, "Request body is too large")
           }
 
           return next()
@@ -427,8 +412,9 @@ spec:
 
 Notes:
 
-- `req.content_length()` returns an `Int` or `nil`. When chunked transfer encoding is used, the `Content-Length` header is absent and `nil` is returned.
-- To strictly limit chunked requests as well, check whether `req.header("Transfer-Encoding")` contains `chunked` and reject those directly.
+- `req.body.byte_len()` reports the raw captured byte count and does not convert the body to a string.
+- The same script works whether the shared body cache remains in memory or spills to disk.
+- The gateway's physical request-body cap is still the authoritative transport limit; a DSL threshold can only be equal or lower.
 
 ---
 
@@ -703,7 +689,7 @@ spec:
         source: |
           // Record the request arrival time (Unix milliseconds)
           let start_ms = time_now()
-          ctx.set("req_start_ms", to_string(start_ms))
+          ctx.set("req_start_ms", to_str(start_ms))
 
           // Generate a request ID for log correlation
           let req_id = uuid()
@@ -721,11 +707,11 @@ spec:
           let start_str = ctx.get("req_start_ms")
 
           if start_str != nil {
-            let start_ms = parse_int(start_str)
+            let start_ms = to_int(start_str)
             if start_ms != nil {
               let elapsed_ms = end_ms - start_ms
-              resp.set_header("X-Upstream-Latency-Ms", to_string(elapsed_ms))
-              ctx.set("upstream_latency_ms", to_string(elapsed_ms))
+              resp.set_header("X-Upstream-Latency-Ms", to_str(elapsed_ms))
+              ctx.set("upstream_latency_ms", to_str(elapsed_ms))
             }
           }
 
@@ -741,7 +727,7 @@ spec:
 Notes:
 
 - `time_now()` returns a Unix millisecond timestamp (type `Int`).
-- Context variables can only store strings, so `to_string()` and `parse_int()` are needed to convert numeric values back and forth.
+- Context variables can only store strings, so `to_str()` and `to_int()` are needed to convert numeric values back and forth.
 - `ctx.set("upstream_latency_ms", ...)` makes latency data appear in the access log, which can be used for P99 percentile statistics.
 
 ---
@@ -808,7 +794,7 @@ config:
 The default limits are suitable for the vast majority of scenarios. Do not raise them blindly. Only consider adjustments in the following situations:
 
 - **Lower** `maxLoopIterations` (e.g., to `20`): when the length of the list being iterated is known to be small, a lower value catches anomalies earlier.
-- **Raise** `maxStringLen` (e.g., to `32768`): when you need to process longer JSON payloads or Base64-encoded content.
+- **Raise** `maxStringLen` (e.g., to `32768`): when you need to return longer strings from `read()`, `read_all()`, `json_get()`, or process longer Base64-encoded content. Streaming body predicates do not require a complete string allocation.
 - Do not increase `maxSteps` to "fix" an infinite loop — inspect the script logic instead.
 
 ### 6.5 Bytecode Mode

@@ -13,6 +13,7 @@ pub(super) use crate::plugins::runtime::PluginLog;
 pub(super) use edgion_resources::filters::PluginRunningResult;
 
 mod api_errors;
+mod body_value;
 mod bytecode_deserialization;
 mod compile_errors;
 mod control_flow;

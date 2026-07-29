@@ -7,6 +7,7 @@
 
 use bytes::Bytes;
 
+use super::operation::{BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, RawBodyScanner};
 use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult};
 
 #[cfg(feature = "body-buffering")]
@@ -43,6 +44,19 @@ impl RequestBodyState {
         self.0.cached_len()
     }
 
+    /// Validate that an opaque Body value has a stable source without
+    /// materializing it. Callers may identify a request as known bodyless;
+    /// every other missing capture is an error.
+    pub fn available_len(&self, known_bodyless: bool) -> Result<u64, BodyReadError> {
+        self.0.available_len(known_bodyless)
+    }
+
+    /// Record a transport-proven empty body. This is the only cached-body
+    /// state stock Pingora can represent without buffering support.
+    pub fn mark_known_empty(&mut self) {
+        self.0.mark_known_empty();
+    }
+
     /// Materialize the cached body, or return `None` when no capture exists.
     pub async fn read_all(&self) -> Result<Option<Bytes>, BodyReadError> {
         self.0.read_all().await
@@ -61,6 +75,67 @@ impl RequestBodyState {
     /// Hash the cached body without forcing disk-backed storage to materialize.
     pub async fn sha256(&self) -> Result<Option<[u8; 32]>, BodyReadError> {
         self.0.sha256().await
+    }
+
+    /// Run an owned raw scanner over an immutable logical snapshot.
+    pub async fn scan_raw<S>(
+        &self,
+        scanner: S,
+        max_scan_bytes: u64,
+    ) -> Result<BodyScanResult<S::Output>, BodyOperationError>
+    where
+        S: RawBodyScanner,
+    {
+        self.0.scan_raw(scanner, max_scan_bytes).await
+    }
+
+    /// Run one of the shared String/Body logical-text operations.
+    pub async fn text_operation(
+        &self,
+        operation: BodyTextOperation,
+        max_scan_bytes: u64,
+    ) -> Result<BodyScanResult<BodyTextResult>, BodyOperationError> {
+        self.0.text_operation(operation, max_scan_bytes).await
+    }
+
+    /// Read an independent raw range without changing replay position.
+    pub async fn read_range(
+        &self,
+        offset: u64,
+        max_bytes: u64,
+        max_scan_bytes: u64,
+    ) -> Result<BodyScanResult<Bytes>, BodyOperationError> {
+        self.0.read_range(offset, max_bytes, max_scan_bytes).await
+    }
+
+    /// Hash the logical body and report raw scan accounting.
+    pub async fn sha256_scan(&self, max_scan_bytes: u64) -> Result<BodyScanResult<[u8; 32]>, BodyOperationError> {
+        self.0.sha256_scan(max_scan_bytes).await
+    }
+
+    pub fn clear(&self) -> Result<(), BodyOperationError> {
+        self.0.clear()
+    }
+
+    pub fn append(&self, bytes: Bytes) -> Result<(), BodyOperationError> {
+        self.0.append(bytes)
+    }
+
+    pub fn prepend(&self, bytes: Bytes) -> Result<(), BodyOperationError> {
+        self.0.prepend(bytes)
+    }
+
+    pub fn remove(&self, range: std::ops::Range<u64>) -> Result<(), BodyOperationError> {
+        self.0.remove(range)
+    }
+
+    pub async fn replace_literal(
+        &self,
+        from: Bytes,
+        to: Bytes,
+        max_scan_bytes: u64,
+    ) -> Result<BodyScanResult<()>, BodyOperationError> {
+        self.0.replace_literal(from, to, max_scan_bytes).await
     }
 
     /// Return the final mutated length that must be reflected in upstream

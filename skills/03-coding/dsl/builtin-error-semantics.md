@@ -61,6 +61,25 @@ instead. Check the individual builtin and its lock-in tests rather than applying
 - `Deny` — returns `ErrResponse { status: 500, .. }`.
 - `DenyWith { status, body }` — returns the configured response.
 
+## Request-body outcomes and the hard-failure boundary
+
+The opaque `Body` API separates data outcomes from infrastructure failures:
+
+| Outcome | Contract |
+|---|---|
+| Invalid JSON, missing JSONPath, or traversal type mismatch | `req.body.json_get()` returns `nil` |
+| Search/prefix/suffix/regex does not match | Returns `false` |
+| Implicit Body→String coercion, Body ordering, invalid method argument type | `TypeError`, handled by configured `errorPolicy` |
+| Oversized returned string | `StringTooLong`, handled by configured `errorPolicy` |
+| Storage error, scan-budget exhaustion, invalid byte range, physical-cap or mutation-segment breach | `RuntimeError::BodyAccess` |
+
+`BodyAccess` is an internal typed hard-failure classification. It bypasses
+`DslErrorPolicy` and always returns HTTP 500 with the fixed client body
+`Request body processing failed`; operational detail stays in the plugin log.
+It is deliberately not a new configurable policy or a fifth project-wide
+failure-policy shape. Do not convert parse/no-match outcomes into
+`BodyAccess`, and do not let `Ignore` soften actual body-storage failures.
+
 ## Adding a new builtin — choose the shape deliberately
 
 When implementing a new builtin that can fail:
@@ -69,6 +88,9 @@ When implementing a new builtin that can fail:
 2. **Is the failure deterministic from script-visible state?** Bad regex literal → compile error (handled). Bad runtime string → silent fallback. Host I/O failure → `ApiError`.
 3. **Will a chained `if x == nil` / `if x == false` idiom let the script handle it gracefully?** If yes, silent fallback. If no (e.g. `set_header` has no useful Value return), `ApiError`.
 4. **Will `Display::to_string()` ever be called on user data?** If yes, see [chrono-display-panic](../../04-review/dsl-builtins/chrono-display-panic.md) — use `write!` to surface fallible-formatter `Err` as `ApiError`, do not let it panic.
+5. **Does it access opaque request-body storage?** Keep normal data outcomes
+   (`nil` / `false`) script-visible, but map storage, scan-budget, byte-range,
+   and transactional mutation failures to `BodyAccess`.
 
 After implementing, add a lock-in test to the appropriate file (mirroring the existing entries in `tests/utility_functions.rs` etc.) so the contract survives future refactors.
 

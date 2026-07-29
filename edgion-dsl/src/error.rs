@@ -145,6 +145,11 @@ pub enum RuntimeError {
     MapTooLarge { size: usize, limit: usize },
     /// PluginSession API returned error
     ApiError { function: String, message: String },
+    /// Request-body capture, storage, scan, or mutation failed.
+    ///
+    /// The gateway treats this typed condition as fixed fail-close instead of
+    /// routing it through the configurable DSL API-error policy.
+    BodyAccess { message: String },
     /// Regex execution error
     RegexError { message: String },
     /// Internal VM error (should not happen)
@@ -179,6 +184,7 @@ impl fmt::Display for RuntimeError {
             Self::ApiError { function, message } => {
                 write!(f, "API error in {}: {}", function, message)
             }
+            Self::BodyAccess { message } => write!(f, "body access failed: {}", message),
             Self::RegexError { message } => write!(f, "regex error: {}", message),
             Self::Internal { message } => write!(f, "internal error: {}", message),
         }
@@ -186,3 +192,16 @@ impl fmt::Display for RuntimeError {
 }
 
 impl std::error::Error for RuntimeError {}
+
+#[cfg(test)]
+mod tests {
+    use super::RuntimeError;
+
+    #[test]
+    fn body_access_has_stable_concise_display() {
+        let error = RuntimeError::BodyAccess {
+            message: "storage unavailable".to_string(),
+        };
+        assert_eq!(error.to_string(), "body access failed: storage unavailable");
+    }
+}

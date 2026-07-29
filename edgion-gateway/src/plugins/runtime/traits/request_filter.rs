@@ -35,6 +35,16 @@ pub trait RequestFilter: Send + Sync {
         None
     }
 
+    /// Whether the body gate must materialize the complete captured request
+    /// body before this filter runs.
+    ///
+    /// The safe default preserves the gate's `on_read_failure` policy for
+    /// storage-read failures. A filter may return `false` only when capture and
+    /// length are sufficient for its own semantics.
+    fn requires_materialized_request_body(&self) -> bool {
+        true
+    }
+
     /// Run the request filter (async)
     /// This is called during the request_filter stage before forwarding to upstream
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult;

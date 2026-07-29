@@ -16,6 +16,8 @@ pub struct DslRuntime {
     /// Built once from linkSysRefs at plugin load time.
     /// Client is resolved per-call (ArcSwap read) — matches rate_limit_redis pattern.
     pub redis_links: HashMap<String, String>,
+    /// Cumulative request-body scan allowance, measured in physical-cap passes.
+    pub max_body_scan_passes: u8,
 }
 
 impl Default for DslRuntime {
@@ -25,6 +27,7 @@ impl Default for DslRuntime {
             max_response_body_bytes: 1024 * 1024, // 1 MB
             block_private_ips: false,
             redis_links: HashMap::new(),
+            max_body_scan_passes: 4,
         }
     }
 }

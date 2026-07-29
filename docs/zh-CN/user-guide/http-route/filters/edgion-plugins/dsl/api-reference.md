@@ -2,7 +2,7 @@
 
 本文档列出 EdgionDSL 所有内置函数，按功能分类组织。每个函数均给出完整签名、参数说明、返回值、限制条件和使用示例。
 
-**类型说明**：EdgionDSL 有 6 种运行时类型：`Str`（字符串）、`Int`（64 位整数）、`Bool`（布尔值）、`Nil`（空值/缺失）、`List`（字符串列表，不可由用户直接构造）、`Map`（有序字符串键映射表；由 `http.call()` 返回，也可通过 `{key: expr}` 字面量构造）。
+**类型说明**：EdgionDSL 有 7 种运行时类型：`Str`（字符串）、`Int`（64 位整数）、`Bool`（布尔值）、`Nil`（空值/缺失）、`Body`（不透明的请求 body 句柄）、`List`（字符串列表，不可由用户直接构造）、`Map`（有序字符串键映射表；由 `http.call()` 返回，也可通过 `{key: expr}` 字面量构造）。
 
 **阶段说明**：部分函数仅在特定执行阶段有效。`req.*` 写操作和 `grpc_error()` 仅在请求阶段有意义；`resp.*` 读写操作仅在响应阶段有效。
 
@@ -317,23 +317,79 @@ if not req.has_header("X-Request-Id") {
 
 ### req.body
 
-**签名**：`req.body` → `Str`
+**签名**：`req.body` → `Body`
 
-返回被缓冲的代理请求体，使用 `String::from_utf8_lossy` 解码——任何非法 UTF-8 字节都会变成 U+FFFD 替换字符。请求体不会在第一个非法字节处被截断；下面的长度限制是唯一能缩短脚本可见内容的机制，且它是通过报错而非静默截断来实现的。
+返回被代理请求 body 的不透明句柄。句柄不包含字节、游标、文件描述符或存储路径。
+求值只检查 body 是否可用，不会把 body 读成连续字符串。无论当前逻辑版本位于内存、
+溢写文件还是修改分段中，所有操作看到的行为都相同。
 
-**返回值**：完整解码后的请求体字符串。
+共享文本操作按流增量解码，结果与 `String::from_utf8_lossy` 相同：非法 UTF-8
+显示为 U+FFFD，跨存储 chunk 的未完整码点会保留到下一段。原始字节读取、哈希和
+修改仍针对原字节。
 
-**约束**：
-- 解码后的字符串同样受 VM 的 `maxStringLen` 限制（默认 8192 字节，硬上限 1,048,576 字节），与其他所有 DSL 字符串值一致。由于 `from_utf8_lossy` 可能将每个非法字节扩展为 3 字节的 U+FFFD，一个原始字节数接近上限的请求体，解码后可能超出 `maxStringLen`。超出限制会抛出 `StringTooLong`，与其他运行时错误一样按 `errorPolicy` 处理——**不会**为其单独放宽一个更大的上限。若需读取更大的请求体，应同时调高 `maxStringLen` 和插件的 `body.maxBodySize`；超过 1 MiB 的字符串上限后，`req.body` 就不是合适的工具了，应改用 `ext_proc` 或 `wasm`。
-- 只有脚本引用了 `req.body` 时才会被门控以缓冲请求体；从不读取 `req.body` 的脚本不会被门控，也不产生任何缓冲开销。该门控只为 `requestPlugins` 中的 DSL 条目安装——具体因阶段而异的行为见下文。
-- **在 `requestPlugins` 中**，该插件受 body gate 保护：读体失败或拒绝都是 fail-close，无论 `errorPolicy` 如何设置，请求都会被拒绝。`errorPolicy` 仍然管辖脚本*运行过程中*抛出的错误（包括脚本运行后该内置函数抛出的错误），但它不能再让一个需要请求体的脚本在请求体不可用时被跳过。网关直接拒绝缓冲的请求体（gRPC，或携带请求体的升级请求）同样会被拒绝，而不是被跳过。
-- **在 `upstreamResponseFilterPlugins` 中**，前面的请求阶段插件填充共享缓存后，脚本即可读取 `req.body`。可在 `requestPlugins` 中配置 `RequestBodyBuffer` 来完成预缓存。晚阶段读取绝不会新建缓存；对于声明了 body 的请求，缺少缓存会抛出普通脚本运行时错误，并由 `errorPolicy` 处理；确实无 body 的请求无需缓存，会读取到空字符串。若已声明的请求 body 不可用时必须 fail-close，请使用 `Deny` 或 `DenyWith`。
+**`Str` / `Body` 共享文本方法**：
+
+| 方法 | 返回值 | 说明 |
+|------|--------|------|
+| `.len()` | `Int` | Unicode 标量数量 |
+| `.is_empty()` | `Bool` | 逻辑文本是否为空 |
+| `.starts_with(s)` | `Bool` | 前缀判断 |
+| `.ends_with(s)` | `Bool` | 后缀判断 |
+| `.contains(s)` | `Bool` | 子串判断 |
+| `.matches("regex")` | `Bool` | 编译期流式正则判断 |
+
+**Body 专用读取**：
+
+| 方法 | 返回值 | 说明 |
+|------|--------|------|
+| `.byte_len()` | `Int` | 原始字节数，只读元数据 |
+| `.read(offset, max_bytes)` | `Str` | 先选原始字节范围，再单独进行 lossy 解码 |
+| `.read_all()` | `Str` | 显式读取并 lossy 解码完整 body |
+| `.sha256()` | `Str` | 原始字节的 64 字符小写 SHA-256 |
+| `.json_get("$.a[0]")` | 值或 `Nil` | 按编译期确定 JSONPath 选择 |
+
+`read`、`read_all` 和序列化后的 JSON 结果必须符合 `maxStringLen`。`read`
+最多返回 `max_bytes` 个源字节；offset 超过 body 会报错。
+
+**仅请求阶段可用的修改**：
+
+| 方法 | 效果 |
+|------|------|
+| `.clear()` | 将 body 替换为空 |
+| `.append(s)` | 追加精确 `Str` 参数 `s` 的 UTF-8 字节 |
+| `.prepend(s)` | 前置精确 `Str` 参数 `s` 的 UTF-8 字节 |
+| `.remove(start, end)` | 删除左闭右开的原始字节范围 |
+| `.replace(from, to)` | 从左到右替换所有不重叠的字面量字节匹配；两个参数都必须为 `Str` |
+
+修改成功返回 `nil`，原子发布，受网关物理请求 body 上限约束，最多保留 4,096
+个逻辑分段。空查找模式和非法范围会被拒绝。修改方法若不在 `requestPlugins`
+中，会在配置校验阶段被拒绝。
+
+**可用性与失败行为**：
+
+- 请求阶段脚本静态引用 `req.body` 时，使用唯一的共享、有界请求 body 捕获；未引用
+  的脚本没有捕获开销。
+- `upstreamResponseFilterPlugins` 中的脚本只能读取请求阶段
+  `RequestBodyBuffer` 已填充的缓存，绝不会启动晚捕获。
+- 已知无 body 的请求无需分配缓存，使用空 Body。
+- VM 执行前的 body gate 固定 fail-close：请求体超过上限时返回空响应体的 413，
+  捕获超时时返回空响应体的 408，拒绝捕获或其他捕获失败时返回空响应体的 500。
+- VM 开始执行后，声明或未知有 body 却缺少晚阶段缓存、存储 I/O、扫描预算耗尽、
+  分段上限和修改发布失败，都返回 HTTP 500 和通用响应
+  `Request body processing failed`，不受 `errorPolicy` 影响。
+- `Body` 为真值，但不能隐式转换，也不能传给 `to_str`。它不能直接拼接、记录日志、
+  插值、作为 Map key/header 值或传给其他字符串 API；应使用显式的有界读取。
+
+Body 与 String 无论左右顺序都按流比较逻辑文本。两个 Body 都指向当前请求 body，
+因此相等。对 Body 排序会产生类型错误。
 
 **示例**：
+
 ```
-let b = req.body
-if len(b) > 0 {
-  req.set_header("X-Body-Preview", b)
+let body = req.body
+if !body.is_empty() and body.contains("token") {
+  req.set_header("X-Body-Preview", body.read(0, 128))
+  req.set_header("X-Body-SHA256", body.sha256())
 }
 ```
 
@@ -863,6 +919,9 @@ ctx.remove("temp_flag")
 
 > **注意（与 `max_string_len` 单位不一致）**：`len()` 返回的是 **Unicode 字符数**，而沙箱的 `max_string_len` 限制（默认 8192）以及相应的 `string too long (N bytes > L bytes)` 错误信息都是按 **UTF-8 字节** 度量的。对 ASCII 字符串两者相等；对含多字节字符（如中文、emoji）的字符串，字节长度最多可达字符数的 4 倍，因此 `len(s) < max_string_len` 这样的脚本守卫并不能保证后续的字符串拼接或内置函数调用一定能通过字节长度检查。
 
+`Body` 使用方法形式 `req.body.len()`。全局 `len(req.body)` 不会把 Body
+隐式转换为字符串。
+
 **示例**：
 ```
 let token = req.header("X-Api-Key")
@@ -904,12 +963,16 @@ if auth != nil and len(auth) > 7 {
 
 **签名**：`to_str(v)` → `Str`
 
-将任意类型转换为字符串：
+将标量和容器值转换为字符串：
 - `Str` → 原值
 - `Int` → 十进制表示
 - `Bool` → `"true"` 或 `"false"`
 - `Nil` → `"nil"`
 - `List` → `"[list]"`
+- `Map` → Map 的诊断表示
+
+`Body` 会被明确拒绝并产生类型错误。需要实际 body 字符串时，使用
+`read(offset, max_bytes)` 或 `read_all()`。
 
 **参数**：
 - `v`（任意类型）— 输入值
@@ -1214,6 +1277,9 @@ if hex_token != nil {
 
 计算字符串的 SHA-256 哈希值，返回 64 字符的小写十六进制摘要。
 
+对请求 Body 使用 `req.body.sha256()`。该方法按流处理原始字节，不要求 body
+符合 `maxStringLen`；旧的 `sha256(req.body)` 会产生类型错误。
+
 **参数**：
 - `s`（Str）— 输入字符串
 
@@ -1279,6 +1345,12 @@ if signature != expected {
 ---
 
 ## 正则表达式
+
+`.matches("pattern")` 同时适用于 `Str` 和 `Body`。它使用有界增量 DFA 和编译期
+字面量模式，因此匹配可跨存储 chunk，而无需物化 Body。流式方言会拒绝 DFA
+无法执行的构造，包括 Unicode 单词边界；可改用显式 ASCII 边界
+`(?-u:\b)`。`regex_find` 和 `regex_replace` 因为要返回或构造字符串，仍仅支持
+字符串。
 
 ### regex_find
 
@@ -1387,27 +1459,35 @@ req.set_header("X-Request-Time", date_str)
 
 ### json_get
 
-**签名**：`json_get(json_str, path)` → `Str | Int | Bool | Nil`
+**签名**：
 
-从 JSON 字符串中按点分隔路径提取值。路径格式为 `"field"` 或 `"parent.child.grandchild"`；对数组可用数字索引，如 `"items.0.name"`。若路径不存在或 JSON 解析失败，返回 `nil`。
+- `json_get(json_str, "$.path")` → `Str | Int | Bool | Nil`
+- `req.body.json_get("$.path")` → `Str | Int | Bool | Nil`
+
+使用编译期确定 JSONPath 从字符串或请求 Body 中选择值。支持的子集包括根 `$`、
+点成员（`$.user.name`）、引号成员（`$["name.with.dots"]`）和非负数组索引
+（`$.items[0].name`）。通配符、过滤器、递归下降、union、slice、负索引和动态
+路径均在编译期被拒绝。
 
 **参数**：
 - `json_str`（Str）— JSON 字符串
-- `path`（Str）— 点分隔的字段路径
+- `path`（Str 字面量）— 确定 JSONPath
 
 **返回值**：提取的值（`Str`、`Int`、`Bool` 或 `Nil`）
 
 **限制**：
-- JSON 字符串长度不得超过 `maxStringLen`（默认 8192 字节）
-- 路径最多支持 32 段，超出时触发运行时错误
+- 路径最多 1024 个 UTF-8 字节、32 段
+- 完整 JSON 文档会被校验，但 Body 输入只保留选中值，不构建完整 DOM
 - JSON 数字若可表示为 `i64` 则返回 `Int`，否则返回 `Str`；数组/对象节点返回其 JSON 字符串表示
+- 选中的字符串或序列化数组/对象必须符合 `maxStringLen`
+- 路径缺失、结构不匹配或 JSON 非法时返回 `nil`；请求 body 存储失败固定 fail-close
 
 **示例**：
 ```
 let payload = req.header("X-Jwt-Claims")
 if payload != nil {
-  let user_id = json_get(payload, "sub")
-  let role = json_get(payload, "role")
+  let user_id = json_get(payload, "$.sub")
+  let role = json_get(payload, "$.role")
   if user_id != nil {
     req.set_header("X-User-Id", to_str(user_id))
   }

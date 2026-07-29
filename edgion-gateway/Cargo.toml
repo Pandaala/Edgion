@@ -138,6 +138,7 @@ arc-swap.workspace = true
 notify.workspace = true
 dashmap.workspace = true
 regex.workspace = true
+regex-automata.workspace = true
 rand.workspace = true
 smallvec.workspace = true
 indexmap.workspace = true

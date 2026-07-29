@@ -15,6 +15,35 @@ const BODY_SHA256: &str = "d509bff642a353f88582e8a846ecae041c333b79c57a7a24ff310
 pub struct DslBodyTestSuite;
 
 impl DslBodyTestSuite {
+    async fn post_echo(ctx: &TestContext, mode: &str, body: Vec<u8>) -> Result<(u16, String), String> {
+        let url = format!("http://{}:31180/echo", ctx.target_host);
+        let response = ctx
+            .http_client
+            .post(url)
+            .header("host", "dsl-req-body-read.example.com")
+            .header("content-type", "application/octet-stream")
+            .header("x-body-mode", mode)
+            .body(body)
+            .send()
+            .await
+            .map_err(|error| format!("Request failed: {error}"))?;
+        let status = response.status().as_u16();
+        let response_body = response
+            .text()
+            .await
+            .map_err(|error| format!("Response body read failed: {error}"))?;
+        Ok((status, response_body))
+    }
+
+    fn echoed_body(response_body: &str) -> Result<&str, String> {
+        response_body.split_once("Echo: ").map(|(_, body)| body).ok_or_else(|| {
+            format!(
+                "Response did not contain the echo marker ({} bytes)",
+                response_body.len()
+            )
+        })
+    }
+
     fn test_late_body_read_requires_explicit_prebuffer() -> TestCase {
         TestCase::new(
             "dsl_late_body_read_requires_explicit_prebuffer",
@@ -51,20 +80,249 @@ impl DslBodyTestSuite {
                         .body("late-body")
                         .send()
                         .await;
-                    let unbuffered_status = match unbuffered {
-                        Ok(response) => response.status().as_u16(),
+                    let (unbuffered_status, unbuffered_body) = match unbuffered {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            let body = response.text().await.unwrap_or_default();
+                            (status, body)
+                        }
                         Err(error) => {
                             return TestResult::failed(start.elapsed(), format!("Unbuffered request failed: {error}"));
                         }
                     };
 
-                    if buffered_status == 200 && buffered_marker == "matched" && unbuffered_status == 500 {
+                    if buffered_status == 200
+                        && buffered_marker == "matched"
+                        && unbuffered_status == 500
+                        && unbuffered_body == "Request body processing failed"
+                    {
                         TestResult::passed(start.elapsed())
                     } else {
                         TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "Expected buffered=200/matched and unbuffered=500, got buffered={buffered_status}/{buffered_marker:?}, unbuffered={unbuffered_status}"
+                                "Expected buffered=200/matched and unbuffered=500 with the generic body, got buffered={buffered_status}/{buffered_marker:?}, unbuffered={unbuffered_status}/{unbuffered_body:?}"
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_body_read_methods_preserve_replay() -> TestCase {
+        TestCase::new(
+            "dsl_body_read_methods_preserve_replay",
+            "String-like predicates, ranges, full reads, equality, and hashing inspect without changing replay",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let request_body = "alpha-π-omega".as_bytes().to_vec();
+                    let (status, response_body) = match Self::post_echo(&ctx, "inspect", request_body.clone()).await {
+                        Ok(result) => result,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    let echoed = match Self::echoed_body(&response_body) {
+                        Ok(body) => body,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    if status == 200 && echoed.as_bytes() == request_body {
+                        TestResult::passed(start.elapsed())
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected exact inspected replay, got status={status}, echoed={echoed:?}"),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_body_definite_json_selection() -> TestCase {
+        TestCase::new(
+            "dsl_body_definite_json_selection",
+            "Definite JSON paths select typed values without changing upstream replay",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let request_body = br#"{"users":[{"name":"old"},{"name":"alice"}],"enabled":true}"#.to_vec();
+                    let (status, response_body) = match Self::post_echo(&ctx, "json", request_body.clone()).await {
+                        Ok(result) => result,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    let echoed = match Self::echoed_body(&response_body) {
+                        Ok(body) => body,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    if status == 200 && echoed.as_bytes() == request_body {
+                        TestResult::passed(start.elapsed())
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected exact JSON replay, got status={status}, echoed={echoed:?}"),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_body_mutations_replay_latest_snapshot() -> TestCase {
+        TestCase::new(
+            "dsl_body_mutations_replay_latest_snapshot",
+            "Literal replacement, prepend, append, and byte-range removal compose transactionally",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let (status, response_body) = match Self::post_echo(&ctx, "mutate", b"cat dog dog".to_vec()).await {
+                        Ok(result) => result,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    let echoed = match Self::echoed_body(&response_body) {
+                        Ok(body) => body,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    if status == 200 && echoed == "[fox fox]" {
+                        TestResult::passed(start.elapsed())
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected mutated replay, got status={status}, echoed={echoed:?}"),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_bodyless_mutation_installs_replay_owner() -> TestCase {
+        TestCase::new(
+            "dsl_bodyless_mutation_installs_replay_owner",
+            "Appending to an initially empty Body creates the upstream replay body",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let (status, response_body) = match Self::post_echo(&ctx, "bodyless-mutate", Vec::new()).await {
+                        Ok(result) => result,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    let echoed = match Self::echoed_body(&response_body) {
+                        Ok(body) => body,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    if status == 200 && echoed == "seed" {
+                        TestResult::passed(start.elapsed())
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected bodyless mutation replay, got status={status}, echoed={echoed:?}"),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_spilled_body_mutations_preserve_source_ranges() -> TestCase {
+        TestCase::new(
+            "dsl_spilled_body_mutations_preserve_source_ranges",
+            "Range inspection and mutations replay the latest disk-backed snapshot exactly",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let request_body = vec![b'x'; BODY_SIZE];
+                    let (status, response_body) = match Self::post_echo(&ctx, "spill-mutate", request_body).await {
+                        Ok(result) => result,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    let echoed = match Self::echoed_body(&response_body) {
+                        Ok(body) => body,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    let mut expected = Vec::with_capacity(BODY_SIZE + 1);
+                    expected.push(b'[');
+                    expected.extend(std::iter::repeat_n(b'x', BODY_SIZE - 1));
+                    expected.push(b']');
+                    if status == 200 && echoed.as_bytes() == expected {
+                        TestResult::passed(start.elapsed())
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected {} mutated spill bytes, got status={status}, echoed_bytes={}",
+                                expected.len(),
+                                echoed.len()
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_spilled_body_predicates_cross_scan_boundary() -> TestCase {
+        TestCase::new(
+            "dsl_spilled_body_predicates_cross_scan_boundary",
+            "Substring and streaming regex matches cross an internal disk-scan boundary",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let mut request_body = Vec::with_capacity(BODY_SIZE);
+                    request_body.extend(std::iter::repeat_n(b'x', 64 * 1024 - 3));
+                    request_body.extend_from_slice(b"needle");
+                    request_body.resize(BODY_SIZE, b'x');
+                    let (status, response_body) = match Self::post_echo(&ctx, "spill-scan", request_body.clone()).await
+                    {
+                        Ok(result) => result,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    let echoed = match Self::echoed_body(&response_body) {
+                        Ok(body) => body,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    if status == 200 && echoed.as_bytes() == request_body {
+                        TestResult::passed(start.elapsed())
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected exact spilled scan replay, got status={status}, echoed_bytes={}",
+                                echoed.len()
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_spilled_body_definite_json_selection() -> TestCase {
+        TestCase::new(
+            "dsl_spilled_body_definite_json_selection",
+            "Definite JSONPath selects a bounded object from a disk-backed body",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let padding = "x".repeat(BODY_SIZE);
+                    let request_body = format!(r#"{{"padding":"{padding}","selected":{{"n":1.0}}}}"#).into_bytes();
+                    let (status, response_body) = match Self::post_echo(&ctx, "spill-json", request_body.clone()).await
+                    {
+                        Ok(result) => result,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    let echoed = match Self::echoed_body(&response_body) {
+                        Ok(body) => body,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    if status == 200 && echoed.as_bytes() == request_body {
+                        TestResult::passed(start.elapsed())
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected exact spilled JSON replay, got status={status}, echoed_bytes={}",
+                                echoed.len()
                             ),
                         )
                     }
@@ -418,6 +676,13 @@ impl TestSuite for DslBodyTestSuite {
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_late_body_read_requires_explicit_prebuffer(),
+            Self::test_body_read_methods_preserve_replay(),
+            Self::test_body_definite_json_selection(),
+            Self::test_body_mutations_replay_latest_snapshot(),
+            Self::test_bodyless_mutation_installs_replay_owner(),
+            Self::test_spilled_body_mutations_preserve_source_ranges(),
+            Self::test_spilled_body_predicates_cross_scan_boundary(),
+            Self::test_spilled_body_definite_json_selection(),
             Self::test_expect_continue_single_interim_then_success(),
             Self::test_expect_continue_single_interim_then_reject(),
             Self::test_chunked_unknown_length_rejected_at_limit(),

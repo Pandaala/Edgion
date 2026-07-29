@@ -36,10 +36,22 @@ requests still use the canonical empty body.
 
 A late consumer never starts body capture. If no earlier plugin populated the
 cache—for example because `RequestBodyBuffer` was absent or its body conditions
-skipped—the late read of a request that declared a body fails according to that
-consumer's error policy. A request that truthfully declared no body still reads
-as the canonical empty body and needs no cache. Capture refusals and
-physical-cap failures remain fail-close.
+skipped—a late read of a request that declared a body fails closed with HTTP
+500 and the fixed body `Request body processing failed`, regardless of the
+consumer's `errorPolicy`. A request that truthfully declared no body still
+reads as the canonical empty body and needs no cache.
+
+Capture failures happen at the pre-VM body gate and have an empty response
+body: request-body limit failures return 413, timeouts return 408, and capture
+refusals or other failures return 500. These gate responses are distinct from
+the fixed generic 500 used when a later VM Body operation cannot access or
+process an already-required cache.
+
+DSL sees the cache as an opaque `req.body` value. Methods such as
+`byte_len()`, `contains()`, `matches()`, `sha256()`, and `json_get()` inspect
+it without requiring a complete string copy; `read()` and `read_all()` create
+strings only for the requested result. All methods behave the same for
+memory-backed and spilled storage.
 
 Wasm modules needing the complete request body should normally run in
 `requestPlugins` and export `proxy_on_request_body`; response-stage Wasm host

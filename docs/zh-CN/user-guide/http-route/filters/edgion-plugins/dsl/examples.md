@@ -93,9 +93,9 @@ spec:
           }
 
           // 提取常用声明
-          let sub = json_get(payload_json, "sub")
-          let role = json_get(payload_json, "role")
-          let tenant = json_get(payload_json, "tenant_id")
+          let sub = json_get(payload_json, "$.sub")
+          let role = json_get(payload_json, "$.role")
+          let tenant = json_get(payload_json, "$.tenant_id")
 
           if sub == nil {
             return deny(401, "JWT missing sub claim")
@@ -121,7 +121,7 @@ spec:
 说明：
 
 - 本示例仅做结构解析，**不做签名验证**。在生产环境中，应将签名校验交给专用的 JWT Auth 插件，DSL 负责在验证通过后进一步提取声明。
-- `json_get` 返回字符串或 `nil`，对 `nil` 值调用字符串方法会得到 `false`，因此每次使用前都应检查 `nil`。
+- `json_get` 返回选中的字符串、整数、布尔值、序列化后的数组/对象或 `nil`；使用必需声明前应检查 `nil`。
 
 ---
 
@@ -387,7 +387,7 @@ spec:
 
 ### 3.2 请求体大小限制
 
-通过读取 `Content-Length` 请求头，在转发前拒绝超过阈值的大请求，保护上游服务免受超大请求的冲击。
+使用已捕获请求体的实际字节长度，在转发前拒绝超过阈值的大请求。该方式也覆盖无法从请求头预知大小的 chunked 请求。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -401,25 +401,10 @@ spec:
       config:
         name: "body-size-limit"
         source: |
-          let method = req.method()
-
-          // 仅对携带请求体的方法做检查
-          if method != "POST" && method != "PUT" && method != "PATCH" {
-            return next()
-          }
-
-          let content_length = req.content_length()
-
-          // content_length 为 nil 表示未携带 Content-Length 头（如 chunked 传输）
-          // 此处选择放行，由上游自行处理
-          if content_length == nil {
-            return next()
-          }
-
           // 限制请求体不超过 10 MB（10 * 1024 * 1024 = 10485760）
           let max_bytes = 10485760
-          if content_length > max_bytes {
-            return deny(413, "Request entity too large: max allowed size is 10MB")
+          if req.body.byte_len() > max_bytes {
+            return deny(413, "Request body is too large")
           }
 
           return next()
@@ -427,8 +412,9 @@ spec:
 
 说明：
 
-- `req.content_length()` 返回 `Int` 或 `nil`。当使用 chunked 传输编码时，`Content-Length` 头不存在，此时返回 `nil`。
-- 如需严格限制 chunked 请求，可检查 `req.header("Transfer-Encoding")` 是否包含 `chunked` 并直接拒绝。
+- `req.body.byte_len()` 返回已捕获请求体的原始字节数，不会把请求体转换成字符串。
+- 无论共享请求体缓存留在内存还是溢写到磁盘，同一脚本都可正常工作。
+- 网关的请求体物理上限仍是传输层权威限制；DSL 阈值只能与其相等或更低。
 
 ---
 
@@ -703,7 +689,7 @@ spec:
         source: |
           // 记录请求进入时间（Unix 毫秒）
           let start_ms = time_now()
-          ctx.set("req_start_ms", to_string(start_ms))
+          ctx.set("req_start_ms", to_str(start_ms))
 
           // 生成请求 ID 用于关联日志
           let req_id = uuid()
@@ -721,11 +707,11 @@ spec:
           let start_str = ctx.get("req_start_ms")
 
           if start_str != nil {
-            let start_ms = parse_int(start_str)
+            let start_ms = to_int(start_str)
             if start_ms != nil {
               let elapsed_ms = end_ms - start_ms
-              resp.set_header("X-Upstream-Latency-Ms", to_string(elapsed_ms))
-              ctx.set("upstream_latency_ms", to_string(elapsed_ms))
+              resp.set_header("X-Upstream-Latency-Ms", to_str(elapsed_ms))
+              ctx.set("upstream_latency_ms", to_str(elapsed_ms))
             }
           }
 
@@ -741,7 +727,7 @@ spec:
 说明：
 
 - `time_now()` 返回 Unix 毫秒时间戳（`Int` 类型）。
-- 上下文变量只能存储字符串，因此需要 `to_string()` 和 `parse_int()` 来回转换数值。
+- 上下文变量只能存储字符串，因此需要 `to_str()` 和 `to_int()` 来回转换数值。
 - `ctx.set("upstream_latency_ms", ...)` 使耗时数据出现在访问日志中，可用于 P99 分位数统计。
 
 ---
@@ -808,7 +794,7 @@ config:
 默认限制适合绝大多数场景，不要盲目调大。在以下情况下才考虑调整：
 
 - **降低** `maxLoopIterations`（如 `20`）：已知遍历的列表长度有限，调小可更早发现异常。
-- **提高** `maxStringLen`（如 `32768`）：需要处理较长的 JSON Payload 或 Base64 编码内容。
+- **提高** `maxStringLen`（如 `32768`）：需要从 `read()`、`read_all()`、`json_get()` 返回较长字符串，或处理较长 Base64 内容。流式请求体谓词不需要分配完整字符串。
 - 不应将 `maxSteps` 调大来"修复"无限循环，应检查脚本逻辑。
 
 ### 6.5 字节码模式

@@ -49,6 +49,17 @@ requirements. Do not generalize the condition-preservation exception in a way
 that lets operators narrow an authentication or validation plugin's
 enforcement scope.
 
+If a response-stage DSL read finds a request that declared a body but no cache,
+the VM raises internal `BodyAccess` and returns the fixed generic HTTP 500
+response regardless of DSL `errorPolicy`. This missing-cache boundary is not a
+configurable failure mode. A bodyless request still resolves to canonical
+empty storage.
+
+Body mutation methods are statically valid only in `requestPlugins`.
+Configuration validation and the response-stage factory both reject a script
+that attempts late mutation; runtime state is not used to reinterpret it as a
+read-only no-op.
+
 ## Verification
 
 Keep both integration directions:

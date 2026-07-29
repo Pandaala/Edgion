@@ -2,7 +2,7 @@
 
 This document lists all built-in functions in EdgionDSL, organized by category. Each function includes its full signature, parameter descriptions, return values, constraints, and usage examples.
 
-**Type overview**: EdgionDSL has 6 runtime types: `Str` (string), `Int` (64-bit integer), `Bool` (boolean), `Nil` (null/missing), `List` (a list of strings; cannot be constructed directly by user code), and `Map` (an ordered string-keyed map; returned by `http.call()` and constructible via `{key: expr}` literals).
+**Type overview**: EdgionDSL has 7 runtime types: `Str` (string), `Int` (64-bit integer), `Bool` (boolean), `Nil` (null/missing), `Body` (an opaque request-body handle), `List` (a list of strings; cannot be constructed directly by user code), and `Map` (an ordered string-keyed map; returned by `http.call()` and constructible via `{key: expr}` literals).
 
 **Phase overview**: Some functions are only valid in specific execution phases. `req.*` write operations and `grpc_error()` are only meaningful in the request phase; `resp.*` read and write operations are only valid in the response phase.
 
@@ -317,23 +317,88 @@ if not req.has_header("X-Request-Id") {
 
 ### req.body
 
-**Signature**: `req.body` → `Str`
+**Signature**: `req.body` → `Body`
 
-Returns the buffered proxied request body, decoded with `String::from_utf8_lossy` — any invalid UTF-8 byte becomes the U+FFFD replacement character. The body is never truncated at the first invalid byte; only the length check below can shorten what the script sees, and it does so by raising an error, not by silently cutting the string.
+Returns an opaque handle for the proxied request body. The handle contains no
+bytes, cursor, file descriptor, or storage path. Evaluating it checks body
+availability but does not read the body into a contiguous string. Every
+operation sees the current logical body version, whether it is backed by
+memory, a spill file, or mutation segments.
 
-**Return value**: The full decoded request body as a string.
+Shared text operations decode incrementally with the same result as
+`String::from_utf8_lossy`: invalid UTF-8 is represented by U+FFFD and incomplete
+code points are carried across storage chunks. Raw byte reads, hashing, and
+mutations still operate on the original bytes.
 
-**Constraints**:
-- The decoded string is subject to the VM's `maxStringLen` limit (default 8192 bytes, hard ceiling 1,048,576 bytes), the same cap every other DSL string value obeys. Because `from_utf8_lossy` can expand each invalid byte into a 3-byte U+FFFD, a body near the cap in raw bytes can exceed `maxStringLen` after decoding. A body over the limit raises `StringTooLong`, handled per `errorPolicy` like any other runtime error — it does **not** get a private, larger cap. To read a larger body, raise both `maxStringLen` and the plugin's `body.maxBodySize` together; beyond the 1 MiB string ceiling, `req.body` is the wrong tool — use `ext_proc` or `wasm` instead.
-- The script is only gated to buffer the request body when it references `req.body`; a script that never reads `req.body` is never gated and pays zero buffering cost. The gate is installed only for DSL entries in `requestPlugins` — see the stage-dependent behavior below.
-- **In `requestPlugins`**, the plugin is body-gated: a body-read failure or refusal is fail-close, and the request is rejected regardless of `errorPolicy`. `errorPolicy` still governs errors raised *inside* the script, including errors this builtin raises once the script is running — but it can no longer cause a script that needs the body to be skipped when the body is unavailable. A body the gateway declines to buffer at all (gRPC, or an upgrade request carrying a body) is likewise rejected, not skipped.
-- **In `upstreamResponseFilterPlugins`**, a script can read `req.body` when an earlier request-stage plugin populated the shared cache. Configure `RequestBodyBuffer` in `requestPlugins` for this purpose. A late read never starts capture: for a request that declared a body, a missing cache raises an ordinary script runtime error governed by `errorPolicy`; a truthfully bodyless request reads as the empty string without a cache. Use `Deny` or `DenyWith` when an unavailable declared body must fail closed.
+**Shared `Str` / `Body` text methods**:
+
+| Method | Return | Description |
+|--------|--------|-------------|
+| `.len()` | `Int` | Unicode scalar count |
+| `.is_empty()` | `Bool` | Whether the logical text is empty |
+| `.starts_with(s)` | `Bool` | Prefix test |
+| `.ends_with(s)` | `Bool` | Suffix test |
+| `.contains(s)` | `Bool` | Substring test |
+| `.matches("regex")` | `Bool` | Compile-time streaming-regex test |
+
+**Body-only reads**:
+
+| Method | Return | Description |
+|--------|--------|-------------|
+| `.byte_len()` | `Int` | Raw byte length; metadata-only |
+| `.read(offset, max_bytes)` | `Str` | Select the raw range, then lossily decode that isolated slice |
+| `.read_all()` | `Str` | Explicitly read and lossily decode the complete body |
+| `.sha256()` | `Str` | 64-character lowercase SHA-256 of the raw bytes |
+| `.json_get("$.a[0]")` | value or `Nil` | Select a compile-time definite JSONPath |
+
+`read`, `read_all`, and serialized JSON results must fit `maxStringLen`. `read`
+returns at most `max_bytes`; an offset beyond the body is an error.
+
+**Request-stage-only mutations**:
+
+| Method | Effect |
+|--------|--------|
+| `.clear()` | Replace the body with empty content |
+| `.append(s)` | Append the UTF-8 bytes of exact `Str` argument `s` |
+| `.prepend(s)` | Prepend the UTF-8 bytes of exact `Str` argument `s` |
+| `.remove(start, end)` | Remove the half-open raw-byte range |
+| `.replace(from, to)` | Replace all non-overlapping, leftmost literal byte matches; both arguments must be `Str` |
+
+Mutations return `nil`, publish atomically, remain bounded by the gateway
+physical request-body cap, and retain at most 4,096 logical segments. Empty
+search patterns and invalid ranges are rejected. Mutation outside
+`requestPlugins` is rejected during configuration validation.
+
+**Availability and failure behavior**:
+
+- A request-stage script that statically references `req.body` uses the one
+  shared bounded request-body capture. A script without such a reference pays
+  no capture cost.
+- An `upstreamResponseFilterPlugins` script may read a cache populated earlier
+  by `RequestBodyBuffer`; it never starts late capture.
+- A known bodyless request uses an empty Body without allocating a cache.
+- The pre-VM body gate always fails closed: request-body limit failures return
+  413, capture timeouts return 408, and refusals or other capture failures
+  return 500. These gate responses have an empty body.
+- After the VM starts, missing late capture for a declared or unknown body,
+  storage I/O, scan-budget exhaustion, segment overflow, and mutation
+  publication failures always return HTTP 500 with the generic response
+  `Request body processing failed`, regardless of `errorPolicy`.
+- `Body` is truthy but cannot be converted implicitly or by `to_str`. It cannot
+  be concatenated, logged, interpolated, used as a map key, passed as a header
+  value, or forwarded to another string API. Use an explicit bounded read.
+
+Body/String equality scans logical text in either operand order. Two Body
+values compare equal because both identify the current request body. Ordering a
+Body is a type error.
 
 **Example**:
+
 ```
-let b = req.body
-if len(b) > 0 {
-  req.set_header("X-Body-Preview", b)
+let body = req.body
+if !body.is_empty() and body.contains("token") {
+  req.set_header("X-Body-Preview", body.read(0, 128))
+  req.set_header("X-Body-SHA256", body.sha256())
 }
 ```
 
@@ -866,6 +931,9 @@ Returns the number of Unicode characters in a string (not bytes), or the number 
 
 > **Note (unit mismatch with `max_string_len`)**: `len()` reports **Unicode character count**, while the sandbox `max_string_len` limit (default 8192) and the resulting `string too long (N bytes > L bytes)` error are measured in **UTF-8 bytes**. For ASCII strings the two numbers are equal; for strings containing multi-byte characters (e.g. CJK, emoji) the byte length can be up to 4× the character length, so a `len(s) < max_string_len` guard does not guarantee that a subsequent concatenation or builtin call will pass the byte-length check.
 
+`Body` uses the method form `req.body.len()`. The global `len(req.body)` does
+not implicitly convert a Body to a string.
+
 **Example**:
 ```
 let token = req.header("X-Api-Key")
@@ -907,12 +975,16 @@ if auth != nil and len(auth) > 7 {
 
 **Signature**: `to_str(v)` → `Str`
 
-Converts any type to a string:
+Converts scalar and container values to a string:
 - `Str` → original value
 - `Int` → decimal representation
 - `Bool` → `"true"` or `"false"`
 - `Nil` → `"nil"`
 - `List` → `"[list]"`
+- `Map` → a diagnostic map representation
+
+`Body` is intentionally rejected with a type error. Use `read(offset,
+max_bytes)` or `read_all()` when an actual body string is required.
 
 **Parameters**:
 - `v` (any type) — Input value
@@ -1217,6 +1289,10 @@ if hex_token != nil {
 
 Computes the SHA-256 hash of a string, returning a 64-character lowercase hexadecimal digest.
 
+For a request Body, use `req.body.sha256()`. The method streams the original
+bytes and does not require the body to fit `maxStringLen`; the old
+`sha256(req.body)` form is a type error.
+
 **Parameters**:
 - `s` (Str) — Input string
 
@@ -1282,6 +1358,13 @@ if signature != expected {
 ---
 
 ## Regular Expressions
+
+The `.matches("pattern")` method works on both `Str` and `Body`. It uses a
+bounded incremental DFA and a compile-time literal pattern, so matches may span
+storage chunks without materializing a Body. The streaming dialect rejects
+constructs the DFA cannot execute, including Unicode word boundaries; use an
+explicit ASCII boundary such as `(?-u:\b)`. `regex_find` and `regex_replace`
+remain string-only because they return or construct strings.
 
 ### regex_find
 
@@ -1390,27 +1473,36 @@ req.set_header("X-Request-Time", date_str)
 
 ### json_get
 
-**Signature**: `json_get(json_str, path)` → `Str | Int | Bool | Nil`
+**Signatures**:
 
-Extracts a value from a JSON string using a dot-separated path. The path format is `"field"` or `"parent.child.grandchild"`; numeric indices can be used for arrays, e.g. `"items.0.name"`. Returns `nil` if the path does not exist or JSON parsing fails.
+- `json_get(json_str, "$.path")` → `Str | Int | Bool | Nil`
+- `req.body.json_get("$.path")` → `Str | Int | Bool | Nil`
+
+Selects a value from a string or request Body using a compile-time definite
+JSONPath. The accepted subset is root `$`, dot members (`$.user.name`), quoted
+members (`$["name.with.dots"]`), and non-negative array indices
+(`$.items[0].name`). Wildcards, filters, recursive descent, unions, slices,
+negative indices, and dynamic paths are rejected at compile time.
 
 **Parameters**:
 - `json_str` (Str) — JSON string
-- `path` (Str) — Dot-separated field path
+- `path` (Str literal) — Definite JSONPath
 
 **Return value**: Extracted value (`Str`, `Int`, `Bool`, or `Nil`)
 
 **Constraints**:
-- The JSON string length must not exceed `maxStringLen` (default 8192 bytes)
-- The path supports at most 32 segments; a runtime error is triggered if this is exceeded
+- Paths are at most 1024 UTF-8 bytes and 32 segments
+- The complete JSON document is validated, but Body input retains only the selected value rather than building a complete DOM
 - JSON numbers that can be represented as `i64` are returned as `Int`; otherwise they are returned as `Str`; array and object nodes are returned as their JSON string representation
+- The selected string or serialized array/object must fit `maxStringLen`
+- A missing path, structural mismatch, or invalid JSON returns `nil`; request-body storage failure is fixed fail-close
 
 **Example**:
 ```
 let payload = req.header("X-Jwt-Claims")
 if payload != nil {
-  let user_id = json_get(payload, "sub")
-  let role = json_get(payload, "role")
+  let user_id = json_get(payload, "$.sub")
+  let role = json_get(payload, "$.role")
   if user_id != nil {
     req.set_header("X-User-Id", to_str(user_id))
   }

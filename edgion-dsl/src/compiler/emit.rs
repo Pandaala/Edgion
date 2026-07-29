@@ -2,7 +2,7 @@
 
 use super::super::bytecode::*;
 use super::super::error::CompileError;
-use super::{Compiler, Local, MAX_REGEX_PATTERN_LEN};
+use super::{validate_streaming_regex, Compiler, Local, MAX_REGEX_PATTERN_LEN};
 
 impl Compiler {
     pub(super) fn emit(&mut self, op: OpCode) -> usize {
@@ -96,6 +96,39 @@ impl Compiler {
         let owned = pattern.to_string();
         self.const_regex_map.insert(owned.clone(), idx);
         self.constants.push(Constant::Regex(owned));
+        Ok(idx)
+    }
+
+    pub(super) fn add_streaming_regex_const(&mut self, pattern: &str) -> Result<u16, CompileError> {
+        if pattern.len() > MAX_REGEX_PATTERN_LEN {
+            return Err(CompileError::new(format!(
+                "regex pattern too long: {} (max {})",
+                pattern.len(),
+                MAX_REGEX_PATTERN_LEN
+            )));
+        }
+        if let Some(&idx) = self.const_streaming_regex_map.get(pattern) {
+            return Ok(idx);
+        }
+        validate_streaming_regex(pattern)
+            .map_err(|error| CompileError::new(format!("regex is not compatible with streaming matches: {}", error)))?;
+        let idx = self.check_const_limit()?;
+        let owned = pattern.to_string();
+        self.const_streaming_regex_map.insert(owned.clone(), idx);
+        self.constants.push(Constant::StreamingRegex(owned));
+        Ok(idx)
+    }
+
+    pub(super) fn add_json_path_const(&mut self, path: &str) -> Result<u16, CompileError> {
+        if let Some(&idx) = self.const_json_path_map.get(path) {
+            return Ok(idx);
+        }
+        crate::json_path::DefiniteJsonPath::parse(path)
+            .map_err(|error| CompileError::new(format!("invalid definite JSON path: {}", error)))?;
+        let idx = self.check_const_limit()?;
+        let owned = path.to_string();
+        self.const_json_path_map.insert(owned.clone(), idx);
+        self.constants.push(Constant::JsonPath(owned));
         Ok(idx)
     }
 

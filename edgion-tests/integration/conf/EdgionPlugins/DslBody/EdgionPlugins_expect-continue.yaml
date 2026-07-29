@@ -12,7 +12,7 @@ spec:
       config:
         name: "expect-continue-body"
         source: |
-          let body = req.body
+          let body_bytes = req.body.byte_len()
         errorPolicy: deny
 ---
 apiVersion: edgion.io/v1
@@ -27,5 +27,5 @@ spec:
       config:
         name: "expect-continue-pass"
         source: |
-          let body = req.body
+          let body_bytes = req.body.byte_len()
         errorPolicy: deny

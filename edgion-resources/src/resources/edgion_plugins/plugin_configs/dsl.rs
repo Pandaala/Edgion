@@ -95,6 +95,10 @@ pub struct DslConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_map_size: Option<usize>,
 
+    /// Maximum cumulative full-body scan passes per execution (default: 4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_body_scan_passes: Option<u8>,
+
     /// Error handling policy (default: ignore = fail-open)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_policy: Option<DslErrorPolicy>,
@@ -211,6 +215,11 @@ impl PluginValidation for DslConfig {
                 return Some("maxStringLen must be between 1 and 1048576".to_string());
             }
         }
+        if let Some(passes) = self.max_body_scan_passes {
+            if !(1..=16).contains(&passes) {
+                return Some("maxBodyScanPasses must be between 1 and 16".to_string());
+            }
+        }
         if let Some(DslErrorPolicy::DenyWith { status, .. }) = &self.error_policy {
             if *status < 100 || *status > 599 {
                 return Some("errorPolicy denyWith status must be between 100 and 599".to_string());
@@ -270,6 +279,29 @@ mod tests {
             ..Default::default()
         };
         assert!(config.validation_error().is_some());
+    }
+
+    #[test]
+    fn validation_error_rejects_out_of_range_body_scan_passes() {
+        let config = DslConfig {
+            name: "scan-budget".to_string(),
+            source: Some("return next".to_string()),
+            max_body_scan_passes: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.validation_error(),
+            Some("maxBodyScanPasses must be between 1 and 16".to_string())
+        );
+
+        let config = DslConfig {
+            max_body_scan_passes: Some(17),
+            ..config
+        };
+        assert_eq!(
+            config.validation_error(),
+            Some("maxBodyScanPasses must be between 1 and 16".to_string())
+        );
     }
 
     #[test]

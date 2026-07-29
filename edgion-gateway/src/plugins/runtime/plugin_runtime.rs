@@ -1690,7 +1690,8 @@ mod tests {
         let mut session = MockPluginSession::new();
         session.expect_ctx().return_const(EdgionHttpContext::new());
         session
-            .expect_read_request_body()
+            .expect_ensure_request_body()
+            .withf(|max_bytes| *max_bytes == Some(32 * 1024 * 1024))
             .returning(|_| Err(BodyReadError::Unimplemented));
         session
             .expect_add_error()

@@ -172,8 +172,9 @@ impl EdgionPlugin {
             // question. A refusal is unconditionally fail-close by design (R5),
             // and a failed read means the script's body check never ran — for a
             // script written to enforce something, silently passing is the one
-            // outcome that must not happen. `errorPolicy` still applies to every
-            // error raised inside the script, including by the body builtin.
+            // outcome that must not happen. Hard BodyAccess failures remain
+            // fixed fail-close inside the VM; `errorPolicy` still applies to
+            // ordinary script runtime errors.
             Dsl(cfg) if stage == BodyStage::Request => {
                 let script = cfg.compile_and_validate().ok()?;
                 if !script.references_builtin(BuiltinId::ReqBody) {

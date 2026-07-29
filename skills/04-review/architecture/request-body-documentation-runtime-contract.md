@@ -22,8 +22,13 @@ planned behavior are **not accepted**.
 **1. Request and response bodies have different ownership**
 
 The request runtime may lazily capture the proxied request body, spill it to
-disk, and expose the current immutable version to serial request plugins. Wasm
-whole-request-body mode is selected by a guest exporting
+disk, and expose the current logical version to serial request plugins. DSL
+sees an opaque `req.body`: metadata, predicates, hashing, streaming regex, and
+definite JSONPath selection operate transparently across memory and spill
+storage; bounded `read()` / `read_all()` are the explicit string-copy APIs.
+Request-stage mutation methods update the shared logical body transactionally,
+while response-stage mutation is rejected. Wasm whole-request-body mode is
+selected by a guest exporting
 `proxy_on_request_body`; an optional operator `body:` block adds pre-execution
 conditions, a per-plugin size policy, and read-failure handling.
 
@@ -38,8 +43,10 @@ change this rule.
 
 Stale statements that request-body reads always return `Unimplemented` direct
 operators toward unnecessary fail-open workarounds. Documentation must instead
-explain capture eligibility, physical and per-plugin limits, and the applicable
-failure policy.
+explain capture eligibility, physical and per-plugin limits, the cumulative
+`maxBodyScanPasses` budget, stage restrictions, and the fixed generic
+fail-close `BodyAccess` boundary. `BodyAccess` is an internal classification,
+not a fifth configurable failure-policy shape.
 
 ## Fix Suggestions Not Accepted
 

@@ -23,6 +23,15 @@ use super::bytecode::*;
 use super::error::CompileError;
 
 pub(super) const MAX_REGEX_PATTERN_LEN: usize = 1024;
+pub(crate) const STREAMING_REGEX_DFA_SIZE_LIMIT: usize = 1 << 20;
+
+/// Validate that a `.matches()` pattern can be built as the bounded forward
+/// DFA used by incremental String/Body matching.
+pub(crate) fn validate_streaming_regex(pattern: &str) -> Result<(), String> {
+    let mut builder = regex_automata::dfa::dense::Builder::new();
+    builder.configure(regex_automata::dfa::dense::Config::new().dfa_size_limit(Some(STREAMING_REGEX_DFA_SIZE_LIMIT)));
+    builder.build(pattern).map(|_| ()).map_err(|error| error.to_string())
+}
 
 /// Local variable entry
 #[derive(Debug, Clone)]
@@ -41,6 +50,8 @@ pub struct Compiler {
     pub(super) const_str_map: HashMap<String, u16>,
     pub(super) const_int_map: HashMap<i64, u16>,
     pub(super) const_regex_map: HashMap<String, u16>,
+    pub(super) const_streaming_regex_map: HashMap<String, u16>,
+    pub(super) const_json_path_map: HashMap<String, u16>,
     pub(super) locals: Vec<Local>,
     pub(super) next_slot: u16,
     pub(super) scope_depth: u16,
@@ -72,6 +83,8 @@ impl Compiler {
             const_str_map: HashMap::new(),
             const_int_map: HashMap::new(),
             const_regex_map: HashMap::new(),
+            const_streaming_regex_map: HashMap::new(),
+            const_json_path_map: HashMap::new(),
             locals: Vec::new(),
             next_slot: 0,
             scope_depth: 0,

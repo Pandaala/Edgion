@@ -6,9 +6,13 @@
 use serde::{Deserialize, Serialize};
 
 /// Current serialized bytecode schema version.
-pub const BYTECODE_VERSION: u16 = 1;
-/// Legacy version for scripts produced before versioning was introduced.
-const LEGACY_BYTECODE_VERSION: u16 = 0;
+///
+/// Version 2 changes `req.body` from a materialized Str to an opaque Body and
+/// adds body-aware opcodes. Version 0/1 payloads are intentionally rejected so
+/// they can never execute with the new semantics.
+pub const BYTECODE_VERSION: u16 = 2;
+/// Missing versions deserialize to zero and are rejected with other old forms.
+const UNVERSIONED_BYTECODE_VERSION: u16 = 0;
 /// Hard limit for decoded bytecode payload to avoid unbounded allocation.
 const MAX_DECODED_BYTECODE_LEN: usize = 256 * 1024;
 
@@ -72,6 +76,32 @@ pub enum OpCode {
     /// regex_replace(s, literal_pattern, replacement) — pattern pre-compiled
     /// Stack: [s, replacement] → [result_str | Nil]  (Nil when s is not a Str)
     RegexReplace(u16),
+    /// Pop Str|Body, push Unicode scalar length.
+    TextLen,
+    /// Pop Str|Body, push whether its logical text is empty.
+    TextIsEmpty,
+
+    // ===== Request Body Operations =====
+    /// Pop Body, push raw captured byte length.
+    BodyByteLen,
+    /// Pop (Body, offset, max_bytes), push lossy-decoded Str.
+    BodyRead,
+    /// Pop Body, push the complete bounded lossy-decoded Str.
+    BodyReadAll,
+    /// Pop Body, push lowercase hexadecimal SHA-256.
+    BodySha256,
+    /// Pop Str|Body, select a definite JSON path from the constant pool.
+    JsonGet(u16),
+    /// Pop Body, replace it with an empty body, push Nil.
+    BodyClear,
+    /// Pop (Body, Str), append bytes, push Nil.
+    BodyAppend,
+    /// Pop (Body, Str), prepend bytes, push Nil.
+    BodyPrepend,
+    /// Pop (Body, start, end), remove a half-open byte range, push Nil.
+    BodyRemove,
+    /// Pop (Body, from, to), replace literal bytes, push Nil.
+    BodyReplace,
 
     // ===== Control Flow =====
     /// Unconditional jump (relative offset from NEXT instruction)
@@ -166,8 +196,8 @@ pub enum BuiltinId {
     // resp.* set status
     RespSetStatus,
 
-    // req/resp proxy body (buffered) — read the body flowing through the proxy.
-    /// `req.body` → str (lossy UTF-8 of the buffered request body)
+    // req/resp proxy body (buffered) — access the body flowing through the proxy.
+    /// `req.body` → opaque request-scoped Body after the host availability check.
     ReqBody,
     /// `resp.body` → str (lossy UTF-8 of the buffered response body)
     RespBody,
@@ -198,7 +228,6 @@ pub enum BuiltinId {
 
     // Additional utilities
     HmacSha256,
-    JsonGet,
     Uuid,
     HexEncode,
     HexDecode,
@@ -280,6 +309,17 @@ impl BuiltinId {
     }
 }
 
+impl OpCode {
+    /// Whether this opcode can publish a new request-body snapshot.
+    #[inline]
+    pub fn is_request_body_mutation(self) -> bool {
+        matches!(
+            self,
+            OpCode::BodyClear | OpCode::BodyAppend | OpCode::BodyPrepend | OpCode::BodyRemove | OpCode::BodyReplace
+        )
+    }
+}
+
 /// Constant pool entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Constant {
@@ -287,6 +327,10 @@ pub enum Constant {
     Int(i64),
     /// Pre-compiled regex (stored as source pattern, re-compiled on deserialization)
     Regex(String),
+    /// Boolean `.matches()` regex accepted by the incremental DFA engine.
+    StreamingRegex(String),
+    /// Definite JSONPath source, parsed again when untrusted bytecode is validated.
+    JsonPath(String),
 }
 
 /// A compiled DSL script — ready for VM execution or serialization
@@ -308,7 +352,7 @@ pub struct CompiledScript {
 }
 
 fn default_bytecode_version() -> u16 {
-    LEGACY_BYTECODE_VERSION
+    UNVERSIONED_BYTECODE_VERSION
 }
 
 impl CompiledScript {
@@ -344,10 +388,10 @@ impl CompiledScript {
         }
 
         let script: Self = serde_json::from_slice(&bytes).map_err(|e| format!("deserialize error: {}", e))?;
-        if script.version != LEGACY_BYTECODE_VERSION && script.version != BYTECODE_VERSION {
+        if script.version != BYTECODE_VERSION {
             return Err(format!(
-                "unsupported bytecode version: {} (supported: {} and legacy {})",
-                script.version, BYTECODE_VERSION, LEGACY_BYTECODE_VERSION
+                "unsupported bytecode version: {} (supported: {})",
+                script.version, BYTECODE_VERSION
             ));
         }
         Ok(script)
@@ -382,6 +426,20 @@ impl CompiledScript {
         self.code
             .iter()
             .any(|op| matches!(op, OpCode::CallBuiltin(b, _) if *b == id))
+    }
+
+    /// True when the script evaluates the opaque request-body value.
+    pub fn references_request_body(&self) -> bool {
+        self.references_builtin(BuiltinId::ReqBody)
+    }
+
+    /// True when the script contains an opcode that can mutate the request body.
+    ///
+    /// Stage validation uses this separately from [`Self::references_request_body`]:
+    /// response-stage scripts may inspect a body captured earlier, but may not
+    /// publish request-body mutations.
+    pub fn references_request_body_mutation(&self) -> bool {
+        self.code.iter().copied().any(OpCode::is_request_body_mutation)
     }
 }
 
@@ -426,8 +484,8 @@ mod tests {
     }
 
     #[test]
-    fn test_legacy_payload_decodes_without_source_map() {
-        // A v=1 JSON predating source_map must decode to `Some(_)` source_map == None.
+    fn test_current_payload_decodes_without_source_map() {
+        // Source maps are optional within the current bytecode version.
         use base64::Engine;
         let legacy = serde_json::json!({
             "version": BYTECODE_VERSION,
@@ -438,7 +496,7 @@ mod tests {
         });
         let bytes = serde_json::to_vec(&legacy).expect("json encode");
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-        let decoded = CompiledScript::deserialize_base64(&encoded).expect("legacy payload should decode");
+        let decoded = CompiledScript::deserialize_base64(&encoded).expect("current payload should decode");
         assert!(decoded.source_map.is_none());
         assert_eq!(decoded.line_of(0), None);
     }
@@ -487,6 +545,25 @@ mod tests {
     }
 
     #[test]
+    fn test_reject_old_and_unversioned_body_semantics() {
+        use base64::Engine;
+        for old_version in [None, Some(0), Some(1)] {
+            let mut payload = serde_json::json!({
+                "code": ["ReturnNext"],
+                "constants": [],
+                "local_count": 0,
+                "max_loop_depth": 0
+            });
+            if let Some(version) = old_version {
+                payload["version"] = serde_json::json!(version);
+            }
+            let encoded = base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&payload).unwrap());
+            let err = CompiledScript::deserialize_base64(&encoded).expect_err("old body semantics must be rejected");
+            assert!(err.contains("unsupported bytecode version"));
+        }
+    }
+
+    #[test]
     fn is_body_builtin_only_true_for_body_ids() {
         assert!(BuiltinId::ReqBody.is_body_builtin());
         assert!(BuiltinId::RespBody.is_body_builtin());
@@ -509,5 +586,17 @@ mod tests {
         let header_only = crate::resolve_script(Some("let h = req.header(\"X\")"), None, &limits).unwrap();
         assert!(!header_only.references_builtin(BuiltinId::ReqBody));
         assert!(!header_only.references_builtin(BuiltinId::RespBody));
+    }
+
+    #[test]
+    fn request_body_introspection_distinguishes_reads_and_mutations() {
+        let limits = crate::validator::ValidationLimits::default();
+        let read = crate::resolve_script(Some("let b = req.body.contains(\"x\")"), None, &limits).unwrap();
+        assert!(read.references_request_body());
+        assert!(!read.references_request_body_mutation());
+
+        let mutation = crate::resolve_script(Some("req.body.append(\"x\")"), None, &limits).unwrap();
+        assert!(mutation.references_request_body());
+        assert!(mutation.references_request_body_mutation());
     }
 }

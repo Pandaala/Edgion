@@ -72,6 +72,7 @@ impl DslPlugin {
             max_response_body_bytes: config.http_max_response_body_bytes.unwrap_or(1024 * 1024),
             block_private_ips: config.http_block_private_ips.unwrap_or(false),
             redis_links,
+            max_body_scan_passes: config.max_body_scan_passes.unwrap_or(4),
         };
         Ok((script, limits, policy, runtime))
     }
@@ -103,6 +104,13 @@ impl DslPlugin {
                 return None;
             }
         };
+        if script.references_request_body_mutation() {
+            tracing::error!(
+                "DSL plugin '{}' uses request-body mutation outside the request stage",
+                config.name
+            );
+            return None;
+        }
         match DslPlugin::new(config.name.clone(), script, limits, policy, runtime) {
             Ok(p) => Some(Box::new(p)),
             Err(e) => {
@@ -117,6 +125,10 @@ impl DslPlugin {
 impl RequestFilter for DslPlugin {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn requires_materialized_request_body(&self) -> bool {
+        false
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
@@ -160,5 +172,34 @@ impl UpstreamResponseFilter for DslPlugin {
                 &self.runtime,
             ))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(source: &str) -> DslConfig {
+        DslConfig {
+            name: "body-test".to_string(),
+            source: Some(source.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn dsl_request_filter_uses_capture_only_body_gate() {
+        let filter = DslPlugin::from_config(&config("let found = req.body.contains(\"x\")")).unwrap();
+        assert!(!filter.requires_materialized_request_body());
+    }
+
+    #[test]
+    fn response_factory_rejects_request_body_mutation() {
+        assert!(DslPlugin::from_config_response(&config("req.body.clear()")).is_none());
+    }
+
+    #[test]
+    fn response_factory_allows_cached_request_body_reads() {
+        assert!(DslPlugin::from_config_response(&config("let found = req.body.contains(\"x\")")).is_some());
     }
 }

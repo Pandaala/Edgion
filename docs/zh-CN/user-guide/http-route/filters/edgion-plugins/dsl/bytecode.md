@@ -18,7 +18,7 @@ DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "code": [...],
   "constants": [...],
   "local_count": 16,
@@ -31,7 +31,7 @@ DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `version` | 整数 | 字节码格式版本号，当前版本为 `1` |
+| `version` | 整数 | 字节码格式版本号，当前版本为 `2` |
 | `code` | 数组 | 指令序列（`Vec<OpCode>`），VM 逐条执行 |
 | `constants` | 数组 | 常量池（`Vec<Constant>`），指令通过索引引用 |
 | `local_count` | 整数 | 局部变量槽数 |
@@ -44,7 +44,9 @@ DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编
 
 - `Str`：字符串常量
 - `Int`：整数常量
-- `Regex`：预编译的正则表达式（在字节码序列化时已完成编译）
+- `Regex`：供字符串查找/替换操作使用的正则表达式
+- `StreamingRegex`：供增量 `.matches()` 使用的前向 DFA 模式
+- `JsonPath`：供 `.json_get()` 使用的已校验确定性 JSONPath
 
 ## 何时使用字节码
 
@@ -53,7 +55,7 @@ DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编
 | 开发调试 | `source` | 可读性好，修改方便，无需预编译步骤 |
 | 高频路由 | `bytecode` | 跳过编译开销，Gateway 启动或重载更快 |
 | CI/CD 流水线 | `bytecode` | 编译在构建阶段完成，部署时直接使用，确保一致性 |
-| 跨版本分发 | `bytecode` | 字节码带版本号，可安全传输和长期存储 |
+| 跨版本分发 | `source` 或重新构建的 `bytecode` | 字节码版本严格匹配，必须针对目标 Edgion 版本重新构建 |
 
 ## 大小限制
 
@@ -69,7 +71,9 @@ DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编
 - 升级 Edgion 后如果字节码格式版本发生变更，已有字节码需要重新编译
 - 建议在 CI/CD 中将字节码与 Edgion 版本绑定，避免版本漂移
 
-当前版本号：`BYTECODE_VERSION = 1`
+当前版本号：`BYTECODE_VERSION = 2`
+
+版本 2 是破坏性格式变更：`req.body` 现在是 opaque `Body` 值，请求体操作使用专用指令和常量。版本 0、版本 1 和无版本字节码都会被拒绝，必须使用目标 Edgion 版本从源码重新编译。
 
 ## 安全校验
 
@@ -77,8 +81,9 @@ DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编
 
 1. **版本号匹配**：`version` 字段与运行时期望版本一致
 2. **常量索引合法**：所有 `LoadConst` 指令引用的常量索引在常量池范围内
-3. **正则常量类型正确**：所有正则相关指令（`Match`、`NotMatch` 等）引用的常量类型必须为 `Regex`
-4. **正则重新编译验证**：反序列化时对每个 `Regex` 常量重新编译，确保正则表达式在当前运行环境下有效
+3. **指令与常量类型匹配**：值加载仅接受 `Str`/`Int`；`.matches()`、字符串正则操作和 `.json_get()` 分别要求 `StreamingRegex`、`Regex` 和 `JsonPath` 常量
+4. **正则重建校验**：反序列化时在自动机大小受限的条件下重新编译正则，验证当前运行环境中的语法和资源限制
+5. **JSONPath 校验**：重新解析每个 `JsonPath` 常量，并要求其仍为确定性路径
 
 ## 配置示例
 
@@ -113,7 +118,7 @@ spec:
       type: Dsl
       config:
         name: "auth-check"
-        bytecode: "eyJ2ZXJzaW9uIjoxLCJjb2RlIjpbLi4uXSwi..."
+        bytecode: "BASE64_ENCODED_BYTECODE_V2"
 ```
 
 ### 同时提供源码和字节码
@@ -128,7 +133,7 @@ config:
     if token == nil {
       return deny(401, "Unauthorized")
     }
-  bytecode: "eyJ2ZXJzaW9uIjoxLCJjb2RlIjpbLi4uXSwi..."
+  bytecode: "BASE64_ENCODED_BYTECODE_V2"
 ```
 
 ## 相关文档

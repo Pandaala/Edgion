@@ -21,7 +21,7 @@ EdgionDSL is **not** a general-purpose embedded language (it deliberately stops 
 ## 1. Data flow
 
 ```
-                          Controller-side (or first-call on the gateway)
+                          Controller-side compile / admission
        ┌──────────────────────────────────────────────────────────────────────┐
        │                                                                      │
 source │   Parser ──── AST ──── Compiler ──── Bytecode (JSON, base64)         │
@@ -40,6 +40,7 @@ session ─► DslPlugin::run_request / run_upstream_response_filter
                                          calls ≤500     stack ≤128
                                          string ≤8 KB   list ≤1024
                                          map ≤512
+                                         body scan ≤ physical cap × configured passes
                                        wrapped by execute_safe → catch_unwind
 ```
 
@@ -60,7 +61,8 @@ The language core (parser, AST, compiler, bytecode, errors, value, validator) li
 | Config-independent compile/validate entry points | `edgion-dsl/src/script.rs` — `resolve_script()`, `check_redis_link_names()` |
 | VM (`async fn execute`, panic-isolated `execute_safe`, `VmLimits`) | `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` |
 | Builtin implementations (`call_builtin`, `call_builtin_http`, `call_builtin_redis`) | `lang/builtins.rs` |
-| Value enum (`Value::Str(Arc<str>)`, `List`, `Map(Box<IndexMap<String, Value>>)`) | `edgion-dsl/src/value.rs` |
+| Value enum (`Value::Str(Arc<str>)`, opaque `Value::Body`, `List`, `Map(Box<IndexMap<String, Value>>)`) | `edgion-dsl/src/value.rs` |
+| Storage-transparent request-body scanners and mutations | `lang/body_scanners.rs`, `edgion-gateway/src/request_body/operation.rs` |
 | Runtime errors | `edgion-dsl/src/error.rs` |
 | Plugin entry (RequestFilter + UpstreamResponseFilter impls, config-to-plugin factory) | `plugin.rs` |
 | Per-plugin external-call context (limits + redis link table) | `runtime.rs` — `DslRuntime` |
@@ -78,6 +80,19 @@ Both factories call `resolve_parts()`, which:
    - `DslConfig::validate()` for static config sanity (limits, errorPolicy enum, etc.).
    - `edgion_dsl::check_redis_link_names()` — a best-effort bytecode scan that rejects `redis.*` calls whose first-arg link name is not in `linkSysRefs`. False-positive / false-negative limitations are documented inline in `edgion-dsl/src/script.rs`; runtime `ok=false` is the fallback.
 2. Builds `VmLimits` and `DslRuntime` from the config and constructs the `Vm`.
+
+A static request-stage reference to `req.body` registers the fixed fail-close
+body gate so capture is available before VM execution. The VM receives only an
+opaque `Value::Body` handle: byte length is metadata, predicates/hash/JSONPath
+scan the shared `BodyStorage` incrementally, and only `read()` / `read_all()`
+materialize a returned string. Memory-backed, spilled, and mutation-segmented
+storage therefore share one logical API. Response-stage DSL never starts late
+capture and may read only the cache populated in the request stage.
+
+Body mutation opcodes (`clear`, `append`, `prepend`, `remove`, `replace`) are
+accepted only in `requestPlugins`; config validation rejects them in response
+stages. Mutations are transactional, operate on raw byte ranges, and remain
+bounded by the gateway physical body cap and mutation-segment limit.
 
 The same `DslPlugin` instance is shared across requests through `PluginRuntime` — only `&self` accessors run on the hot path. Per-request mutable state lives in `Vm::execute`'s local `VmState`, not in `DslPlugin`.
 
@@ -104,6 +119,13 @@ The same `DslPlugin` instance is shared across requests through `PluginRuntime` 
 
 This pairs with the runtime limits in `VmLimits` (step / loop / call / stack / string / list / map): the limits are the first line of defence — they raise typed `RuntimeError`s through normal control flow — and `catch_unwind` only catches the "this should never happen" tail. Both layers must stay in place; removing the limits would shift defensive load onto `catch_unwind`, which is more expensive and harder to reason about.
 
+`RuntimeError::BodyAccess` is intentionally handled before configurable
+`errorPolicy`: storage, scan-budget, invalid-range, and mutation failures return
+the fixed generic HTTP 500 body `Request body processing failed`. This is an
+internal hard-failure classification, not an additional configurable policy
+shape. Parse/type outcomes remain ordinary DSL semantics—for example,
+`json_get()` returns `nil` for invalid JSON, missing paths, or type mismatch.
+
 ## 6. `DslRuntime` lifecycle
 
 `DslRuntime` is **constructed per-plugin-instance at config-resolve time**, not per-request and not lazily — see `plugin.rs::resolve_parts`. It is `Send + Sync` and stored by value in `DslPlugin` (`self.runtime: DslRuntime`), so the hot path is a simple `&self.runtime` borrow.
@@ -115,6 +137,7 @@ pub struct DslRuntime {
     pub max_response_body_bytes: usize, // http.call body cap
     pub block_private_ips: bool,        // http.call SSRF guard for IP literals
     pub redis_links: HashMap<String, String>, // alias → "namespace/name" for get_redis_client
+    pub max_body_scan_passes: u8,       // cumulative body-scan budget in physical-cap passes
 }
 ```
 

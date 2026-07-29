@@ -23,17 +23,88 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use bytes::Bytes;
+use regex_automata::dfa::dense;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession};
+use crate::request_body::{
+    BodyOperationError, BodyTextOperation, BodyTextResult, LossyTextScanner, RawBodyScanner, TextBodyScanner,
+};
 use edgion_resources::filters::PluginRunningResult;
 
 use super::super::runtime::DslRuntime;
+use super::body_scanners::{JsonPathScanner, JsonScanValue, StreamingRegexScanner};
 use super::bytecode::*;
 use super::error::RuntimeError;
+use super::value::BodyValue;
 use super::value::Value;
+use edgion_dsl::json_path::DefiniteJsonPath;
+
+pub(crate) trait RuntimeString {
+    fn runtime_string(self) -> Result<String, RuntimeError>;
+}
+
+impl RuntimeString for Value {
+    fn runtime_string(self) -> Result<String, RuntimeError> {
+        self.try_into_string().map_err(|error| RuntimeError::TypeError {
+            expected: "a value implicitly convertible to Str",
+            got: error.got(),
+            operation: "implicit string conversion",
+        })
+    }
+}
+
+pub(crate) fn body_access_error(message: impl Into<String>) -> RuntimeError {
+    RuntimeError::BodyAccess {
+        message: message.into(),
+    }
+}
+
+fn map_body_error(error: BodyOperationError) -> RuntimeError {
+    body_access_error(error.to_string())
+}
+
+fn expect_body(value: Value, operation: &'static str) -> Result<(), RuntimeError> {
+    if matches!(value, Value::Body(BodyValue::Request)) {
+        Ok(())
+    } else {
+        Err(RuntimeError::TypeError {
+            expected: "Body",
+            got: value.type_name(),
+            operation,
+        })
+    }
+}
+
+fn expect_string(value: Value, operation: &'static str) -> Result<String, RuntimeError> {
+    match value {
+        Value::Str(value) => Ok(value.to_string()),
+        other => Err(RuntimeError::TypeError {
+            expected: "Str",
+            got: other.type_name(),
+            operation,
+        }),
+    }
+}
+
+fn nonnegative_u64(value: Value, operation: &'static str) -> Result<u64, RuntimeError> {
+    match value {
+        Value::Int(value) if value >= 0 => Ok(value as u64),
+        Value::Int(_) => Err(RuntimeError::TypeError {
+            expected: "non-negative Int",
+            got: "Int",
+            operation,
+        }),
+        other => Err(RuntimeError::TypeError {
+            expected: "non-negative Int",
+            got: other.type_name(),
+            operation,
+        }),
+    }
+}
 
 // ==================== VM Limits ====================
 
@@ -131,6 +202,7 @@ pub(crate) struct VmState {
     // Original limits (for error messages)
     max_steps: u32,
     max_call_count: u32,
+    body_scan_budget: Option<u64>,
 }
 
 impl VmState {
@@ -148,6 +220,7 @@ impl VmState {
             call_budget: limits.max_call_count,
             max_steps: limits.max_steps,
             max_call_count: limits.max_call_count,
+            body_scan_budget: None,
         }
     }
 
@@ -182,6 +255,25 @@ impl VmState {
         self.call_budget -= 1;
         Ok(())
     }
+
+    fn reserve_body_scan(&mut self, physical_cap: u64, passes: u8) -> Result<u64, RuntimeError> {
+        let budget = match self.body_scan_budget {
+            Some(budget) => budget,
+            None => {
+                let budget = physical_cap
+                    .checked_mul(u64::from(passes))
+                    .ok_or_else(|| body_access_error("request body scan budget overflow"))?;
+                self.body_scan_budget = Some(budget);
+                budget
+            }
+        };
+        self.body_scan_budget = Some(0);
+        Ok(budget)
+    }
+
+    fn refund_body_scan(&mut self, reserved: u64, scanned: u64) {
+        self.body_scan_budget = Some(reserved.saturating_sub(scanned));
+    }
 }
 
 // ==================== VM ====================
@@ -191,6 +283,8 @@ pub struct Vm {
     script: CompiledScript,
     // Parallel to script.constants: Some for pre-compiled Regex entries, None for others.
     regex_cache: Vec<Option<regex::Regex>>,
+    streaming_regex_cache: Vec<Option<Arc<dense::DFA<Vec<u32>>>>>,
+    json_path_cache: Vec<Option<DefiniteJsonPath>>,
     // Parallel to script.constants: Some for Str entries, None for Int/Regex.
     const_str_cache: Vec<Option<Arc<str>>>,
     pub(crate) limits: VmLimits,
@@ -200,6 +294,8 @@ impl Vm {
     /// Create a new VM with pre-compiled regex cache
     pub fn new(script: CompiledScript, limits: VmLimits) -> Result<Self, RuntimeError> {
         let mut regex_cache = Vec::with_capacity(script.constants.len());
+        let mut streaming_regex_cache = Vec::with_capacity(script.constants.len());
+        let mut json_path_cache = Vec::with_capacity(script.constants.len());
         let mut const_str_cache = Vec::with_capacity(script.constants.len());
         for constant in &script.constants {
             match constant {
@@ -214,14 +310,40 @@ impl Vm {
                             message: format!("failed to compile regex '{}': {}", pattern, e),
                         })?;
                     regex_cache.push(Some(re));
+                    streaming_regex_cache.push(None);
+                    json_path_cache.push(None);
+                    const_str_cache.push(None);
+                }
+                Constant::StreamingRegex(pattern) => {
+                    let mut builder = dense::Builder::new();
+                    builder.configure(dense::Config::new().dfa_size_limit(Some(1 << 20)));
+                    let dfa = builder.build(pattern).map_err(|error| RuntimeError::RegexError {
+                        message: format!("failed to compile streaming regex '{}': {}", pattern, error),
+                    })?;
+                    regex_cache.push(None);
+                    streaming_regex_cache.push(Some(Arc::new(dfa)));
+                    json_path_cache.push(None);
+                    const_str_cache.push(None);
+                }
+                Constant::JsonPath(path) => {
+                    let path = DefiniteJsonPath::parse(path).map_err(|error| RuntimeError::Internal {
+                        message: format!("invalid validated JSON path: {error}"),
+                    })?;
+                    regex_cache.push(None);
+                    streaming_regex_cache.push(None);
+                    json_path_cache.push(Some(path));
                     const_str_cache.push(None);
                 }
                 Constant::Str(s) => {
                     regex_cache.push(None);
+                    streaming_regex_cache.push(None);
+                    json_path_cache.push(None);
                     const_str_cache.push(Some(Arc::from(s.as_str())));
                 }
                 Constant::Int(_) => {
                     regex_cache.push(None);
+                    streaming_regex_cache.push(None);
+                    json_path_cache.push(None);
                     const_str_cache.push(None);
                 }
             }
@@ -229,6 +351,8 @@ impl Vm {
         Ok(Self {
             script,
             regex_cache,
+            streaming_regex_cache,
+            json_path_cache,
             const_str_cache,
             limits,
         })
@@ -278,6 +402,15 @@ impl Vm {
                             return Err(RuntimeError::Internal {
                                 message: format!(
                                     "LoadConst at pc {} references constant {} (Regex) which cannot be used as a value",
+                                    state.pc - 1,
+                                    idx
+                                ),
+                            });
+                        }
+                        Constant::StreamingRegex(_) | Constant::JsonPath(_) => {
+                            return Err(RuntimeError::Internal {
+                                message: format!(
+                                    "LoadConst at pc {} references non-value constant {}",
                                     state.pc - 1,
                                     idx
                                 ),
@@ -336,7 +469,7 @@ impl Vm {
                             Value::Str(result.into())
                         }
                         (Value::Str(a), _) => {
-                            let b_str = b.into_string();
+                            let b_str = b.runtime_string()?;
                             let new_len = a.len() + b_str.len();
                             if new_len > self.limits.max_string_len {
                                 return Err(RuntimeError::StringTooLong {
@@ -350,7 +483,7 @@ impl Vm {
                             Value::Str(result.into())
                         }
                         (_, Value::Str(b)) => {
-                            let a_str = a.into_string();
+                            let a_str = a.runtime_string()?;
                             let new_len = a_str.len() + b.len();
                             if new_len > self.limits.max_string_len {
                                 return Err(RuntimeError::StringTooLong {
@@ -457,12 +590,42 @@ impl Vm {
                 OpCode::Equal => {
                     let b = state.pop()?;
                     let a = state.pop()?;
-                    state.push(Value::Bool(a == b), self.limits.max_stack_depth)?;
+                    let equal = match (a, b) {
+                        (Value::Body(_), Value::Str(pattern)) | (Value::Str(pattern), Value::Body(_)) => {
+                            let cap = session.ctx().request_body_config.max_body_size_bytes;
+                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
+                            let result = session
+                                .ctx()
+                                .request_body
+                                .text_operation(BodyTextOperation::Equals(pattern.to_string()), reserved)
+                                .await
+                                .map_err(map_body_error)?;
+                            state.refund_body_scan(reserved, result.bytes_scanned);
+                            matches!(result.value, BodyTextResult::Bool(true))
+                        }
+                        (a, b) => a == b,
+                    };
+                    state.push(Value::Bool(equal), self.limits.max_stack_depth)?;
                 }
                 OpCode::NotEqual => {
                     let b = state.pop()?;
                     let a = state.pop()?;
-                    state.push(Value::Bool(a != b), self.limits.max_stack_depth)?;
+                    let equal = match (a, b) {
+                        (Value::Body(_), Value::Str(pattern)) | (Value::Str(pattern), Value::Body(_)) => {
+                            let cap = session.ctx().request_body_config.max_body_size_bytes;
+                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
+                            let result = session
+                                .ctx()
+                                .request_body
+                                .text_operation(BodyTextOperation::Equals(pattern.to_string()), reserved)
+                                .await
+                                .map_err(map_body_error)?;
+                            state.refund_body_scan(reserved, result.bytes_scanned);
+                            matches!(result.value, BodyTextResult::Bool(true))
+                        }
+                        (a, b) => a == b,
+                    };
+                    state.push(Value::Bool(!equal), self.limits.max_stack_depth)?;
                 }
                 OpCode::Less => {
                     let b = state.pop()?;
@@ -539,8 +702,20 @@ impl Vm {
                 OpCode::StartsWith => {
                     let prefix = state.pop()?;
                     let s = state.pop()?;
-                    let result = match (&s, &prefix) {
+                    let result = match (s, prefix) {
                         (Value::Str(s), Value::Str(p)) => s.starts_with(p.as_ref()),
+                        (Value::Body(_), Value::Str(p)) => {
+                            let cap = session.ctx().request_body_config.max_body_size_bytes;
+                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
+                            let scan = session
+                                .ctx()
+                                .request_body
+                                .text_operation(BodyTextOperation::StartsWith(p.to_string()), reserved)
+                                .await
+                                .map_err(map_body_error)?;
+                            state.refund_body_scan(reserved, scan.bytes_scanned);
+                            matches!(scan.value, BodyTextResult::Bool(true))
+                        }
                         _ => false, // Nil-friendly: returns false
                     };
                     state.push(Value::Bool(result), self.limits.max_stack_depth)?;
@@ -548,8 +723,20 @@ impl Vm {
                 OpCode::EndsWith => {
                     let suffix = state.pop()?;
                     let s = state.pop()?;
-                    let result = match (&s, &suffix) {
+                    let result = match (s, suffix) {
                         (Value::Str(s), Value::Str(p)) => s.ends_with(p.as_ref()),
+                        (Value::Body(_), Value::Str(p)) => {
+                            let cap = session.ctx().request_body_config.max_body_size_bytes;
+                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
+                            let scan = session
+                                .ctx()
+                                .request_body
+                                .text_operation(BodyTextOperation::EndsWith(p.to_string()), reserved)
+                                .await
+                                .map_err(map_body_error)?;
+                            state.refund_body_scan(reserved, scan.bytes_scanned);
+                            matches!(scan.value, BodyTextResult::Bool(true))
+                        }
                         _ => false,
                     };
                     state.push(Value::Bool(result), self.limits.max_stack_depth)?;
@@ -557,26 +744,277 @@ impl Vm {
                 OpCode::Contains => {
                     let substr = state.pop()?;
                     let s = state.pop()?;
-                    let result = match (&s, &substr) {
+                    let result = match (s, substr) {
                         (Value::Str(s), Value::Str(p)) => s.contains(p.as_ref()),
+                        (Value::Body(_), Value::Str(p)) => {
+                            let cap = session.ctx().request_body_config.max_body_size_bytes;
+                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
+                            let scan = session
+                                .ctx()
+                                .request_body
+                                .text_operation(BodyTextOperation::Contains(p.to_string()), reserved)
+                                .await
+                                .map_err(map_body_error)?;
+                            state.refund_body_scan(reserved, scan.bytes_scanned);
+                            matches!(scan.value, BodyTextResult::Bool(true))
+                        }
                         _ => false,
                     };
                     state.push(Value::Bool(result), self.limits.max_stack_depth)?;
                 }
                 OpCode::Matches(regex_idx) => {
                     let s = state.pop()?;
-                    let result = match &s {
+                    let Some(Some(dfa)) = self.streaming_regex_cache.get(regex_idx as usize) else {
+                        return Err(RuntimeError::Internal {
+                            message: format!("streaming_regex_cache[{}] missing or invalid", regex_idx),
+                        });
+                    };
+                    let result = match s {
                         Value::Str(s) => {
-                            let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) else {
-                                return Err(RuntimeError::Internal {
-                                    message: format!("regex_cache[{}] missing or invalid", regex_idx),
-                                });
-                            };
-                            re.is_match(s)
+                            let mut scanner = StreamingRegexScanner::new(Arc::clone(dfa)).map_err(map_body_error)?;
+                            scanner.push(&s).map_err(map_body_error)?;
+                            scanner.finish().map_err(map_body_error)?
+                        }
+                        Value::Body(_) => {
+                            let cap = session.ctx().request_body_config.max_body_size_bytes;
+                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
+                            let scanner = StreamingRegexScanner::new(Arc::clone(dfa)).map_err(map_body_error)?;
+                            let scan = session
+                                .ctx()
+                                .request_body
+                                .scan_raw(LossyTextScanner::new(scanner), reserved)
+                                .await
+                                .map_err(map_body_error)?;
+                            state.refund_body_scan(reserved, scan.bytes_scanned);
+                            scan.value
                         }
                         _ => false,
                     };
                     state.push(Value::Bool(result), self.limits.max_stack_depth)?;
+                }
+                OpCode::TextLen => {
+                    let value = state.pop()?;
+                    let len = match value {
+                        Value::Str(value) => value.chars().count() as u64,
+                        Value::Body(_) => {
+                            let cap = session.ctx().request_body_config.max_body_size_bytes;
+                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
+                            let scan = session
+                                .ctx()
+                                .request_body
+                                .text_operation(BodyTextOperation::CharLen, reserved)
+                                .await
+                                .map_err(map_body_error)?;
+                            state.refund_body_scan(reserved, scan.bytes_scanned);
+                            match scan.value {
+                                BodyTextResult::CharLen(len) => len,
+                                BodyTextResult::Bool(_) => {
+                                    return Err(RuntimeError::Internal {
+                                        message: "body CharLen returned Bool".to_string(),
+                                    })
+                                }
+                            }
+                        }
+                        other => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "Str or Body",
+                                got: other.type_name(),
+                                operation: "len",
+                            })
+                        }
+                    };
+                    let len = i64::try_from(len).map_err(|_| body_access_error("request body length exceeds Int"))?;
+                    state.push(Value::Int(len), self.limits.max_stack_depth)?;
+                }
+                OpCode::TextIsEmpty => {
+                    let value = state.pop()?;
+                    let empty = match value {
+                        Value::Str(value) => value.is_empty(),
+                        Value::Body(_) => {
+                            let cap = session.ctx().request_body_config.max_body_size_bytes;
+                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
+                            let scan = session
+                                .ctx()
+                                .request_body
+                                .text_operation(BodyTextOperation::IsEmpty, reserved)
+                                .await
+                                .map_err(map_body_error)?;
+                            state.refund_body_scan(reserved, scan.bytes_scanned);
+                            matches!(scan.value, BodyTextResult::Bool(true))
+                        }
+                        _ => false,
+                    };
+                    state.push(Value::Bool(empty), self.limits.max_stack_depth)?;
+                }
+                OpCode::BodyByteLen => {
+                    expect_body(state.pop()?, "body.byte_len")?;
+                    let known_bodyless = session.declares_body() == Some(false);
+                    let len = session
+                        .request_body_available_len(known_bodyless)
+                        .map_err(|error| body_access_error(error.to_string()))?;
+                    let len = i64::try_from(len).map_err(|_| body_access_error("request body length exceeds Int"))?;
+                    state.push(Value::Int(len), self.limits.max_stack_depth)?;
+                }
+                OpCode::BodyRead => {
+                    let max_bytes = nonnegative_u64(state.pop()?, "body.read")?;
+                    let offset = nonnegative_u64(state.pop()?, "body.read")?;
+                    expect_body(state.pop()?, "body.read")?;
+                    let cap = session.ctx().request_body_config.max_body_size_bytes;
+                    let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
+                    let scan = session
+                        .ctx()
+                        .request_body
+                        .read_range(offset, max_bytes, reserved)
+                        .await
+                        .map_err(map_body_error)?;
+                    state.refund_body_scan(reserved, scan.bytes_scanned);
+                    let text = String::from_utf8_lossy(&scan.value).into_owned();
+                    if text.len() > self.limits.max_string_len {
+                        return Err(RuntimeError::StringTooLong {
+                            len: text.len(),
+                            limit: self.limits.max_string_len,
+                        });
+                    }
+                    state.push(Value::Str(text.into()), self.limits.max_stack_depth)?;
+                }
+                OpCode::BodyReadAll => {
+                    expect_body(state.pop()?, "body.read_all")?;
+                    let known_bodyless = session.declares_body() == Some(false);
+                    let len = session
+                        .request_body_available_len(known_bodyless)
+                        .map_err(|error| body_access_error(error.to_string()))?;
+                    if len > self.limits.max_string_len as u64 {
+                        return Err(RuntimeError::StringTooLong {
+                            len: usize::try_from(len).unwrap_or(usize::MAX),
+                            limit: self.limits.max_string_len,
+                        });
+                    }
+                    let cap = session.ctx().request_body_config.max_body_size_bytes;
+                    let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
+                    let scan = session
+                        .ctx()
+                        .request_body
+                        .read_range(0, len, reserved)
+                        .await
+                        .map_err(map_body_error)?;
+                    state.refund_body_scan(reserved, scan.bytes_scanned);
+                    let text = String::from_utf8_lossy(&scan.value).into_owned();
+                    if text.len() > self.limits.max_string_len {
+                        return Err(RuntimeError::StringTooLong {
+                            len: text.len(),
+                            limit: self.limits.max_string_len,
+                        });
+                    }
+                    state.push(Value::Str(text.into()), self.limits.max_stack_depth)?;
+                }
+                OpCode::BodySha256 => {
+                    expect_body(state.pop()?, "body.sha256")?;
+                    let cap = session.ctx().request_body_config.max_body_size_bytes;
+                    let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
+                    let scan = session
+                        .ctx()
+                        .request_body
+                        .sha256_scan(reserved)
+                        .await
+                        .map_err(map_body_error)?;
+                    state.refund_body_scan(reserved, scan.bytes_scanned);
+                    state.push(Value::Str(hex::encode(scan.value).into()), self.limits.max_stack_depth)?;
+                }
+                OpCode::JsonGet(path_idx) => {
+                    let input = state.pop()?;
+                    let Some(Some(path)) = self.json_path_cache.get(path_idx as usize) else {
+                        return Err(RuntimeError::Internal {
+                            message: format!("json_path_cache[{}] missing or invalid", path_idx),
+                        });
+                    };
+                    let result = match input {
+                        Value::Str(text) => {
+                            let mut scanner = JsonPathScanner::new(path.clone(), self.limits.max_string_len)
+                                .await
+                                .map_err(map_body_error)?;
+                            let _ = scanner.push(text.as_bytes()).map_err(map_body_error)?;
+                            scanner.finish().map_err(map_body_error)?
+                        }
+                        Value::Body(_) => {
+                            let cap = session.ctx().request_body_config.max_body_size_bytes;
+                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
+                            let scan = session
+                                .ctx()
+                                .request_body
+                                .scan_raw(
+                                    JsonPathScanner::new(path.clone(), self.limits.max_string_len)
+                                        .await
+                                        .map_err(map_body_error)?,
+                                    reserved,
+                                )
+                                .await
+                                .map_err(map_body_error)?;
+                            state.refund_body_scan(reserved, scan.bytes_scanned);
+                            scan.value
+                        }
+                        _ => JsonScanValue::Missing,
+                    };
+                    let value = match result {
+                        JsonScanValue::Value(value) => value,
+                        JsonScanValue::Missing => Value::Nil,
+                        JsonScanValue::TooLong => {
+                            return Err(RuntimeError::StringTooLong {
+                                len: self.limits.max_string_len.saturating_add(1),
+                                limit: self.limits.max_string_len,
+                            })
+                        }
+                    };
+                    state.push(value, self.limits.max_stack_depth)?;
+                }
+                OpCode::BodyClear => {
+                    expect_body(state.pop()?, "body.clear")?;
+                    session.request_body_clear().await.map_err(map_body_error)?;
+                    state.push(Value::Nil, self.limits.max_stack_depth)?;
+                }
+                OpCode::BodyAppend => {
+                    let bytes = expect_string(state.pop()?, "body.append")?;
+                    expect_body(state.pop()?, "body.append")?;
+                    session
+                        .request_body_append(Bytes::from(bytes))
+                        .await
+                        .map_err(map_body_error)?;
+                    state.push(Value::Nil, self.limits.max_stack_depth)?;
+                }
+                OpCode::BodyPrepend => {
+                    let bytes = expect_string(state.pop()?, "body.prepend")?;
+                    expect_body(state.pop()?, "body.prepend")?;
+                    session
+                        .request_body_prepend(Bytes::from(bytes))
+                        .await
+                        .map_err(map_body_error)?;
+                    state.push(Value::Nil, self.limits.max_stack_depth)?;
+                }
+                OpCode::BodyRemove => {
+                    let end = nonnegative_u64(state.pop()?, "body.remove")?;
+                    let start = nonnegative_u64(state.pop()?, "body.remove")?;
+                    expect_body(state.pop()?, "body.remove")?;
+                    session.request_body_remove(start..end).await.map_err(map_body_error)?;
+                    state.push(Value::Nil, self.limits.max_stack_depth)?;
+                }
+                OpCode::BodyReplace => {
+                    let to = expect_string(state.pop()?, "body.replace")?;
+                    let from = expect_string(state.pop()?, "body.replace")?;
+                    expect_body(state.pop()?, "body.replace")?;
+                    if from.is_empty() {
+                        return Err(RuntimeError::TypeError {
+                            expected: "non-empty Str",
+                            got: "Str",
+                            operation: "body.replace",
+                        });
+                    }
+                    let cap = session.ctx().request_body_config.max_body_size_bytes;
+                    let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
+                    let scan = session
+                        .request_body_replace_literal(Bytes::from(from), Bytes::from(to), reserved)
+                        .await
+                        .map_err(map_body_error)?;
+                    state.refund_body_scan(reserved, scan.bytes_scanned);
+                    state.push(Value::Nil, self.limits.max_stack_depth)?;
                 }
                 OpCode::RegexFind(regex_idx) => {
                     let s = state.pop()?;
@@ -606,7 +1044,7 @@ impl Vm {
                     state.push(result, self.limits.max_stack_depth)?;
                 }
                 OpCode::RegexReplace(regex_idx) => {
-                    let replacement = state.pop()?.into_string();
+                    let replacement = state.pop()?.runtime_string()?;
                     let s = state.pop()?;
                     // Nil-friendly: non-Str input returns Nil, consistent with RegexFind.
                     let Value::Str(s) = s else {
@@ -743,7 +1181,7 @@ impl Vm {
                         pairs.push((key, val));
                     }
                     for (k, v) in pairs.into_iter().rev() {
-                        let key_str = k.into_string();
+                        let key_str = k.runtime_string()?;
                         map.insert(key_str, v);
                     }
                     state.push(Value::Map(Box::new(map)), self.limits.max_stack_depth)?;
@@ -784,7 +1222,7 @@ impl Vm {
                     };
                     let body_str = match body {
                         Value::Nil => None,
-                        other => Some(other.into_string()),
+                        other => Some(other.runtime_string()?),
                     };
                     return Ok(PluginRunningResult::ErrResponse {
                         status: status_code,
@@ -810,7 +1248,7 @@ impl Vm {
                     };
                     let message_str = match message {
                         Value::Nil => None,
-                        other => Some(other.into_string()),
+                        other => Some(other.runtime_string()?),
                     };
                     return Ok(PluginRunningResult::ErrGrpcError {
                         grpc_status: grpc_code,
@@ -856,6 +1294,14 @@ pub async fn execute_safe(
             running_result
         }
         Ok(Err(runtime_err)) => {
+            if matches!(&runtime_err, RuntimeError::BodyAccess { .. }) {
+                log.push_err("request body access error");
+                session.record_outcome(DyeOutcome::FailClose, "request-body-access-error");
+                return PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: Some("Request body processing failed".to_string()),
+                };
+            }
             let kind: &'static str = match &runtime_err {
                 RuntimeError::TypeError { .. } => "type error",
                 RuntimeError::DivisionByZero => "division by zero",
@@ -868,6 +1314,7 @@ pub async fn execute_safe(
                 RuntimeError::ListTooLong { .. } => "list too long",
                 RuntimeError::MapTooLarge { .. } => "map too large",
                 RuntimeError::ApiError { .. } => "api error",
+                RuntimeError::BodyAccess { .. } => unreachable!("handled above"),
                 RuntimeError::RegexError { .. } => "regex error",
                 RuntimeError::Internal { .. } => "internal error",
             };

@@ -4,8 +4,9 @@
 //! Rejects scripts that exceed any limit before they reach the Gateway.
 
 use super::bytecode::*;
-use super::compiler::Compiler;
+use super::compiler::{validate_streaming_regex, Compiler};
 use super::error::ValidationError;
+use super::json_path::DefiniteJsonPath;
 use super::parser::parse_program;
 
 const MAX_REGEX_PATTERN_LEN: usize = 1024;
@@ -56,6 +57,15 @@ impl Validator {
     /// Validate a compiled script. Returns a list of errors (empty = valid).
     pub fn validate(&self, script: &CompiledScript) -> Vec<ValidationError> {
         let mut errors = Vec::new();
+
+        // 0. Bytecode schema version. Direct callers can construct a script
+        // without passing through `deserialize_base64`, so repeat the check.
+        if script.version != BYTECODE_VERSION {
+            errors.push(ValidationError::new(format!(
+                "unsupported bytecode version: {} (supported: {})",
+                script.version, BYTECODE_VERSION
+            )));
+        }
 
         // 1. Instruction count
         if script.code.len() > self.limits.max_instructions {
@@ -124,6 +134,31 @@ impl Validator {
                         )));
                     }
                 }
+                Constant::StreamingRegex(pattern) => {
+                    total_pool_bytes += pattern.len();
+                    if pattern.len() > MAX_REGEX_PATTERN_LEN {
+                        errors.push(ValidationError::new(format!(
+                            "streaming regex constant[{}] too long: {} bytes (max {})",
+                            i,
+                            pattern.len(),
+                            MAX_REGEX_PATTERN_LEN
+                        )));
+                    } else if let Err(error) = validate_streaming_regex(pattern) {
+                        errors.push(ValidationError::new(format!(
+                            "invalid streaming regex constant[{}]: {}",
+                            i, error
+                        )));
+                    }
+                }
+                Constant::JsonPath(path) => {
+                    total_pool_bytes += path.len();
+                    if let Err(error) = DefiniteJsonPath::parse(path) {
+                        errors.push(ValidationError::new(format!(
+                            "invalid JSON path constant[{}]: {}",
+                            i, error
+                        )));
+                    }
+                }
             }
         }
 
@@ -145,22 +180,50 @@ impl Validator {
                             "LoadConst at instruction {} references constant {} but pool size is {}",
                             i, idx, const_count
                         )));
-                    } else if matches!(script.constants[*idx as usize], Constant::Regex(_)) {
+                    } else if !matches!(script.constants[*idx as usize], Constant::Str(_) | Constant::Int(_)) {
+                        let kind = constant_kind(&script.constants[*idx as usize]);
                         errors.push(ValidationError::new(format!(
-                            "LoadConst at instruction {} references constant {} (Regex) which cannot be used as a value",
-                            i, idx
+                            "LoadConst at instruction {} references constant {} ({}) which cannot be used as a value",
+                            i, idx, kind
                         )));
                     }
                 }
-                OpCode::Matches(idx) => {
-                    check_regex_ref(&mut errors, "Matches", i, *idx, &script.constants, const_count)
-                }
-                OpCode::RegexFind(idx) => {
-                    check_regex_ref(&mut errors, "RegexFind", i, *idx, &script.constants, const_count)
-                }
-                OpCode::RegexReplace(idx) => {
-                    check_regex_ref(&mut errors, "RegexReplace", i, *idx, &script.constants, const_count)
-                }
+                OpCode::Matches(idx) => check_constant_ref(
+                    &mut errors,
+                    "Matches",
+                    i,
+                    *idx,
+                    &script.constants,
+                    const_count,
+                    ConstantRefKind::StreamingRegex,
+                ),
+                OpCode::RegexFind(idx) => check_constant_ref(
+                    &mut errors,
+                    "RegexFind",
+                    i,
+                    *idx,
+                    &script.constants,
+                    const_count,
+                    ConstantRefKind::Regex,
+                ),
+                OpCode::RegexReplace(idx) => check_constant_ref(
+                    &mut errors,
+                    "RegexReplace",
+                    i,
+                    *idx,
+                    &script.constants,
+                    const_count,
+                    ConstantRefKind::Regex,
+                ),
+                OpCode::JsonGet(idx) => check_constant_ref(
+                    &mut errors,
+                    "JsonGet",
+                    i,
+                    *idx,
+                    &script.constants,
+                    const_count,
+                    ConstantRefKind::JsonPath,
+                ),
                 _ => {}
             }
         }
@@ -294,25 +357,65 @@ impl Validator {
     }
 }
 
-/// Validate that an opcode's regex constant index is in-bounds and points to a `Constant::Regex`.
-/// Used for `Matches`, `RegexFind`, and `RegexReplace` arms.
-fn check_regex_ref(
+#[derive(Clone, Copy)]
+enum ConstantRefKind {
+    Regex,
+    StreamingRegex,
+    JsonPath,
+}
+
+impl ConstantRefKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Regex => "Regex",
+            Self::StreamingRegex => "StreamingRegex",
+            Self::JsonPath => "JsonPath",
+        }
+    }
+
+    fn accepts(self, constant: &Constant) -> bool {
+        matches!(
+            (self, constant),
+            (Self::Regex, Constant::Regex(_))
+                | (Self::StreamingRegex, Constant::StreamingRegex(_))
+                | (Self::JsonPath, Constant::JsonPath(_))
+        )
+    }
+}
+
+fn constant_kind(constant: &Constant) -> &'static str {
+    match constant {
+        Constant::Str(_) => "Str",
+        Constant::Int(_) => "Int",
+        Constant::Regex(_) => "Regex",
+        Constant::StreamingRegex(_) => "StreamingRegex",
+        Constant::JsonPath(_) => "JsonPath",
+    }
+}
+
+/// Validate that an opcode constant index is in bounds and has the required
+/// non-value constant kind.
+fn check_constant_ref(
     errors: &mut Vec<ValidationError>,
     op_name: &str,
     instruction: usize,
     idx: u16,
     constants: &[Constant],
     const_count: usize,
+    expected: ConstantRefKind,
 ) {
     if idx as usize >= const_count {
         errors.push(ValidationError::new(format!(
             "{} at instruction {} references constant {} but pool size is {}",
             op_name, instruction, idx, const_count
         )));
-    } else if !matches!(constants[idx as usize], Constant::Regex(_)) {
+    } else if !expected.accepts(&constants[idx as usize]) {
         errors.push(ValidationError::new(format!(
-            "{} at instruction {} references constant {} which is not a Regex",
-            op_name, instruction, idx
+            "{} at instruction {} references constant {} which is not a {}",
+            op_name,
+            instruction,
+            idx,
+            expected.name()
         )));
     }
 }
@@ -535,11 +638,91 @@ mod tests {
             let errors = Validator::new(ValidationLimits::default()).validate(&script);
             let joined = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("|");
             assert!(
-                joined.contains("which is not a Regex"),
-                "expected non-Regex error, got: {}",
+                joined.contains("which is not a"),
+                "expected wrong constant-kind error, got: {}",
                 joined
             );
         }
+    }
+
+    #[test]
+    fn test_validate_requires_streaming_regex_for_matches() {
+        let script = CompiledScript {
+            version: BYTECODE_VERSION,
+            code: vec![OpCode::Matches(0), OpCode::ReturnNext],
+            constants: vec![Constant::Regex("word".to_string())],
+            local_count: 0,
+            max_loop_depth: 0,
+            source: None,
+            source_map: None,
+        };
+        let joined = Validator::new(ValidationLimits::default())
+            .validate(&script)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(joined.contains("which is not a StreamingRegex"));
+    }
+
+    #[test]
+    fn test_validate_rejects_unicode_word_boundary_in_injected_streaming_regex() {
+        let script = CompiledScript {
+            version: BYTECODE_VERSION,
+            code: vec![OpCode::Matches(0), OpCode::ReturnNext],
+            constants: vec![Constant::StreamingRegex(r"\bword\b".to_string())],
+            local_count: 0,
+            max_loop_depth: 0,
+            source: None,
+            source_map: None,
+        };
+        let joined = Validator::new(ValidationLimits::default())
+            .validate(&script)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(joined.contains("invalid streaming regex constant"));
+    }
+
+    #[test]
+    fn test_validate_rejects_invalid_or_mistyped_json_path_constant() {
+        for constants in [
+            vec![Constant::JsonPath("$.*".to_string())],
+            vec![Constant::Str("$.ok".to_string())],
+        ] {
+            let script = CompiledScript {
+                version: BYTECODE_VERSION,
+                code: vec![OpCode::JsonGet(0), OpCode::ReturnNext],
+                constants,
+                local_count: 0,
+                max_loop_depth: 0,
+                source: None,
+                source_map: None,
+            };
+            let errors = Validator::new(ValidationLimits::default()).validate(&script);
+            assert!(!errors.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_validate_rejects_old_bytecode_version_for_direct_callers() {
+        let script = CompiledScript {
+            version: 1,
+            code: vec![OpCode::ReturnNext],
+            constants: vec![],
+            local_count: 0,
+            max_loop_depth: 0,
+            source: None,
+            source_map: None,
+        };
+        let joined = Validator::new(ValidationLimits::default())
+            .validate(&script)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(joined.contains("unsupported bytecode version"));
     }
 
     #[test]

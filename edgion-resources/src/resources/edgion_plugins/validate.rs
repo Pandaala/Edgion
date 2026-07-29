@@ -223,6 +223,20 @@ impl EdgionPlugins {
                             errors.push(format!("{}[{}] ({}): {}", $label, i, name, err));
                             continue;
                         }
+                        if !matches!($stage_word, "request") {
+                            if let EdgionPlugin::Dsl(config) = &entry.plugin {
+                                if config
+                                    .compile_and_validate()
+                                    .is_ok_and(|script| script.references_request_body_mutation())
+                                {
+                                    errors.push(format!(
+                                        "{}[{}] ({}): request-body mutation is only valid in request stage",
+                                        $label, i, name
+                                    ));
+                                    continue;
+                                }
+                            }
+                        }
                         // 2. Optional alias. Recorded but does NOT skip the stage
                         //    check — the gateway only drops the invalid alias.
                         if let Some(err) = entry.validate_alias() {
@@ -389,7 +403,7 @@ impl EdgionPlugins {
 mod tests {
     use super::*;
     use crate::resources::edgion_plugins::plugin_configs::DslConfig;
-    use crate::resources::edgion_plugins::{EdgionPluginsSpec, RequestFilterEntry};
+    use crate::resources::edgion_plugins::{EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseFilterEntry};
     use crate::resources::http_route::HTTPHeaderFilter;
 
     fn header_filter() -> HTTPHeaderFilter {
@@ -497,6 +511,48 @@ mod tests {
             errs.iter().any(|e| e.contains("linkSysRefs")),
             "expected a redis link-name error, got: {errs:?}"
         );
+    }
+
+    #[test]
+    fn dsl_request_body_mutation_is_rejected_in_response_stage() {
+        let entry = UpstreamResponseFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+            name: "late-mutation".to_string(),
+            source: Some("req.body.clear()".to_string()),
+            ..Default::default()
+        }));
+        let plugins = EdgionPlugins {
+            metadata: Default::default(),
+            spec: EdgionPluginsSpec {
+                upstream_response_filter_plugins: Some(vec![entry]),
+                ..Default::default()
+            },
+            status: None,
+        };
+        let errors = plugins.validate_plugins();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("request-body mutation is only valid in request stage")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn dsl_request_body_read_is_allowed_in_response_stage() {
+        let entry = UpstreamResponseFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+            name: "late-read".to_string(),
+            source: Some("let found = req.body.contains(\"needle\")".to_string()),
+            ..Default::default()
+        }));
+        let plugins = EdgionPlugins {
+            metadata: Default::default(),
+            spec: EdgionPluginsSpec {
+                upstream_response_filter_plugins: Some(vec![entry]),
+                ..Default::default()
+            },
+            status: None,
+        };
+        assert!(plugins.validate_plugins().is_empty());
     }
 
     #[test]

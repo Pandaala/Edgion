@@ -5,11 +5,16 @@
 //! only; proxied upstream responses remain streaming-only.
 
 pub mod config;
+mod operation;
 mod state;
 #[cfg(feature = "body-buffering")]
 mod storage;
 
 pub use config::{ResolvedRequestBodyConfig, DEFAULT_MEMORY_BUFFER_BYTES};
+pub use operation::{
+    BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, LossyTextScanner, RawBodyScanner,
+    ScanControl, TextBodyScanner, MAX_BODY_SEGMENTS,
+};
 pub use state::RequestBodyState;
 #[cfg(feature = "body-buffering")]
 pub use storage::{BodyStorage, BodyStorageView};

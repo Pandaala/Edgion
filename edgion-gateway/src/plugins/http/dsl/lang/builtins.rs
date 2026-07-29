@@ -14,8 +14,8 @@ use crate::plugins::runtime::{PluginLog, PluginSession};
 use super::super::runtime::{dsl_http_client, DslRuntime};
 use super::bytecode::BuiltinId;
 use super::error::RuntimeError;
-use super::value::Value;
-use super::vm::{Vm, VmState};
+use super::value::{BodyValue, Value};
+use super::vm::{body_access_error, RuntimeString, Vm, VmState};
 
 /// Build a `Map { ok: true, value: <val>, error: nil }` success response for redis.* builtins.
 fn redis_ok(value: Value) -> Value {
@@ -56,15 +56,9 @@ fn checked_value_str(s: String, limit: usize) -> Result<Value, RuntimeError> {
     Ok(Value::Str(s.into()))
 }
 
-/// Decode a buffered proxy body into a DSL string value.
-///
-/// DSL has no byte type, so the body is decoded with `from_utf8_lossy` (invalid
-/// bytes become U+FFFD — never silently truncated). The decoded string obeys the
-/// VM `max_string_len` budget like every other string value; an oversized decoded
-/// body raises `StringTooLong` (handled by the script's `errorPolicy`).
+#[cfg(test)]
 fn body_bytes_to_value(bytes: &[u8], limit: usize) -> Result<Value, RuntimeError> {
-    let s = String::from_utf8_lossy(bytes).into_owned();
-    checked_value_str(s, limit)
+    checked_value_str(String::from_utf8_lossy(bytes).into_owned(), limit)
 }
 
 /// Silently truncate `s` to at most `limit` UTF-8 bytes, walking back to the
@@ -116,24 +110,24 @@ impl Vm {
         match id {
             // ===== req.* read =====
             BuiltinId::ReqHeader => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.header_value(&name), self.limits.max_string_len)
             }
             BuiltinId::ReqMethod => checked_value_str(session.get_method().to_string(), self.limits.max_string_len),
             BuiltinId::ReqPath => checked_value_str(session.get_path().to_string(), self.limits.max_string_len),
             BuiltinId::ReqQuery => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.get_query_param(&name), self.limits.max_string_len)
             }
             BuiltinId::ReqQueryString => checked_value_opt_str(session.get_query(), self.limits.max_string_len),
             BuiltinId::ReqCookie => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.get_cookie(&name), self.limits.max_string_len)
             }
             BuiltinId::ReqClientIp => checked_value_str(session.client_addr().to_string(), self.limits.max_string_len),
             BuiltinId::ReqRemoteIp => checked_value_str(session.remote_addr().to_string(), self.limits.max_string_len),
             BuiltinId::ReqPathParam => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.get_path_param(&name), self.limits.max_string_len)
             }
             BuiltinId::ReqHeaderNames => {
@@ -164,50 +158,50 @@ impl Vm {
                 checked_value_opt_str(session.header_value("Content-Type"), self.limits.max_string_len)
             }
             BuiltinId::ReqHasHeader => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 Ok(Value::Bool(session.header_value(&name).is_some()))
             }
 
             // ===== req.* mutation =====
             BuiltinId::ReqSetHeader => {
-                let value = state.pop()?.into_string();
-                let name = state.pop()?.into_string();
+                let value = state.pop()?.runtime_string()?;
+                let name = state.pop()?.runtime_string()?;
                 session
                     .set_request_header(&name, &value)
                     .map_err(|e| api_error("req.set_header", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::ReqAppendHeader => {
-                let value = state.pop()?.into_string();
-                let name = state.pop()?.into_string();
+                let value = state.pop()?.runtime_string()?;
+                let name = state.pop()?.runtime_string()?;
                 session
                     .append_request_header(&name, &value)
                     .map_err(|e| api_error("req.append_header", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::ReqRemoveHeader => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 session
                     .remove_request_header(&name)
                     .map_err(|e| api_error("req.remove_header", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::ReqSetUri => {
-                let uri = state.pop()?.into_string();
+                let uri = state.pop()?.runtime_string()?;
                 session
                     .set_upstream_uri(&uri)
                     .map_err(|e| api_error("req.set_uri", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::ReqSetHost => {
-                let host = state.pop()?.into_string();
+                let host = state.pop()?.runtime_string()?;
                 session
                     .set_upstream_host(&host)
                     .map_err(|e| api_error("req.set_host", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::ReqSetMethod => {
-                let method = state.pop()?.into_string();
+                let method = state.pop()?.runtime_string()?;
                 session
                     .set_upstream_method(&method)
                     .map_err(|e| api_error("req.set_method", e))?;
@@ -220,11 +214,11 @@ impl Vm {
                 None => Ok(Value::Nil),
             },
             BuiltinId::RespHeader => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.get_response_header(&name), self.limits.max_string_len)
             }
             BuiltinId::RespHasHeader => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 Ok(Value::Bool(session.get_response_header(&name).is_some()))
             }
 
@@ -293,23 +287,23 @@ impl Vm {
 
             // ===== resp.* mutation =====
             BuiltinId::RespSetHeader => {
-                let value = state.pop()?.into_string();
-                let name = state.pop()?.into_string();
+                let value = state.pop()?.runtime_string()?;
+                let name = state.pop()?.runtime_string()?;
                 session
                     .set_response_header(&name, &value)
                     .map_err(|e| api_error("resp.set_header", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::RespAppendHeader => {
-                let value = state.pop()?.into_string();
-                let name = state.pop()?.into_string();
+                let value = state.pop()?.runtime_string()?;
+                let name = state.pop()?.runtime_string()?;
                 session
                     .append_response_header(&name, &value)
                     .map_err(|e| api_error("resp.append_header", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::RespRemoveHeader => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 session
                     .remove_response_header(&name)
                     .map_err(|e| api_error("resp.remove_header", e))?;
@@ -318,24 +312,24 @@ impl Vm {
 
             // ===== ctx.* =====
             BuiltinId::CtxGet => {
-                let key = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.get_ctx_var(&key), self.limits.max_string_len)
             }
             BuiltinId::CtxSet => {
-                let value = state.pop()?.into_string();
-                let key = state.pop()?.into_string();
+                let value = state.pop()?.runtime_string()?;
+                let key = state.pop()?.runtime_string()?;
                 session.set_ctx_var(&key, &value).map_err(|e| api_error("ctx.set", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::CtxRemove => {
-                let key = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
                 session.remove_ctx_var(&key).map_err(|e| api_error("ctx.remove", e))?;
                 Ok(Value::Nil)
             }
 
             // ===== Utilities =====
             BuiltinId::Log => {
-                let msg = state.pop()?.into_string();
+                let msg = state.pop()?.runtime_string()?;
                 log.push_sensitive(&msg);
                 Ok(Value::Nil)
             }
@@ -414,7 +408,7 @@ impl Vm {
             }
             BuiltinId::ToStr => {
                 let v = state.pop()?;
-                let s = v.into_string();
+                let s = v.runtime_string()?;
                 check_string_len(&s, self.limits.max_string_len)?;
                 Ok(Value::Str(s.into()))
             }
@@ -427,27 +421,27 @@ impl Vm {
                 }
             }
             BuiltinId::ToUpper => {
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let result = s.to_uppercase();
                 check_string_len(&result, self.limits.max_string_len)?;
                 Ok(Value::Str(result.into()))
             }
             BuiltinId::ToLower => {
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let result = s.to_lowercase();
                 check_string_len(&result, self.limits.max_string_len)?;
                 Ok(Value::Str(result.into()))
             }
             BuiltinId::Base64Encode => {
                 use base64::Engine;
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let encoded = base64::engine::general_purpose::STANDARD.encode(s.as_bytes());
                 check_string_len(&encoded, self.limits.max_string_len)?;
                 Ok(Value::Str(encoded.into()))
             }
             BuiltinId::Base64Decode => {
                 use base64::Engine;
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 match base64::engine::general_purpose::STANDARD.decode(s.as_bytes()) {
                     Ok(bytes) => {
                         let decoded = String::from_utf8_lossy(&bytes).to_string();
@@ -466,7 +460,7 @@ impl Vm {
             }
             BuiltinId::UrlEncode => {
                 use std::fmt::Write as _;
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let limit = self.limits.max_string_len;
                 // Build the encoded string incrementally and bail as soon as the running
                 // length crosses `max_string_len`, instead of collecting the full result
@@ -511,7 +505,7 @@ impl Vm {
             // for future maintainers considering a rename / semantics change. See
             // `skills/04-review/dsl-builtins/url-decode-form-semantics.md`.
             BuiltinId::UrlDecode => {
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let mut result = Vec::new();
                 let bytes = s.as_bytes();
                 let mut i = 0;
@@ -546,18 +540,18 @@ impl Vm {
             }
             BuiltinId::Sha256 => {
                 use sha2::Digest;
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let hash = sha2::Sha256::digest(s.as_bytes());
                 checked_value_str(hex::encode(hash), self.limits.max_string_len)
             }
             BuiltinId::Md5 => {
                 use md5::Digest;
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let hash = md5::Md5::digest(s.as_bytes());
                 checked_value_str(hex::encode(hash), self.limits.max_string_len)
             }
             BuiltinId::Trim => {
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let trimmed = s.trim();
                 if trimmed.len() == s.len() {
                     Ok(Value::Str(s.into()))
@@ -566,8 +560,8 @@ impl Vm {
                 }
             }
             BuiltinId::Split => {
-                let delim = state.pop()?.into_string();
-                let s = state.pop()?.into_string();
+                let delim = state.pop()?.runtime_string()?;
+                let s = state.pop()?.runtime_string()?;
                 let estimated = if delim.is_empty() {
                     // split("") inserts "" at both ends: N chars → N+2 parts
                     s.chars().count() + 2
@@ -627,8 +621,8 @@ impl Vm {
                 use hmac::{Hmac, Mac};
                 type HmacSha256 = Hmac<sha2::Sha256>;
 
-                let data = state.pop()?.into_string();
-                let key = state.pop()?.into_string();
+                let data = state.pop()?.runtime_string()?;
+                let key = state.pop()?.runtime_string()?;
                 let mut mac = HmacSha256::new_from_slice(key.as_bytes()).map_err(|e| RuntimeError::ApiError {
                     function: "hmac_sha256".into(),
                     message: format!("invalid key: {}", e),
@@ -637,81 +631,18 @@ impl Vm {
                 let result = hex::encode(mac.finalize().into_bytes());
                 checked_value_str(result, self.limits.max_string_len)
             }
-            BuiltinId::JsonGet => {
-                let path = state.pop()?.into_string();
-                let json_str = state.pop()?.into_string();
-                // Limit JSON parse size to prevent abuse
-                if json_str.len() > self.limits.max_string_len {
-                    return Err(RuntimeError::StringTooLong {
-                        len: json_str.len(),
-                        limit: self.limits.max_string_len,
-                    });
-                }
-                match serde_json::from_str::<serde_json::Value>(&json_str) {
-                    Ok(val) => {
-                        // Simple dot-notation path traversal with depth limit
-                        let mut current = &val;
-                        let segments: Vec<&str> = path.split('.').collect();
-                        if segments.len() > 32 {
-                            return Err(RuntimeError::ApiError {
-                                function: "json_get".into(),
-                                message: "path too deep (max 32 segments)".into(),
-                            });
-                        }
-                        for key in &segments {
-                            match current {
-                                serde_json::Value::Object(map) => {
-                                    current = match map.get(*key) {
-                                        Some(v) => v,
-                                        None => return Ok(Value::Nil),
-                                    };
-                                }
-                                serde_json::Value::Array(arr) => {
-                                    if let Ok(idx) = key.parse::<usize>() {
-                                        current = match arr.get(idx) {
-                                            Some(v) => v,
-                                            None => return Ok(Value::Nil),
-                                        };
-                                    } else {
-                                        return Ok(Value::Nil);
-                                    }
-                                }
-                                _ => return Ok(Value::Nil),
-                            }
-                        }
-                        match current {
-                            serde_json::Value::String(s) => checked_value_str(s.clone(), self.limits.max_string_len),
-                            serde_json::Value::Number(n) => {
-                                if let Some(i) = n.as_i64() {
-                                    Ok(Value::Int(i))
-                                } else {
-                                    Ok(Value::Str(n.to_string().into()))
-                                }
-                            }
-                            serde_json::Value::Bool(b) => Ok(Value::Bool(*b)),
-                            serde_json::Value::Null => Ok(Value::Nil),
-                            other => {
-                                let s = other.to_string();
-                                check_string_len(&s, self.limits.max_string_len)?;
-                                Ok(Value::Str(s.into()))
-                            }
-                        }
-                    }
-                    Err(_) => Ok(Value::Nil),
-                }
-            }
             BuiltinId::Uuid => {
                 let id = uuid::Uuid::new_v4().to_string();
                 Ok(Value::Str(id.into()))
             }
             BuiltinId::HexEncode => {
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let encoded = hex::encode(s.as_bytes());
                 check_string_len(&encoded, self.limits.max_string_len)?;
                 Ok(Value::Str(encoded.into()))
             }
             BuiltinId::HexDecode => {
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 match hex::decode(&s) {
                     Ok(bytes) => {
                         let decoded = String::from_utf8_lossy(&bytes).to_string();
@@ -722,7 +653,7 @@ impl Vm {
                 }
             }
             BuiltinId::TimeFormat => {
-                let format = state.pop()?.into_string();
+                let format = state.pop()?.runtime_string()?;
                 if format.len() > 256 {
                     return Err(RuntimeError::ApiError {
                         function: "time_format".into(),
@@ -763,8 +694,8 @@ impl Vm {
                 }
             }
             BuiltinId::IpInCidr => {
-                let cidr_str = state.pop()?.into_string();
-                let ip_str = state.pop()?.into_string();
+                let cidr_str = state.pop()?.runtime_string()?;
+                let ip_str = state.pop()?.runtime_string()?;
                 let ip: std::net::IpAddr = match ip_str.parse() {
                     Ok(ip) => ip,
                     Err(_) => return Ok(Value::Bool(false)),
@@ -808,7 +739,7 @@ impl Vm {
                 Ok(Value::Bool(result))
             }
             BuiltinId::Join => {
-                let delim = state.pop()?.into_string();
+                let delim = state.pop()?.runtime_string()?;
                 let list = state.pop()?;
                 match list {
                     Value::List(items) => {
@@ -824,12 +755,12 @@ impl Vm {
                 }
             }
             BuiltinId::LogWarn => {
-                let value = state.pop()?.into_string();
+                let value = state.pop()?.runtime_string()?;
                 log.push_sensitive(&value);
                 Ok(Value::Nil)
             }
             BuiltinId::LogError => {
-                let value = state.pop()?.into_string();
+                let value = state.pop()?.runtime_string()?;
                 log.push_err_sensitive(&value);
                 Ok(Value::Nil)
             }
@@ -846,10 +777,10 @@ impl Vm {
                 let value_count = total - 1;
                 let mut values: Vec<String> = Vec::with_capacity(value_count);
                 for _ in 0..value_count {
-                    values.push(state.pop()?.into_string());
+                    values.push(state.pop()?.runtime_string()?);
                 }
                 values.reverse();
-                let template = state.pop()?.into_string();
+                let template = state.pop()?.runtime_string()?;
                 let log_args: Vec<crate::plugins::runtime::log::LogArg<'_>> = values
                     .iter()
                     .map(|s| crate::plugins::runtime::log::LogArg::Sensitive(s.as_str()))
@@ -908,8 +839,8 @@ impl Vm {
         let url_val = state.pop()?;
         let method_val = state.pop()?;
 
-        let method_str = method_val.into_string();
-        let url_str = url_val.into_string();
+        let method_str = method_val.runtime_string()?;
+        let url_str = url_val.runtime_string()?;
 
         // Reject non-http/https schemes to prevent file://, ftp://, etc.
         let parsed_url = match reqwest::Url::parse(&url_str) {
@@ -945,7 +876,7 @@ impl Vm {
 
         let body_str = match body_val {
             Value::Nil => String::new(),
-            other => other.into_string(),
+            other => other.runtime_string()?,
         };
 
         let timeout_ms = match timeout_val {
@@ -991,7 +922,12 @@ impl Vm {
             match hv {
                 Value::Map(m) => {
                     for (k, v) in m.iter() {
-                        builder = builder.header(k.as_str(), v.as_str());
+                        let value = v.try_as_str().map_err(|error| RuntimeError::TypeError {
+                            expected: "a value implicitly convertible to Str",
+                            got: error.got(),
+                            operation: "http.call headers_map",
+                        })?;
+                        builder = builder.header(k.as_str(), value);
                     }
                 }
                 Value::Nil => {}
@@ -1090,11 +1026,9 @@ impl Vm {
 impl Vm {
     /// Dispatch the proxy-body builtins (`req.body` / `resp.body`).
     ///
-    /// The body gate has already buffered the body before this plugin runs, so
-    /// the read is a cheap `Arc`-backed handle. A `BodyReadError` here is
-    /// unexpected (e.g. buffering not yet implemented on this binary) and is
-    /// surfaced as an `ApiError` so `execute_safe` applies the script's
-    /// `errorPolicy` — identical handling to any other runtime error.
+    /// This performs only a metadata availability check and returns an opaque
+    /// Body token. Availability failures use the VM's dedicated body-access
+    /// marker and are fixed fail-close, independent of `errorPolicy`.
     pub(crate) async fn call_builtin_body(
         &self,
         id: BuiltinId,
@@ -1102,20 +1036,21 @@ impl Vm {
         session: &mut dyn PluginSession,
         _log: &mut PluginLog,
     ) -> Result<Value, RuntimeError> {
-        let (function, read) = match id {
-            BuiltinId::ReqBody => ("req.body", session.read_request_body(None).await),
-            BuiltinId::RespBody => ("resp.body", session.read_response_body(None).await),
-            other => {
-                return Err(RuntimeError::Internal {
-                    message: format!("{:?} is not a body builtin", other),
-                })
+        match id {
+            BuiltinId::ReqBody => {
+                let known_bodyless = session.declares_body() == Some(false);
+                session
+                    .request_body_available_len(known_bodyless)
+                    .map_err(|error| body_access_error(error.to_string()))?;
+                Ok(Value::Body(BodyValue::Request))
             }
-        };
-        let bytes = read.map_err(|e| RuntimeError::ApiError {
-            function: function.to_string(),
-            message: e.to_string(),
-        })?;
-        body_bytes_to_value(&bytes, self.limits.max_string_len)
+            BuiltinId::RespBody => Err(body_access_error(
+                "proxied upstream response bodies remain streaming-only",
+            )),
+            other => Err(RuntimeError::Internal {
+                message: format!("{:?} is not a body builtin", other),
+            }),
+        }
     }
 }
 
@@ -1155,8 +1090,8 @@ impl Vm {
             // ===== Basic KV =====
             BuiltinId::RedisGet => {
                 // redis.get(link, key)
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1176,9 +1111,9 @@ impl Vm {
                     return Ok(redis_err(format!("redis.set requires 3 or 4 arguments, got {}", argc)));
                 }
                 let ttl_ms_val = if argc == 4 { Some(state.pop()?) } else { None };
-                let value = state.pop()?.into_string();
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let value = state.pop()?.runtime_string()?;
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1202,8 +1137,8 @@ impl Vm {
             }
             BuiltinId::RedisDel => {
                 // redis.del(link, key)
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1215,8 +1150,8 @@ impl Vm {
             }
             BuiltinId::RedisExists => {
                 // redis.exists(link, key)
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1228,8 +1163,8 @@ impl Vm {
             }
             BuiltinId::RedisTtl => {
                 // redis.ttl(link, key)
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1243,8 +1178,8 @@ impl Vm {
             BuiltinId::RedisExpire => {
                 // redis.expire(link, key, seconds)
                 let seconds_val = state.pop()?;
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let seconds = match &seconds_val {
                     Value::Int(n) => *n,
                     other => {
@@ -1265,8 +1200,8 @@ impl Vm {
             }
             BuiltinId::RedisIncr => {
                 // redis.incr(link, key)
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1279,8 +1214,8 @@ impl Vm {
             BuiltinId::RedisIncrBy => {
                 // redis.incr_by(link, key, delta)
                 let delta_val = state.pop()?;
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let delta = match &delta_val {
                     Value::Int(n) => *n,
                     other => {
@@ -1303,9 +1238,9 @@ impl Vm {
             // ===== Hash =====
             BuiltinId::RedisHGet => {
                 // redis.hget(link, key, field)
-                let field = state.pop()?.into_string();
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let field = state.pop()?.runtime_string()?;
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1321,10 +1256,10 @@ impl Vm {
             }
             BuiltinId::RedisHSet => {
                 // redis.hset(link, key, field, value)
-                let val = state.pop()?.into_string();
-                let field = state.pop()?.into_string();
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let val = state.pop()?.runtime_string()?;
+                let field = state.pop()?.runtime_string()?;
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1336,9 +1271,9 @@ impl Vm {
             }
             BuiltinId::RedisHDel => {
                 // redis.hdel(link, key, field)
-                let field = state.pop()?.into_string();
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let field = state.pop()?.runtime_string()?;
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1350,8 +1285,8 @@ impl Vm {
             }
             BuiltinId::RedisHGetAll => {
                 // redis.hgetall(link, key)
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1380,9 +1315,9 @@ impl Vm {
             }
             BuiltinId::RedisHExists => {
                 // redis.hexists(link, key, field)
-                let field = state.pop()?.into_string();
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let field = state.pop()?.runtime_string()?;
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1455,7 +1390,6 @@ impl Vm {
             | BuiltinId::Trim
             | BuiltinId::Split
             | BuiltinId::HmacSha256
-            | BuiltinId::JsonGet
             | BuiltinId::Uuid
             | BuiltinId::HexEncode
             | BuiltinId::HexDecode
@@ -1634,14 +1568,15 @@ mod body_tests {
     /// `MockPluginSession` is not `Send`, so these tests use `#[test]`, not
     /// `#[tokio::test]`.
     #[test]
-    fn req_body_reads_session_and_failopen_continues() {
+    fn req_body_availability_failure_is_fixed_fail_close() {
         let b64 = compile_dsl_source("let b = req.body", &ValidationLimits::default()).expect("compile failed");
         let script = CompiledScript::deserialize_base64(&b64).expect("deserialize failed");
         let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
 
         let mut session = MockPluginSession::new();
+        session.expect_declares_body().return_const(Some(true));
         session
-            .expect_read_request_body()
+            .expect_request_body_available_len()
             .returning(|_| Err(BodyReadError::Unimplemented));
         session.expect_record_outcome().return_const(());
 
@@ -1658,8 +1593,12 @@ mod body_tests {
                 &DslErrorPolicy::Ignore,
                 &rt,
             ));
-        // Fail-open (Ignore) policy: a body-read error is swallowed and the
-        // request proceeds to the next filter stage.
-        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: Some("Request body processing failed".to_string()),
+            }
+        );
     }
 }

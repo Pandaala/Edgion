@@ -160,12 +160,9 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> Option<usize> {
         | BuiltinId::LogError => Some(1),
         BuiltinId::Substr => Some(3),
         BuiltinId::TimeNow | BuiltinId::Uuid => Some(0),
-        BuiltinId::Split
-        | BuiltinId::HmacSha256
-        | BuiltinId::JsonGet
-        | BuiltinId::TimeFormat
-        | BuiltinId::IpInCidr
-        | BuiltinId::Join => Some(2),
+        BuiltinId::Split | BuiltinId::HmacSha256 | BuiltinId::TimeFormat | BuiltinId::IpInCidr | BuiltinId::Join => {
+            Some(2)
+        }
         BuiltinId::Range => Some(2),
 
         // Variadic: argc carried by the opcode itself.

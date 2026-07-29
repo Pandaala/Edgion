@@ -56,7 +56,7 @@ fn make_script(code: Vec<OpCode>, local_count: u16) -> CompiledScript {
     // Manually constructed — bypasses the compiler so the validator's checks
     // are the only line of defense.
     CompiledScript {
-        version: 1,
+        version: super::super::lang::bytecode::BYTECODE_VERSION,
         code,
         constants: vec![],
         local_count,
@@ -196,7 +196,9 @@ fn test_validator_rejects_regex_opcode_pointing_to_non_regex() {
     };
     let errors = Validator::new(ValidationLimits::default()).validate(&script);
     assert!(
-        errors.iter().any(|e| e.message.contains("which is not a Regex")),
+        errors
+            .iter()
+            .any(|e| e.message.contains("which is not a StreamingRegex")),
         "expected Matches non-Regex rejection, got: {:?}",
         errors
     );

@@ -16,6 +16,7 @@ use super::traits::{DyeOutcome, PluginSession, PluginSessionError, PluginSession
 use crate::link_sys::template::evaluate_template;
 #[cfg(feature = "body-buffering")]
 use crate::request_body::BodyStorage;
+use crate::request_body::{BodyOperationError, BodyScanResult};
 use crate::runtime::server::{http_to_grpc_status, send_grpc_trailers_only_frame};
 use crate::{EdgionHttpContext, MirrorState, PendingHeaderOp, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::common::{KeyGet, KeySet, WebhookExtract};
@@ -1097,6 +1098,58 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         Ok(sha2::Sha256::digest([]).into())
     }
 
+    fn request_body_available_len(&mut self, known_bodyless: bool) -> Result<u64, BodyReadError> {
+        if known_bodyless && !self.ctx.request_body.has_cached_body() {
+            self.ctx.request_body.mark_known_empty();
+        }
+        self.ctx.request_body.available_len(known_bodyless)
+    }
+
+    async fn request_body_clear(&mut self) -> Result<(), BodyOperationError> {
+        if !self.ctx.request_info.in_request_body_stage {
+            return Err(BodyReadError::NotBuffered.into());
+        }
+        self.ensure_bodyless_request_replay_owner().await?;
+        self.ctx.request_body.clear()
+    }
+
+    async fn request_body_append(&mut self, bytes: Bytes) -> Result<(), BodyOperationError> {
+        if !self.ctx.request_info.in_request_body_stage {
+            return Err(BodyReadError::NotBuffered.into());
+        }
+        self.ensure_bodyless_request_replay_owner().await?;
+        self.ctx.request_body.append(bytes)
+    }
+
+    async fn request_body_prepend(&mut self, bytes: Bytes) -> Result<(), BodyOperationError> {
+        if !self.ctx.request_info.in_request_body_stage {
+            return Err(BodyReadError::NotBuffered.into());
+        }
+        self.ensure_bodyless_request_replay_owner().await?;
+        self.ctx.request_body.prepend(bytes)
+    }
+
+    async fn request_body_remove(&mut self, range: std::ops::Range<u64>) -> Result<(), BodyOperationError> {
+        if !self.ctx.request_info.in_request_body_stage {
+            return Err(BodyReadError::NotBuffered.into());
+        }
+        self.ensure_bodyless_request_replay_owner().await?;
+        self.ctx.request_body.remove(range)
+    }
+
+    async fn request_body_replace_literal(
+        &mut self,
+        from: Bytes,
+        to: Bytes,
+        max_scan_bytes: u64,
+    ) -> Result<BodyScanResult<()>, BodyOperationError> {
+        if !self.ctx.request_info.in_request_body_stage {
+            return Err(BodyReadError::NotBuffered.into());
+        }
+        self.ensure_bodyless_request_replay_owner().await?;
+        self.ctx.request_body.replace_literal(from, to, max_scan_bytes).await
+    }
+
     fn grpc_service(&self) -> Option<String> {
         self.ctx.request_info.grpc_service.clone()
     }
@@ -2169,6 +2222,29 @@ mod record_outcome_tests {
         assert_eq!(adapter.declares_body(), Some(true));
     }
 
+    #[tokio::test]
+    async fn opaque_body_metadata_marks_transport_proven_empty_without_capture() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(false);
+
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            assert_eq!(adapter.request_body_available_len(true), Ok(0));
+            assert_eq!(adapter.request_body_available_len(false), Ok(0));
+        }
+
+        assert!(!ctx.request_body.has_cached_body());
+        assert_eq!(
+            ctx.request_body
+                .text_operation(crate::request_body::BodyTextOperation::IsEmpty, 0)
+                .await
+                .unwrap()
+                .value,
+            crate::request_body::BodyTextResult::Bool(true)
+        );
+    }
+
     #[cfg(feature = "upstream-pingora")]
     #[tokio::test]
     async fn stock_gateway_reports_request_body_capture_as_unimplemented() {
@@ -2240,6 +2316,34 @@ mod record_outcome_tests {
         assert!(body.is_empty());
         assert!(!ctx.request_body.has_cached_body());
         assert!(!ctx.edgion_status.contains(&EdgionStatus::BodyRefusedStage));
+    }
+
+    #[cfg(feature = "body-buffering")]
+    #[tokio::test]
+    async fn bodyless_request_body_mutations_install_replay_owner() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(false);
+        ctx.request_info.in_request_body_stage = true;
+
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            adapter.request_body_append(Bytes::from_static(b"abc")).await.unwrap();
+            adapter.request_body_prepend(Bytes::from_static(b"[")).await.unwrap();
+            adapter
+                .request_body_replace_literal(Bytes::from_static(b"b"), Bytes::from_static(b"B"), 64)
+                .await
+                .unwrap();
+            adapter.request_body_remove(0..1).await.unwrap();
+            adapter.request_body_clear().await.unwrap();
+            adapter.request_body_append(Bytes::from_static(b"x")).await.unwrap();
+        }
+
+        assert_eq!(
+            ctx.request_body.read_all().await.unwrap().unwrap(),
+            Bytes::from_static(b"x")
+        );
+        assert_eq!(ctx.request_body.modified_len_for_framing().unwrap(), Some(1));
     }
 
     /// A late consumer may reuse an existing request-scoped body cache, but

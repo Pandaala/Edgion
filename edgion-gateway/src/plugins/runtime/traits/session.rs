@@ -3,6 +3,7 @@
 use crate::ctx::ClientCertInfo;
 use crate::plugins::runtime::dye_plan::CompiledDyePlan;
 use crate::plugins::runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
+use crate::request_body::{BodyOperationError, BodyScanResult};
 use crate::{EdgionHttpContext, MirrorState, SetJumpOutcome, UpstreamJumpTarget};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -406,6 +407,40 @@ pub trait PluginSession: Send + Sync {
         use sha2::Digest;
         let body = self.read_request_body(None).await?;
         Ok(sha2::Sha256::digest(body).into())
+    }
+
+    /// Resolve the opaque request Body against an existing complete cache.
+    ///
+    /// This is metadata-only: it must never initiate capture or materialize
+    /// the cached bytes. A transport-proven bodyless request is recorded as an
+    /// empty stable source so subsequent operations share the same semantics.
+    fn request_body_available_len(&mut self, _known_bodyless: bool) -> Result<u64, BodyReadError> {
+        Err(BodyReadError::Unimplemented)
+    }
+
+    async fn request_body_clear(&mut self) -> Result<(), BodyOperationError> {
+        Err(BodyReadError::Unimplemented.into())
+    }
+
+    async fn request_body_append(&mut self, _bytes: Bytes) -> Result<(), BodyOperationError> {
+        Err(BodyReadError::Unimplemented.into())
+    }
+
+    async fn request_body_prepend(&mut self, _bytes: Bytes) -> Result<(), BodyOperationError> {
+        Err(BodyReadError::Unimplemented.into())
+    }
+
+    async fn request_body_remove(&mut self, _range: std::ops::Range<u64>) -> Result<(), BodyOperationError> {
+        Err(BodyReadError::Unimplemented.into())
+    }
+
+    async fn request_body_replace_literal(
+        &mut self,
+        _from: Bytes,
+        _to: Bytes,
+        _max_scan_bytes: u64,
+    ) -> Result<BodyScanResult<()>, BodyOperationError> {
+        Err(BodyReadError::Unimplemented.into())
     }
 
     // ========== Entry-level dye suite (traffic tagging) ==========

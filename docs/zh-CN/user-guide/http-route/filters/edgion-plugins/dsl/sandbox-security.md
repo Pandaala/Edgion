@@ -25,6 +25,7 @@ EdgionDSL 的沙盒设计遵循以下核心原则：
 | 最大函数调用次数 | `maxCallCount` | 500 | 1 | 100,000 | 内置函数调用总数 |
 | 最大栈深度 | `maxStackDepth` | 128 | 1 | 1,024 | 值栈深度 |
 | 最大字符串长度 | `maxStringLen` | 8,192 | 1 | 1,048,576 | 字符串拼接结果最大字节数 |
+| 最大 body 扫描次数 | `maxBodyScanPasses` | 4 | 1 | 16 | 累计扫描原始字节预算，以解析后的物理请求 body 上限计 |
 
 ### 各限制详细说明
 
@@ -48,6 +49,18 @@ VM 使用栈来计算表达式。深度嵌套的表达式（如多层函数调�
 
 限制字符串拼接操作产生的结果最大字节数。如果拼接后的字符串超过该值，VM 抛出 `StringTooLong` 错误。该限制同时也是 `json_get()` 等处理字符串数据的函数的间接约束。注意：该限制针对运行时产生的字符串，不影响编译期常量池中的字符串（由单独的编译期限制控制）。
 
+它不限制不透明 Body 本身，但会限制 `Body.read`、`Body.read_all` 以及选中或
+序列化后的 JSON 字符串结果。
+
+**maxBodyScanPasses（请求 body 累计扫描次数）**
+
+一次脚本执行的累计扫描预算为网关解析后的物理请求 body 上限乘以
+`maxBodyScanPasses`。只读元数据的 `byte_len()` 不消耗扫描字节。扫描以最大
+64 KiB 的 source chunk 读取数据，并将每个已读取 chunk 全部计入预算；因此，即使
+early-exit 谓词在最终 chunk 开头命中，也可能计入完整的最终 chunk。失败或回滚的
+扫描保留失败前已读取 chunk 的费用。这种保守计费可避免小块读取和频繁回调开销，
+并对内存、溢写文件和修改分段使用同一规则。
+
 ### 配置示例
 
 ```yaml
@@ -63,6 +76,7 @@ spec:
         maxCallCount: 200
         maxStackDepth: 64
         maxStringLen: 4096
+        maxBodyScanPasses: 4
         errorPolicy: deny
 ```
 
@@ -110,6 +124,8 @@ errorPolicy:
 
 注意：`ignore` 策略仅对非预期错误生效。如果脚本主动调用 `deny()` 或 `terminate()`，该调用是脚本的正常逻辑，不受 `errorPolicy` 影响，会按照 `deny()` 和 `terminate()` 的语义执行。
 
+请求体存储、扫描预算、范围和修改失败会在内部归类为 `BodyAccess`。无论 `errorPolicy` 如何配置，这类错误都固定 fail-close：返回 HTTP 500 和客户端消息 `Request body processing failed`。这是不可配置的安全边界，不是第四种 DSL 可配置策略，也不是新增的项目级失败策略形态；具体错误只写入日志，不返回给客户端。
+
 **deny**
 
 脚本出错时，网关返回 HTTP 500 并中止请求处理。这是 fail-close 策略，适合安全关键场景（如权限校验、访问控制），确保脚本出错时不会误放行请求。
@@ -122,7 +138,8 @@ errorPolicy:
 
 ## 运行时错误类型
 
-以下错误类型由 VM 在运行时产生，触发后根据 `errorPolicy` 处理：
+以下错误类型由 VM 在运行时产生。除下文固定硬失败边界 `BodyAccess` 外，其余错误
+均根据 `errorPolicy` 处理：
 
 | 错误类型 | 触发条件 | 说明 |
 |----------|----------|------|
@@ -137,6 +154,7 @@ errorPolicy:
 | `RegexError` | 正则错误 | 正则解析或执行失败 |
 | `HttpCallError` | `http.call()` 参数校验失败 | URL 协议不合法或地址被 SSRF 拦截；调用返回 `status = 0`，**不会**抛出运行时错误 |
 | `ApiError` | API 调用失败 | PluginSession 接口调用异常 |
+| `BodyAccess` | 请求体存储、扫描、范围或修改失败 | 绕过 `errorPolicy`，固定返回通用 fail-close 响应 |
 
 `TypeError` 是最常见的运行时错误，通常由脚本逻辑处理了可能为 `nil` 的值（如请求头不存在时对其进行字符串操作）。建议在脚本中对从外部读取的值（`req.header()`、`ctx.get()` 等）进行 `nil` 检查。
 
@@ -156,11 +174,11 @@ Panic 隔离是最后一道防线，在正常的脚本逻辑和运行时错误�
 
 DSL 的正则表达式功能在设计上防范 ReDoS（正则拒绝服务）攻击：
 
-**编译期预编译**：`.matches()` 方法中使用的正则模式在脚本编译期就被解析和编译，编译后的结果被缓存。每次请求到来时直接使用缓存的编译结果，不会重新编译正则，消除了编译阶段的时间消耗。
+**编译期预编译**：`.matches()` 使用的正则模式在脚本编译期构建为前向稠密 DFA。DFA 最大 1 MiB，并增量消费请求体，因此匹配不需要完整物化请求体。
 
 **语法校验**：不合法的正则模式会在编译期报错，不会延迟到运行时才失败。这样可以在脚本加载阶段就发现正则错误，而不是在生产流量中才暴露问题。
 
-**长度限制**：正则模式长度上限为 1,024 字节，防止超长模式占用过多内存。复杂度极高的正则模式（如包含大量反向引用或嵌套分组）在理论上仍可能造成匹配时间过长，`maxSteps` 限制可以作为额外保障。
+**长度和自动机限制**：正则模式最大 1,024 字节，编译后的 DFA 最大 1 MiB。引擎不使用回溯，请求体输入消耗还受 `maxBodyScanPasses` 限制。流式匹配器不支持 Unicode 感知的单词边界；适用时可显式使用 ASCII 边界 `(?-u:\b)`。
 
 `regex_find()` 和 `regex_replace()` 函数的模式参数同样受 1,024 字节限制约束。
 
@@ -173,7 +191,7 @@ DSL 插件可以在两个阶段运行，不同阶段的可用 API 有所不同�
 | `requestPlugins` | `req.*`、`ctx.*`、`deny`、`next`、`terminate`、`grpc_error` | `resp.set_status`（调用返回 `nil`，无实际效果） | 请求转发前执行 |
 | `upstreamResponseFilterPlugins` | `req.*`（只读）、`resp.*`、`ctx.*`、`deny`、`next` | `grpc_error`、`terminate` | 响应头阶段执行 |
 
-在响应阶段，`req.*` 系列函数仍然可以调用，但修改操作（如 `req.set_header()`）不会对已经转发出去的请求产生影响，仅供读取请求信息使用。
+在响应阶段仍可调用 `req.*`，但请求体读取只能使用请求阶段已经捕获的请求体；响应阶段的延迟读取不会重新开始从下游捕获。请求体修改方法在 `requestPlugins` 以外的阶段会在配置校验时被拒绝；`req.set_header()` 等其他请求修改也无法改变已经转发的请求。
 
 `grpc_error()` 只在请求阶段有效，因为 gRPC 状态码通过 HTTP/2 trailers 传递，而 trailers 只能在响应体发送之前设置。在响应阶段调用 `grpc_error()` 会降级为 `terminate()` 行为，并产生一条警告日志。
 
@@ -183,7 +201,10 @@ DSL 插件可以在两个阶段运行，不同阶段的可用 API 有所不同�
 
 | 函数 | 限制 | 说明 |
 |------|------|------|
-| `json_get` | 路径最多 32 段；JSON 大小受 `maxStringLen` 限制 | 防止深层嵌套路径访问 |
+| `req.body.json_get` | 确定性 JSONPath 最大 1,024 字节、32 段；选中结果受 `maxStringLen` 限制 | 选择性解析单个值，不构建完整 JSON DOM |
+| `req.body.read` / `read_all` | 范围必须非负；返回字符串受 `maxStringLen` 限制 | 透明读取内存或磁盘缓存的请求体 |
+| `req.body.matches` / 其他请求体扫描 | 总扫描字节数受 `maxBodyScanPasses × 请求体物理上限` 限制 | 防止重复完整扫描请求体 |
+| 请求体修改方法 | 结果受请求体物理上限和 4,096 个修改片段限制 | 修改具有事务性，且仅允许在请求阶段 |
 | `time_format` | 格式字符串最大 256 字符 | 防止格式字符串过长导致的资源消耗 |
 | `regex_find` / `regex_replace` | 模式最大 1,024 字节 | 防止 ReDoS |
 | `req.header_names` / `resp.header_names` | 最多返回 256 个头名称 | 防止大量请求头导致的内存问题 |
@@ -191,7 +212,7 @@ DSL 插件可以在两个阶段运行，不同阶段的可用 API 有所不同�
 | `range` | 最多生成 1,000 个元素 | 防止大列表占用过多内存 |
 | `http.call` | 超时上限 `httpMaxTimeoutMs`（默认 5,000 ms）；响应体上限 `httpMaxResponseBodyBytes`（默认 1 MiB）；仅支持 `http`/`https`；`httpBlockPrivateIps: true` 时拦截私有 IP | 防止网关资源耗尽和 SSRF 攻击 |
 
-`json_get` 的路径段限制（32 段）针对的是路径表达式中的层级数量，例如 `"a.b.c.d"` 是 4 段。超过 32 段的路径在实际业务中极为罕见，该限制不会对正常使用造成影响。
+`req.body.json_get()` 只接受以 `$` 为根的确定性路径：`.member`、`["quoted member"]` 和非负 `[index]` 段。通配符、递归下降、过滤器、切片、联合和动态路径会在编译期被拒绝。
 
 `req.header_names()` 和 `resp.header_names()` 返回一个字符串列表。当实际头数量超过 256 时，只返回前 256 个，不产生错误。如果需要遍历所有头，应当结合具体的头名称使用 `req.header()` 直接访问。
 

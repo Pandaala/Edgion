@@ -176,6 +176,20 @@ impl Compiler {
 
         // String methods
         match method {
+            "len" => {
+                if !args.is_empty() {
+                    return Err(CompileError::new("len() requires 0 arguments"));
+                }
+                self.compile_expr(object)?;
+                self.emit(OpCode::TextLen);
+            }
+            "is_empty" => {
+                if !args.is_empty() {
+                    return Err(CompileError::new("is_empty() requires 0 arguments"));
+                }
+                self.compile_expr(object)?;
+                self.emit(OpCode::TextIsEmpty);
+            }
             "starts_with" => {
                 if args.len() != 1 {
                     return Err(CompileError::new("starts_with() requires 1 argument"));
@@ -211,9 +225,94 @@ impl Compiler {
                         return Err(CompileError::new("matches() pattern must be a string literal"));
                     }
                 };
-                let regex_idx = self.add_regex_const(&pattern)?;
+                let regex_idx = self.add_streaming_regex_const(&pattern)?;
                 self.compile_expr(object)?;
                 self.emit(OpCode::Matches(regex_idx));
+            }
+            "byte_len" => {
+                if !args.is_empty() {
+                    return Err(CompileError::new("byte_len() requires 0 arguments"));
+                }
+                self.compile_expr(object)?;
+                self.emit(OpCode::BodyByteLen);
+            }
+            "read" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new("read() requires 2 arguments"));
+                }
+                self.compile_expr(object)?;
+                self.compile_expr(&args[0])?;
+                self.compile_expr(&args[1])?;
+                self.emit(OpCode::BodyRead);
+            }
+            "read_all" => {
+                if !args.is_empty() {
+                    return Err(CompileError::new("read_all() requires 0 arguments"));
+                }
+                self.compile_expr(object)?;
+                self.emit(OpCode::BodyReadAll);
+            }
+            "sha256" => {
+                if !args.is_empty() {
+                    return Err(CompileError::new("sha256() requires 0 arguments"));
+                }
+                self.compile_expr(object)?;
+                self.emit(OpCode::BodySha256);
+            }
+            "json_get" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new("json_get() requires 1 string literal path argument"));
+                }
+                let ExprKind::StringLit(path) = &args[0].kind else {
+                    return Err(CompileError::new("json_get() path must be a string literal"));
+                };
+                let path_idx = self.add_json_path_const(path)?;
+                self.compile_expr(object)?;
+                self.emit(OpCode::JsonGet(path_idx));
+            }
+            "clear" => {
+                if !args.is_empty() {
+                    return Err(CompileError::new("clear() requires 0 arguments"));
+                }
+                self.compile_expr(object)?;
+                self.emit(OpCode::BodyClear);
+            }
+            "append" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new("append() requires 1 argument"));
+                }
+                self.compile_expr(object)?;
+                self.compile_expr(&args[0])?;
+                self.emit(OpCode::BodyAppend);
+            }
+            "prepend" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new("prepend() requires 1 argument"));
+                }
+                self.compile_expr(object)?;
+                self.compile_expr(&args[0])?;
+                self.emit(OpCode::BodyPrepend);
+            }
+            "remove" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new("remove() requires 2 arguments"));
+                }
+                self.compile_expr(object)?;
+                self.compile_expr(&args[0])?;
+                self.compile_expr(&args[1])?;
+                self.emit(OpCode::BodyRemove);
+            }
+            "replace" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new("replace() requires 2 arguments"));
+                }
+                if matches!(&args[0].kind, ExprKind::StringLit(from) if from.is_empty()) {
+                    return Err(CompileError::new("replace() search string must not be empty"));
+                }
+                self.compile_expr(object)?;
+                self.compile_expr(&args[0])?;
+                self.compile_expr(&args[1])?;
+                self.emit(OpCode::BodyReplace);
             }
             _ => {
                 return Err(CompileError::new(format!("unknown method: .{}()", method)));
@@ -258,6 +357,20 @@ impl Compiler {
                 }
                 _ => return Err(CompileError::new("regex_replace() pattern must be a string literal")),
             }
+        } else if name == "json_get" {
+            if args.len() != 2 {
+                return Err(CompileError::new(format!(
+                    "json_get() requires 2 arguments, got {}",
+                    args.len()
+                )));
+            }
+            let ExprKind::StringLit(path) = &args[1].kind else {
+                return Err(CompileError::new("json_get() path must be a string literal"));
+            };
+            let path_idx = self.add_json_path_const(path)?;
+            self.compile_expr(&args[0])?;
+            self.emit(OpCode::JsonGet(path_idx));
+            return Ok(());
         } else if name == "log_fmt" {
             // log_fmt(template_literal, sensitive_arg1, sensitive_arg2, ...)
             //
@@ -313,7 +426,6 @@ impl Compiler {
             "range" => (BuiltinId::Range, Some(2)),
             // P3 utility functions
             "hmac_sha256" => (BuiltinId::HmacSha256, Some(2)),
-            "json_get" => (BuiltinId::JsonGet, Some(2)),
             "uuid" => (BuiltinId::Uuid, Some(0)),
             "hex_encode" => (BuiltinId::HexEncode, Some(1)),
             "hex_decode" => (BuiltinId::HexDecode, Some(1)),
@@ -349,8 +461,7 @@ impl Compiler {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::bytecode::Constant;
-    use super::super::super::bytecode::OpCode;
+    use super::super::super::bytecode::{Constant, OpCode};
     use super::super::super::parser::parse_program;
     use super::super::Compiler;
 
@@ -377,6 +488,110 @@ mod tests {
         "#;
         let prog = parse_program(source).unwrap();
         let compiled = Compiler::new().compile(&prog).unwrap();
-        assert!(compiled.constants.iter().any(|c| matches!(c, Constant::Regex(_))));
+        assert!(compiled
+            .constants
+            .iter()
+            .any(|c| matches!(c, Constant::StreamingRegex(_))));
+    }
+
+    #[test]
+    fn test_compile_body_read_and_mutation_methods() {
+        let source = r#"
+            let chars = req.body.len()
+            let empty = req.body.is_empty()
+            let bytes = req.body.byte_len()
+            let prefix = req.body.read(0, 16)
+            let whole = req.body.read_all()
+            let digest = req.body.sha256()
+            let selected = req.body.json_get("$.user[0].name")
+            req.body.clear()
+            req.body.append("tail")
+            req.body.prepend("head")
+            req.body.remove(1, 2)
+            req.body.replace("from", "to")
+        "#;
+        let program = parse_program(source).unwrap();
+        let compiled = Compiler::new().compile(&program).unwrap();
+        for expected in [
+            OpCode::TextLen,
+            OpCode::TextIsEmpty,
+            OpCode::BodyByteLen,
+            OpCode::BodyRead,
+            OpCode::BodyReadAll,
+            OpCode::BodySha256,
+            OpCode::BodyClear,
+            OpCode::BodyAppend,
+            OpCode::BodyPrepend,
+            OpCode::BodyRemove,
+            OpCode::BodyReplace,
+        ] {
+            assert!(compiled.code.contains(&expected), "missing opcode {expected:?}");
+        }
+        let json_path_index = compiled
+            .constants
+            .iter()
+            .position(|constant| matches!(constant, Constant::JsonPath(path) if path == "$.user[0].name"))
+            .unwrap() as u16;
+        assert!(compiled.code.contains(&OpCode::JsonGet(json_path_index)));
+    }
+
+    #[test]
+    fn test_json_get_function_and_method_share_definite_path_constants() {
+        let source = r#"
+            let a = json_get("{\"a\":1}", "$.a")
+            let b = req.body.json_get("$.a")
+        "#;
+        let program = parse_program(source).unwrap();
+        let compiled = Compiler::new().compile(&program).unwrap();
+        assert_eq!(
+            compiled
+                .constants
+                .iter()
+                .filter(|constant| matches!(constant, Constant::JsonPath(path) if path == "$.a"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            compiled
+                .code
+                .iter()
+                .filter(|opcode| matches!(opcode, OpCode::JsonGet(_)))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn test_json_get_rejects_dynamic_and_indefinite_paths() {
+        for source in [
+            r#"let path = "$.a"
+               let value = req.body.json_get(path)"#,
+            r#"let value = json_get("{}", "a.b")"#,
+            r#"let value = req.body.json_get("$.*")"#,
+        ] {
+            let program = parse_program(source).unwrap();
+            assert!(Compiler::new().compile(&program).is_err());
+        }
+    }
+
+    #[test]
+    fn test_matches_rejects_unicode_word_boundaries_but_accepts_ascii_boundaries() {
+        let unicode = parse_program(r#"let found = "word".matches("\\bword\\b")"#).unwrap();
+        let error = Compiler::new().compile(&unicode).unwrap_err().to_string();
+        assert!(error.contains("not compatible with streaming matches"));
+
+        let ascii = parse_program(r#"let found = "word".matches("(?-u:\\b)word(?-u:\\b)")"#).unwrap();
+        Compiler::new().compile(&ascii).unwrap();
+
+        // regex_find is not a streaming Body operation and keeps its existing dialect.
+        let find = parse_program(r#"let found = regex_find("word", "\\bword\\b")"#).unwrap();
+        Compiler::new().compile(&find).unwrap();
+    }
+
+    #[test]
+    fn test_body_replace_rejects_literal_empty_search() {
+        let program = parse_program(r#"req.body.replace("", "x")"#).unwrap();
+        let error = Compiler::new().compile(&program).unwrap_err().to_string();
+        assert!(error.contains("must not be empty"));
     }
 }

@@ -18,7 +18,7 @@ Bytecode is transmitted as a Base64-encoded JSON string.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "code": [...],
   "constants": [...],
   "local_count": 16,
@@ -31,7 +31,7 @@ Field descriptions:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `version` | integer | Bytecode format version. Current version is `1`. |
+| `version` | integer | Bytecode format version. Current version is `2`. |
 | `code` | array | Instruction sequence (`Vec<OpCode>`), executed by the VM one instruction at a time. |
 | `constants` | array | Constant pool (`Vec<Constant>`), referenced by instructions via index. |
 | `local_count` | integer | Number of local variable slots. |
@@ -44,7 +44,9 @@ Each entry in the constant pool is one of the following types:
 
 - `Str`: a string constant
 - `Int`: an integer constant
-- `Regex`: a pre-compiled regular expression (compiled at bytecode serialization time)
+- `Regex`: a regular expression used by string-only find/replace operations
+- `StreamingRegex`: a forward-DFA pattern used by incremental `.matches()` operations
+- `JsonPath`: a validated definite JSONPath used by `.json_get()`
 
 ## When to Use Bytecode
 
@@ -53,7 +55,7 @@ Each entry in the constant pool is one of the following types:
 | Development and debugging | `source` | Readable, easy to modify, no pre-compilation step required. |
 | High-traffic routes | `bytecode` | Eliminates compilation overhead; Gateway starts or reloads faster. |
 | CI/CD pipelines | `bytecode` | Compilation happens at build time; bytecode is used directly at deploy time, ensuring consistency. |
-| Cross-version distribution | `bytecode` | Bytecode carries a version number and can be safely transferred and stored long-term. |
+| Cross-version distribution | `source` or rebuilt `bytecode` | Bytecode versions are intentionally strict; rebuild it for the target Edgion release. |
 
 ## Size Limits
 
@@ -69,7 +71,9 @@ Bytecode carries a version number in the `version` field, which is strictly vali
 - If the bytecode format version changes after an Edgion upgrade, existing bytecode must be recompiled.
 - It is recommended to bind bytecode to a specific Edgion version in your CI/CD pipeline to avoid version drift.
 
-Current version: `BYTECODE_VERSION = 1`
+Current version: `BYTECODE_VERSION = 2`
+
+Version 2 is a breaking format change: `req.body` is now an opaque `Body` value and body operations use dedicated instructions and constants. Version 0, version 1, and unversioned payloads are rejected; recompile them from source with the target Edgion version.
 
 ## Security Validation
 
@@ -77,8 +81,9 @@ The following static checks are performed during deserialization. If any check f
 
 1. **Version match**: The `version` field matches the version expected by the runtime.
 2. **Constant index bounds**: All constant indices referenced by `LoadConst` instructions fall within the bounds of the constant pool.
-3. **Regex constant type**: All constants referenced by regex-related instructions (`Match`, `NotMatch`, etc.) must be of type `Regex`.
-4. **Regex recompilation**: Each `Regex` constant is recompiled during deserialization to verify that the regular expression is valid in the current runtime environment.
+3. **Instruction/constant type match**: Value loads accept only `Str`/`Int`; `.matches()`, string regex operations, and `.json_get()` require `StreamingRegex`, `Regex`, and `JsonPath` constants respectively.
+4. **Regex reconstruction**: Regex constants are recompiled with bounded automaton size to verify syntax and resource limits in the current runtime.
+5. **JSONPath validation**: Every `JsonPath` constant is parsed again and must remain a definite path.
 
 ## Configuration Examples
 
@@ -113,7 +118,7 @@ spec:
       type: Dsl
       config:
         name: "auth-check"
-        bytecode: "eyJ2ZXJzaW9uIjoxLCJjb2RlIjpbLi4uXSwi..."
+        bytecode: "BASE64_ENCODED_BYTECODE_V2"
 ```
 
 ### Providing Both Source and Bytecode
@@ -128,7 +133,7 @@ config:
     if token == nil {
       return deny(401, "Unauthorized")
     }
-  bytecode: "eyJ2ZXJzaW9uIjoxLCJjb2RlIjpbLi4uXSwi..."
+  bytecode: "BASE64_ENCODED_BYTECODE_V2"
 ```
 
 ## Related Documentation

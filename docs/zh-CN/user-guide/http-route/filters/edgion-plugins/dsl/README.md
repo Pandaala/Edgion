@@ -14,8 +14,9 @@ DSL 适合以下场景：权限前置检查、动态 Header 注入、协议级�
 
 - **沙箱隔离执行**：脚本无法访问文件系统或环境变量，运行环境完全受控
 - **出站 HTTP 调用**：脚本可通过 `http.call()` 调用外部 HTTP/HTTPS 服务，支持可配置超时、响应体大小限制，以及可选的 SSRF 防护（`httpBlockPrivateIps`）
-- **字节码预编译**：支持 `source`（运行时编译）和 `bytecode`（预编译 Base64）两种加载方式，字节码模式可跳过编译开销
+- **字节码预编译**：支持 `source`（配置处理时编译）和 `bytecode`（预编译 Base64）两种加载方式，字节码模式可跳过编译开销
 - **资源限制可配置**：可独立限制执行步数、循环次数、调用深度、字符串长度
+- **请求 body 存储透明**：通过有界操作检查或修改不透明的 `req.body`，磁盘溢写无需先合并为一个完整字符串
 - **错误策略可选**：`Ignore` / `Deny` / `DenyWith` 三种策略，适应不同容错需求
 - **原生 gRPC 支持**：通过 HTTP/2 trailers 返回标准 gRPC 状态码（`grpc_error()`）
 - **双阶段执行**：请求阶段（转发前）和响应阶段（上游返回后）各自独立运行
@@ -51,6 +52,7 @@ spec:
 | `maxCallCount` | Integer | ❌ | `500` | 最大函数调用次数 |
 | `maxStackDepth` | Integer | ❌ | `128` | 最大栈深度 |
 | `maxStringLen` | Integer | ❌ | `8192` | 最大字符串长度 |
+| `maxBodyScanPasses` | Integer | ❌ | `4` | 请求 body 累计扫描预算，以物理 body 上限的完整扫描次数计，范围 `1`–`16` |
 | `errorPolicy` | String | ❌ | `Ignore` | 错误策略：`Ignore` / `Deny` / `DenyWith` |
 | `httpMaxTimeoutMs` | Integer | ❌ | `5000` | `http.call()` 单次调用超时上限（毫秒） |
 | `httpMaxResponseBodyBytes` | Integer | ❌ | `1048576` | `http.call()` 响应体最大字节数 |
@@ -68,6 +70,12 @@ spec:
 | `Deny` | 脚本出错时拒绝请求（返回 500） |
 | `DenyWith` | 脚本出错时返回自定义状态码和消息 |
 
+无论 `errorPolicy` 如何配置，请求 body 失败都固定 fail-close。VM 执行前的 body
+gate 在请求体超过上限时返回空响应体的 413，捕获超时时返回空响应体的 408，拒绝捕获
+或其他捕获失败时返回空响应体的 500。VM 开始执行后，Body 可用性、存储 I/O、扫描
+预算和修改发布失败返回 HTTP 500 和通用响应体
+`Request body processing failed`。这是内部硬失败分类，不是新增的可配置失败策略。
+
 ## 执行阶段
 
 DSL 插件在两个独立阶段运行，分别对应 `EdgionPlugins` 的不同字段：
@@ -79,6 +87,8 @@ DSL 插件在两个独立阶段运行，分别对应 `EdgionPlugins` 的不同�
 - 读取和修改请求头、URI、Host、HTTP 方法
 - 读取查询参数、Cookie、路径参数、客户端 IP
 - 读取 mTLS 客户端证书信息（`req.client_cert_cn`、`req.client_cert_fingerprint`）
+- 通过有界文本、字节范围、哈希和确定 JSONPath 操作检查不透明的请求 `Body`
+- 通过 `clear`、`append`、`prepend`、`remove` 和字面量 `replace` 事务式修改请求 body
 - 通过 `deny()` 拒绝请求并返回 HTTP 错误
 - 通过 `grpc_error()` 返回原生 gRPC 状态码（仅此阶段支持）
 - 通过 `ctx.set()` 向后续插件传递上下文值
@@ -91,6 +101,10 @@ DSL 插件在两个独立阶段运行，分别对应 `EdgionPlugins` 的不同�
 - 修改响应头（`resp.set_header()`、`resp.append_header()`、`resp.remove_header()`）
 - 修改响应状态码（`resp.set_status()`）
 - 读取请求阶段设置的上下文值（`ctx.get()`）
+- 读取请求阶段 `RequestBodyBuffer` 已缓存的 `req.body`
+
+响应阶段的 DSL 绝不会启动请求 body 捕获。请求 body 修改若不在
+`requestPlugins` 中，会在配置校验阶段被拒绝。
 
 > **注意**：`grpc_error()` 仅在请求阶段有效。在响应阶段调用会降级为 `terminate()`，因为响应头已提交，无法再追加 HTTP/2 trailers。
 

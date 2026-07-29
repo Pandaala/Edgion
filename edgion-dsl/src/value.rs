@@ -1,12 +1,46 @@
 //! Runtime value types for EdgionDSL
 //!
-//! User-visible types: Str, Int, Bool, Nil, Map.
+//! User-visible types: Str, Int, Bool, Nil, Body, Map.
 //! Plus an internal List type for iteration (not user-constructable directly).
 
 use std::fmt;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
+
+/// Opaque host-backed body values exposed to the DSL.
+///
+/// The tag deliberately carries no bytes, cursor, file handle, or gateway
+/// reference. Runtime operations resolve it against the current request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BodyValue {
+    /// The proxied request body associated with the current DSL execution.
+    Request,
+}
+
+/// A value that cannot participate in implicit string coercion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImplicitStringCoercionError {
+    got: &'static str,
+}
+
+impl ImplicitStringCoercionError {
+    fn new(got: &'static str) -> Self {
+        Self { got }
+    }
+
+    pub fn got(&self) -> &'static str {
+        self.got
+    }
+}
+
+impl fmt::Display for ImplicitStringCoercionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} cannot be implicitly converted to Str", self.got)
+    }
+}
+
+impl std::error::Error for ImplicitStringCoercionError {}
 
 /// Runtime value — the types of EdgionDSL
 #[derive(Debug, Clone)]
@@ -19,6 +53,8 @@ pub enum Value {
     Bool(bool),
     /// Nil — missing/absent value (maps to Option::None)
     Nil,
+    /// Opaque request body token. Body bytes remain owned by the host runtime.
+    Body(BodyValue),
     /// Internal: list of strings for iteration (not user-constructable directly)
     List(Vec<Arc<str>>),
     /// Structured map — returned by http.call and constructable via map literals.
@@ -30,31 +66,38 @@ pub enum Value {
 impl Value {
     // ========== Type coercion ==========
 
-    /// Get string ref; returns empty string for non-Str types.
-    /// Used when script passes a value to PluginSession string APIs.
-    pub fn as_str(&self) -> &str {
+    /// Get a string reference using the legacy nil-friendly coercion rules.
+    ///
+    /// Non-string scalar/container values retain the previous empty-string
+    /// fallback. Body is different: accessing its bytes requires an explicit
+    /// bounded body operation, so implicit conversion is rejected.
+    pub fn try_as_str(&self) -> Result<&str, ImplicitStringCoercionError> {
         match self {
-            Value::Str(s) => s.as_ref(),
-            _ => "",
+            Value::Str(s) => Ok(s.as_ref()),
+            Value::Body(_) => Err(ImplicitStringCoercionError::new(self.type_name())),
+            _ => Ok(""),
         }
     }
 
-    /// Convert to owned String representation.
-    /// Str → itself, Int → decimal, Bool → "true"/"false", Nil → "nil"
-    pub fn into_string(self) -> String {
+    /// Convert to an owned string using the existing scalar coercion rules.
+    ///
+    /// Body conversion is intentionally fallible. Callers that need body text
+    /// must use the explicit bounded `read` or `read_all` DSL operations.
+    pub fn try_into_string(self) -> Result<String, ImplicitStringCoercionError> {
         match self {
-            Value::Str(s) => s.to_string(),
-            Value::Int(n) => n.to_string(),
+            Value::Str(s) => Ok(s.to_string()),
+            Value::Int(n) => Ok(n.to_string()),
             Value::Bool(b) => {
                 if b {
-                    "true".to_string()
+                    Ok("true".to_string())
                 } else {
-                    "false".to_string()
+                    Ok("false".to_string())
                 }
             }
-            Value::Nil => "nil".to_string(),
-            Value::List(_) => "[list]".to_string(),
-            Value::Map(m) => format!("[map:{}]", m.len()),
+            Value::Nil => Ok("nil".to_string()),
+            Value::Body(_) => Err(ImplicitStringCoercionError::new("Body")),
+            Value::List(_) => Ok("[list]".to_string()),
+            Value::Map(m) => Ok(format!("[map:{}]", m.len())),
         }
     }
 
@@ -79,6 +122,7 @@ impl Value {
             Value::Int(_) => "Int",
             Value::Bool(_) => "Bool",
             Value::Nil => "Nil",
+            Value::Body(_) => "Body",
             Value::List(_) => "List",
             Value::Map(_) => "Map",
         }
@@ -92,6 +136,7 @@ impl fmt::Display for Value {
             Value::Int(n) => write!(f, "{}", n),
             Value::Bool(b) => write!(f, "{}", b),
             Value::Nil => write!(f, "nil"),
+            Value::Body(BodyValue::Request) => write!(f, "[body:request]"),
             Value::List(l) => write!(f, "[list:{}]", l.len()),
             Value::Map(m) => write!(f, "[map:{}]", m.len()),
         }
@@ -105,6 +150,7 @@ impl PartialEq for Value {
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Nil, Value::Nil) => true,
+            (Value::Body(a), Value::Body(b)) => a == b,
             (Value::List(a), Value::List(b)) => a == b,
             (Value::Map(a), Value::Map(b)) => a == b,
             _ => false, // different types are never equal
@@ -127,6 +173,7 @@ mod tests {
         assert!(Value::Str(Arc::from("hello")).is_truthy());
         assert!(Value::Int(0).is_truthy()); // zero IS truthy (like Lua)
         assert!(Value::Int(42).is_truthy());
+        assert!(Value::Body(BodyValue::Request).is_truthy());
     }
 
     #[test]
@@ -135,6 +182,7 @@ mod tests {
         assert_eq!(Value::Int(42), Value::Int(42));
         assert_ne!(Value::Int(1), Value::Str(Arc::from("1"))); // cross-type never equal
         assert_ne!(Value::Nil, Value::Bool(false)); // nil != false
+        assert_eq!(Value::Body(BodyValue::Request), Value::Body(BodyValue::Request));
     }
 
     #[test]
@@ -172,6 +220,7 @@ mod tests {
         assert_eq!(format!("{}", Value::Int(42)), "42");
         assert_eq!(format!("{}", Value::Bool(true)), "true");
         assert_eq!(format!("{}", Value::Nil), "nil");
+        assert_eq!(format!("{}", Value::Body(BodyValue::Request)), "[body:request]");
     }
 
     /// Lock the layout: any change pushing `Value` past 24 B blows up
@@ -184,11 +233,19 @@ mod tests {
     }
 
     #[test]
-    fn test_into_string() {
-        assert_eq!(Value::Str(Arc::from("hello")).into_string(), "hello");
-        assert_eq!(Value::Int(42).into_string(), "42");
-        assert_eq!(Value::Bool(true).into_string(), "true");
-        assert_eq!(Value::Bool(false).into_string(), "false");
-        assert_eq!(Value::Nil.into_string(), "nil");
+    fn test_try_into_string() {
+        assert_eq!(Value::Str(Arc::from("hello")).try_into_string().unwrap(), "hello");
+        assert_eq!(Value::Int(42).try_into_string().unwrap(), "42");
+        assert_eq!(Value::Bool(true).try_into_string().unwrap(), "true");
+        assert_eq!(Value::Bool(false).try_into_string().unwrap(), "false");
+        assert_eq!(Value::Nil.try_into_string().unwrap(), "nil");
+    }
+
+    #[test]
+    fn body_rejects_implicit_string_coercion() {
+        let body = Value::Body(BodyValue::Request);
+        let err = body.clone().try_into_string().unwrap_err();
+        assert_eq!(err.got(), "Body");
+        assert!(body.try_as_str().is_err());
     }
 }

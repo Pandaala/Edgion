@@ -23,6 +23,10 @@ impl RequestFilter for RequestBodyBuffer {
         "RequestBodyBuffer"
     }
 
+    fn requires_materialized_request_body(&self) -> bool {
+        false
+    }
+
     async fn run_request(&self, _session: &mut dyn PluginSession, _log: &mut PluginLog) -> PluginRunningResult {
         PluginRunningResult::GoodNext
     }
