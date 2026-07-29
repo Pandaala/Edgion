@@ -133,20 +133,30 @@ for the full schema, defaults, and conflict semantics.
 | Label | Value | Description |
 |-------|-------|-------------|
 | `edgion.io/leader` | `"true"\|"false"` | Pod leader-election marker; the leader Service selects `"true"` |
-| `edgion.io/managed-by` | see below | Lifecycle ownership of the labeled resource |
+| `edgion.io/managed-by` | see below | Provenance marker for a system-managed resource; read by nothing |
 | `edgion.io/acme-resource` | resource name | ACME resource association |
 
 ### `edgion.io/managed-by` Vocabulary
 
-Applies to `EdgionConfigData` (and `Secret`/`EdgionTls` managed by ACME). Declares who owns the resource
-lifecycle and how the controller treats the spec on reconcile.
+Provenance only. **Nothing reads this label** — no handler consults it, and the `managed_by`
+constants in `edgion-resources/src/constants/labels.rs` have no callers anywhere in the workspace.
+Treat it as a marker for a human or a `kubectl get -l` selector, never as an enforcement or
+ownership mechanism.
 
-| Value | Active? | Description |
-|-------|---------|-------------|
-| `operator` | yes (default) | Git/kubectl authoritative; controller never mutates spec. This is the only active mode today. |
-| `acme` | yes | ACME service manages the certificate lifecycle (existing usage on Secrets and EdgionTls). |
-| `center` | **DESIGN-DECLARED, NOT YET IMPLEMENTED** | Placeholder; real data delivered via fed_sync from EdgionCenter. Controller does not overwrite spec from git. Refs always resolve (object exists); overlay-absent fallback yields base. Requires EdgionCenter coordination. |
-| `controller` | **DESIGN-DECLARED, NOT YET IMPLEMENTED** | Controller regenerates body from a template ref. Requires template-engine design. |
+Two values are actually written, both by the service that owns the object's lifecycle, each via
+its own local string literal rather than the constants module:
+
+| Value | Written on | By |
+|-------|-----------|----|
+| `acme` | ACME-issued `Secret` and the auto-generated `EdgionTls` | `edgion-controller/src/services/acme/service.rs`, `.../acme/secret_io.rs` |
+| `conf-sync-ca` | conf-sync CA and certificate `Secret`s | `edgion-controller/src/services/conf_sync_ca/secret_io.rs` |
+
+`operator`, `center`, and `controller` are declared in the constants module but written by nothing
+and read by nothing. In particular, **do not put this label on an `EdgionConfigData`** — it grants
+no ownership and enforces nothing there. That kind is the Center-controlled data overlay with a
+single intended writer; see
+[`../../01-architecture/05-resources/15-edgion-config-data.md`](../../01-architecture/05-resources/15-edgion-config-data.md)
+(Ownership) for why no label-based arbitration exists or is planned.
 
 Constant definitions: `edgion-resources/src/constants/labels.rs` (`managed_by` module).
 

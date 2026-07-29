@@ -1,6 +1,6 @@
 ---
 name: resource-edgion-config-data
-description: EdgionConfigData resource — general-purpose hot-swappable overlay/data primitive. Covers the overlay model (base+overlay, apply_override, fail-to-base), variant taxonomy (KeyList/IpList/typed first-party overlays/Misc), managed-by ownership, and controller/gateway processing.
+description: EdgionConfigData resource — general-purpose hot-swappable overlay/data primitive. Covers the overlay model (base+overlay, apply_override, fail-to-base), variant taxonomy (KeyList/IpList/typed first-party overlays/Misc), ownership (Center-controlled; the managed-by label is inert here), and controller/gateway processing.
 ---
 
 # EdgionConfigData Resource
@@ -52,7 +52,7 @@ and others later) may reference it via a generic `dataRef`.
                 │     EdgionConfigData        │  general-purpose, hot-swappable
                 │  (overlay / data)     │  KeyList/IpList + typed overlays + Misc
                 └──────────────────────┘
-           origin-agnostic: operator | controller | center (managed-by label)
+           Center-controlled data; not an ops-repo artifact (see Ownership)
 ```
 
 - **Base** (`EdgionPlugins` / `EdgionStreamPlugins`, git-owned): holds complete, safe default config — decision
@@ -161,20 +161,56 @@ re-applies `apply_override` on each request from the current snapshot.
   `overlay_type_mismatch` label on the relevant plugin's event counter).
 - **Enable=false:** plugin skipped via the shared `effective_switch` helper.
 
-## Managed-By Ownership
+## Ownership
 
-The `edgion.io/managed-by` **label** on an EdgionConfigData object declares who owns its lifecycle. See
-`skills/02-features/05-annotations/00-annotations-overview.md` (Labels section) for the full vocabulary:
+EdgionConfigData is the **Center-controlled data overlay**, and its bodies are not an ops-repo
+artifact. The split is deliberate: the git-owned half of the model is the base config
+(`EdgionPlugins` and friends), which carries the *logic*; the EdgionConfigData overlay carries
+only *data* and exists to be pushed and hot-swapped by EdgionCenter. There is therefore a single
+intended writer for this kind, no ownership arbitration to perform, and none implemented.
 
-| Value | Meaning | Controller behavior |
-|-------|---------|---------------------|
-| `operator` (default) | Git/kubectl authoritative | Controller never mutates spec |
-| `acme` | ACME-managed (existing usage on Secrets/EdgionTls) | ACME service owns lifecycle |
-| `center` | Placeholder; data pushed via fed_sync from EdgionCenter | Controller does not overwrite from git — **DESIGN-DECLARED, NOT YET IMPLEMENTED** |
-| `controller` | Body regenerated from a template ref | Controller regenerates spec — **DESIGN-DECLARED, NOT YET IMPLEMENTED** |
+**The `edgion.io/managed-by` label is inert on EdgionConfigData — nothing reads it.**
 
-`operator` is the only active ownership mode today. `center` and `controller` require EdgionCenter
-coordination (I1 in `tasks/todo/edgion-config-data-overlay-refactor/05-issues.md`).
+- No handler consults it. `resource_processor/handlers/edgion_config_data.rs` has no label logic,
+  and the reconcile path only stores the spec, requeues dependents, and writes status (see the
+  four sections above). The `operator` value's stated meaning, "controller never mutates spec", was
+  therefore not merely unenforced but wrong: the Controller's own Admin API failover endpoint
+  (`edgion-controller/src/api/region_route_handlers.rs`) rewrites `spec.data.config.regions` on an
+  EdgionConfigData, and consults no label while doing it.
+- The `managed_by` constants in `edgion-resources/src/constants/labels.rs` have **no callers**
+  anywhere in the workspace. They are declarations, not a mechanism.
+- The label's only live use is on `Secret` and `EdgionTls`, never on EdgionConfigData, and it does
+  not go through those constants: ACME writes `acme`
+  (`edgion-controller/src/services/acme/service.rs`,
+  `edgion-controller/src/services/acme/secret_io.rs`) and the conf-sync CA writes `conf-sync-ca`
+  (`edgion-controller/src/services/conf_sync_ca/secret_io.rs`), each via its own local string
+  literal.
+
+Do not put `edgion.io/managed-by` on an EdgionConfigData manifest or sample: it changes no
+behavior and reads as an ownership guarantee that does not exist. See
+`skills/02-features/05-annotations/00-annotations-overview.md` (Labels section) for the label's
+actual vocabulary, which covers only ACME- and conf-sync-CA-owned `Secret`s plus the
+ACME-generated `EdgionTls`.
+
+### Why there is no `center` / `controller` ownership mode
+
+Both values were previously declared here as pending EdgionCenter coordination. The label-based
+ownership design that would have consumed them — Center stamping `managed-by: center`, refusing to
+take over an unowned object, and surfacing an `unowned-conflict` drift state — lived in
+EdgionCenter's `tasks/pending/global-resource-management/` package, which was **superseded and
+rejected on 2026-07-26** in favour of
+`tasks/pending/center-controller-interaction-convergence/`. The current program authority,
+`EdgionCenter/docs/superpowers/specs/2026-07-26-center-controller-write-model-convergence-design.md`,
+declares no `managed-by` mechanism at all. Center's cross-cluster `GlobalResources` view is
+read-only; Center's two *dedicated* write paths — the pair sharing its convergence-outcome write
+core — are RegionRouteOverride failover and row-level copy, while general EdgionConfigData
+create / update / delete stays available through the generic Controller Admin proxy, which is what
+the default federation policy grants. Write safety throughout is a CAS property — `If-Match` on
+`metadata.resourceVersion`, with explicit `converged` / `superseded` / `conflict` outcomes — not an
+ownership epoch.
+
+Full analysis and the decision to keep it that way:
+[`../../04-review/architecture/edgion-config-data-managed-by-is-inert.md`](../../04-review/architecture/edgion-config-data-managed-by-is-inert.md).
 
 ## Cross-Resource Relationships
 
@@ -321,8 +357,6 @@ kind: EdgionConfigData
 metadata:
   name: region-overlay
   namespace: edgion-system
-  labels:
-    edgion.io/managed-by: operator
 spec:
   enable: true
   data:

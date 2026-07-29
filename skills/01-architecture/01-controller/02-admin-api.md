@@ -116,7 +116,7 @@ Response `data` shape:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/reload` | Request asynchronous lifecycle rebuild: stop controllers, clear the current ConfigSyncServer, call `ControllerRuntime::reset()`, build a new server, and replay initialization |
+| POST | `/api/v1/reload` | Request asynchronous lifecycle rebuild: stop controllers, clear the current ConfigSyncServer, call `ControllerRuntime::reset()`, build a new server, and replay initialization. **The 200 is an initiation acknowledgement only** — `request_reload()` is fire-and-forget, so a reload that starts and then wedges still answers 200. The new `server_id` is the completion signal: observe it via conf_sync re-list (Gateway), the federation watch stream (Center — see `EdgionCenter/crates/center-app/src/api/reload_ops.rs`), or by polling `GET /api/v1/server-info`. Returns `Retry-After: 5` on 503 (reload already in progress) |
 
 ### Namespaced Resource CRUD
 
@@ -138,16 +138,73 @@ In non-K8s mode, create and update operations:
 2. Automatically call `next_resource_version()` to assign an incrementing `resourceVersion`
 
 Update **and delete** endpoints support optimistic concurrency through a strong
-`If-Match: "<resourceVersion>"` header. For updates the request body's
-`metadata.resourceVersion` is used as a compatibility fallback when the header
-is absent (`DELETE` has no body, so the header is its only form). A mismatch
-returns `409 Conflict`; a missing precondition preserves unconditional
-behavior for older clients, and `If-Match: *` means "must exist" and is
-likewise unconditional. Weak (`W/"..."`) and multi-value ETags are rejected
-with `400`. File-system comparison runs inside the per-resource lock, etcd
-combines the comparison with its mod-revision transaction, and Kubernetes
-compares the fetched object before a replace that retains the fetched native
-resourceVersion.
+`If-Match: "<resourceVersion>"` header. `expected_resource_version()`
+(`api/common.rs`) resolves the precondition in this order: the `If-Match`
+header, then — for updates only — the request body's `metadata.resourceVersion`
+as a compatibility fallback (`DELETE` has no body, so the header is its only
+form), then none. A mismatch returns `409 Conflict`. Weak (`W/"..."`) and
+multi-value ETags are rejected with `400`. File-system comparison runs inside
+the per-resource lock, etcd combines the comparison with its mod-revision
+transaction, and Kubernetes compares the fetched object before a replace that
+retains the fetched native resourceVersion.
+
+**The precondition is opt-in, and a write without one is last-writer-wins.**
+State this plainly to callers rather than treating it as a compatibility
+concession: a `PUT` or `DELETE` that carries neither an `If-Match` header nor a
+body `metadata.resourceVersion` is an **unconditional replace of every field the
+caller owns** (`labels`, `annotations`, `spec`, top-level operator fields).
+`merge_operator_update_*` takes `apiVersion`, `kind`, and `status` from the
+stored object and preserves server-created metadata — except that the non-K8s
+backends persist the request's `resourceVersion` and `generation`, per the
+freshly-allocated-version rule below. An update another client committed after
+this caller performed its `GET` is silently discarded, and this caller still
+receives `200`/`204`. Nothing reports the loss to either party.
+
+Two things that look like protection are not. `If-Match: *` is unconditional
+too; it means only "must exist", and existence is already enforced by the
+update/delete path itself (`ConfWriterError::NotFound` → `404`). And
+`api/resource_locks.rs` only serialises writers so a read-modify-write cannot
+interleave, which makes a lost update *deterministic* rather than *detected* —
+it is also taken on just two paths (the generic `EdgionConfigData` `PUT` arm of
+`update_namespaced` and the RegionRoute failover RMW), not on every write.
+
+A `409` is still reachable without a client precondition — **on `PUT` only** —
+but it comes from the backend's own get→write window, which is far narrower than
+the caller's cross-request read→modify→write: etcd commits through
+`txn_put_if_mod_revision` against the revision it just read, and the Kubernetes
+replace carries the fetched native `resourceVersion` so the API server applies
+its own optimistic concurrency. The file-system backend has no CAS of its own
+(read, compare, write under `update_lock` — it enforces a *supplied* precondition
+and nothing more). No backend *requests* a delete
+precondition when the caller sent none, so none generates a `409` on that path
+(etcd takes the plain-delete branch and maps a zero-delete to `NotFound`,
+Kubernetes passes `preconditions: None`, and file-system skips the pre-read) —
+though in K8s mode `map_kube_error` forwards any API-server `409` verbatim, so
+that is a promise about what Edgion asks for, not about what the API Server can
+return. So a precondition-free `PUT` may still see a `409` it did not ask for,
+and no caller may read the absence of one as "my update was the only one".
+
+Detection of the caller's *own* conflict is therefore the caller's
+responsibility — it must send the precondition from its own `GET`.
+`EdgionCenter`'s dedicated `EdgionConfigData` write path always does (`If-Match`
+is in the federation proxy header allowlist, and the path refuses to dispatch
+without a version); its dashboard's generic resource `PUT` sends one whenever
+the edited document carries a `resourceVersion`. `edgion-cli apply`
+(`commands/apply.rs`, which performs a `GET` but uses only its status code),
+`edgion-cli delete`, the `edgion-tests` `apply_yaml` helper
+(`client/framework.rs`), an ad-hoc `curl`, and any GitOps tool issuing a plain
+`PUT` send none, and are last-writer-wins by construction. (A hand-written
+manifest that happens to carry `metadata.resourceVersion` makes such a `PUT`
+conditional through the body fallback — usually by accident.)
+
+This is deliberate parity with the Kubernetes API, whose update verb is likewise
+unconditional when `metadata.resourceVersion` is empty (upstream behavior, not
+something this repository asserts or tests). Requiring the
+precondition here would make this API stricter than the API it mirrors, and in
+K8s mode the guarantee would be unenforceable anyway because `kubectl apply`
+writes the same CRD without passing through this API at all. See
+[`../../04-review/architecture/admin-api-write-precondition-opt-in.md`](../../04-review/architecture/admin-api-write-precondition-opt-in.md)
+for the full decision.
 
 In non-K8s mode every persisted write must carry a **freshly allocated**
 `resourceVersion` (`next_resource_version()`), because those backends store the

@@ -187,8 +187,16 @@ where
 ///
 /// A strong `If-Match` ETag takes precedence. The body resourceVersion is a
 /// compatibility fallback for clients that have not started sending the
-/// header yet. Missing tokens intentionally preserve unconditional updates for
-/// old clients.
+/// header yet.
+///
+/// `None` — no header and no body version — is the documented contract, not a
+/// concession to old clients: the write becomes unconditional and is
+/// last-writer-wins, so another client's update is silently discarded while
+/// this caller still receives `200`/`204`. Callers that want `409`-on-conflict
+/// must send the precondition from their own `GET`. `If-Match: *` also resolves
+/// to `None`; it means only "must exist", which the update/delete path already
+/// enforces via `ConfWriterError::NotFound`. Do not "fix" this into a `428` —
+/// see `skills/04-review/architecture/admin-api-write-precondition-opt-in.md`.
 pub fn expected_resource_version(headers: &HeaderMap, body: &str) -> Result<Option<String>, StatusCode> {
     if let Some(value) = headers.get(IF_MATCH) {
         let value = value.to_str().map_err(|_| StatusCode::BAD_REQUEST)?.trim();

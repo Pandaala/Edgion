@@ -369,7 +369,21 @@ fn apply_center_reload(state: &AdminState) {
 ///
 /// Gateway clients will detect the server_id change and re-list all resources.
 ///
-/// Returns `Retry-After: 5` on 503 — a reload already in progress is a transient condition.
+/// Returns `Retry-After: 5` on 503. `request_reload()` refuses for more than one
+/// transient reason — a reload is already queued, or the config center is not
+/// started/ready — so the response body, not the status, is what says which.
+///
+/// **The 200 is an initiation acknowledgement only.** `request_reload()` is
+/// fire-and-forget, so this response can promise nothing about steps 1-4 above;
+/// a reload that starts and then wedges still answers 200 here. There is
+/// deliberately no completion signal on this response and no callback: the new
+/// `server_id` from step 3 *is* the completion signal, and it reaches observers
+/// on their own channels — Gateways via conf_sync re-list, and Center via the
+/// `server_id` on the federation watch stream (which Center compares against
+/// the value it cached before dispatching; see
+/// `EdgionCenter/crates/center-app/src/api/reload_ops.rs`). Callers that need a
+/// terminal state must observe one of those, or poll
+/// `GET /api/v1/server-info`, rather than reading this 200 as "reloaded".
 async fn reload_all_resources(State(state): State<Arc<AdminState>>) -> impl IntoResponse {
     tracing::info!(
         component = "admin_api",

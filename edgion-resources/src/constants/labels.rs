@@ -20,34 +20,37 @@ pub mod dns {
     pub const MANAGED_BY_VALUE: &str = "edgion-dns-resolver";
 }
 
-/// `edgion.io/managed-by` label — declares the lifecycle owner of a resource.
+/// `edgion.io/managed-by` label — provenance marker for a system-managed resource.
 ///
-/// Used on `EdgionConfigData` (and `Secret`/`EdgionTls` managed by ACME).
-/// The label controls how the controller treats the spec on reconcile:
-/// - `operator` (default): git/kubectl authoritative; controller never mutates spec.
-/// - `acme`: ACME service manages the certificate lifecycle (existing usage).
-/// - `center`: placeholder object; real data delivered via fed_sync from EdgionCenter
-///   — controller does not overwrite spec from git.
-///   **DESIGN-DECLARED, NOT YET IMPLEMENTED** — pending EdgionCenter coordination.
-/// - `controller`: controller regenerates body from a template ref.
-///   **DESIGN-DECLARED, NOT YET IMPLEMENTED** — pending template-engine design.
+/// **This is not an enforcement mechanism, and these constants have no callers.** Nothing in the
+/// workspace reads the label: no handler consults it, and the two services that write it use
+/// their own local string literals rather than the values below. Keep it that way unless a
+/// design explicitly introduces a reader — a value here does not grant ownership of anything.
+///
+/// Written in practice on `Secret` and the ACME-generated `EdgionTls`:
+/// - `acme` — `edgion-controller/src/services/acme/service.rs`, `.../acme/secret_io.rs`
+/// - `conf-sync-ca` — `edgion-controller/src/services/conf_sync_ca/secret_io.rs`
+///   (not declared below)
+///
+/// It is deliberately **not** used on `EdgionConfigData`. That kind is the Center-controlled data
+/// overlay with a single intended writer, so there is no ownership to arbitrate; see
+/// `skills/01-architecture/05-resources/15-edgion-config-data.md` (Ownership).
 pub mod managed_by {
     /// Label key
     pub const KEY: &str = "edgion.io/managed-by";
 
-    /// Default ownership: git/kubectl authoritative; controller never mutates spec.
-    /// This is the only actively reconciled mode today.
+    /// Git/kubectl-authored resource. Declared for completeness; written by nothing.
     pub const OPERATOR: &str = "operator";
 
-    /// ACME service owns the resource lifecycle (existing usage on Secrets and EdgionTls).
+    /// ACME service owns the resource lifecycle (Secrets and the generated EdgionTls).
     pub const ACME: &str = "acme";
 
-    /// Placeholder: real data is pushed via fed_sync from EdgionCenter.
-    /// Controller does not overwrite spec from git.
-    /// **NOT YET IMPLEMENTED** — requires EdgionCenter coordination (I1).
+    /// Reserved for EdgionCenter-pushed data. No reader and no writer exists; the label-based
+    /// ownership design that would have consumed this was rejected in favour of the CAS write
+    /// model — see the skill section referenced above before reintroducing it.
     pub const CENTER: &str = "center";
 
-    /// Controller regenerates spec body from a template ref.
-    /// **NOT YET IMPLEMENTED** — requires template-engine design.
+    /// Reserved for a controller-regenerated body from a template ref. No reader, no writer,
+    /// and no template engine.
     pub const CONTROLLER: &str = "controller";
 }

@@ -620,7 +620,7 @@ Edgion is under active development. The following are key priorities for the nea
 
 **Request Latency Histogram Enhancements.** Building on the existing `edgion_gateway_request_duration_ms` metric, introduce Native Histogram (Prometheus native histogram) support for higher-precision latency distribution data. Additional per-phase histograms will be added for upstream connection establishment time and TLS handshake time.
 
-**Federated Management Center.** Build a multi-cluster unified configuration synchronization platform (Edgion Center) that connects multiple Controller instances via gRPC bidirectional streams, enabling cross-cluster configuration distribution, state aggregation, and unified operations. The federated center exposes an HTTP Admin API for global configuration management and includes a built-in scheduler that periodically audits configuration consistency across clusters.
+**Federated Management Center.** Build a multi-cluster unified configuration synchronization platform (Edgion Center) that connects multiple Controller instances via gRPC bidirectional streams, enabling cross-cluster configuration distribution, state aggregation, and unified operations. The federated center exposes an HTTP Admin API for global configuration management; cluster state flows back through a reverse list/watch of the Center-writable configuration overlay and coalesced statistics reports, not through periodic polling.
 
 ---
 

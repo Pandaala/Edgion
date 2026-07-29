@@ -63,7 +63,7 @@ Service 级别的后端行为（主动健康检查、异常点检测/熔断、pa
 | `edgion.io/cert-provider` | `Gateway.spec.listeners[*].tls.options` | Listener TLS 证书来源扩展 |
 | `edgion.io/client-certificate-ref` | `BackendTLSPolicy.spec.options` | 上游 mTLS 客户端证书引用 |
 | `edgion.io/leader` | `metadata.labels` | K8s HA 领导者标签 |
-| `edgion.io/managed-by` | `metadata.labels` | ACME 等系统生成资源的归属标签 |
+| `edgion.io/managed-by` | `metadata.labels` | ACME 等系统生成资源的来源标记；系统不读取该标签 |
 | `edgion.io/acme-resource` | `metadata.labels` | ACME 关联资源标签 |
 
 ## 系统保留与测试专用键

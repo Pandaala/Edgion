@@ -57,7 +57,7 @@ These are labels, not annotations.
 | Key | Where | Effect |
 |-----|-------|--------|
 | `edgion.io/leader` | controller Pod / leader Service selection | String `"true"` or `"false"`; the leader Service selects `"true"`. |
-| `edgion.io/managed-by` | managed resources | Indicates lifecycle ownership, including ACME resources and conf-sync CA/certificate Secrets. |
+| `edgion.io/managed-by` | ACME `Secret`s / generated `EdgionTls`, conf-sync CA and certificate `Secret`s | Provenance only — records which service created the object. Read by nothing; not an ownership or enforcement mechanism. |
 | `edgion.io/acme-resource` | ACME-managed Secrets and related internal resources | Stores the owning `EdgionAcme` resource name/key. |
 
 ## Quick Placement Test

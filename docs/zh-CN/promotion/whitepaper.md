@@ -626,7 +626,7 @@ Edgion 正在积极演进，以下是近期和中期的重点方向：
 
 **请求延迟直方图增强。** 在现有 `edgion_gateway_request_duration_ms` 基础上，引入 Native Histogram（Prometheus 原生直方图）支持，提供更高精度的延迟分布数据。同时增加上游连接建立耗时、TLS 握手耗时等细分阶段的独立直方图。
 
-**联邦管理中心。** 构建多集群统一配置同步平台（Edgion Center），通过 gRPC 双向流连接多个 Controller 实例，实现跨集群的配置分发、状态聚合和统一运维。联邦中心提供 HTTP Admin API 用于全局配置管理，并内置调度器定期巡检各集群的配置一致性。
+**联邦管理中心。** 构建多集群统一配置同步平台（Edgion Center），通过 gRPC 双向流连接多个 Controller 实例，实现跨集群的配置分发、状态聚合和统一运维。联邦中心提供 HTTP Admin API 用于全局配置管理；集群状态通过对可写配置覆盖层的反向 list/watch 与合并后的统计上报回流，而非周期性轮询。
 
 ---
 

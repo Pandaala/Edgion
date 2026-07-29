@@ -32,12 +32,13 @@ interleave either. The lock lives in the shared `api::resource_locks` module
   re-deserializes a fresh `serde_json::Value` from storage on every call, so a lock
   "inside the resource" is meaningless — concurrent requests hold independent Values.
   The lock must live in a cross-request, per-resource-identity structure.
-- Neither backend provides optimistic concurrency on this path: the K8s
-  `update_one` (`kubernetes/storage.rs`) re-fetches the *current* `resourceVersion`
-  immediately before `replace` and stamps it on, so it does **not** carry the
-  handler's read-time version; the FileSystem backend has no version check at all.
-  The TOCTOU window therefore exists on both backends and cannot be closed by
-  relying on the K8s API server — an in-process lock is the only protection.
+- **As of this fix (2026-06-01)** neither backend provided optimistic concurrency on
+  this path: the K8s `update_one` (`kubernetes/storage.rs`) re-fetched the *current*
+  `resourceVersion` immediately before `replace` and stamped it on, so it did **not**
+  carry the handler's read-time version; the FileSystem backend had no version check
+  at all. The TOCTOU window therefore existed on both backends and could not be closed
+  by relying on the K8s API server — an in-process lock was the only protection.
+  This is no longer the current state; see [Superseded in Part](#superseded-in-part--cas-landed-later-2026-07-28) below.
 - The reconcile/watch loop is **not** a concurrent spec writer: K8s reconcile
   persists via `patch_status` on the status subresource
   (`kubernetes/resource_controller.rs`) and the FileSystem reconcile writes a separate
@@ -58,14 +59,68 @@ interleave either. The lock lives in the shared `api::resource_locks` module
   failover RMW competitor); other kinds gain nothing from locking, so they are left
   lock-free to keep blast radius minimal.
 
+## Superseded in Part — CAS landed later (2026-07-28)
+
+The backends now **do** reject a stale write on this path. `update_one_if_version`
+threads a caller-supplied `resourceVersion` precondition to the writer, and all three
+backends enforce it via `ensure_expected_resource_version_value`
+(`conf_mgr/conf_center/common.rs`): the FileSystem compares inside its per-key
+`update_lock`, etcd compares in-process and *then* fuses the write into a
+`txn_put_if_mod_revision` (that transaction's compare is on etcd's own `mod_revision`,
+guarding the backend's internal get→put window — a different value guarding a different
+window), and Kubernetes compares the fetched object immediately before `replace`
+(`kubernetes/storage.rs`). `patch_edgion_config_data_failover` supplies one it read
+itself and retries a `Conflict` twice (three attempts total); `update_namespaced`
+forwards whatever the client sent — its `If-Match` or body `metadata.resourceVersion`,
+which is often nothing.
+
+So "the backends ignore `resourceVersion`" must no longer be repeated, and the lock's
+rationale has moved rather than disappeared. What is still true is the short-circuit:
+`ensure_expected_resource_version_value` returns `Ok(())` when the caller supplies no
+version, so a precondition-free write stays an unconditional last-writer-wins replace.
+That opt-in contract is deliberate — see
+[`../architecture/admin-api-write-precondition-opt-in.md`](../architecture/admin-api-write-precondition-opt-in.md).
+
+The lock therefore stays load-bearing for what the precondition does not cover:
+
+1. No lock-taking writer can land inside another's get → patch → write window.
+   Not just a precondition-free replace — a conditional PUT that wins, or a second
+   failover request, does the same thing: it turns the failover in progress into a CAS
+   conflict and, under sustained contention, exhausts its three attempts and fails the
+   request. CAS prevents the *loss*, not the *conflict*, and the retry budget is finite.
+   Scope this claim to the two lock-takers. `delete_namespaced`
+   (`delete_one_if_version`) and `wipe_all` (`delete_one`) take no lock and can still
+   land mid-window; they surface as `NotFound` and fail the request (HTTP 500), which
+   is not a lost update.
+2. Where the stored object carries no `metadata.resourceVersion` at all, the failover
+   has nothing to send and its own write is unconditional (`region_route_handlers.rs`
+   reads the version off the snapshot it patched and passes `None` when the pointer is
+   absent). Reachable only outside Kubernetes, which assigns a version server-side: a
+   hand-authored YAML file in the FileSystem `conf_dir` (nothing normalizes it —
+   `bump_resource_version_floor` only raises the in-memory allocator floor, it never
+   writes back), or an object put into etcd out of band. On that path the lock is the
+   sole protection against a genuine silent lost update, exactly as it was in 2026-06.
+   The exposure self-heals: it lasts only until the first Admin API write to that
+   object stamps a version — `set_fresh_resource_version` on the failover path,
+   `update_resource_version` (via `parse_resource_and_update_version`) on the generic
+   PUT — which FileSystem and etcd then persist through `merge_operator_update_yaml`.
+
+It does **not** protect a caller that sends a stale unconditional write after another
+writer committed; detecting that is the caller's job. The `api/resource_locks.rs`
+module doc was corrected to say all of this (finding `new_work-19`, closed 2026-07-28);
+reject any re-report claiming either that the backends never check `resourceVersion` or
+that CAS has made the lock obsolete.
+
 ## Fix Suggestions Not Accepted
 
 - "Rely on `resourceVersion` optimistic concurrency / CAS in the storage backend"
-  — the original finding assumed the K8s backend already rejects a stale write via
-  `resourceVersion`; it does not (see Core Rationale). A real `compare_and_swap_one`
-  round-tripping the read-time version is the general backend-correct fix but a wider
-  `ConfCenter` trait change; the in-process lock is sufficient for the single-process
-  controller and is what shipped. (Re-open if a cross-process writer ever appears.)
+  — declined at the time, and since **superseded**. The original finding assumed the
+  K8s backend already rejected a stale write via `resourceVersion`; in 2026-06 it did
+  not (see Core Rationale). A real `compare_and_swap_one` round-tripping the read-time
+  version was judged the general backend-correct fix but a wider `ConfCenter` trait
+  change; the in-process lock was sufficient for the single-process controller and is
+  what shipped. That wider change has since landed as `update_one_if_version` — it
+  complements the lock rather than replacing it (see Superseded in Part).
 - "Single global failover mutex" — workable/simplest, rejected for per-key so distinct
   resources don't block each other; per-key is the cleaner expression of the invariant.
 - "Lock field on `AdminState`" — rejected to keep blast radius minimal: it would touch
@@ -86,8 +141,10 @@ Re-open this decision only if:
   through `resource_locks::lock_resource` (re-opens the interleaving window).
 - `patch_edgion_config_data_failover` starts mutating across multiple resources in one
   call (single per-key lock no longer suffices; lock-ordering required).
-- A real `compare_and_swap_one` is added to the `ConfCenter` trait (this ad-hoc lock
-  can then be replaced by it).
+- ~~A real `compare_and_swap_one` is added to the `ConfCenter` trait (this ad-hoc lock
+  can then be replaced by it).~~ This happened (`update_one_if_version`) and was
+  re-evaluated: the lock is **not** replaced by it, because the precondition is opt-in.
+  See Superseded in Part.
 
 ## Reference Cases
 

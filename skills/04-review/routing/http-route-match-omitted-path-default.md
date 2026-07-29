@@ -51,17 +51,26 @@ gateway-routing-only fix leaves three of them on the `None` branch. Defaulting
 at deserialization fixes all five at once and keeps File/Etcd byte-identical to
 what a K8s cluster would have served.
 
-**3. The controller's two `None` branches are unaffected — by design**
+**3. The controller's two `None` branches — CORRECTED 2026-07-29**
 
-Both delegation sites were checked and neither regresses:
+The original closure claimed both delegation sites were unaffected. That was
+true only for the two cases it checked, and it missed a third:
 
 - `route_delegation.rs` scope derivation maps `None => ("PathPrefix", "/")` —
   literally the same value the new default produces, so it is a no-op change.
+  (Still true.)
 - `route_delegation.rs` synthesizes an `HTTPRouteMatch { path: None, .. }`
   **in code** for a child rule that declares no `matches` at all. Code-built
-  values never pass through `Deserialize`, so that sentinel stays `None` and
-  `merge_match`'s "a child match with no path inherits the scope prefix" branch
-  remains live and load-bearing.
+  values never pass through `Deserialize`, so that sentinel stays `None`.
+  (Still true.)
+- **Missed**: a child rule that DOES declare `matches` whose individual match
+  omits `path` (method/header-only). Those matches ARE deserialized, so the
+  backfill turned them into an explicit `PathPrefix /`, the containment check
+  judged `/` outside every delegated prefix, and the rule was dropped —
+  `child_match_without_path_inherits_prefix` sat red from this commit until
+  the two-repo `cargo test` gate caught it. Fixed by treating the structural
+  default as inherit-scope-prefix in `merge_match`; see
+  [delegation-root-prefix-inherits-scope.md](delegation-root-prefix-inherits-scope.md).
 
 The single behavior delta is a File/Etcd child rule that *explicitly declares*
 `matches` with a `path`-less item: it now becomes `PathPrefix /`, fails the

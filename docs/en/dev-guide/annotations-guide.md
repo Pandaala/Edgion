@@ -67,7 +67,7 @@ for the full schema, or the user guides:
 | `edgion.io/cert-provider` | `Gateway.spec.listeners[*].tls.options` | Listener TLS certificate-provider extension |
 | `edgion.io/client-certificate-ref` | `BackendTLSPolicy.spec.options` | Upstream mTLS client certificate reference |
 | `edgion.io/leader` | `metadata.labels` | K8s HA leader label |
-| `edgion.io/managed-by` | `metadata.labels` | Ownership label for ACME and other system-managed resources |
+| `edgion.io/managed-by` | `metadata.labels` | Provenance marker on ACME and other system-managed resources; not read by the system |
 | `edgion.io/acme-resource` | `metadata.labels` | ACME ownership/resource label |
 
 ## Reserved And Test-Only Keys

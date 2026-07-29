@@ -162,8 +162,6 @@ kind: EdgionConfigData
 metadata:
   name: region-overlay
   namespace: edgion-system
-  labels:
-    edgion.io/managed-by: operator
 spec:
   enable: true
   data:

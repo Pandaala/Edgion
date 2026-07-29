@@ -28,7 +28,7 @@
   - Stream log：长连接（WebSocket、TCP）的连接生命周期事件
   - 灵活输出：本地文件或远程 Kafka / Elasticsearch
 - **无需 Kubernetes 部署** — 可独立运行于裸金属或虚拟机。本地文件或 etcd 作为配置后端，无需 Kubernetes。
-- **联邦集群设计** — 无状态的 Center 连接多个跨地域的 Controller，实现集群级和区域级的高级路由控制。
+- **联邦集群设计** — 无状态的 Center 连接多个跨地域的 Controller，提供跨集群资源可见性、配置覆盖层写入与区域路由故障切换。
 - 完整文档请参见 [English Docs](../en/README.md) · [中文文档导航](#文档)。
 
 ## 架构
@@ -108,7 +108,7 @@ graph TD;
 
 | 组件 | 二进制 | 职责 |
 |------|--------|------|
-| **Center** | `edgion-center` | 联邦控制面。连接多个跨集群或跨地域的 Controller，实现全局路由策略和跨集群可见性。 |
+| **Center** | `edgion-center` | 联邦控制面（已拆分至独立的 EdgionCenter 仓库）。连接多个跨集群或跨地域的 Controller，实现全局路由策略和跨集群可见性。 |
 | **Controller** | `edgion-controller` | 监听 Kubernetes CRD 或本地 YAML，验证并预解析资源，通过 gRPC 向 Gateway 流式同步配置。处理 ACME 和状态更新。 |
 | **Gateway** | `edgion-gateway` | 基于 Pingora 的无状态数据面。从 Controller 接收配置，执行路由、插件链、负载均衡、TLS 和 Access Log。 |
 | **CLI** | `edgion-cli` | 用于检查和操作 Controller 及 Gateway 实例的管理工具。 |

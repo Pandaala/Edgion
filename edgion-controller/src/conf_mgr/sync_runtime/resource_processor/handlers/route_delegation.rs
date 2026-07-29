@@ -651,11 +651,29 @@ enum MergeResult {
     Merged(HTTPRouteMatch),
 }
 
+/// True for the Gateway API structural default `{type: PathPrefix, value: "/"}`.
+///
+/// `edgion-resources` backfills this shape whenever `HTTPRouteMatch.path` is
+/// omitted (the File/Etcd backends never pass through K8s admission), so by
+/// the time a child rule reaches the flattener an "omitted" path is
+/// indistinguishable from an explicit root prefix. Inside a delegated scope
+/// both mean "everything delegated to me" and inherit the scope prefix;
+/// treating them as a literal `/` instead would put every method/header-only
+/// child match outside its own scope and drop it.
+fn is_root_prefix_match(p: &HTTPPathMatch) -> bool {
+    p.match_type.as_deref().unwrap_or("PathPrefix") == "PathPrefix" && p.value.as_deref().unwrap_or("/") == "/"
+}
+
 /// Merge one child match into one delegated scope.
 fn merge_match(scope: &DelegatedScope, child_match: &HTTPRouteMatch) -> MergeResult {
-    // Path containment. A child match with no path inherits the scope prefix.
+    // Path containment. A child match with no path — or with the structural
+    // default `PathPrefix /` that stands in for it — inherits the scope prefix.
     let merged_path: HTTPPathMatch = match child_match.path.as_ref() {
         None => HTTPPathMatch {
+            match_type: Some("PathPrefix".to_string()),
+            value: Some(scope.prefix.clone()),
+        },
+        Some(p) if is_root_prefix_match(p) => HTTPPathMatch {
             match_type: Some("PathPrefix".to_string()),
             value: Some(scope.prefix.clone()),
         },
