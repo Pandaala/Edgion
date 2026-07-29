@@ -54,10 +54,10 @@ impl Segment {
     }
 }
 
-#[derive(Clone)]
 struct BodySnapshot {
     segments: Vec<Segment>,
     len: u64,
+    sha256: OnceCell<[u8; 32]>,
 }
 
 impl BodySnapshot {
@@ -65,6 +65,7 @@ impl BodySnapshot {
         Self {
             segments: Vec::new(),
             len: 0,
+            sha256: OnceCell::new(),
         }
     }
 
@@ -79,6 +80,7 @@ impl BodySnapshot {
         Ok(Self {
             segments: vec![Segment::SourceRange { source, offset: 0, len }],
             len,
+            sha256: OnceCell::new(),
         })
     }
 
@@ -90,6 +92,7 @@ impl BodySnapshot {
         Ok(Self {
             segments: vec![Segment::Inline(body)],
             len,
+            sha256: OnceCell::new(),
         })
     }
 
@@ -105,7 +108,11 @@ impl BodySnapshot {
                 .checked_add(segment.len()?)
                 .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))
         })?;
-        Ok(Self { segments, len })
+        Ok(Self {
+            segments,
+            len,
+            sha256: OnceCell::new(),
+        })
     }
 
     fn contains_disk(&self) -> bool {
@@ -225,8 +232,13 @@ struct MutationState {
     generation: u64,
 }
 
+struct InitialBody {
+    source: Arc<BodySource>,
+    snapshot: Arc<BodySnapshot>,
+}
+
 struct BodyStorageViewInner {
-    source: OnceLock<Arc<BodySource>>,
+    initial: OnceLock<InitialBody>,
     materialized: OnceCell<Bytes>,
     mutation: RwLock<MutationState>,
     max_body_size_bytes: u64,
@@ -251,17 +263,20 @@ impl BodyStorageView {
         if let Some(snapshot) = mutation.snapshot.as_ref() {
             return Ok((Arc::clone(snapshot), mutation.generation));
         }
-        let source = Arc::clone(self.inner.source.get().ok_or(BodyReadError::Incomplete)?);
-        Ok((Arc::new(BodySnapshot::from_source(source)?), mutation.generation))
+        let initial = self.inner.initial.get().ok_or(BodyReadError::Incomplete)?;
+        Ok((Arc::clone(&initial.snapshot), mutation.generation))
     }
 
     fn publish(&self, expected_generation: u64, snapshot: BodySnapshot) -> Result<(), BodyOperationError> {
+        self.publish_arc(expected_generation, Arc::new(snapshot))
+    }
+
+    fn publish_arc(&self, expected_generation: u64, snapshot: Arc<BodySnapshot>) -> Result<(), BodyOperationError> {
         if snapshot.len > self.inner.max_body_size_bytes {
             return Err(BodyOperationError::Body(BodyReadError::BufferLimitExceeded {
                 limit: self.inner.max_body_size_bytes,
             }));
         }
-        let snapshot = Arc::new(snapshot);
         let mut mutation = self.inner.mutation.write();
         if mutation.generation != expected_generation {
             return Err(BodyOperationError::Body(BodyReadError::Incomplete));
@@ -285,8 +300,8 @@ impl BodyStorageView {
                 .map_err(operation_to_body_error);
         }
 
-        let source = self.inner.source.get().ok_or(BodyReadError::Incomplete)?;
-        match source.as_ref() {
+        let initial = self.inner.initial.get().ok_or(BodyReadError::Incomplete)?;
+        match initial.source.as_ref() {
             BodySource::Memory(body) => Ok(body.clone()),
             BodySource::Disk { file, len } => {
                 let body = self
@@ -429,7 +444,23 @@ impl BodyStorageView {
     }
 
     pub async fn sha256_scan(&self, max_scan_bytes: u64) -> Result<BodyScanResult<[u8; 32]>, BodyOperationError> {
-        self.scan_raw(Sha256Scanner(Sha256::new()), max_scan_bytes).await
+        let (snapshot, _) = self.snapshot().map_err(BodyOperationError::Body)?;
+        let scan_snapshot = Arc::clone(&snapshot);
+        let mut bytes_scanned = 0;
+        let value = snapshot
+            .sha256
+            .get_or_try_init(|| async {
+                let scan = self
+                    .scan_snapshot(scan_snapshot, Sha256Scanner(Sha256::new()), max_scan_bytes)
+                    .await?;
+                bytes_scanned = scan.bytes_scanned;
+                Ok::<[u8; 32], BodyOperationError>(scan.value)
+            })
+            .await?;
+        Ok(BodyScanResult {
+            value: *value,
+            bytes_scanned,
+        })
     }
 
     pub fn clear(&self) -> Result<(), BodyOperationError> {
@@ -552,7 +583,7 @@ impl BodyStorageView {
             segments.push(Segment::Inline(replacement));
         }
         segments.extend(snapshot.slice(end..snapshot.len).map_err(operation_to_body_error)?);
-        let next = BodySnapshot::from_segments(segments).map_err(operation_to_body_error)?;
+        let next = Arc::new(BodySnapshot::from_segments(segments).map_err(operation_to_body_error)?);
         if next.len > self.inner.max_body_size_bytes {
             return Err(BodyReadError::BufferLimitExceeded {
                 limit: self.inner.max_body_size_bytes,
@@ -560,11 +591,11 @@ impl BodyStorageView {
         }
         let capacity = usize::try_from(next.len).map_err(|_| BodyReadError::Incomplete)?;
         let result = self
-            .scan_snapshot(Arc::new(next.clone()), BytesScanner::with_capacity(capacity), u64::MAX)
+            .scan_snapshot(Arc::clone(&next), BytesScanner::with_capacity(capacity), u64::MAX)
             .await
             .map_err(operation_to_body_error)?
             .value;
-        self.publish(generation, next).map_err(operation_to_body_error)?;
+        self.publish_arc(generation, next).map_err(operation_to_body_error)?;
         Ok(result)
     }
 
@@ -880,7 +911,7 @@ impl BodyStorage {
 
     fn with_limits(memory_limit: usize, max_body_size_bytes: u64) -> (Self, Arc<BodyStorageView>) {
         let view = Arc::new(BodyStorageViewInner {
-            source: OnceLock::new(),
+            initial: OnceLock::new(),
             materialized: OnceCell::new(),
             mutation: RwLock::new(MutationState::default()),
             max_body_size_bytes,
@@ -901,7 +932,14 @@ impl BodyStorage {
     }
 
     fn publish(&self, source: BodySource) -> PingoraResult<()> {
-        self.view.source.set(Arc::new(source)).map_err(|_| {
+        let source = Arc::new(source);
+        let snapshot = Arc::new(BodySnapshot::from_source(Arc::clone(&source)).map_err(|_| {
+            PingoraError::explain(
+                ErrorType::InternalError,
+                "request body source length cannot be represented",
+            )
+        })?);
+        self.view.initial.set(InitialBody { source, snapshot }).map_err(|_| {
             PingoraError::explain(
                 ErrorType::InternalError,
                 "request body storage was finalized more than once with different state",
@@ -1299,6 +1337,124 @@ mod tests {
         let expected: [u8; 32] = Sha256::digest(b"prefix-body-suffix").into();
         assert_eq!(view.sha256_scan(u64::MAX).await.unwrap().value, expected);
         assert!(!view.is_materialized());
+    }
+
+    #[tokio::test]
+    async fn sha256_cache_scans_each_memory_or_disk_snapshot_once() {
+        let body = b"cached request body";
+        let expected: [u8; 32] = Sha256::digest(body).into();
+        for memory_limit in [body.len() + 1, 1] {
+            let (mut storage, view) = BodyStorage::with_memory_limit(memory_limit);
+            capture(&mut storage, &[body]).await;
+
+            let first = view.sha256_scan(body.len() as u64).await.unwrap();
+            let second = view.sha256_scan(0).await.unwrap();
+
+            assert_eq!(first.value, expected);
+            assert_eq!(first.bytes_scanned, body.len() as u64);
+            assert_eq!(second.value, expected);
+            assert_eq!(second.bytes_scanned, 0);
+            assert!(!view.is_materialized());
+        }
+    }
+
+    #[tokio::test]
+    async fn sha256_failed_scan_is_not_cached_and_concurrent_callers_share_success() {
+        let body = vec![b'x'; SCAN_CHUNK_SIZE + 17];
+        let expected: [u8; 32] = Sha256::digest(&body).into();
+        let (mut storage, view) = BodyStorage::with_memory_limit(1);
+        capture(&mut storage, &[&body]).await;
+
+        assert_eq!(
+            view.sha256_scan(body.len() as u64 - 1).await.unwrap_err(),
+            BodyOperationError::ScanLimitExceeded {
+                limit: body.len() as u64 - 1
+            }
+        );
+
+        let (left, right) = tokio::join!(view.sha256_scan(body.len() as u64), view.sha256_scan(body.len() as u64));
+        let left = left.unwrap();
+        let right = right.unwrap();
+        assert_eq!(left.value, expected);
+        assert_eq!(right.value, expected);
+        assert_eq!(
+            left.bytes_scanned + right.bytes_scanned,
+            body.len() as u64,
+            "exactly one concurrent initializer must scan the snapshot"
+        );
+        assert_eq!(view.sha256_scan(0).await.unwrap().bytes_scanned, 0);
+        assert!(!view.is_materialized());
+    }
+
+    #[tokio::test]
+    async fn sha256_cache_is_generation_local_across_mutations_and_failures() {
+        let (mut storage, view) = BodyStorage::with_limits(1, 16);
+        capture(&mut storage, &[b"abc"]).await;
+
+        async fn assert_new_generation(view: &BodyStorageView, body: &[u8]) {
+            let expected: [u8; 32] = Sha256::digest(body).into();
+            let first = view.sha256_scan(body.len() as u64).await.unwrap();
+            assert_eq!(first.value, expected);
+            assert_eq!(first.bytes_scanned, body.len() as u64);
+            let cached = view.sha256_scan(0).await.unwrap();
+            assert_eq!(cached.value, expected);
+            assert_eq!(cached.bytes_scanned, 0);
+        }
+
+        assert_new_generation(&view, b"abc").await;
+        assert_eq!(
+            view.append(Bytes::from_static(b"body-too-large")),
+            Err(BodyOperationError::Body(BodyReadError::BufferLimitExceeded {
+                limit: 16
+            }))
+        );
+        assert_eq!(view.sha256_scan(0).await.unwrap().bytes_scanned, 0);
+
+        view.append(Bytes::from_static(b"d")).unwrap();
+        assert_new_generation(&view, b"abcd").await;
+        view.prepend(Bytes::from_static(b"0")).unwrap();
+        assert_new_generation(&view, b"0abcd").await;
+        view.remove(1..3).unwrap();
+        assert_new_generation(&view, b"0cd").await;
+        view.replace_literal(Bytes::from_static(b"c"), Bytes::from_static(b"XY"), 3)
+            .await
+            .unwrap();
+        assert_new_generation(&view, b"0XYd").await;
+        assert_eq!(
+            view.replace_slice(1..3, Bytes::from_static(b"z")).await.unwrap(),
+            Bytes::from_static(b"0zd")
+        );
+        assert_new_generation(&view, b"0zd").await;
+        view.overwrite_body(Bytes::from_static(b"new")).unwrap();
+        assert_new_generation(&view, b"new").await;
+        view.clear().unwrap();
+        assert_new_generation(&view, b"").await;
+    }
+
+    #[tokio::test]
+    async fn digest_completed_for_old_snapshot_cannot_populate_new_generation() {
+        let (mut storage, view) = BodyStorage::with_memory_limit(1);
+        capture(&mut storage, &[b"old"]).await;
+        let (old_snapshot, _) = view.snapshot().unwrap();
+
+        view.overwrite_body(Bytes::from_static(b"new")).unwrap();
+        let old_for_scan = Arc::clone(&old_snapshot);
+        let old_digest = old_snapshot
+            .sha256
+            .get_or_try_init(|| async {
+                view.scan_snapshot(old_for_scan, Sha256Scanner(Sha256::new()), u64::MAX)
+                    .await
+                    .map(|scan| scan.value)
+            })
+            .await
+            .unwrap();
+        let expected_old: [u8; 32] = Sha256::digest(b"old").into();
+        assert_eq!(*old_digest, expected_old);
+
+        let current = view.sha256_scan(u64::MAX).await.unwrap();
+        let expected_new: [u8; 32] = Sha256::digest(b"new").into();
+        assert_eq!(current.value, expected_new);
+        assert_eq!(current.bytes_scanned, 3);
     }
 
     #[tokio::test]

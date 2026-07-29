@@ -18,7 +18,7 @@ DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编
 
 ```json
 {
-  "version": 2,
+  "version": 4,
   "code": [...],
   "constants": [...],
   "local_count": 16,
@@ -31,7 +31,7 @@ DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `version` | 整数 | 字节码格式版本号，当前版本为 `2` |
+| `version` | 整数 | 字节码格式版本号，当前版本为 `4` |
 | `code` | 数组 | 指令序列（`Vec<OpCode>`），VM 逐条执行 |
 | `constants` | 数组 | 常量池（`Vec<Constant>`），指令通过索引引用 |
 | `local_count` | 整数 | 局部变量槽数 |
@@ -47,6 +47,7 @@ DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编
 - `Regex`：供字符串查找/替换操作使用的正则表达式
 - `StreamingRegex`：供增量 `.matches()` 使用的前向 DFA 模式
 - `JsonPath`：供 `.json_get()` 使用的已校验确定性 JSONPath
+- `JsonSelect`：供 `.json_select()` 使用的静态命名多路径计划
 
 ## 何时使用字节码
 
@@ -71,9 +72,11 @@ DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编
 - 升级 Edgion 后如果字节码格式版本发生变更，已有字节码需要重新编译
 - 建议在 CI/CD 中将字节码与 Edgion 版本绑定，避免版本漂移
 
-当前版本号：`BYTECODE_VERSION = 2`
+当前版本号：`BYTECODE_VERSION = 4`
 
-版本 2 是破坏性格式变更：`req.body` 现在是 opaque `Body` 值，请求体操作使用专用指令和常量。版本 0、版本 1 和无版本字节码都会被拒绝，必须使用目标 Edgion 版本从源码重新编译。
+版本 4 新增显式的原始 Body MD5 和 HMAC-SHA-256 指令。版本 3 新增静态有界的
+`JsonSelect` 常量和指令，但现在版本 3 以及所有更早版本和无版本字节码都会被
+拒绝，必须使用目标 Edgion 版本从源码重新编译。
 
 ## 安全校验
 
@@ -81,9 +84,10 @@ DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编
 
 1. **版本号匹配**：`version` 字段与运行时期望版本一致
 2. **常量索引合法**：所有 `LoadConst` 指令引用的常量索引在常量池范围内
-3. **指令与常量类型匹配**：值加载仅接受 `Str`/`Int`；`.matches()`、字符串正则操作和 `.json_get()` 分别要求 `StreamingRegex`、`Regex` 和 `JsonPath` 常量
+3. **指令与常量类型匹配**：值加载仅接受 `Str`/`Int`；`.matches()`、字符串正则操作、`.json_get()` 和 `.json_select()` 分别要求 `StreamingRegex`、`Regex`、`JsonPath` 和 `JsonSelect` 常量
 4. **正则重建校验**：反序列化时在自动机大小受限的条件下重新编译正则，验证当前运行环境中的语法和资源限制
 5. **JSONPath 校验**：重新解析每个 `JsonPath` 常量，并要求其仍为确定性路径
+6. **JSON 多路径校验**：每个 selector 必须非空且有界，输出名必须唯一，路径必须为确定性路径
 
 ## 配置示例
 

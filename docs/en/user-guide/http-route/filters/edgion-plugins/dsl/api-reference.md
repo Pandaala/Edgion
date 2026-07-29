@@ -348,11 +348,28 @@ mutations still operate on the original bytes.
 | `.byte_len()` | `Int` | Raw byte length; metadata-only |
 | `.read(offset, max_bytes)` | `Str` | Select the raw range, then lossily decode that isolated slice |
 | `.read_all()` | `Str` | Explicitly read and lossily decode the complete body |
-| `.sha256()` | `Str` | 64-character lowercase SHA-256 of the raw bytes |
+| `.sha256()` | `Str` | 64-character lowercase SHA-256 of the raw bytes; cached per immutable Body generation |
+| `.md5()` | `Str` | 32-character lowercase legacy MD5 checksum of the raw bytes |
+| `.hmac_sha256(key)` | `Str` | Generate a 64-character lowercase HMAC-SHA-256 over the raw bytes |
 | `.json_get("$.a[0]")` | value or `Nil` | Select a compile-time definite JSONPath |
+| `.json_select({"name": "$.a"})` | `Map` | Select several named compile-time paths in one parse |
 
 `read`, `read_all`, and serialized JSON results must fit `maxStringLen`. `read`
 returns at most `max_bytes`; an offset beyond the body is an error.
+
+Body digest and MAC methods scan the already captured raw bytes; they do not
+hash concurrently with client upload and never convert the Body to String.
+`sha256()` caches one 32-byte result per immutable Body generation. `md5()` and
+`hmac_sha256(key)` scan on every call and consume actual Body scan bytes. MD5
+is compatibility-only and must not be used for authentication, signatures,
+password storage, or collision-sensitive security. Its availability in a FIPS
+build does not make MD5 an approved security algorithm.
+
+`Body.hmac_sha256(key)` accepts an exact `Str`, adds no persistent key/MAC
+cache, and is only a MAC-generation API. Ordinary DSL `==` is not
+constant-time; do not use it to verify an attacker-supplied authentication
+tag. Use a dedicated authentication plugin or external verifier for inbound
+signature verification.
 
 **Request-stage-only mutations**:
 
@@ -1290,8 +1307,12 @@ if hex_token != nil {
 Computes the SHA-256 hash of a string, returning a 64-character lowercase hexadecimal digest.
 
 For a request Body, use `req.body.sha256()`. The method streams the original
-bytes and does not require the body to fit `maxStringLen`; the old
-`sha256(req.body)` form is a type error.
+bytes from the already captured Body and does not require the body to fit
+`maxStringLen`; it does not hash concurrently with client upload. The first
+successful call for an immutable Body generation performs one bounded scan.
+Later calls for that generation reuse the 32-byte digest with zero Body scan
+bytes. A successful Body mutation creates a new generation and therefore
+requires one new scan. The old `sha256(req.body)` form is a type error.
 
 **Parameters**:
 - `s` (Str) — Input string
@@ -1314,7 +1335,11 @@ if key != nil {
 
 **Signature**: `md5(s)` → `Str`
 
-Computes the MD5 hash of a string, returning a 32-character lowercase hexadecimal digest. Note that MD5 is not suitable for security-sensitive use cases (such as password storage); it should only be used for non-security purposes such as data integrity checks or cache key generation.
+Computes the MD5 hash of a string, returning a 32-character lowercase
+hexadecimal digest. MD5 is collision-broken and provides no adversarial
+integrity guarantee. Use it only for legacy protocol compatibility, cache keys,
+or accidental-corruption checks; never use it for signatures, authentication,
+password storage, or attacker-controlled integrity decisions.
 
 **Parameters**:
 - `s` (Str) — Input string
@@ -1333,7 +1358,9 @@ req.set_header("X-Cache-Key", body_hash)
 
 **Signature**: `hmac_sha256(key, data)` → `Str`
 
-Computes a message authentication code using the HMAC-SHA256 algorithm, returning a 64-character lowercase hexadecimal string. Commonly used to verify request signatures.
+Generates a message authentication code using HMAC-SHA256 and returns a
+64-character lowercase hexadecimal string. For raw request Body bytes, use
+`req.body.hmac_sha256(key)`.
 
 **Parameters**:
 - `key` (Str) — Secret key string
@@ -1341,17 +1368,18 @@ Computes a message authentication code using the HMAC-SHA256 algorithm, returnin
 
 **Return value**: 64-character hexadecimal HMAC digest
 
-**Example**:
+This function generates a MAC. Ordinary DSL `==` is not constant-time, so do
+not use either HMAC function to verify an attacker-supplied tag. Use a
+dedicated authentication plugin or external verifier for inbound signature
+verification.
+
+**Example — generate an upstream signature**:
 ```
 let secret = "my-secret-key"
 let timestamp = req.header("X-Timestamp")
-let signature = req.header("X-Signature")
-if timestamp == nil or signature == nil {
-  return deny(401, "missing signature headers")
-}
-let expected = hmac_sha256(secret, timestamp + ":" + req.path)
-if signature != expected {
-  return deny(401, "invalid signature")
+if timestamp != nil {
+  let signature = hmac_sha256(secret, timestamp + ":" + req.path)
+  req.set_header("X-Upstream-Signature", signature)
 }
 ```
 
@@ -1509,6 +1537,53 @@ if payload != nil {
   if role == "admin" {
     req.set_header("X-Is-Admin", "true")
   }
+}
+```
+
+---
+
+### req.body.json_select
+
+**Signature**:
+`req.body.json_select({"outputName": "$.path", ...})` → `Map`
+
+Selects several definite JSONPaths from the current request Body with one
+complete Body scan and one JSON parse. The argument must be a non-empty map
+literal: output names and paths cannot be computed at runtime.
+
+The result contains every declared output name in declaration order. Missing
+paths, traversal mismatches, and JSON `null` become `Nil`. Duplicate paths are
+allowed under different output names and are captured once. Duplicate JSON
+object keys use the last occurrence, matching `json_get`.
+
+**Constraints**:
+
+- 1–64 entries, further limited by `maxMapSize`
+- unique output names up to 256 UTF-8 bytes
+- paths up to 1,024 UTF-8 bytes and 32 segments
+- each selected string or serialized subtree, and the live aggregate selected
+  string payload, is bounded by `maxStringLen`
+- the complete JSON document is validated; invalid JSON returns a Map whose
+  values are all `Nil`
+- Body storage and scan-budget failures remain fixed fail-close
+
+Numbers use the same conversion as `json_get`: values fitting `i64` become
+`Int`; other numbers use its canonical `Str` conversion. Exact source-token
+spelling is not promised.
+
+Prefer `json_select` whenever a script needs several Body fields. Repeated
+`json_get` calls each parse and scan the complete Body and each consume a Body
+scan pass.
+
+```dsl
+let values = req.body.json_select({
+  "id": "$.user.id",
+  "name": "$.user.name",
+  "role": "$.user.role"
+})
+
+if values["id"] != nil {
+  req.set_header("X-User-Id", to_str(values["id"]))
 }
 ```
 
@@ -2108,6 +2183,7 @@ if sig == nil {
 | `time_now()` | Time | `Int` | 0 |
 | `time_format(timestamp, format)` | Time | `Str` | 2 |
 | `json_get(json_str, path)` | JSON | `Str\|Int\|Bool\|Nil` | 2 |
+| `req.body.json_select({name: path, ...})` | JSON | `Map` | 1 map |
 | `http.call(method, url, body [, timeout_ms [, headers]])` | Network | `Map` | 3–5 |
 | `ip_in_cidr(ip, cidr)` | Network | `Bool` | 2 |
 | `uuid()` | Utility | `Str` | 0 |

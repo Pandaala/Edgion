@@ -36,7 +36,10 @@ use crate::request_body::{
 use edgion_resources::filters::PluginRunningResult;
 
 use super::super::runtime::DslRuntime;
-use super::body_scanners::{JsonPathScanner, JsonScanValue, StreamingRegexScanner};
+use super::body_scanners::{
+    HmacSha256Scanner, JsonPathScanner, JsonScanValue, JsonSelectPlan, JsonSelectScanner, Md5Scanner,
+    StreamingRegexScanner,
+};
 use super::bytecode::*;
 use super::error::RuntimeError;
 use super::value::BodyValue;
@@ -88,6 +91,13 @@ fn expect_string(value: Value, operation: &'static str) -> Result<String, Runtim
             operation,
         }),
     }
+}
+
+fn check_fixed_string_len(len: usize, limit: usize) -> Result<(), RuntimeError> {
+    if len > limit {
+        return Err(RuntimeError::StringTooLong { len, limit });
+    }
+    Ok(())
 }
 
 fn nonnegative_u64(value: Value, operation: &'static str) -> Result<u64, RuntimeError> {
@@ -334,6 +344,7 @@ pub struct Vm {
     regex_cache: Vec<Option<regex::Regex>>,
     streaming_regex_cache: Vec<Option<Arc<dense::DFA<Vec<u32>>>>>,
     json_path_cache: Vec<Option<DefiniteJsonPath>>,
+    json_select_cache: Vec<Option<Arc<JsonSelectPlan>>>,
     // Parallel to script.constants: Some for Str entries, None for Int/Regex.
     const_str_cache: Vec<Option<Arc<str>>>,
     pub(crate) limits: VmLimits,
@@ -345,6 +356,7 @@ impl Vm {
         let mut regex_cache = Vec::with_capacity(script.constants.len());
         let mut streaming_regex_cache = Vec::with_capacity(script.constants.len());
         let mut json_path_cache = Vec::with_capacity(script.constants.len());
+        let mut json_select_cache = Vec::with_capacity(script.constants.len());
         let mut const_str_cache = Vec::with_capacity(script.constants.len());
         for constant in &script.constants {
             match constant {
@@ -361,6 +373,7 @@ impl Vm {
                     regex_cache.push(Some(re));
                     streaming_regex_cache.push(None);
                     json_path_cache.push(None);
+                    json_select_cache.push(None);
                     const_str_cache.push(None);
                 }
                 Constant::StreamingRegex(pattern) => {
@@ -372,6 +385,7 @@ impl Vm {
                     regex_cache.push(None);
                     streaming_regex_cache.push(Some(Arc::new(dfa)));
                     json_path_cache.push(None);
+                    json_select_cache.push(None);
                     const_str_cache.push(None);
                 }
                 Constant::JsonPath(path) => {
@@ -381,18 +395,61 @@ impl Vm {
                     regex_cache.push(None);
                     streaming_regex_cache.push(None);
                     json_path_cache.push(Some(path));
+                    json_select_cache.push(None);
+                    const_str_cache.push(None);
+                }
+                Constant::JsonSelect(entries) => {
+                    let entry_limit = JSON_SELECT_MAX_ENTRIES.min(limits.max_map_size);
+                    if entries.is_empty() {
+                        return Err(RuntimeError::Internal {
+                            message: "validated JSON select plan is empty".to_string(),
+                        });
+                    }
+                    if entries.len() > entry_limit {
+                        return Err(RuntimeError::MapTooLarge {
+                            size: entries.len(),
+                            limit: entry_limit,
+                        });
+                    }
+                    let mut names = std::collections::HashSet::with_capacity(entries.len());
+                    let parsed = entries
+                        .iter()
+                        .map(|entry| {
+                            if entry.name.len() > JSON_SELECT_MAX_NAME_BYTES {
+                                return Err(RuntimeError::Internal {
+                                    message: "validated JSON select output name exceeds limit".to_string(),
+                                });
+                            }
+                            if !names.insert(entry.name.as_str()) {
+                                return Err(RuntimeError::Internal {
+                                    message: "validated JSON select output name is duplicated".to_string(),
+                                });
+                            }
+                            let path =
+                                DefiniteJsonPath::parse(&entry.path).map_err(|error| RuntimeError::Internal {
+                                    message: format!("invalid validated JSON select path: {error}"),
+                                })?;
+                            Ok((entry.name.clone(), path))
+                        })
+                        .collect::<Result<Vec<_>, RuntimeError>>()?;
+                    regex_cache.push(None);
+                    streaming_regex_cache.push(None);
+                    json_path_cache.push(None);
+                    json_select_cache.push(Some(Arc::new(JsonSelectPlan::new(parsed))));
                     const_str_cache.push(None);
                 }
                 Constant::Str(s) => {
                     regex_cache.push(None);
                     streaming_regex_cache.push(None);
                     json_path_cache.push(None);
+                    json_select_cache.push(None);
                     const_str_cache.push(Some(Arc::from(s.as_str())));
                 }
                 Constant::Int(_) => {
                     regex_cache.push(None);
                     streaming_regex_cache.push(None);
                     json_path_cache.push(None);
+                    json_select_cache.push(None);
                     const_str_cache.push(None);
                 }
             }
@@ -402,6 +459,7 @@ impl Vm {
             regex_cache,
             streaming_regex_cache,
             json_path_cache,
+            json_select_cache,
             const_str_cache,
             limits,
         })
@@ -456,7 +514,7 @@ impl Vm {
                                 ),
                             });
                         }
-                        Constant::StreamingRegex(_) | Constant::JsonPath(_) => {
+                        Constant::StreamingRegex(_) | Constant::JsonPath(_) | Constant::JsonSelect(_) => {
                             return Err(RuntimeError::Internal {
                                 message: format!(
                                     "LoadConst at pc {} references non-value constant {}",
@@ -958,12 +1016,52 @@ impl Vm {
                 }
                 OpCode::BodySha256 => {
                     expect_body(state.pop()?, "body.sha256")?;
+                    check_fixed_string_len(64, self.limits.max_string_len)?;
                     let cap = session.ctx().request_body_config.max_body_size_bytes;
                     let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
                     let scan = session
                         .ctx()
                         .request_body
                         .sha256_scan(reserved)
+                        .await
+                        .map_err(map_body_error)?;
+                    state.refund_body_scan(reserved, scan.bytes_scanned);
+                    state.push(Value::Str(hex::encode(scan.value).into()), self.limits.max_stack_depth)?;
+                }
+                OpCode::BodyMd5 => {
+                    expect_body(state.pop()?, "body.md5")?;
+                    check_fixed_string_len(32, self.limits.max_string_len)?;
+                    let cap = session.ctx().request_body_config.max_body_size_bytes;
+                    let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
+                    let scan = session
+                        .ctx()
+                        .request_body
+                        .scan_raw(Md5Scanner::new(), reserved)
+                        .await
+                        .map_err(map_body_error)?;
+                    state.refund_body_scan(reserved, scan.bytes_scanned);
+                    state.push(Value::Str(hex::encode(scan.value).into()), self.limits.max_stack_depth)?;
+                }
+                OpCode::BodyHmacSha256 => {
+                    let key = match state.pop()? {
+                        Value::Str(key) => key,
+                        other => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "Str",
+                                got: other.type_name(),
+                                operation: "body.hmac_sha256",
+                            })
+                        }
+                    };
+                    expect_body(state.pop()?, "body.hmac_sha256")?;
+                    check_fixed_string_len(64, self.limits.max_string_len)?;
+                    let scanner = HmacSha256Scanner::new(key.as_bytes()).map_err(map_body_error)?;
+                    let cap = session.ctx().request_body_config.max_body_size_bytes;
+                    let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
+                    let scan = session
+                        .ctx()
+                        .request_body
+                        .scan_raw(scanner, reserved)
                         .await
                         .map_err(map_body_error)?;
                     state.refund_body_scan(reserved, scan.bytes_scanned);
@@ -1014,6 +1112,44 @@ impl Vm {
                         }
                     };
                     state.push(value, self.limits.max_stack_depth)?;
+                }
+                OpCode::JsonSelect(plan_idx) => {
+                    expect_body(state.pop()?, "body.json_select")?;
+                    let Some(Some(plan)) = self.json_select_cache.get(plan_idx as usize) else {
+                        return Err(RuntimeError::Internal {
+                            message: format!("json_select_cache[{}] missing or invalid", plan_idx),
+                        });
+                    };
+                    let cap = session.ctx().request_body_config.max_body_size_bytes;
+                    let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
+                    let scan = session
+                        .ctx()
+                        .request_body
+                        .scan_raw(
+                            JsonSelectScanner::new(Arc::clone(plan), self.limits.max_string_len)
+                                .await
+                                .map_err(map_body_error)?,
+                            reserved,
+                        )
+                        .await
+                        .map_err(map_body_error)?;
+                    state.refund_body_scan(reserved, scan.bytes_scanned);
+
+                    let mut output = indexmap::IndexMap::with_capacity(plan.outputs().len());
+                    for (name, capture) in plan.outputs() {
+                        let value = match scan.value.get(*capture) {
+                            Some(JsonScanValue::Value(value)) => value.clone(),
+                            Some(JsonScanValue::Missing) | None => Value::Nil,
+                            Some(JsonScanValue::TooLong) => {
+                                return Err(RuntimeError::StringTooLong {
+                                    len: self.limits.max_string_len.saturating_add(1),
+                                    limit: self.limits.max_string_len,
+                                });
+                            }
+                        };
+                        output.insert(name.to_string(), value);
+                    }
+                    state.push(Value::Map(Box::new(output)), self.limits.max_stack_depth)?;
                 }
                 OpCode::BodyClear => {
                     expect_body(state.pop()?, "body.clear")?;

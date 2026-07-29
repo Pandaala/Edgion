@@ -1043,6 +1043,14 @@ pub struct EdgionHttpContext {
     /// header plugin chain and is then released before streaming the response.
     pub request_body: RequestBodyState,
 
+    /// First-write-wins request-chain guard for JSON Schema validation.
+    ///
+    /// A request may compose plugins from global, Gateway, Route, and BackendRef
+    /// sources even though each individual EdgionPlugins resource permits only
+    /// one validator. The first validator that actually runs claims this slot;
+    /// a second validator fails closed before materializing or parsing JSON.
+    pub(crate) json_schema_validation_claimed: bool,
+
     /// Snapshot of resolved global plugin runtimes for this request, taken at
     /// `request_filter` entry. Each entry is one EdgionPlugins resource;
     /// per-stage bucketing is handled by `PluginRuntime`'s internal stage Vecs.
@@ -1134,6 +1142,18 @@ impl EdgionHttpContext {
         self.request_body.overwrite(body)
     }
 
+    /// Claim the one JSON Schema validation slot for this request.
+    ///
+    /// Returns `true` only to the first caller.
+    pub(crate) fn claim_json_schema_validation(&mut self) -> bool {
+        if self.json_schema_validation_claimed {
+            false
+        } else {
+            self.json_schema_validation_claimed = true;
+            true
+        }
+    }
+
     /// Drain queued response-header ops onto the given real `ResponseHeader`,
     /// preserving each op's original semantics (Set/Append/Remove). Called
     /// from drain points: upstream-response stage and request-stage termination
@@ -1203,6 +1223,7 @@ impl EdgionHttpContext {
             allow_loopback_upstream: false,
             request_body_config: crate::request_body::ResolvedRequestBodyConfig::default(),
             request_body: RequestBodyState::default(),
+            json_schema_validation_claimed: false,
             resolved_global_plugins: None,
             resolved_gateway_plugins: None,
             resolved_route_ext_refs: None,
@@ -2054,6 +2075,18 @@ mod local_reply_tests {
         assert!(ctx.local_reply_header.is_none());
         assert!(ctx.local_reply_body.is_none());
         assert!(!ctx.local_reply_written);
+    }
+}
+
+#[cfg(test)]
+mod json_schema_validation_claim_tests {
+    use super::*;
+
+    #[test]
+    fn request_context_allows_exactly_one_json_schema_validator() {
+        let mut ctx = EdgionHttpContext::new();
+        assert!(ctx.claim_json_schema_validation());
+        assert!(!ctx.claim_json_schema_validation());
     }
 }
 

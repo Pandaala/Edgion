@@ -49,7 +49,19 @@ Reference this resource from an `HTTPRoute` with an `ExtensionRef` filter. See [
 
 `body.conditions` is not supported because body validation must not become conditionally fail-open. Entry-level `alias` and `dye` use the common plugin entry contract.
 
-The inline schema has fixed safety limits, including 64 KiB serialized size, depth 64, 4,096 schema nodes, 64 patterns, and bounded regular-expression compilation. A configuration exceeding a limit is rejected.
+The inline schema has fixed safety limits, including 64 KiB serialized size,
+depth 64, 4,096 schema nodes, 64 patterns, and bounded regular-expression
+compilation. Pattern matching consumes validation work in 128-byte pattern
+source units, so long patterns reduce the amount of request text that can be
+validated within one request. A configuration exceeding a static limit is
+rejected; a request exceeding the combined work budget receives HTTP 400.
+
+Each `requestPlugins` list may contain at most one validator. Because one
+request can compose multiple plugin resources from global, Gateway, Route, and
+BackendRef sources, the first validator that actually runs also claims a
+request-wide slot. Entry conditions that skip a validator do not claim it. A
+second running validator fails closed with HTTP 500 before JSON materialization
+or parsing. Compose multiple constraints into one schema with `allOf`.
 
 ## Supported Schema Features
 
@@ -79,8 +91,10 @@ config:
 External references and retrieval are never allowed. Percent-encoded reference
 fragments are not supported; write JSON Pointer escapes (`~0` and `~1`)
 directly. `$id`, `$anchor`, `$dynamicAnchor`, `$dynamicRef`, `$recursiveRef`,
-`unevaluatedProperties`, and local reference cycles are rejected. Use schemas
-that are fully self-contained and acyclic.
+`unevaluatedProperties`, the legacy `dependencies` and `additionalItems`
+keywords, and local reference cycles are rejected. Use `dependentRequired`,
+`dependentSchemas`, or the `prefixItems` plus `items` tuple-validation form
+instead. Schemas must be fully self-contained and acyclic.
 
 ## Request Requirements
 

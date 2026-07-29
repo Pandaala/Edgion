@@ -379,10 +379,12 @@ receiver or argument has the wrong type:
 | `.matches(pattern)` | String | Bool | Whether the string matches the given regular expression (validated at compile time) |
 
 Body additionally provides `.byte_len()`, `.read(offset, max_bytes)`,
-`.read_all()`, `.sha256()`, and `.json_get("definite path")`. Request-stage
-scripts may mutate it with `.clear()`, `.append(s)`, `.prepend(s)`,
-`.remove(start, end)`, and literal `.replace(from, to)`. See the
-[API reference](./api-reference.md#reqbody) for bounds and failure behavior.
+`.read_all()`, `.sha256()`, `.md5()`, `.hmac_sha256(key)`,
+`.json_get("definite path")`, and the static
+multi-path `.json_select({"name": "$.path"})`. Request-stage scripts may
+mutate it with `.clear()`, `.append(s)`, `.prepend(s)`, `.remove(start, end)`,
+and literal `.replace(from, to)`. See the [API
+reference](./api-reference.md#reqbody) for bounds and failure behavior.
 
 ```dsl
 let ua = req.header("User-Agent")

@@ -99,10 +99,28 @@ The compile-time `MakeMap(n)` operand check in `edgion-dsl/src/validator.rs:279-
 
 `max_string_len` caps **runtime-produced** strings only — every concat,
 `regex_find` / `regex_replace` result, checked builtin return, request-body
-`read()` / `read_all()` result, and serialized `json_get()` result. Body
+`read()` / `read_all()` result, serialized `json_get()` result, and the live
+aggregate string payload retained by `json_select()`. Body
 predicates and `sha256()` scan storage without first constructing a complete
 body string; `read_all()` is the explicit escape hatch and fails before
 returning an oversized value.
+
+`sha256()` uses one lazy `[u8; 32]` once-cell per immutable Body snapshot. The
+first successful call scans the captured snapshot; concurrent and later calls
+reuse that result and report zero scanned bytes. Initial capture publishes one
+canonical snapshot, while every successful mutation publishes a distinct
+snapshot with an empty digest cell. The cache never contains Body bytes,
+errors, or keyed MAC state.
+
+`md5()` and `hmac_sha256(key)` deliberately use the generic raw snapshot scanner
+without caching. Each call consumes another body-scan pass. MD5 exists only for
+compatibility protocols and is not a security digest. Body HMAC is a
+MAC-generation API. It adds no persistent key or MAC cache and makes no extra
+key String copy, but ordinary VM values may retain the caller's key and
+returned hexadecimal MAC; memory zeroization is not promised. Ordinary DSL
+equality is not constant-time, so scripts must not use it to authenticate an
+attacker-supplied tag; authentication belongs in a dedicated verifier such as
+the HMAC Auth plugin.
 
 It deliberately does **not** cap string literals in the constant pool. Those are bounded at compile time by `max_string_const_len` (4 KB per literal) and `max_const_pool_bytes` (32 KB total). Mixing the two would force the operator to set `max_string_len ≥ 4 KB` to accommodate the largest legal literal, defeating the point of a per-request runtime cap.
 
@@ -146,6 +164,19 @@ and 32 `.member`, `["quoted"]`, or non-negative `[index]` segments. Runtime
 parsing validates the complete JSON document but materializes only the selected
 value, bounded by `max_string_len`; invalid JSON, missing paths, and type
 mismatch return `nil`.
+
+`req.body.json_select()` embeds one self-contained `Constant::JsonSelect` with
+1–64 literal `{name, path}` entries. Names are unique and at most 256 UTF-8
+bytes; the configured `max_map_size` may lower the entry count. The validator
+rechecks every path and constant-pool byte, then `Vm::new` builds one immutable
+shared-prefix trie. Each execution performs one complete Body scan and JSON
+parse, retains no full DOM, and returns a caller-ordered Map. Individual
+selected strings, the live aggregate selected string payload, and each
+canonical-object accumulator are bounded by `max_string_len`. The parser may
+also own one in-progress candidate and a small constant number of encoding
+copies; serde may temporarily own one decoded or escaped token bounded by the
+physical Body cap. It never retains a complete Body DOM. Invalid JSON discards
+every observed value and returns all `Nil`.
 
 Body mutations are request-stage only and are transactional: an invalid range,
 physical-cap breach, storage error, or 4,096-segment breach leaves the prior

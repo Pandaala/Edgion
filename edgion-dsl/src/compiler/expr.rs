@@ -5,6 +5,7 @@ use super::super::bytecode::*;
 use super::super::error::CompileError;
 use super::builtins::{builtin_arity, resolve_namespace_method};
 use super::Compiler;
+use std::collections::HashSet;
 
 impl Compiler {
     pub(super) fn compile_expr(&mut self, expr: &Expr) -> Result<(), CompileError> {
@@ -150,6 +151,10 @@ impl Compiler {
     }
 
     fn compile_method_call(&mut self, object: &Expr, method: &str, args: &[Expr]) -> Result<(), CompileError> {
+        if method == "json_select" {
+            return self.compile_json_select(object, args);
+        }
+
         // Check whether the object names a builtin namespace.
         if let ExprKind::Ident(namespace) = &object.kind {
             if let Some(builtin_id) = resolve_namespace_method(namespace, method) {
@@ -258,6 +263,21 @@ impl Compiler {
                 self.compile_expr(object)?;
                 self.emit(OpCode::BodySha256);
             }
+            "md5" => {
+                if !args.is_empty() {
+                    return Err(CompileError::new("md5() requires 0 arguments"));
+                }
+                self.compile_expr(object)?;
+                self.emit(OpCode::BodyMd5);
+            }
+            "hmac_sha256" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new("hmac_sha256() requires 1 key argument"));
+                }
+                self.compile_expr(object)?;
+                self.compile_expr(&args[0])?;
+                self.emit(OpCode::BodyHmacSha256);
+            }
             "json_get" => {
                 if args.len() != 1 {
                     return Err(CompileError::new("json_get() requires 1 string literal path argument"));
@@ -317,6 +337,64 @@ impl Compiler {
                 return Err(CompileError::new(format!("unknown method: .{}()", method)));
             }
         }
+        Ok(())
+    }
+
+    fn compile_json_select(&mut self, object: &Expr, args: &[Expr]) -> Result<(), CompileError> {
+        if args.len() != 1 {
+            return Err(CompileError::new(
+                "json_select() requires 1 non-empty map literal argument",
+            ));
+        }
+        let ExprKind::MapLiteral(pairs) = &args[0].kind else {
+            return Err(CompileError::new(
+                "json_select() argument must be a non-empty map literal",
+            ));
+        };
+        if pairs.is_empty() {
+            return Err(CompileError::new("json_select() map must not be empty"));
+        }
+        if pairs.len() > JSON_SELECT_MAX_ENTRIES {
+            return Err(CompileError::new(format!(
+                "json_select() map has {} entries (max {})",
+                pairs.len(),
+                JSON_SELECT_MAX_ENTRIES
+            )));
+        }
+
+        let mut names = HashSet::with_capacity(pairs.len());
+        let mut entries = Vec::with_capacity(pairs.len());
+        for (name, path) in pairs {
+            let ExprKind::StringLit(name) = &name.kind else {
+                return Err(CompileError::new("json_select() output names must be string literals"));
+            };
+            let ExprKind::StringLit(path) = &path.kind else {
+                return Err(CompileError::new("json_select() paths must be string literals"));
+            };
+            if name.len() > JSON_SELECT_MAX_NAME_BYTES {
+                return Err(CompileError::new(format!(
+                    "json_select() output name is {} bytes (max {})",
+                    name.len(),
+                    JSON_SELECT_MAX_NAME_BYTES
+                )));
+            }
+            if !names.insert(name.as_str()) {
+                return Err(CompileError::new(format!(
+                    "json_select() output name '{}' is duplicated",
+                    name
+                )));
+            }
+            crate::json_path::DefiniteJsonPath::parse(path)
+                .map_err(|error| CompileError::new(format!("invalid definite JSON path: {}", error)))?;
+            entries.push(JsonSelectEntry {
+                name: name.clone(),
+                path: path.clone(),
+            });
+        }
+
+        let plan_idx = self.add_json_select_const(entries)?;
+        self.compile_expr(object)?;
+        self.emit(OpCode::JsonSelect(plan_idx));
         Ok(())
     }
 
@@ -458,7 +536,7 @@ impl Compiler {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::bytecode::{Constant, OpCode};
+    use super::super::super::bytecode::{Constant, OpCode, JSON_SELECT_MAX_ENTRIES, JSON_SELECT_MAX_NAME_BYTES};
     use super::super::super::parser::parse_program;
     use super::super::Compiler;
 
@@ -536,6 +614,8 @@ mod tests {
             let prefix = req.body.read(0, 16)
             let whole = req.body.read_all()
             let digest = req.body.sha256()
+            let legacy = req.body.md5()
+            let mac = req.body.hmac_sha256("key")
             let selected = req.body.json_get("$.user[0].name")
             req.body.clear()
             req.body.append("tail")
@@ -552,6 +632,8 @@ mod tests {
             OpCode::BodyRead,
             OpCode::BodyReadAll,
             OpCode::BodySha256,
+            OpCode::BodyMd5,
+            OpCode::BodyHmacSha256,
             OpCode::BodyClear,
             OpCode::BodyAppend,
             OpCode::BodyPrepend,
@@ -595,6 +677,22 @@ mod tests {
     }
 
     #[test]
+    fn test_compile_body_digest_method_arities() {
+        for (source, expected) in [
+            ("req.body.md5(1)", "md5() requires 0 arguments"),
+            ("req.body.hmac_sha256()", "hmac_sha256() requires 1 key argument"),
+            (
+                r#"req.body.hmac_sha256("a", "b")"#,
+                "hmac_sha256() requires 1 key argument",
+            ),
+        ] {
+            let program = parse_program(source).unwrap();
+            let error = Compiler::new().compile(&program).unwrap_err().to_string();
+            assert!(error.contains(expected), "expected '{expected}', got: {error}");
+        }
+    }
+
+    #[test]
     fn test_json_get_rejects_dynamic_and_indefinite_paths() {
         for source in [
             r#"let path = "$.a"
@@ -605,6 +703,98 @@ mod tests {
             let program = parse_program(source).unwrap();
             assert!(Compiler::new().compile(&program).is_err());
         }
+    }
+
+    #[test]
+    fn test_json_select_compiles_one_self_contained_plan_without_makemap() {
+        let source = r#"
+            let selected = req.body.json_select({
+                "id": "$.user.id",
+                "name": "$.user.name",
+                "id_copy": "$.user.id"
+            })
+        "#;
+        let program = parse_program(source).unwrap();
+        let compiled = Compiler::new().compile(&program).unwrap();
+        let (plan_index, entries) = compiled
+            .constants
+            .iter()
+            .enumerate()
+            .find_map(|(index, constant)| match constant {
+                Constant::JsonSelect(entries) => Some((index as u16, entries)),
+                _ => None,
+            })
+            .expect("JSON select plan constant");
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].name, "id");
+        assert_eq!(entries[0].path, "$.user.id");
+        assert_eq!(entries[2].name, "id_copy");
+        assert_eq!(entries[2].path, "$.user.id");
+        assert!(compiled.code.contains(&OpCode::JsonSelect(plan_index)));
+        assert!(!compiled.code.iter().any(|op| matches!(op, OpCode::MakeMap(_))));
+    }
+
+    #[test]
+    fn test_json_select_rejects_non_literal_or_invalid_plans() {
+        for (source, expected) in [
+            (r#"let selected = req.body.json_select({})"#, "map must not be empty"),
+            (
+                r#"let plan = {"id": "$.id"}
+                   let selected = req.body.json_select(plan)"#,
+                "argument must be a non-empty map literal",
+            ),
+            (
+                r#"let path = "$.id"
+                   let selected = req.body.json_select({"id": path})"#,
+                "paths must be string literals",
+            ),
+            (
+                r#"let selected = req.body.json_select({"id": "$.*"})"#,
+                "invalid definite JSON path",
+            ),
+            (
+                r#"let selected = req.body.json_select({"id": "$.a", "id": "$.b"})"#,
+                "output name 'id' is duplicated",
+            ),
+            (
+                r#"let selected = req.body.json_select({"id": "$.id"}, {"name": "$.name"})"#,
+                "requires 1 non-empty map literal argument",
+            ),
+        ] {
+            let program = parse_program(source).unwrap();
+            let error = Compiler::new().compile(&program).unwrap_err().to_string();
+            assert!(error.contains(expected), "expected '{expected}', got: {error}");
+        }
+    }
+
+    #[test]
+    fn test_json_select_accepts_body_value_in_a_local() {
+        let source = r#"
+            let body = req.body
+            let selected = body.json_select({"id": "$.id"})
+        "#;
+        let program = parse_program(source).unwrap();
+        let compiled = Compiler::new().compile(&program).unwrap();
+        assert!(compiled.code.iter().any(|op| matches!(op, OpCode::JsonSelect(_))));
+    }
+
+    #[test]
+    fn test_json_select_enforces_static_entry_and_name_limits() {
+        let entries = (0..=JSON_SELECT_MAX_ENTRIES)
+            .map(|index| format!(r#""k{index}": "$.v""#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let source = format!("let selected = req.body.json_select({{{entries}}})");
+        let program = parse_program(&source).unwrap();
+        let error = Compiler::new().compile(&program).unwrap_err().to_string();
+        assert!(error.contains("65 entries (max 64)"), "got: {error}");
+
+        let long_name = "n".repeat(JSON_SELECT_MAX_NAME_BYTES + 1);
+        let source = format!(r#"let selected = req.body.json_select({{"{long_name}": "$.v"}})"#);
+        let program = parse_program(&source).unwrap();
+        let error = Compiler::new().compile(&program).unwrap_err().to_string();
+        assert!(error.contains("257 bytes (max 256)"), "got: {error}");
     }
 
     #[test]

@@ -64,6 +64,11 @@ impl RequestFilter for JsonSchemaValidation {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        if !session.claim_json_schema_validation() {
+            log.push_err("multiple validators in effective request chain");
+            return Self::reject(500, None);
+        }
+
         let known_bodyless = session.declares_body() == Some(false);
         let body_len = match session.request_body_available_len(known_bodyless) {
             Ok(body_len) => body_len,
@@ -159,7 +164,17 @@ mod tests {
     }
 
     fn session(body: &'static [u8], content_type: &str) -> MockPluginSession {
+        session_with_claims(body, content_type, vec![true])
+    }
+
+    fn session_with_claims(body: &'static [u8], content_type: &str, claims: Vec<bool>) -> MockPluginSession {
         let mut session = MockPluginSession::new();
+        let claim_count = claims.len();
+        let mut claims = claims.into_iter();
+        session
+            .expect_claim_json_schema_validation()
+            .times(claim_count)
+            .returning(move || claims.next().expect("claim expectation exhausted"));
         session.expect_declares_body().return_const(Some(!body.is_empty()));
         session
             .expect_request_body_available_len()
@@ -216,6 +231,7 @@ mod tests {
     async fn empty_body_wins_over_missing_content_type_without_materializing() {
         let filter = plugin(json!({}));
         let mut session = MockPluginSession::new();
+        session.expect_claim_json_schema_validation().return_const(true);
         session.expect_declares_body().return_const(Some(false));
         session
             .expect_request_body_available_len()
@@ -233,6 +249,7 @@ mod tests {
     async fn absolute_limit_wins_over_media_type_without_materializing() {
         let filter = plugin(json!({}));
         let mut session = MockPluginSession::new();
+        session.expect_claim_json_schema_validation().return_const(true);
         session.expect_declares_body().return_const(Some(true));
         session
             .expect_request_body_available_len()
@@ -255,6 +272,7 @@ mod tests {
         let filter = plugin(json!({}));
         let body = br#"{"name":"Ada"}"#;
         let mut session = MockPluginSession::new();
+        session.expect_claim_json_schema_validation().return_const(true);
         session.expect_declares_body().return_const(Some(true));
         session
             .expect_request_body_available_len()
@@ -277,6 +295,7 @@ mod tests {
         let filter = plugin(json!({}));
         let body = br#"{"name":"Ada"}"#;
         let mut session = MockPluginSession::new();
+        session.expect_claim_json_schema_validation().return_const(true);
         session.expect_declares_body().return_const(Some(true));
         session
             .expect_request_body_available_len()
@@ -305,5 +324,65 @@ mod tests {
             JsonSchemaValidation::reject(500, None)
         );
         assert!(log.contains("err: body materialization failed"));
+    }
+
+    #[tokio::test]
+    async fn second_validator_fails_closed_before_body_access() {
+        let filter = plugin(json!({"type": "object"}));
+        let mut session = session_with_claims(br#"{"name":"Ada"}"#, "application/json", vec![true, false]);
+
+        let mut first_log = PluginLog::new(filter.name());
+        assert_eq!(
+            filter.run_request(&mut session, &mut first_log).await,
+            PluginRunningResult::Nothing
+        );
+
+        let mut second_log = PluginLog::new(filter.name());
+        assert_eq!(
+            filter.run_request(&mut session, &mut second_log).await,
+            JsonSchemaValidation::reject(500, None)
+        );
+        assert!(second_log.contains("err: multiple validators in effective request chain"));
+    }
+
+    #[tokio::test]
+    async fn conditionally_skipped_validator_does_not_claim_request_slot() {
+        use crate::plugins::runtime::conditional_filter::ConditionalRequestFilter;
+        use edgion_resources::common::KeyGet;
+        use edgion_resources::resources::edgion_plugins::conditions::{Condition, IncludeCondition, PluginConditions};
+
+        let skipped = ConditionalRequestFilter::new(
+            plugin(json!({"type": "object"})),
+            Some(PluginConditions {
+                skip: None,
+                run: Some(vec![Condition::Include(IncludeCondition {
+                    key: KeyGet::Method,
+                    values: Some(vec!["POST".to_string()]),
+                    regex: None,
+                    values_set: None,
+                    wildcard_patterns: None,
+                    compiled_regex: None,
+                })]),
+            }),
+        );
+        let active = plugin(json!({"type": "object"}));
+        let mut session = session(br#"{"name":"Ada"}"#, "application/json");
+        session
+            .expect_key_get()
+            .with(mockall::predicate::eq(KeyGet::Method))
+            .return_const(Some("GET".to_string()));
+
+        let mut skipped_log = PluginLog::new(skipped.name());
+        assert_eq!(
+            skipped.run_request(&mut session, &mut skipped_log).await,
+            PluginRunningResult::Nothing
+        );
+        assert!(skipped_log.is_cond_skipped());
+
+        let mut active_log = PluginLog::new(active.name());
+        assert_eq!(
+            active.run_request(&mut session, &mut active_log).await,
+            PluginRunningResult::Nothing
+        );
     }
 }

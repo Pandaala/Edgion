@@ -10,6 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 const BODY_SIZE: usize = 256 * 1024;
+const DIGEST_CACHE_BODY_SIZE: usize = 1024 * 1024;
 const BODY_SHA256: &str = "d509bff642a353f88582e8a846ecae041c333b79c57a7a24ff310fbdb7e914e9";
 
 pub struct DslBodyTestSuite;
@@ -196,6 +197,159 @@ impl DslBodyTestSuite {
                             format!("Expected exact JSON replay, got status={status}, echoed={echoed:?}"),
                         )
                     }
+                })
+            },
+        )
+    }
+
+    fn test_body_json_multi_select_uses_one_scan_for_memory_and_spill() -> TestCase {
+        TestCase::new(
+            "dsl_body_json_multi_select_one_scan",
+            "Static multi-select reads typed values and aliases with one scan from memory or spill storage",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/echo", ctx.target_host);
+                    let small = br#"{"user":{"id":7,"name":"alice"},"enabled":true,"nullValue":null}"#.to_vec();
+                    let large = format!(
+                        r#"{{"user":{{"id":7,"name":"alice"}},"enabled":true,"nullValue":null,"padding":"{}"}}"#,
+                        "x".repeat(BODY_SIZE)
+                    )
+                    .into_bytes();
+
+                    for request_body in [small, large] {
+                        let response = match ctx
+                            .http_client
+                            .post(&url)
+                            .header("host", "dsl-json-select.example.com")
+                            .header("content-type", "application/json")
+                            .body(request_body.clone())
+                            .send()
+                            .await
+                        {
+                            Ok(response) => response,
+                            Err(error) => {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("JSON multi-select request failed: {error}"),
+                                );
+                            }
+                        };
+                        let status = response.status().as_u16();
+                        let response_body = response.text().await.unwrap_or_default();
+                        let echoed = match Self::echoed_body(&response_body) {
+                            Ok(body) => body,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        if status != 200 || echoed.as_bytes() != request_body {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!(
+                                    "Expected exact JSON multi-select replay, got status={status}, echoed_bytes={}",
+                                    echoed.len()
+                                ),
+                            );
+                        }
+                    }
+                    TestResult::passed(start.elapsed())
+                })
+            },
+        )
+    }
+
+    fn test_body_digest_cache_uses_one_scan_for_memory_and_spill() -> TestCase {
+        TestCase::new(
+            "dsl_body_digest_cache_one_scan",
+            "Repeated SHA-256 calls share one immutable-snapshot scan in memory or spill storage",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/echo", ctx.target_host);
+                    for request_body in [b"small digest body".to_vec(), vec![b'x'; DIGEST_CACHE_BODY_SIZE]] {
+                        let digest = hex::encode(Sha256::digest(&request_body));
+                        let response = match ctx
+                            .http_client
+                            .post(&url)
+                            .header("host", "dsl-digest-cache.example.com")
+                            .header("content-type", "application/octet-stream")
+                            .header("x-expected-body-sha256", digest)
+                            .body(request_body.clone())
+                            .send()
+                            .await
+                        {
+                            Ok(response) => response,
+                            Err(error) => {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Digest-cache request failed: {error}"),
+                                );
+                            }
+                        };
+                        let status = response.status().as_u16();
+                        let response_body = response.text().await.unwrap_or_default();
+                        let echoed = match Self::echoed_body(&response_body) {
+                            Ok(body) => body,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        if status != 200 || echoed.as_bytes() != request_body {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!(
+                                    "Expected exact digest-cache replay, got status={status}, echoed_bytes={}",
+                                    echoed.len()
+                                ),
+                            );
+                        }
+                    }
+                    TestResult::passed(start.elapsed())
+                })
+            },
+        )
+    }
+
+    fn test_body_md5_and_hmac_for_memory_and_spill() -> TestCase {
+        TestCase::new(
+            "dsl_body_md5_and_hmac_memory_and_spill",
+            "MD5 and HMAC-SHA-256 scan raw memory or spill snapshots and preserve exact replay",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/echo", ctx.target_host);
+                    for request_body in [b"small MAC body".to_vec(), vec![b'm'; DIGEST_CACHE_BODY_SIZE]] {
+                        let response = match ctx
+                            .http_client
+                            .post(&url)
+                            .header("host", "dsl-body-mac.example.com")
+                            .header("content-type", "application/octet-stream")
+                            .body(request_body.clone())
+                            .send()
+                            .await
+                        {
+                            Ok(response) => response,
+                            Err(error) => {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Body digest/MAC request failed: {error}"),
+                                );
+                            }
+                        };
+                        let status = response.status().as_u16();
+                        let response_body = response.text().await.unwrap_or_default();
+                        let echoed = match Self::echoed_body(&response_body) {
+                            Ok(body) => body,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        if status != 200 || echoed.as_bytes() != request_body {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!(
+                                    "Expected exact digest/MAC replay, got status={status}, echoed_bytes={}",
+                                    echoed.len()
+                                ),
+                            );
+                        }
+                    }
+                    TestResult::passed(start.elapsed())
                 })
             },
         )
@@ -854,6 +1008,9 @@ impl TestSuite for DslBodyTestSuite {
             Self::test_late_body_read_requires_explicit_prebuffer(),
             Self::test_body_read_methods_preserve_replay(),
             Self::test_body_definite_json_selection(),
+            Self::test_body_json_multi_select_uses_one_scan_for_memory_and_spill(),
+            Self::test_body_digest_cache_uses_one_scan_for_memory_and_spill(),
+            Self::test_body_md5_and_hmac_for_memory_and_spill(),
             Self::test_body_mutations_replay_latest_snapshot(),
             Self::test_bodyless_mutation_installs_replay_owner(),
             Self::test_spilled_body_mutations_preserve_source_ranges(),

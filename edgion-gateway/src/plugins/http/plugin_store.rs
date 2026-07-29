@@ -740,6 +740,32 @@ mod compile_plugins_tests {
             });
             entry
         }
+        fn invalid_json_schema_with_invalid_body() -> RequestFilterEntry {
+            use edgion_resources::resources::edgion_plugins::JsonSchemaValidationConfig;
+
+            let mut entry = json_schema_entry_with_body(Some("notasize"), false);
+            entry.plugin = EdgionPlugin::JsonSchemaValidation(JsonSchemaValidationConfig {
+                schema: serde_json::json!({"$schema": "http://json-schema.org/draft-07/schema#"}),
+            });
+            entry
+        }
+        fn invalid_proxy_rewrite_with_invalid_body() -> RequestFilterEntry {
+            use edgion_resources::resources::edgion_plugins::{JsonBodyRewrite, ProxyRewriteConfig, RegexUri};
+
+            let mut entry = RequestFilterEntry::new(EdgionPlugin::ProxyRewrite(ProxyRewriteConfig {
+                regex_uri: Some(RegexUri {
+                    pattern: "(".to_string(),
+                    replacement: "/invalid".to_string(),
+                }),
+                json_body: Some(JsonBodyRewrite::default()),
+                ..Default::default()
+            }));
+            entry.body = Some(edgion_resources::resources::edgion_plugins::BodyRequirement {
+                max_body_size: Some("notasize".to_string()),
+                ..Default::default()
+            });
+            entry
+        }
         fn aliased(mut e: RequestFilterEntry, alias: &str) -> RequestFilterEntry {
             e.alias = Some(alias.to_string());
             e
@@ -944,6 +970,14 @@ mod compile_plugins_tests {
             (
                 "json_schema_body_conditions",
                 mk(Some(vec![json_schema_entry_with_body(None, true)]), None),
+            ),
+            (
+                "json_schema_invalid_config_and_body",
+                mk(Some(vec![invalid_json_schema_with_invalid_body()]), None),
+            ),
+            (
+                "proxy_rewrite_invalid_config_and_body",
+                mk(Some(vec![invalid_proxy_rewrite_with_invalid_body()]), None),
             ),
             (
                 "json_schema_two_enabled",

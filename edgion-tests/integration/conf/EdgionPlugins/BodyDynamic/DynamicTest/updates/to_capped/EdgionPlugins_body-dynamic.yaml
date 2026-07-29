@@ -15,3 +15,17 @@ spec:
             - op: replace
               path: /version
               value: updated-body-version-is-longer
+    - enable: true
+      type: Dsl
+      config:
+        name: body-dynamic-json-select
+        maxBodyScanPasses: 1
+        source: |
+          let values = req.body.json_select({
+            "version": "$.version",
+            "discard": "$.discard"
+          })
+          if values["version"] != "updated-body-version-is-longer" || values["discard"] != nil {
+            return deny(422, "updated JSON multi-select mismatch")
+          }
+        errorPolicy: deny

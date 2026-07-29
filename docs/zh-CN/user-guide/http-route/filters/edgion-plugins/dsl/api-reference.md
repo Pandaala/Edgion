@@ -345,11 +345,24 @@ if not req.has_header("X-Request-Id") {
 | `.byte_len()` | `Int` | 原始字节数，只读元数据 |
 | `.read(offset, max_bytes)` | `Str` | 先选原始字节范围，再单独进行 lossy 解码 |
 | `.read_all()` | `Str` | 显式读取并 lossy 解码完整 body |
-| `.sha256()` | `Str` | 原始字节的 64 字符小写 SHA-256 |
+| `.sha256()` | `Str` | 原始字节的 64 字符小写 SHA-256；按不可变 Body 版本缓存 |
+| `.md5()` | `Str` | 原始字节的 32 字符小写遗留 MD5 checksum |
+| `.hmac_sha256(key)` | `Str` | 对原始字节生成 64 字符小写 HMAC-SHA-256 |
 | `.json_get("$.a[0]")` | 值或 `Nil` | 按编译期确定 JSONPath 选择 |
+| `.json_select({"name": "$.a"})` | `Map` | 一次解析选择多个命名的编译期路径 |
 
 `read`、`read_all` 和序列化后的 JSON 结果必须符合 `maxStringLen`。`read`
 最多返回 `max_bytes` 个源字节；offset 超过 body 会报错。
+
+Body 摘要和 MAC 方法扫描已经捕获的原始字节，不会在客户端上传过程中同步计算，也
+不会将 Body 转成字符串。`sha256()` 为每个不可变 Body 版本缓存一个 32 字节结果；
+`md5()` 和 `hmac_sha256(key)` 每次调用都会扫描，并消耗实际 Body 扫描字节。
+MD5 仅用于兼容遗留协议，不得用于认证、签名、密码存储或依赖抗碰撞性的安全场景。
+FIPS build 中保留该兼容 API，并不代表 MD5 是获批的安全算法。
+
+`Body.hmac_sha256(key)` 只接受精确 `Str`，不新增持久 key/MAC 缓存，并且只用于
+生成 MAC。普通 DSL `==` 不是 constant-time；不得用它验证攻击者提交的认证标签。
+入站签名验证应使用专用认证插件或外部验证器。
 
 **仅请求阶段可用的修改**：
 
@@ -1277,8 +1290,11 @@ if hex_token != nil {
 
 计算字符串的 SHA-256 哈希值，返回 64 字符的小写十六进制摘要。
 
-对请求 Body 使用 `req.body.sha256()`。该方法按流处理原始字节，不要求 body
-符合 `maxStringLen`；旧的 `sha256(req.body)` 会产生类型错误。
+对请求 Body 使用 `req.body.sha256()`。该方法从已经捕获的 Body 按流处理原始
+字节，不要求 body 符合 `maxStringLen`，也不会在客户端上传过程中同步计算摘要。
+每个不可变 Body 版本的第一次成功调用执行一次有界扫描，后续调用复用 32 字节
+摘要且不消耗 Body 扫描字节。Body 修改成功后会产生新版本，需要重新扫描一次。
+旧的 `sha256(req.body)` 会产生类型错误。
 
 **参数**：
 - `s`（Str）— 输入字符串
@@ -1301,7 +1317,9 @@ if key != nil {
 
 **签名**：`md5(s)` → `Str`
 
-计算字符串的 MD5 哈希值，返回 32 字符的小写十六进制摘要。注意 MD5 不适合安全场景（如密码存储），仅适合用于数据完整性校验或缓存键生成等非安全目的。
+计算字符串的 MD5 哈希值，返回 32 字符的小写十六进制摘要。MD5 已不具备抗碰撞
+安全性，不能提供对抗性完整性保证。它仅适用于遗留协议兼容、缓存键或偶发损坏
+检测；不要用于签名、认证、密码存储或攻击者可控的完整性判断。
 
 **参数**：
 - `s`（Str）— 输入字符串
@@ -1320,7 +1338,8 @@ req.set_header("X-Cache-Key", body_hash)
 
 **签名**：`hmac_sha256(key, data)` → `Str`
 
-使用 HMAC-SHA256 算法计算消息认证码，返回 64 字符的小写十六进制字符串。常用于验证请求签名。
+使用 HMAC-SHA256 生成消息认证码，返回 64 字符的小写十六进制字符串。若要处理
+请求 Body 的原始字节，请使用 `req.body.hmac_sha256(key)`。
 
 **参数**：
 - `key`（Str）— 密钥字符串
@@ -1328,17 +1347,16 @@ req.set_header("X-Cache-Key", body_hash)
 
 **返回值**：64 字符十六进制 HMAC 摘要
 
-**示例**：
+该函数只生成 MAC。普通 DSL `==` 不是 constant-time，因此不得使用任一 HMAC
+函数验证攻击者提交的标签。入站签名验证应使用专用认证插件或外部验证器。
+
+**示例——生成上游签名**：
 ```
 let secret = "my-secret-key"
 let timestamp = req.header("X-Timestamp")
-let signature = req.header("X-Signature")
-if timestamp == nil or signature == nil {
-  return deny(401, "missing signature headers")
-}
-let expected = hmac_sha256(secret, timestamp + ":" + req.path)
-if signature != expected {
-  return deny(401, "invalid signature")
+if timestamp != nil {
+  let signature = hmac_sha256(secret, timestamp + ":" + req.path)
+  req.set_header("X-Upstream-Signature", signature)
 }
 ```
 
@@ -1494,6 +1512,48 @@ if payload != nil {
   if role == "admin" {
     req.set_header("X-Is-Admin", "true")
   }
+}
+```
+
+---
+
+### req.body.json_select
+
+**签名**：
+`req.body.json_select({"outputName": "$.path", ...})` → `Map`
+
+通过一次完整 Body 扫描和一次 JSON 解析，从当前请求 Body 选择多个确定性
+JSONPath。参数必须是非空 Map 字面量，输出名和路径都不能在运行时动态计算。
+
+结果按声明顺序包含全部输出名。路径缺失、遍历结构不匹配和 JSON `null` 都转换为
+`Nil`。允许不同输出名使用相同路径，运行时只捕获一次。JSON 对象出现重复 key
+时使用最后一次，与 `json_get` 一致。
+
+**限制**：
+
+- 1–64 项，并继续受 `maxMapSize` 的更小值限制
+- 输出名必须唯一，最多 256 个 UTF-8 字节
+- 路径最多 1,024 个 UTF-8 字节、32 段
+- 每个选中字符串或序列化子树，以及实时保留的选中字符串总量，都受
+  `maxStringLen` 限制
+- 完整 JSON 文档仍会被校验；JSON 非法时返回所有值均为 `Nil` 的 Map
+- Body 存储和扫描预算故障仍固定 fail-close
+
+数字转换与 `json_get` 相同：可表示为 `i64` 的值返回 `Int`，其他数字使用其规范化
+`Str` 转换；不承诺保留原始数字 token 的精确拼写。
+
+脚本需要多个 Body 字段时应优先使用 `json_select`。重复调用 `json_get` 会分别解析
+和扫描完整 Body，并分别消耗一次 Body 扫描预算。
+
+```dsl
+let values = req.body.json_select({
+  "id": "$.user.id",
+  "name": "$.user.name",
+  "role": "$.user.role"
+})
+
+if values["id"] != nil {
+  req.set_header("X-User-Id", to_str(values["id"]))
 }
 ```
 
@@ -2083,6 +2143,7 @@ if sig == nil {
 | `time_now()` | 时间 | `Int` | 0 |
 | `time_format(timestamp, format)` | 时间 | `Str` | 2 |
 | `json_get(json_str, path)` | JSON | `Str\|Int\|Bool\|Nil` | 2 |
+| `req.body.json_select({name: path, ...})` | JSON | `Map` | 1 个 Map |
 | `http.call(method, url, body [, timeout_ms [, headers]])` | 网络 | `Map` | 3–5 |
 | `ip_in_cidr(ip, cidr)` | 网络 | `Bool` | 2 |
 | `uuid()` | 工具 | `Str` | 0 |

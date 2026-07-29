@@ -7,10 +7,14 @@ use serde::{Deserialize, Serialize};
 
 /// Current serialized bytecode schema version.
 ///
-/// Version 2 changes `req.body` from a materialized Str to an opaque Body and
-/// adds body-aware opcodes. Version 0/1 payloads are intentionally rejected so
-/// they can never execute with the new semantics.
-pub const BYTECODE_VERSION: u16 = 2;
+/// Version 4 adds explicit raw-Body MD5 and HMAC-SHA-256 operations. Older
+/// payloads are intentionally rejected so they can never execute with
+/// different Body or stack semantics.
+pub const BYTECODE_VERSION: u16 = 4;
+/// Hard ceiling for one static JSON multi-select plan.
+pub const JSON_SELECT_MAX_ENTRIES: usize = 64;
+/// Maximum UTF-8 byte length of one JSON multi-select output name.
+pub const JSON_SELECT_MAX_NAME_BYTES: usize = 256;
 /// Missing versions deserialize to zero and are rejected with other old forms.
 const UNVERSIONED_BYTECODE_VERSION: u16 = 0;
 /// Hard limit for decoded bytecode payload to avoid unbounded allocation.
@@ -90,8 +94,14 @@ pub enum OpCode {
     BodyReadAll,
     /// Pop Body, push lowercase hexadecimal SHA-256.
     BodySha256,
+    /// Pop Body, push lowercase hexadecimal MD5.
+    BodyMd5,
+    /// Pop (Body, key Str), push lowercase hexadecimal HMAC-SHA-256.
+    BodyHmacSha256,
     /// Pop Str|Body, select a definite JSON path from the constant pool.
     JsonGet(u16),
+    /// Pop Body, select a statically compiled set of definite JSON paths, push Map.
+    JsonSelect(u16),
     /// Pop Body, replace it with an empty body, push Nil.
     BodyClear,
     /// Pop (Body, Str), append bytes, push Nil.
@@ -320,6 +330,13 @@ impl OpCode {
     }
 }
 
+/// One output name and definite JSONPath in a static multi-select plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonSelectEntry {
+    pub name: String,
+    pub path: String,
+}
+
 /// Constant pool entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Constant {
@@ -331,6 +348,8 @@ pub enum Constant {
     StreamingRegex(String),
     /// Definite JSONPath source, parsed again when untrusted bytecode is validated.
     JsonPath(String),
+    /// Static request-body JSON selection plan. This is not a loadable DSL value.
+    JsonSelect(Vec<JsonSelectEntry>),
 }
 
 /// A compiled DSL script — ready for VM execution or serialization
@@ -484,6 +503,32 @@ mod tests {
     }
 
     #[test]
+    fn test_json_select_bytecode_roundtrip() {
+        let entries = vec![
+            JsonSelectEntry {
+                name: "id".to_string(),
+                path: "$.user.id".to_string(),
+            },
+            JsonSelectEntry {
+                name: "id_copy".to_string(),
+                path: "$.user.id".to_string(),
+            },
+        ];
+        let script = CompiledScript {
+            code: vec![OpCode::JsonSelect(0), OpCode::ReturnNext],
+            constants: vec![Constant::JsonSelect(entries.clone())],
+            ..minimal_script()
+        };
+        let encoded = script.serialize_base64().expect("serialize");
+        let decoded = CompiledScript::deserialize_base64(&encoded).expect("deserialize");
+        assert_eq!(decoded.code, vec![OpCode::JsonSelect(0), OpCode::ReturnNext]);
+        let Constant::JsonSelect(decoded_entries) = &decoded.constants[0] else {
+            panic!("expected JSON select constant");
+        };
+        assert_eq!(decoded_entries, &entries);
+    }
+
+    #[test]
     fn test_current_payload_decodes_without_source_map() {
         // Source maps are optional within the current bytecode version.
         use base64::Engine;
@@ -545,9 +590,9 @@ mod tests {
     }
 
     #[test]
-    fn test_reject_old_and_unversioned_body_semantics() {
+    fn test_reject_old_and_unversioned_bytecode_schemas() {
         use base64::Engine;
-        for old_version in [None, Some(0), Some(1)] {
+        for old_version in [None, Some(0), Some(1), Some(2), Some(3)] {
             let mut payload = serde_json::json!({
                 "code": ["ReturnNext"],
                 "constants": [],

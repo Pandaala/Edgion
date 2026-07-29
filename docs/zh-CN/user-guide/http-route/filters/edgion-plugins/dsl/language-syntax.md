@@ -375,9 +375,10 @@ nil-friendly 行为，返回 `false`：
 | `.matches(pattern)` | String | Bool | 是否匹配正则表达式（编译期校验） |
 
 Body 还提供 `.byte_len()`、`.read(offset, max_bytes)`、`.read_all()`、
-`.sha256()` 和 `.json_get("确定路径")`。请求阶段脚本可用 `.clear()`、
-`.append(s)`、`.prepend(s)`、`.remove(start, end)` 和字面量
-`.replace(from, to)` 修改它。边界和失败行为见
+`.sha256()`、`.md5()`、`.hmac_sha256(key)`、`.json_get("确定路径")` 和静态多路径
+`.json_select({"name": "$.path"})`。请求阶段脚本可用 `.clear()`、
+`.append(s)`、`.prepend(s)`、`.remove(start, end)` 和字面量 `.replace(from,
+to)` 修改它。边界和失败行为见
 [API 参考](./api-reference.md#reqbody)。
 
 ```dsl

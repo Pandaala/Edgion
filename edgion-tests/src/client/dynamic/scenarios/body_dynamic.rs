@@ -18,6 +18,10 @@ fn capped_suite() -> Box<dyn TestSuite> {
     Box::new(suites::BodyDynamicCappedTestSuite)
 }
 
+fn rejected_suite() -> Box<dyn TestSuite> {
+    Box::new(suites::BodyDynamicRejectedTestSuite)
+}
+
 static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
         name: "initial",
@@ -31,6 +35,10 @@ static PHASES: &[PhaseSuite] = &[
         name: "restored",
         factory: update_suite,
     },
+    PhaseSuite {
+        name: "rejected",
+        factory: rejected_suite,
+    },
 ];
 
 fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
@@ -41,6 +49,8 @@ fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>>
         ctx.wait_phase(scenario, "capped", Duration::from_secs(15)).await?;
         ctx.apply_dir("updates/to_restored").await?;
         ctx.wait_phase(scenario, "restored", Duration::from_secs(15)).await?;
+        ctx.apply_dir("updates/to_invalid").await?;
+        ctx.wait_phase(scenario, "rejected", Duration::from_secs(15)).await?;
         Ok(())
     })
 }

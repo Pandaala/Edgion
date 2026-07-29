@@ -395,6 +395,20 @@ impl PluginRuntime {
     pub fn add_from_request_filters(&mut self, entries: &[RequestFilterEntry], namespace: &str) -> Vec<String> {
         let mut errors = Vec::new();
         let mut invalid_bounded_json_entries = vec![false; entries.len()];
+        // Freeze config validation before the bounded-body prepass. A config
+        // error owns the entry and suppresses later body-policy errors, matching
+        // `EdgionPlugins::validate_plugins` and avoiding Controller/Gateway
+        // error-set drift when both parts are invalid.
+        let config_validation_errors: Vec<Option<String>> = entries
+            .iter()
+            .map(|entry| {
+                if entry.is_enabled() && entry.policy_action.is_none() {
+                    Self::plugin_validation_error(&entry.plugin)
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         // Mirror the schema-layer JsonSchemaValidation list/entry invariants
         // before constructing any filters. The Gateway must remain fail-closed
@@ -419,6 +433,7 @@ impl PluginRuntime {
         for (index, entry) in entries.iter().enumerate() {
             if !entry.is_enabled()
                 || entry.policy_action.is_some()
+                || config_validation_errors[index].is_some()
                 || !matches!(
                     entry.plugin,
                     EdgionPlugin::JsonSchemaValidation(_)
@@ -472,7 +487,7 @@ impl PluginRuntime {
                 // surface the error, and skip construction so an invalid config
                 // can never run in the request path. `seal_fail_closed` later
                 // turns a non-empty `invalid_plugins` into a fail-closed 500.
-                if let Some(error) = Self::plugin_validation_error(&entry.plugin) {
+                if let Some(error) = &config_validation_errors[index] {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, error));
                     self.invalid_plugins.push(plugin_name);
@@ -1825,6 +1840,7 @@ mod tests {
 
         let mut session = MockPluginSession::new();
         session.expect_ctx().return_const(EdgionHttpContext::new());
+        session.expect_claim_json_schema_validation().return_const(true);
         session.expect_declares_body().return_const(Some(false));
         session
             .expect_ensure_request_body()
@@ -1900,14 +1916,20 @@ mod tests {
 
     #[test]
     fn proxy_rewrite_bounded_body_validation_matches_consumption() {
-        use edgion_resources::resources::edgion_plugins::{BodyRequirement, JsonBodyRewrite, ProxyRewriteConfig};
+        use edgion_resources::resources::edgion_plugins::{
+            BodyRequirement, JsonBodyRewrite, JsonPatchOperation, ProxyRewriteConfig,
+        };
 
         let invalid_body = BodyRequirement {
             conditions: Some(Default::default()),
             ..BodyRequirement::default()
         };
         let mut consuming = RequestFilterEntry::new(EdgionPlugin::ProxyRewrite(ProxyRewriteConfig {
-            json_body: Some(JsonBodyRewrite { operations: Vec::new() }),
+            json_body: Some(JsonBodyRewrite {
+                operations: vec![JsonPatchOperation::Remove {
+                    path: "/obsolete".to_string(),
+                }],
+            }),
             ..Default::default()
         }));
         consuming.body = Some(invalid_body.clone());
@@ -2035,6 +2057,7 @@ mod tests {
         let body = Bytes::from(body);
         let mut session = MockPluginSession::new();
         session.expect_ctx().return_const(EdgionHttpContext::new());
+        session.expect_claim_json_schema_validation().return_const(true);
         session.expect_declares_body().return_const(Some(true));
         session
             .expect_ensure_request_body()

@@ -1109,6 +1109,40 @@ async fn run_body_dynamic_case(ctx: TestContext, expected_version: &'static str)
     }
 }
 
+async fn fetch_body_dynamic_accepted(ctx: &TestContext) -> Result<(String, String), String> {
+    let url = format!(
+        "{}/configserver/EdgionPlugins?namespace=edgion-default&name=body-dynamic",
+        ctx.admin_api_url()
+    );
+    let mut request = ctx.http_client.get(url);
+    if let Some(token) = &ctx.admin_token {
+        request = request.header("authorization", format!("Bearer {token}"));
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("Status request failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Status request returned {}", response.status()));
+    }
+    let body = response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|error| format!("Status response was not JSON: {error}"))?;
+    let condition = body["data"]["status"]["conditions"]
+        .as_array()
+        .and_then(|conditions| {
+            conditions
+                .iter()
+                .find(|condition| condition["type"].as_str() == Some("Accepted"))
+        })
+        .ok_or_else(|| format!("Accepted condition missing from response: {body}"))?;
+    Ok((
+        condition["status"].as_str().unwrap_or_default().to_string(),
+        condition["reason"].as_str().unwrap_or_default().to_string(),
+    ))
+}
+
 fn body_dynamic_initial_case() -> TestCase {
     TestCase::new(
         "body_dynamic_initial",
@@ -1122,6 +1156,29 @@ fn body_dynamic_update_case() -> TestCase {
         "body_dynamic_update",
         "The active hot-reloaded plugin commits the expected complete request body",
         |ctx| Box::pin(run_body_dynamic_case(ctx, "updated-body-version-is-longer")),
+    )
+}
+
+fn body_dynamic_rejected_status_case() -> TestCase {
+    TestCase::new(
+        "body_dynamic_invalid_json_select_rejected",
+        "A hot update with a dynamic json_select plan is rejected by configuration validation",
+        |ctx| {
+            Box::pin(async move {
+                let start = Instant::now();
+                match fetch_body_dynamic_accepted(&ctx).await {
+                    Ok((status, reason)) if status == "False" => TestResult::passed_with_message(
+                        start.elapsed(),
+                        format!("Accepted=False as expected ({reason})"),
+                    ),
+                    Ok((status, reason)) => TestResult::failed(
+                        start.elapsed(),
+                        format!("Expected Accepted=False, got status={status} reason={reason}"),
+                    ),
+                    Err(error) => TestResult::failed(start.elapsed(), error),
+                }
+            })
+        },
     )
 }
 
@@ -1230,5 +1287,17 @@ impl TestSuite for BodyDynamicUpdateTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![body_dynamic_update_case()]
+    }
+}
+
+pub struct BodyDynamicRejectedTestSuite;
+
+impl TestSuite for BodyDynamicRejectedTestSuite {
+    fn name(&self) -> &str {
+        "Request Body Dynamic - Rejected Phase"
+    }
+
+    fn test_cases(&self) -> Vec<TestCase> {
+        vec![body_dynamic_rejected_status_case(), body_dynamic_update_case()]
     }
 }

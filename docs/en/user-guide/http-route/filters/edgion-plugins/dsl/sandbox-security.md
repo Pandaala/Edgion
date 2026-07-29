@@ -64,6 +64,18 @@ charge for chunks fetched before failure. This conservative accounting avoids
 small-read and per-callback overhead and applies identically to memory,
 spill-file, and mutation-segment sources.
 
+`req.body.sha256()` lazily caches only the 32-byte digest on the current
+immutable Body generation. Its first successful call scans normally; repeated
+calls for the same generation consume zero scan bytes. Any successful Body
+mutation publishes a new generation with an empty digest cache. Failed scans
+and failed mutations never populate a new cache entry.
+
+`req.body.md5()` and `req.body.hmac_sha256(key)` are intentionally uncached and
+consume actual scan bytes on every call. MD5 is legacy interoperability only,
+including in FIPS builds. Body HMAC adds no persistent key/MAC cache and is a
+generation API, not an inbound verification API: normal DSL equality is not
+constant-time.
+
 ### Configuration Example
 
 ```yaml
@@ -205,6 +217,7 @@ Some built-in functions have their own parameter or result limits in addition to
 | Function | Limit | Description |
 |----------|-------|-------------|
 | `req.body.json_get` | Definite JSONPath up to 1,024 bytes and 32 segments; selected result bounded by `maxStringLen` | Selectively parses one value without building a complete JSON DOM |
+| `req.body.json_select` | 1–64 static named paths; names up to 256 bytes; per-value and live aggregate string payload bounded by `maxStringLen` | Selects several values with one complete parse and Body scan |
 | `req.body.read` / `read_all` | Non-negative range; returned string bounded by `maxStringLen` | Reads the memory-backed or spilled body transparently |
 | `req.body.matches` / other body scans | Total scanned bytes bounded by `maxBodyScanPasses × physical body cap` | Prevents repeated full-body scans |
 | Request-body mutation methods | Result bounded by the physical body cap and 4,096 mutation segments | Mutations are transactional and request-stage only |
@@ -223,6 +236,11 @@ body. Opaque-Body calls return 3xx responses without following redirects. By con
 `Str` and `Nil` calls retain the existing redirect behavior.
 
 `req.body.json_get()` accepts only a definite path rooted at `$`: `.member`, `["quoted member"]`, and non-negative `[index]` segments. Wildcards, recursive descent, filters, slices, unions, and dynamic paths are rejected at compile time.
+
+`req.body.json_select()` accepts a non-empty literal Map of unique output names
+to the same definite paths. It builds the shared-prefix plan during VM
+initialization, not per request. Use it instead of repeated `json_get` calls
+when several fields are needed.
 
 `req.header_names()` and `resp.header_names()` return a list of strings. When the actual number of headers exceeds 256, only the first 256 are returned without raising an error. If you need to access all headers, use `req.header()` directly with specific header names rather than iterating over the full list.
 

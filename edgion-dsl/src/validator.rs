@@ -106,13 +106,13 @@ impl Validator {
                             self.limits.max_string_const_len
                         )));
                     }
-                    total_pool_bytes += s.len();
+                    total_pool_bytes = total_pool_bytes.saturating_add(s.len());
                 }
                 Constant::Int(_) => {
-                    total_pool_bytes += 8;
+                    total_pool_bytes = total_pool_bytes.saturating_add(8);
                 }
                 Constant::Regex(pattern) => {
-                    total_pool_bytes += pattern.len();
+                    total_pool_bytes = total_pool_bytes.saturating_add(pattern.len());
                     if pattern.len() > MAX_REGEX_PATTERN_LEN {
                         errors.push(ValidationError::new(format!(
                             "regex constant[{}] too long: {} bytes (max {})",
@@ -135,7 +135,7 @@ impl Validator {
                     }
                 }
                 Constant::StreamingRegex(pattern) => {
-                    total_pool_bytes += pattern.len();
+                    total_pool_bytes = total_pool_bytes.saturating_add(pattern.len());
                     if pattern.len() > MAX_REGEX_PATTERN_LEN {
                         errors.push(ValidationError::new(format!(
                             "streaming regex constant[{}] too long: {} bytes (max {})",
@@ -151,12 +151,69 @@ impl Validator {
                     }
                 }
                 Constant::JsonPath(path) => {
-                    total_pool_bytes += path.len();
+                    total_pool_bytes = total_pool_bytes.saturating_add(path.len());
                     if let Err(error) = DefiniteJsonPath::parse(path) {
                         errors.push(ValidationError::new(format!(
                             "invalid JSON path constant[{}]: {}",
                             i, error
                         )));
+                    }
+                }
+                Constant::JsonSelect(entries) => {
+                    let max_entries = JSON_SELECT_MAX_ENTRIES.min(self.limits.max_map_size);
+                    if entries.is_empty() || entries.len() > max_entries {
+                        errors.push(ValidationError::new(format!(
+                            "JSON select constant[{}] has {} entries (allowed 1..={})",
+                            i,
+                            entries.len(),
+                            max_entries
+                        )));
+                    }
+                    let mut names =
+                        std::collections::HashSet::with_capacity(entries.len().min(JSON_SELECT_MAX_ENTRIES));
+                    for (entry_index, entry) in entries.iter().enumerate() {
+                        total_pool_bytes = total_pool_bytes
+                            .saturating_add(entry.name.len())
+                            .saturating_add(entry.path.len());
+                        if entry.name.len() > JSON_SELECT_MAX_NAME_BYTES {
+                            errors.push(ValidationError::new(format!(
+                                "JSON select constant[{}] entry[{}] name is too long: {} bytes (max {})",
+                                i,
+                                entry_index,
+                                entry.name.len(),
+                                JSON_SELECT_MAX_NAME_BYTES
+                            )));
+                        }
+                        if entry.name.len() > self.limits.max_string_const_len {
+                            errors.push(ValidationError::new(format!(
+                                "JSON select constant[{}] entry[{}] name exceeds string constant limit: {} bytes (max {})",
+                                i,
+                                entry_index,
+                                entry.name.len(),
+                                self.limits.max_string_const_len
+                            )));
+                        }
+                        if entry.path.len() > self.limits.max_string_const_len {
+                            errors.push(ValidationError::new(format!(
+                                "JSON select constant[{}] entry[{}] path exceeds string constant limit: {} bytes (max {})",
+                                i,
+                                entry_index,
+                                entry.path.len(),
+                                self.limits.max_string_const_len
+                            )));
+                        }
+                        if !names.insert(entry.name.as_str()) {
+                            errors.push(ValidationError::new(format!(
+                                "JSON select constant[{}] has duplicate output name '{}'",
+                                i, entry.name
+                            )));
+                        }
+                        if let Err(error) = DefiniteJsonPath::parse(&entry.path) {
+                            errors.push(ValidationError::new(format!(
+                                "invalid JSON select path constant[{}] entry[{}]: {}",
+                                i, entry_index, error
+                            )));
+                        }
                     }
                 }
             }
@@ -223,6 +280,15 @@ impl Validator {
                     &script.constants,
                     const_count,
                     ConstantRefKind::JsonPath,
+                ),
+                OpCode::JsonSelect(idx) => check_constant_ref(
+                    &mut errors,
+                    "JsonSelect",
+                    i,
+                    *idx,
+                    &script.constants,
+                    const_count,
+                    ConstantRefKind::JsonSelect,
                 ),
                 _ => {}
             }
@@ -361,6 +427,7 @@ enum ConstantRefKind {
     Regex,
     StreamingRegex,
     JsonPath,
+    JsonSelect,
 }
 
 impl ConstantRefKind {
@@ -369,6 +436,7 @@ impl ConstantRefKind {
             Self::Regex => "Regex",
             Self::StreamingRegex => "StreamingRegex",
             Self::JsonPath => "JsonPath",
+            Self::JsonSelect => "JsonSelect",
         }
     }
 
@@ -378,6 +446,7 @@ impl ConstantRefKind {
             (Self::Regex, Constant::Regex(_))
                 | (Self::StreamingRegex, Constant::StreamingRegex(_))
                 | (Self::JsonPath, Constant::JsonPath(_))
+                | (Self::JsonSelect, Constant::JsonSelect(_))
         )
     }
 }
@@ -389,6 +458,7 @@ fn constant_kind(constant: &Constant) -> &'static str {
         Constant::Regex(_) => "Regex",
         Constant::StreamingRegex(_) => "StreamingRegex",
         Constant::JsonPath(_) => "JsonPath",
+        Constant::JsonSelect(_) => "JsonSelect",
     }
 }
 
@@ -823,6 +893,152 @@ mod tests {
             "expected MakeMap limit error, got: {}",
             joined
         );
+    }
+
+    fn json_select_script(entries: Vec<JsonSelectEntry>) -> CompiledScript {
+        CompiledScript {
+            version: BYTECODE_VERSION,
+            code: vec![OpCode::JsonSelect(0), OpCode::ReturnNext],
+            constants: vec![Constant::JsonSelect(entries)],
+            local_count: 0,
+            max_loop_depth: 0,
+            source: None,
+            source_map: None,
+        }
+    }
+
+    fn json_select_entry(name: impl Into<String>, path: impl Into<String>) -> JsonSelectEntry {
+        JsonSelectEntry {
+            name: name.into(),
+            path: path.into(),
+        }
+    }
+
+    #[test]
+    fn test_validate_json_select_accepts_duplicate_paths() {
+        let script = json_select_script(vec![
+            json_select_entry("first", "$.user.id"),
+            json_select_entry("second", "$.user.id"),
+        ]);
+        let errors = Validator::new(ValidationLimits::default()).validate(&script);
+        assert!(errors.is_empty(), "duplicate paths must be valid: {errors:?}");
+    }
+
+    #[test]
+    fn test_validate_rejects_json_select_opcode_reference_errors() {
+        for script in [
+            CompiledScript {
+                version: BYTECODE_VERSION,
+                code: vec![OpCode::JsonSelect(1), OpCode::ReturnNext],
+                constants: vec![Constant::JsonSelect(vec![json_select_entry("id", "$.id")])],
+                local_count: 0,
+                max_loop_depth: 0,
+                source: None,
+                source_map: None,
+            },
+            CompiledScript {
+                version: BYTECODE_VERSION,
+                code: vec![OpCode::JsonSelect(0), OpCode::ReturnNext],
+                constants: vec![Constant::JsonPath("$.id".to_string())],
+                local_count: 0,
+                max_loop_depth: 0,
+                source: None,
+                source_map: None,
+            },
+        ] {
+            let errors = Validator::new(ValidationLimits::default()).validate(&script);
+            assert!(!errors.is_empty(), "hostile opcode reference must fail");
+        }
+    }
+
+    #[test]
+    fn test_validate_rejects_json_select_entry_count_limits() {
+        let empty = json_select_script(vec![]);
+        let errors = Validator::new(ValidationLimits::default()).validate(&empty);
+        assert!(errors.iter().any(|error| error.to_string().contains("allowed 1..=64")));
+
+        let too_many = json_select_script(
+            (0..65)
+                .map(|index| json_select_entry(format!("key{index}"), "$.value"))
+                .collect(),
+        );
+        let errors = Validator::new(ValidationLimits::default()).validate(&too_many);
+        assert!(errors.iter().any(|error| error.to_string().contains("has 65 entries")));
+
+        let smaller_map_limit = json_select_script(vec![
+            json_select_entry("first", "$.a"),
+            json_select_entry("second", "$.b"),
+        ]);
+        let errors = Validator::new(ValidationLimits {
+            max_map_size: 1,
+            ..Default::default()
+        })
+        .validate(&smaller_map_limit);
+        assert!(errors.iter().any(|error| error.to_string().contains("allowed 1..=1")));
+    }
+
+    #[test]
+    fn test_validate_rejects_json_select_name_path_and_pool_violations() {
+        let invalid = json_select_script(vec![
+            json_select_entry("duplicate", "$.ok"),
+            json_select_entry("duplicate", "$.*"),
+            json_select_entry("n".repeat(JSON_SELECT_MAX_NAME_BYTES + 1), "$.ok"),
+        ]);
+        let joined = Validator::new(ValidationLimits::default())
+            .validate(&invalid)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(joined.contains("duplicate output name 'duplicate'"), "got: {joined}");
+        assert!(joined.contains("invalid JSON select path"), "got: {joined}");
+        assert!(joined.contains("name is too long: 257 bytes"), "got: {joined}");
+
+        let script = json_select_script(vec![json_select_entry("name", "$.path")]);
+        let joined = Validator::new(ValidationLimits {
+            max_string_const_len: 4,
+            max_const_pool_bytes: 5,
+            ..Default::default()
+        })
+        .validate(&script)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("|");
+        assert!(joined.contains("path exceeds string constant limit"), "got: {joined}");
+        assert!(joined.contains("constant pool too large"), "got: {joined}");
+    }
+
+    #[test]
+    fn test_validate_rejects_loading_json_select_as_value() {
+        let script = CompiledScript {
+            code: vec![OpCode::LoadConst(0), OpCode::ReturnNext],
+            ..json_select_script(vec![json_select_entry("id", "$.id")])
+        };
+        let joined = Validator::new(ValidationLimits::default())
+            .validate(&script)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(
+            joined.contains("(JsonSelect) which cannot be used as a value"),
+            "got: {joined}"
+        );
+    }
+
+    #[test]
+    fn test_full_pipeline_enforces_json_select_max_map_size() {
+        let limits = ValidationLimits {
+            max_map_size: 1,
+            ..Default::default()
+        };
+        let result = compile_dsl_source(
+            r#"let selected = req.body.json_select({"first": "$.a", "second": "$.b"})"#,
+            &limits,
+        );
+        let joined = result.expect_err("configured maxMapSize must reject plan").join("|");
+        assert!(joined.contains("allowed 1..=1"), "got: {joined}");
     }
 
     #[test]

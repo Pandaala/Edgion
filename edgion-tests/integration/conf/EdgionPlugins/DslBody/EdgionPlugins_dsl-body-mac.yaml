@@ -1,0 +1,26 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-body-mac
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "body-mac"
+        maxBodyScanPasses: 2
+        source: |
+          let mut expected_md5 = "9ec9d4a1ab4fb25d0ce0a8c08c9e79ba"
+          let mut expected_hmac = "4385857ed6eeb5a93e188822a03ded29dd338167c8458806dbfc8c055a7ad965"
+          if req.body.byte_len() == 1048576 {
+            expected_md5 = "12564a07eb1f09728e729910398fd87f"
+            expected_hmac = "359d85cc392220dbcf11eb224e511e2a3e2cf93953540ba8014071c22787de24"
+          }
+          if req.body.md5() != expected_md5 {
+            return deny(422, "body MD5 mismatch")
+          }
+          if req.body.hmac_sha256("integration-secret") != expected_hmac {
+            return deny(422, "body HMAC mismatch")
+          }
+        errorPolicy: deny

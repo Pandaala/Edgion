@@ -1,0 +1,20 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-digest-cache
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "digest-cache"
+        maxBodyScanPasses: 1
+        source: |
+          let expected = req.header("X-Expected-Body-SHA256")
+          for i in range(0, 40) {
+            if req.body.sha256() != expected {
+              return deny(422, "body digest cache mismatch")
+            }
+          }
+        errorPolicy: deny

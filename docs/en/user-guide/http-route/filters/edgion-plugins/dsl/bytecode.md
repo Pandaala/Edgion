@@ -18,7 +18,7 @@ Bytecode is transmitted as a Base64-encoded JSON string.
 
 ```json
 {
-  "version": 2,
+  "version": 4,
   "code": [...],
   "constants": [...],
   "local_count": 16,
@@ -31,7 +31,7 @@ Field descriptions:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `version` | integer | Bytecode format version. Current version is `2`. |
+| `version` | integer | Bytecode format version. Current version is `4`. |
 | `code` | array | Instruction sequence (`Vec<OpCode>`), executed by the VM one instruction at a time. |
 | `constants` | array | Constant pool (`Vec<Constant>`), referenced by instructions via index. |
 | `local_count` | integer | Number of local variable slots. |
@@ -47,6 +47,7 @@ Each entry in the constant pool is one of the following types:
 - `Regex`: a regular expression used by string-only find/replace operations
 - `StreamingRegex`: a forward-DFA pattern used by incremental `.matches()` operations
 - `JsonPath`: a validated definite JSONPath used by `.json_get()`
+- `JsonSelect`: a static named multi-path plan used by `.json_select()`
 
 ## When to Use Bytecode
 
@@ -71,9 +72,12 @@ Bytecode carries a version number in the `version` field, which is strictly vali
 - If the bytecode format version changes after an Edgion upgrade, existing bytecode must be recompiled.
 - It is recommended to bind bytecode to a specific Edgion version in your CI/CD pipeline to avoid version drift.
 
-Current version: `BYTECODE_VERSION = 2`
+Current version: `BYTECODE_VERSION = 4`
 
-Version 2 is a breaking format change: `req.body` is now an opaque `Body` value and body operations use dedicated instructions and constants. Version 0, version 1, and unversioned payloads are rejected; recompile them from source with the target Edgion version.
+Version 4 adds explicit raw-Body MD5 and HMAC-SHA-256 opcodes. Version 3 added
+the statically bounded `JsonSelect` constant and opcode, but version 3 and all
+older or unversioned payloads are now rejected; recompile them from source
+with the target Edgion version.
 
 ## Security Validation
 
@@ -81,9 +85,11 @@ The following static checks are performed during deserialization. If any check f
 
 1. **Version match**: The `version` field matches the version expected by the runtime.
 2. **Constant index bounds**: All constant indices referenced by `LoadConst` instructions fall within the bounds of the constant pool.
-3. **Instruction/constant type match**: Value loads accept only `Str`/`Int`; `.matches()`, string regex operations, and `.json_get()` require `StreamingRegex`, `Regex`, and `JsonPath` constants respectively.
+3. **Instruction/constant type match**: Value loads accept only `Str`/`Int`; `.matches()`, string regex operations, `.json_get()`, and `.json_select()` require `StreamingRegex`, `Regex`, `JsonPath`, and `JsonSelect` constants respectively.
 4. **Regex reconstruction**: Regex constants are recompiled with bounded automaton size to verify syntax and resource limits in the current runtime.
 5. **JSONPath validation**: Every `JsonPath` constant is parsed again and must remain a definite path.
+6. **JSON multi-select validation**: Every selector is non-empty and bounded,
+   has unique output names, and contains only definite paths.
 
 ## Configuration Examples
 

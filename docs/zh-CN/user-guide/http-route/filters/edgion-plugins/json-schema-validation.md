@@ -49,7 +49,9 @@ spec:
 
 不支持 `body.conditions`，因为请求体校验不能被配置成条件式失败开放。条目级 `alias` 和 `dye` 继续使用通用插件条目契约。
 
-内联 Schema 采用固定安全限制，包括 64 KiB 序列化大小、64 层深度、4,096 个 Schema 节点、64 个 pattern，以及有界正则表达式编译。超过限制的配置会被拒绝。
+内联 Schema 采用固定安全限制，包括 64 KiB 序列化大小、64 层深度、4,096 个 Schema 节点、64 个 pattern，以及有界正则表达式编译。pattern 匹配按照每 128 字节 pattern 源码一个扫描单位消耗校验工作量，因此长 pattern 会减少单次请求预算内能够校验的请求文本量。超过静态限制的配置会被拒绝；超过组合工作预算的请求会收到 HTTP 400。
+
+每个 `requestPlugins` 列表最多只能包含一个 validator。由于同一请求可以组合来自全局、Gateway、Route 和 BackendRef 的多个插件资源，第一个实际运行的 validator 还会占用请求级唯一名额；被条目条件跳过的 validator 不占用名额。第二个实际运行的 validator 会在 JSON 物化或解析前以 HTTP 500 失败关闭。多个约束应使用 `allOf` 组合到同一个 Schema 中。
 
 ## 支持的 Schema 功能
 
@@ -73,7 +75,7 @@ config:
             type: string
 ```
 
-外部引用和外部资源读取始终禁用。不支持百分号编码的引用片段，请直接使用 JSON Pointer 转义（`~0` 和 `~1`）。`$id`、`$anchor`、`$dynamicAnchor`、`$dynamicRef`、`$recursiveRef`、`unevaluatedProperties` 以及本地引用环都会被拒绝。Schema 必须完整内联且不存在引用环。
+外部引用和外部资源读取始终禁用。不支持百分号编码的引用片段，请直接使用 JSON Pointer 转义（`~0` 和 `~1`）。`$id`、`$anchor`、`$dynamicAnchor`、`$dynamicRef`、`$recursiveRef`、`unevaluatedProperties`、旧版 `dependencies` 和 `additionalItems` 关键字以及本地引用环都会被拒绝。请改用 Draft 2020-12 的 `dependentRequired`、`dependentSchemas`，或由 `prefixItems` 与 `items` 组成的元组校验形式。Schema 必须完整内联且不存在引用环。
 
 ## 请求要求
 

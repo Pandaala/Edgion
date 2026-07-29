@@ -132,6 +132,12 @@ impl Compiler {
         Ok(idx)
     }
 
+    pub(super) fn add_json_select_const(&mut self, entries: Vec<JsonSelectEntry>) -> Result<u16, CompileError> {
+        let idx = self.check_const_limit()?;
+        self.constants.push(Constant::JsonSelect(entries));
+        Ok(idx)
+    }
+
     // ==================== Locals ====================
 
     pub(super) fn declare_local(&mut self, name: &str, mutable: bool) -> Result<u16, CompileError> {

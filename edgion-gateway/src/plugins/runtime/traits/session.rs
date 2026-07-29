@@ -309,6 +309,16 @@ pub trait PluginSession: Send + Sync {
     /// ctx fields; only the error list.
     fn add_error(&mut self, status: EdgionStatus);
 
+    /// Claim the request-wide JSON Schema validation slot.
+    ///
+    /// Returns `true` only for the first validator that actually runs in the
+    /// effective global/Gateway/Route/BackendRef request chain. The safe
+    /// default fails closed for adapters that do not carry an
+    /// [`EdgionHttpContext`].
+    fn claim_json_schema_validation(&mut self) -> bool {
+        false
+    }
+
     /// Look up the resolved target `PluginRuntime` for an `ExtensionRef` at the
     /// given index (assigned at route build time by
     /// `PluginRuntime::from_httproute_filters_for_rule` /

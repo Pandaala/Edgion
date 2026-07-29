@@ -21,6 +21,7 @@ const MAX_SCHEMA_NODES: usize = 4_096;
 const MAX_REFERENCE_DEPTH: usize = 32;
 const MAX_PATTERN_COUNT: usize = 64;
 const MAX_PATTERN_SOURCE_BYTES: usize = 16 * 1024;
+const PATTERN_SCAN_CHUNK_BYTES: u64 = 128;
 const REGEX_SIZE_LIMIT: usize = 256 * 1024;
 const REGEX_DFA_SIZE_LIMIT: usize = 256 * 1024;
 pub const MAX_JSON_INSTANCE_DEPTH: usize = 64;
@@ -454,6 +455,8 @@ fn validate_schema_policy(root: &Value) -> Result<(), String> {
             "$dynamicAnchor",
             "$dynamicRef",
             "$recursiveRef",
+            "additionalItems",
+            "dependencies",
             "unevaluatedProperties",
         ] {
             if object.contains_key(keyword) {
@@ -582,11 +585,17 @@ fn profile_schema(
             profile.scan_ops = profile.scan_ops.saturating_add(members);
         }
     }
-    for keyword in ["properties", "patternProperties", "dependentSchemas"] {
+    for keyword in ["properties", "dependentSchemas"] {
         if let Some(values) = object.get(keyword).and_then(Value::as_object) {
             profile.node_ops = profile.node_ops.saturating_add(values.len() as u64);
             profile.scan_ops = profile.scan_ops.saturating_add(values.len() as u64);
         }
+    }
+    if let Some(patterns) = object.get("patternProperties").and_then(Value::as_object) {
+        profile.node_ops = profile.node_ops.saturating_add(patterns.len() as u64);
+        profile.scan_ops = profile
+            .scan_ops
+            .saturating_add(patterns.keys().map(|pattern| pattern_scan_ops(pattern)).sum::<u64>());
     }
     // jsonschema uses pairwise deep comparisons for arrays of up to 15 items
     // before switching to hashing. Charge the worst fixed node and text-scan
@@ -606,10 +615,13 @@ fn profile_schema(
         }
     }
 
-    for keyword in ["format", "maxLength", "minLength", "pattern"] {
+    for keyword in ["format", "maxLength", "minLength"] {
         if object.contains_key(keyword) {
             profile.scan_ops = profile.scan_ops.saturating_add(1);
         }
+    }
+    if let Some(pattern) = object.get("pattern").and_then(Value::as_str) {
+        profile.scan_ops = profile.scan_ops.saturating_add(pattern_scan_ops(pattern));
     }
 
     for child in schema_children(object, false) {
@@ -689,6 +701,11 @@ fn array_member_count(value: &Value) -> u64 {
         }
         _ => 0,
     }
+}
+
+fn pattern_scan_ops(pattern: &str) -> u64 {
+    let bytes = u64::try_from(pattern.len()).unwrap_or(u64::MAX);
+    bytes.max(1).div_ceil(PATTERN_SCAN_CHUNK_BYTES)
 }
 
 fn literal_comparison_cost(root: &Value) -> (u64, u64) {
@@ -867,6 +884,43 @@ mod tests {
     }
 
     #[test]
+    fn rejects_legacy_applicator_keywords() {
+        for (keyword, schema) in [
+            (
+                "dependencies",
+                json!({
+                    "type": "object",
+                    "dependencies": {
+                        "trigger": {
+                            "properties": {
+                                "payload": {"type": "string", "format": "regex"}
+                            }
+                        }
+                    }
+                }),
+            ),
+            (
+                "dependencies",
+                json!({
+                    "type": "object",
+                    "dependencies": {"trigger": ["payload"]}
+                }),
+            ),
+            (
+                "additionalItems",
+                json!({
+                    "type": "array",
+                    "items": [{"type": "string"}],
+                    "additionalItems": false
+                }),
+            ),
+        ] {
+            let error = config(schema).compile().unwrap_err();
+            assert!(error.contains(keyword), "{error}");
+        }
+    }
+
+    #[test]
     fn percent_encoded_ref_cannot_select_a_different_validator_target() {
         let error = config(json!({
             "$ref": "#/$defs/safe%2Fname",
@@ -1036,6 +1090,44 @@ mod tests {
         let profile = compiled.profile();
         assert!(profile.node_ops >= 20, "{profile:?}");
         assert!(profile.scan_ops >= 7, "{profile:?}");
+    }
+
+    #[test]
+    fn pattern_scan_weight_uses_128_byte_chunks() {
+        assert_eq!(pattern_scan_ops(""), 1);
+        assert_eq!(pattern_scan_ops("a"), 1);
+        assert_eq!(pattern_scan_ops(&"a".repeat(128)), 1);
+        assert_eq!(pattern_scan_ops(&"a".repeat(129)), 2);
+        assert_eq!(pattern_scan_ops(&"é".repeat(64)), 1);
+        assert_eq!(pattern_scan_ops(&"é".repeat(65)), 2);
+    }
+
+    #[test]
+    fn profile_weights_pattern_and_pattern_properties_without_double_counting() {
+        let direct = config(json!({"pattern": "a".repeat(129)})).compile().unwrap();
+        assert_eq!(direct.profile().scan_ops, 2);
+
+        let patterns = Map::from_iter([
+            ("a".to_string(), Value::Bool(true)),
+            ("b".repeat(129), Value::Bool(true)),
+        ]);
+        let properties = config(json!({"patternProperties": patterns})).compile().unwrap();
+        assert_eq!(properties.profile().scan_ops, 3);
+    }
+
+    #[test]
+    fn long_pattern_and_large_text_exceed_validation_work_budget() {
+        let pattern = "(?:a?)".repeat(86);
+        assert!(pattern.len() > 512);
+        let compiled = config(json!({"type": "string", "pattern": pattern})).compile().unwrap();
+        assert_eq!(compiled.profile().scan_ops, 5);
+
+        let encoded = serde_json::to_vec(&"b".repeat(800 * 1024)).unwrap();
+        let parsed = parse_json_instance(&encoded).unwrap();
+        assert_eq!(
+            compiled.validate_instance(&parsed),
+            Err(InstanceValidationError::WorkBudgetExceeded)
+        );
     }
 
     #[test]

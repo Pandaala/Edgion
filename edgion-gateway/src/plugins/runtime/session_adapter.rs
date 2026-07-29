@@ -983,6 +983,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.add_error(status);
     }
 
+    fn claim_json_schema_validation(&mut self) -> bool {
+        self.ctx.claim_json_schema_validation()
+    }
+
     fn discover_protocol(&self) -> String {
         self.ctx.request_info.discover_protocol.clone().unwrap_or_else(|| {
             if self.ctx.request_info.is_grpc_request {
@@ -2568,6 +2572,13 @@ mod record_outcome_tests {
             );
             assert_eq!(
                 adapter.request_body_sha256().await.expect("disk-backed body must hash"),
+                expected
+            );
+            assert_eq!(
+                adapter
+                    .request_body_sha256()
+                    .await
+                    .expect("the cached disk-backed digest must remain available"),
                 expected
             );
         }

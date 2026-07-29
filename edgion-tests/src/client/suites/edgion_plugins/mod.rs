@@ -62,7 +62,8 @@ pub use basic_auth::{
     BasicAuthDynamicUpdateTestSuite, BasicAuthTestSuite,
 };
 pub use body_plugins::{
-    BodyDynamicCappedTestSuite, BodyDynamicInitialTestSuite, BodyDynamicUpdateTestSuite, BodyPluginsTestSuite,
+    BodyDynamicCappedTestSuite, BodyDynamicInitialTestSuite, BodyDynamicRejectedTestSuite, BodyDynamicUpdateTestSuite,
+    BodyPluginsTestSuite,
 };
 pub use canary::{CanaryHotSwapFinalTestSuite, CanaryHotSwapInitialTestSuite, CanaryTestSuite};
 pub use cors::CorsPluginTestSuite;
