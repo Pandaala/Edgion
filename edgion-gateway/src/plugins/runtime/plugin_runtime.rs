@@ -49,6 +49,7 @@ use crate::plugins::http::global_access_control::GlobalAccessControl;
 use crate::plugins::http::header_cert_auth::HeaderCertAuth;
 use crate::plugins::http::hmac_auth::HmacAuth;
 use crate::plugins::http::ip_restriction::IpRestriction;
+use crate::plugins::http::json_schema_validation::JsonSchemaValidation;
 use crate::plugins::http::jwe_decrypt::JweDecrypt;
 use crate::plugins::http::jwt_auth::JwtAuth;
 use crate::plugins::http::key_auth::KeyAuth;
@@ -393,9 +394,55 @@ impl PluginRuntime {
     /// A vector of validation error messages (empty if all plugins are valid)
     pub fn add_from_request_filters(&mut self, entries: &[RequestFilterEntry], namespace: &str) -> Vec<String> {
         let mut errors = Vec::new();
+        let mut invalid_json_schema_entries = vec![false; entries.len()];
+
+        // Mirror the schema-layer JsonSchemaValidation list/entry invariants
+        // before constructing any filters. The Gateway must remain fail-closed
+        // even if an invalid resource reaches it without Controller admission.
+        // Disabled entries are inert and do not participate.
+        let json_schema_count = entries
+            .iter()
+            .filter(|entry| {
+                entry.is_enabled()
+                    && entry.policy_action.is_none()
+                    && matches!(entry.plugin, EdgionPlugin::JsonSchemaValidation(_))
+            })
+            .count();
+        if json_schema_count > 1 {
+            errors.push(format!(
+                "requestPlugins: at most one JsonSchemaValidation plugin is allowed, found {json_schema_count}"
+            ));
+            self.invalid_plugins.push("JsonSchemaValidation");
+        }
+
+        for (index, entry) in entries.iter().enumerate() {
+            if !entry.is_enabled()
+                || entry.policy_action.is_some()
+                || !matches!(entry.plugin, EdgionPlugin::JsonSchemaValidation(_))
+            {
+                continue;
+            }
+            let Some(body) = entry.body.as_ref() else {
+                continue;
+            };
+            let body_errors = edgion_resources::resources::edgion_plugins::json_schema_body_validation_errors(body);
+            if body_errors.is_empty() {
+                continue;
+            }
+            invalid_json_schema_entries[index] = true;
+            self.invalid_plugins.push("JsonSchemaValidation");
+            errors.extend(
+                body_errors
+                    .into_iter()
+                    .map(|error| format!("requestPlugins[{}] (JsonSchemaValidation): {}", index, error)),
+            );
+        }
 
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
+                if invalid_json_schema_entries[index] {
+                    continue;
+                }
                 // Plugin policy: a stamped entry is never instantiated and is
                 // deliberately NOT recorded in invalid_plugins (that would turn
                 // Bypass into a fail-closed 500 via seal_fail_closed).
@@ -1053,6 +1100,7 @@ impl PluginRuntime {
             EdgionPlugin::JweDecrypt(config) => {
                 CreateResult::Ok(Some(Box::new(JweDecrypt::new(config, namespace.to_string()))))
             }
+            EdgionPlugin::JsonSchemaValidation(config) => CreateResult::Ok(JsonSchemaValidation::create(config)),
             EdgionPlugin::HmacAuth(config) => CreateResult::Ok(Some(HmacAuth::create(config, body_requirement))),
             EdgionPlugin::HeaderCertAuth(config) => {
                 CreateResult::Ok(Some(Box::new(HeaderCertAuth::new(config, namespace.to_string()))))
@@ -1122,6 +1170,7 @@ impl PluginRuntime {
             | EdgionPlugin::IpRestriction(_)
             | EdgionPlugin::JwtAuth(_)
             | EdgionPlugin::JweDecrypt(_)
+            | EdgionPlugin::JsonSchemaValidation(_)
             | EdgionPlugin::HmacAuth(_)
             | EdgionPlugin::HeaderCertAuth(_)
             | EdgionPlugin::KeyAuth(_)
@@ -1182,6 +1231,7 @@ impl PluginRuntime {
             | EdgionPlugin::IpRestriction(_)
             | EdgionPlugin::JwtAuth(_)
             | EdgionPlugin::JweDecrypt(_)
+            | EdgionPlugin::JsonSchemaValidation(_)
             | EdgionPlugin::HmacAuth(_)
             | EdgionPlugin::HeaderCertAuth(_)
             | EdgionPlugin::KeyAuth(_)
@@ -1226,6 +1276,7 @@ impl PluginRuntime {
             EdgionPlugin::Canary(_) => "Canary",
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
             EdgionPlugin::JweDecrypt(_) => "JweDecrypt",
+            EdgionPlugin::JsonSchemaValidation(_) => "JsonSchemaValidation",
             EdgionPlugin::HmacAuth(_) => "HmacAuth",
             EdgionPlugin::HeaderCertAuth(_) => "HeaderCertAuth",
             EdgionPlugin::KeyAuth(_) => "KeyAuth",
@@ -1633,6 +1684,31 @@ mod tests {
     use super::*;
     use edgion_resources::resources::{EdgionPlugin, KeyAuthConfig, RequestFilterEntry};
 
+    fn json_schema_entry(
+        body: Option<edgion_resources::resources::edgion_plugins::BodyRequirement>,
+        enabled: bool,
+    ) -> RequestFilterEntry {
+        use edgion_resources::resources::edgion_plugins::JsonSchemaValidationConfig;
+        use serde_json::json;
+
+        let mut entry = RequestFilterEntry::with_enable(
+            EdgionPlugin::JsonSchemaValidation(JsonSchemaValidationConfig {
+                schema: json!({"type": "object"}),
+            }),
+            enabled,
+        );
+        entry.body = body;
+        entry
+    }
+
+    fn assert_sealed_invalid(runtime: &mut PluginRuntime) {
+        runtime.seal_fail_closed();
+        assert_eq!(
+            runtime.request_plugins_iter().next().map(|filter| filter.name()),
+            Some("RejectInvalidConfig")
+        );
+    }
+
     #[tokio::test]
     async fn add_from_request_filters_defers_hmac_body_capture() {
         // HMAC owns its resolved body requirement instead of using the generic
@@ -1671,6 +1747,257 @@ mod tests {
             result,
             PluginRunningResult::ErrTerminateRequest,
             "HMAC must reject malformed authentication before capturing the body"
+        );
+    }
+
+    #[tokio::test]
+    async fn json_schema_validation_gate_captures_without_materializing() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use crate::EdgionHttpContext;
+        use edgion_resources::resources::edgion_plugins::JsonSchemaValidationConfig;
+        use serde_json::json;
+
+        let entry = RequestFilterEntry::new(EdgionPlugin::JsonSchemaValidation(JsonSchemaValidationConfig {
+            schema: json!({"type": "object"}),
+        }));
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[entry], "default");
+        assert!(errors.is_empty(), "unexpected build errors: {errors:?}");
+
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+        assert_eq!(filter.name(), "JsonSchemaValidation");
+
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session.expect_declares_body().return_const(Some(false));
+        session
+            .expect_ensure_request_body()
+            .with(mockall::predicate::eq(Some(32 * 1024 * 1024)))
+            .return_once(|_| Ok(0));
+        session
+            .expect_request_body_available_len()
+            .with(mockall::predicate::eq(true))
+            .return_const(Ok(0));
+
+        let mut log = PluginLog::new("JsonSchemaValidation");
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 400,
+                body: Some("Invalid request body".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn json_schema_invalid_body_rules_seal_fail_closed() {
+        use edgion_resources::resources::edgion_plugins::BodyRequirement;
+
+        let cases = [
+            (
+                BodyRequirement {
+                    max_body_size: Some("invalid".to_string()),
+                    ..BodyRequirement::default()
+                },
+                "invalid body.maxBodySize",
+            ),
+            (
+                BodyRequirement {
+                    max_body_size: Some("0".to_string()),
+                    ..BodyRequirement::default()
+                },
+                "must be greater than 0",
+            ),
+            (
+                BodyRequirement {
+                    max_body_size: Some((1024 * 1024 + 1).to_string()),
+                    ..BodyRequirement::default()
+                },
+                "must not exceed 1MiB",
+            ),
+            (
+                BodyRequirement {
+                    conditions: Some(Default::default()),
+                    ..BodyRequirement::default()
+                },
+                "conditions are not supported",
+            ),
+        ];
+
+        for (body, expected_error) in cases {
+            let expected_errors: Vec<String> =
+                edgion_resources::resources::edgion_plugins::json_schema_body_validation_errors(&body)
+                    .into_iter()
+                    .map(|error| format!("requestPlugins[0] (JsonSchemaValidation): {error}"))
+                    .collect();
+            let mut runtime = PluginRuntime::new();
+            let errors = runtime.add_from_request_filters(&[json_schema_entry(Some(body), true)], "default");
+            assert_eq!(errors, expected_errors, "Gateway must mirror canonical body errors");
+            assert!(
+                errors.iter().any(|error| error.contains(expected_error)),
+                "expected {expected_error:?}, got {errors:?}"
+            );
+            assert_eq!(runtime.request_plugins_count(), 0);
+            assert_sealed_invalid(&mut runtime);
+        }
+    }
+
+    #[test]
+    fn multiple_enabled_json_schema_validators_seal_fail_closed() {
+        let entries = [json_schema_entry(None, true), json_schema_entry(None, true)];
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&entries, "default");
+        assert_eq!(
+            errors,
+            vec!["requestPlugins: at most one JsonSchemaValidation plugin is allowed, found 2"]
+        );
+        assert_sealed_invalid(&mut runtime);
+    }
+
+    #[test]
+    fn disabled_json_schema_validator_is_inert_for_cardinality() {
+        let entries = [json_schema_entry(None, true), json_schema_entry(None, false)];
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&entries, "default");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        runtime.seal_fail_closed();
+        assert_eq!(runtime.request_plugins_count(), 1);
+        assert_eq!(
+            runtime.request_plugins_iter().next().map(|filter| filter.name()),
+            Some("JsonSchemaValidation")
+        );
+    }
+
+    #[test]
+    fn bypassed_json_schema_is_inert_for_body_validation_and_cardinality() {
+        use edgion_resources::resources::edgion_plugins::BodyRequirement;
+        use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+
+        let mut bypassed = json_schema_entry(
+            Some(BodyRequirement {
+                max_body_size: Some("invalid".to_string()),
+                ..BodyRequirement::default()
+            }),
+            true,
+        );
+        bypassed.policy_action = Some(PluginPolicyAction::Bypass);
+        let normal = json_schema_entry(None, true);
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[bypassed, normal], "default");
+        assert!(errors.is_empty(), "policy-stamped entries are inert: {errors:?}");
+        assert!(runtime.invalid_plugins.is_empty());
+
+        runtime.seal_fail_closed();
+        assert_eq!(runtime.request_plugins_count(), 1);
+        assert_eq!(
+            runtime.request_plugins_iter().next().map(|filter| filter.name()),
+            Some("JsonSchemaValidation")
+        );
+    }
+
+    #[test]
+    fn blocked_json_schema_is_inert_for_body_validation_and_cardinality() {
+        use edgion_resources::resources::edgion_plugins::BodyRequirement;
+        use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+
+        let mut blocked = json_schema_entry(
+            Some(BodyRequirement {
+                conditions: Some(Default::default()),
+                ..BodyRequirement::default()
+            }),
+            true,
+        );
+        blocked.policy_action = Some(PluginPolicyAction::Block { status: 451 });
+        let normal = json_schema_entry(None, true);
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[blocked, normal], "default");
+        assert!(errors.is_empty(), "policy-stamped entries are inert: {errors:?}");
+        assert!(runtime.invalid_plugins.is_empty());
+
+        runtime.seal_fail_closed();
+        runtime.seal_plugin_policy();
+        assert_eq!(
+            runtime.request_plugins_iter().next().map(|filter| filter.name()),
+            Some("PluginPolicyBlock")
+        );
+    }
+
+    #[tokio::test]
+    async fn json_schema_default_limit_accepts_exactly_64_kib() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use crate::EdgionHttpContext;
+        use bytes::Bytes;
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[json_schema_entry(None, true)], "default");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+
+        let mut body = vec![b' '; 64 * 1024];
+        body[0] = b'{';
+        body[1] = b'}';
+        let body = Bytes::from(body);
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session.expect_declares_body().return_const(Some(true));
+        session
+            .expect_ensure_request_body()
+            .with(mockall::predicate::eq(Some(32 * 1024 * 1024)))
+            .return_const(Ok(64 * 1024));
+        session
+            .expect_request_body_available_len()
+            .with(mockall::predicate::eq(false))
+            .return_const(Ok(64 * 1024));
+        session
+            .expect_request_header_values()
+            .times(2)
+            .returning(|name| match name {
+                "content-type" => Some(vec!["application/json".to_string()]),
+                "content-encoding" => Some(Vec::new()),
+                _ => unreachable!("unexpected header name"),
+            });
+        session
+            .expect_read_request_body()
+            .with(mockall::predicate::eq(None))
+            .return_once(move |_| Ok(body));
+
+        let mut log = PluginLog::new("JsonSchemaValidation");
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::Nothing
+        );
+    }
+
+    #[tokio::test]
+    async fn json_schema_default_limit_rejects_64_kib_plus_one_before_materialization() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use crate::EdgionHttpContext;
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[json_schema_entry(None, true)], "default");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session
+            .expect_ensure_request_body()
+            .with(mockall::predicate::eq(Some(32 * 1024 * 1024)))
+            .return_const(Ok(64 * 1024 + 1));
+        session
+            .expect_add_error()
+            .with(mockall::predicate::eq(edgion_resources::EdgionStatus::BodyReadTooLarge))
+            .return_once(|_| ());
+
+        let mut log = PluginLog::new("JsonSchemaValidation");
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 413,
+                body: None,
+            }
         );
     }
 

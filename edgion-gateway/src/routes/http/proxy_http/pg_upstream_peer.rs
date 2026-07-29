@@ -809,6 +809,16 @@ fn resolve_connect_deadline(service_key: Option<&str>, global: std::time::Durati
     (!d.is_zero()).then_some(d)
 }
 
+/// Replay-safety write bound for when the timeout fold produced no deadline:
+/// `Some(global default backendRequest)` only when a captured request body will
+/// replay to the upstream AND the global default itself is enabled (non-zero).
+/// A disabled global default means the operator asked for no bounds anywhere —
+/// respected, the window stays unbounded. Rationale at the call site.
+#[inline]
+fn replay_write_floor(body_captured: bool, global_backend_request: std::time::Duration) -> Option<std::time::Duration> {
+    (body_captured && !global_backend_request.is_zero()).then_some(global_backend_request)
+}
+
 /// Configure peer timeouts from global and route-level configs (inline for performance)
 #[inline]
 pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<HttpPeer>, ctx: &mut EdgionHttpContext) {
@@ -871,6 +881,20 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
     if let Some((timeout, _)) = folded {
         peer.options.read_timeout = Some(timeout);
         peer.options.write_timeout = Some(timeout);
+    } else if let Some(floor) = replay_write_floor(ctx.request_body.has_cached_body(), backend_timeout.request_timeout)
+    {
+        // Replay safety floor: while a captured request body replays to the
+        // upstream, the session does not watch the downstream socket, so a
+        // client that disconnected after uploading is noticed only once replay
+        // completes — upstream backpressure can stretch that window
+        // indefinitely unless each body write is bounded (see the pingora
+        // `RequestBodyBuffer` contract). With every deadline disabled
+        // (`backendRequestTimeout: "0s"`, no route/gRPC deadline), fall back
+        // to the global default for the WRITE bound only. Reads stay
+        // unbounded as configured, and `peer_timeout_source` stays `None` so
+        // a fired write timeout is a plain upstream failure, not a retryable
+        // per-try (GEP-1731) cancellation.
+        peer.options.write_timeout = Some(floor);
     }
 
     // Idle timeout: use global config from EdgionGatewayConfig
@@ -1256,8 +1280,8 @@ fn sp_should_repin_on_strict_retry(
 mod tests {
     use super::{
         apply_upstream_authority_decision, backoff_action, decide_upstream_authority, decide_want_raw,
-        fold_peer_timeouts, sp_should_refresh_on_cross_attempt_retry, sp_should_repin_on_strict_retry,
-        AuthorityDecision, BackoffAction,
+        fold_peer_timeouts, replay_write_floor, sp_should_refresh_on_cross_attempt_retry,
+        sp_should_repin_on_strict_retry, AuthorityDecision, BackoffAction,
     };
     use crate::backends::policy::backend_traffic::authority::AuthorityError;
     use crate::{BackendContext, BackendTlsInfo, EdgionHttpContext, UpstreamInfo};
@@ -1266,6 +1290,17 @@ mod tests {
     use pingora_core::prelude::HttpPeer;
     use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
     use std::time::Duration;
+
+    #[test]
+    fn replay_write_floor_applies_only_with_captured_body_and_enabled_default() {
+        let global = Duration::from_secs(30);
+        // Captured body + enabled global default → the write bound floor.
+        assert_eq!(replay_write_floor(true, global), Some(global));
+        // No captured body: nothing replays, nothing to bound.
+        assert_eq!(replay_write_floor(false, global), None);
+        // Global default disabled: the operator asked for no bounds anywhere.
+        assert_eq!(replay_write_floor(true, Duration::ZERO), None);
+    }
 
     #[test]
     fn default_writes_normalized() {

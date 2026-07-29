@@ -54,6 +54,20 @@ pub async fn fail_to_proxy(
         ctx.add_error(EdgionStatus::ClientClosed);
     }
 
+    // A gateway-internal error that surfaced while the captured request body
+    // was being replayed to the upstream is a body-replay failure (buffer
+    // invariant violation or spill-storage read error). `upstream.err` alone
+    // would show only the indistinguishable "InternalError", so record a
+    // dedicated status; the error-log line (join on x-trace-id) carries the
+    // precise cause text. Upstream-attributed errors mid-replay (e.g. a write
+    // timeout while pushing the replayed body) are deliberately excluded —
+    // those are upstream failures, not buffer failures.
+    if crate::request_body::request_body_replay_active(session)
+        && (matches!(e.esource(), ErrorSource::Internal) || matches!(e.etype(), ErrorType::InternalError))
+    {
+        ctx.add_error(EdgionStatus::BodyReplayFailed);
+    }
+
     if code > 0 {
         if ctx.request_info.status.is_none() {
             ctx.request_info.status = Some(code);

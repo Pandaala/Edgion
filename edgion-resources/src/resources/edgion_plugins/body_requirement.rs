@@ -18,8 +18,8 @@
 //!   large; fail-open → skip the plugin as if it were disabled).
 //!
 //! The requirement can be declared by the operator (the `body` field on a plugin
-//! entry) or intrinsically by the plugin implementation; the operator value, when
-//! present, wins.
+//! entry) or intrinsically by the plugin implementation. Operator fields tune
+//! the intrinsic declaration; omitted operator fields retain intrinsic values.
 
 use super::conditions::PluginConditions;
 use crate::resources::common::parse_byte_size;
@@ -119,15 +119,21 @@ impl BodyRequirement {
     /// and the stray `body:` is surfaced as a preparse validation error instead.
     ///
     /// When the plugin does consume the body, the operator may tune
-    /// `max_body_size` / `conditions`, but may NOT loosen an intrinsic fail-close
-    /// to fail-open: the stricter `on_read_failure` wins, so a security plugin
-    /// (e.g. HMAC body validation) can never be silently downgraded to
-    /// bypass-on-error.
+    /// `max_body_size` / `conditions`; omitted operator fields inherit their
+    /// intrinsic values. The operator may NOT loosen an intrinsic fail-close to
+    /// fail-open: the stricter `on_read_failure` wins, so a security plugin (e.g.
+    /// HMAC body validation) can never be silently downgraded to bypass-on-error.
     pub fn resolve(operator: Option<BodyRequirement>, intrinsic: Option<BodyRequirement>) -> Option<BodyRequirement> {
         let intr = intrinsic?;
         match operator {
             None => Some(intr),
             Some(mut op) => {
+                if op.max_body_size.is_none() {
+                    op.max_body_size = intr.max_body_size.clone();
+                }
+                if op.conditions.is_none() {
+                    op.conditions = intr.conditions.clone();
+                }
                 if intr.is_fail_close() {
                     // Stricter fail policy wins: can't downgrade to fail-open.
                     op.on_read_failure = BodyReadFailureMode::FailClose;
@@ -249,6 +255,29 @@ mod tests {
         assert!(resolved.is_fail_close());
         assert!(resolved.conditions.is_none(), "operator conditions must be dropped");
         assert_eq!(resolved.max_body_size.as_deref(), Some("2m"));
+    }
+
+    #[test]
+    fn resolve_inherits_intrinsic_max_when_operator_omits_it() {
+        let intrinsic = BodyRequirement {
+            max_body_size: Some("64KiB".to_string()),
+            conditions: Some(PluginConditions {
+                skip: None,
+                run: Some(vec![]),
+            }),
+            ..Default::default()
+        };
+
+        let empty_operator: BodyRequirement = serde_json::from_str("{}").unwrap();
+        let resolved = BodyRequirement::resolve(Some(empty_operator), Some(intrinsic.clone())).unwrap();
+        assert_eq!(resolved.max_body_size.as_deref(), Some("64KiB"));
+        assert!(resolved.conditions.is_some());
+
+        let policy_only_operator: BodyRequirement = serde_json::from_str(r#"{ "onReadFailure": "failOpen" }"#).unwrap();
+        let resolved = BodyRequirement::resolve(Some(policy_only_operator), Some(intrinsic)).unwrap();
+        assert_eq!(resolved.max_body_size.as_deref(), Some("64KiB"));
+        assert!(resolved.conditions.is_some());
+        assert!(resolved.is_fail_close());
     }
 
     #[test]

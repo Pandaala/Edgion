@@ -65,6 +65,19 @@ pub fn cookie_value(headers: &http::HeaderMap, name: &str) -> Option<String> {
     })
 }
 
+/// Return every value for one header, preserving duplicate occurrences.
+///
+/// `None` reports that at least one matching value is not valid UTF-8. This
+/// prevents security-sensitive consumers from silently treating an invalid
+/// duplicate as absent.
+fn utf8_header_values(headers: &http::HeaderMap, name: &str) -> Option<Vec<String>> {
+    headers
+        .get_all(name)
+        .iter()
+        .map(|value| value.to_str().ok().map(str::to_owned))
+        .collect()
+}
+
 /// Pure core of the once-per-name request-direction anti-spoof strip.
 ///
 /// For each request-direction rule in `plan`, removes the client-supplied
@@ -279,6 +292,10 @@ impl<'a> PingoraSessionAdapter<'a> {
                     return Err(match err.etype() {
                         pingora_core::ErrorType::ReadTimedout => BodyReadError::Timeout,
                         pingora_core::ErrorType::HTTPStatus(413) => self.reject_over_limit_request_body(cap),
+                        // Gateway-local capture failure (spill-file IO, capture
+                        // poisoned mid-chunk). Kept apart from the client-caused
+                        // `Incomplete` so the access log can alert on it.
+                        pingora_core::ErrorType::InternalError => BodyReadError::StorageFailure,
                         _ => BodyReadError::Incomplete,
                     });
                 }
@@ -640,6 +657,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .iter()
             .filter_map(|(name, value)| value.to_str().ok().map(|v| (name.as_str().to_string(), v.to_string())))
             .collect()
+    }
+
+    fn request_header_values(&self, name: &str) -> Option<Vec<String>> {
+        utf8_header_values(&self.inner.req_header().headers, name)
     }
 
     fn get_query_param(&self, name: &str) -> Option<String> {
@@ -1620,6 +1641,30 @@ mod tests {
         headers.insert("Cookie", http::HeaderValue::from_static("a=1; b=2"));
         assert_eq!(cookie_value(&headers, "b").as_deref(), Some("2"));
         assert_eq!(cookie_value(&headers, "c"), None);
+    }
+
+    #[test]
+    fn utf8_header_values_preserves_duplicates_and_rejects_invalid_values() {
+        let mut headers = http::HeaderMap::new();
+        headers.append("content-type", http::HeaderValue::from_static("application/json"));
+        headers.append(
+            "content-type",
+            http::HeaderValue::from_static("application/problem+json"),
+        );
+        assert_eq!(
+            utf8_header_values(&headers, "content-type"),
+            Some(vec![
+                "application/json".to_string(),
+                "application/problem+json".to_string()
+            ])
+        );
+        assert_eq!(utf8_header_values(&headers, "content-encoding"), Some(Vec::new()));
+
+        headers.append(
+            "content-type",
+            http::HeaderValue::from_bytes(&[0xff]).expect("obs-text is a valid raw header value"),
+        );
+        assert_eq!(utf8_header_values(&headers, "content-type"), None);
     }
 
     #[test]

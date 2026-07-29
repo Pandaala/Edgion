@@ -172,7 +172,7 @@ mod capability_tests {
             starter.contains("stock)") && starter.contains("Stock Gateway does not report body-buffering=disabled"),
             "the shared starter must accept the runner's stock flavor name"
         );
-        for suite in ["DslBody", "BodyPlugins"] {
+        for suite in ["DslBody", "BodyPlugins", "JsonSchemaValidation"] {
             assert_eq!(
                 runner.matches(&format!("EdgionPlugins_{suite}")).count(),
                 2,
@@ -342,6 +342,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "dsl" => "EdgionPlugins/Dsl".to_string(),
             "dsl-body" | "dslbody" => "EdgionPlugins/DslBody".to_string(),
             "body-plugins" | "bodyplugins" => "EdgionPlugins/BodyPlugins".to_string(),
+            "json-schema-validation" | "jsonschemavalidation" => "EdgionPlugins/JsonSchemaValidation".to_string(),
             "EdgionConfigDataManaged" | "edgionconfigdatamanaged" | "data-managed" => {
                 "EdgionPlugins/EdgionConfigDataManaged".to_string()
             }
@@ -526,6 +527,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/Dsl" => "EdgionPlugins",
         "EdgionPlugins/DslBody" => "EdgionPlugins",
         "EdgionPlugins/BodyPlugins" => "EdgionPlugins",
+        "EdgionPlugins/JsonSchemaValidation" => "EdgionPlugins",
         "EdgionPlugins/BodyDynamic" => "EdgionPlugins",
         "EdgionPlugins/DslDynamic" => "EdgionPlugins",
         "EdgionPlugins/DslGrpcError" => "GRPCRoute/Basic",
@@ -1605,6 +1607,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::BodyPluginsTestSuite));
+        }
+        "EdgionPlugins/JsonSchemaValidation" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/JsonSchemaValidation tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::JsonSchemaValidationTestSuite));
         }
         "EdgionPlugins/BodyDynamic" => {
             if !gateway {

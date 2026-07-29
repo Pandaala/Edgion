@@ -213,6 +213,24 @@ pub enum EdgionStatus {
     /// ordinary buffered read rather than this status.
     BodyRefusedNoSnapshot = 500_22,
 
+    /// Replaying the captured request body to the upstream failed: a
+    /// gateway-local fault (spill-file read error, a replay-cursor invariant
+    /// violation, or a capture poisoned mid-chunk), never an upstream or
+    /// client failure. Without this code the access log shows only the final
+    /// 500 with `upstream.err: ["InternalError"]`, which is not actionable;
+    /// the matching error-log line (join on `x-trace-id`) carries the precise
+    /// cause text. A non-zero rate is alertable: captured bodies are failing
+    /// to reach the upstream (HTTP 500).
+    BodyReplayFailed = 500_23,
+
+    /// The request-body capture storage backend failed mid-capture (spill
+    /// file create/write, or the capture was poisoned): an infrastructure
+    /// fault such as a full disk, not a client abort. Deliberately split from
+    /// `BodyReadAborted` (client stream ended prematurely) so storage
+    /// incidents stay alertable instead of drowning in client-abort noise
+    /// (HTTP 500).
+    BodyCaptureStorageFailed = 500_24,
+
     /// Client-supplied `grpc-timeout` deadline already exceeded before peer
     /// selection. Surfaced to the gRPC client as `grpc-status: 4` (DEADLINE_EXCEEDED)
     /// via the standard 504 → grpc-status mapping.
@@ -336,6 +354,8 @@ mod tests {
             EdgionStatus::BodyReadTimeout => Some(408),
             EdgionStatus::BodyReadTooLarge => Some(413),
             EdgionStatus::BodyReadUnimplemented => Some(500),
+            EdgionStatus::BodyReplayFailed => Some(500),
+            EdgionStatus::BodyCaptureStorageFailed => Some(500),
             EdgionStatus::PluginResponseReplaced => None,
             EdgionStatus::PluginResponseReplaceUnsupportedGrpc => None,
             EdgionStatus::OutboundTlsVerifyUnsupported => None,
@@ -413,6 +433,8 @@ mod tests {
             EdgionStatus::BodyReadTimeout,
             EdgionStatus::BodyReadTooLarge,
             EdgionStatus::BodyReadUnimplemented,
+            EdgionStatus::BodyReplayFailed,
+            EdgionStatus::BodyCaptureStorageFailed,
             EdgionStatus::PluginResponseReplaced,
             EdgionStatus::PluginResponseReplaceUnsupportedGrpc,
             EdgionStatus::OutboundTlsVerifyUnsupported,
@@ -435,5 +457,7 @@ mod tests {
         assert_eq!(EdgionStatus::BodyReadUnimplemented.http_status(), Some(500));
         assert_eq!(EdgionStatus::BodyReadTimeout.http_status(), Some(408));
         assert_eq!(EdgionStatus::BodyReadTooLarge.http_status(), Some(413));
+        assert_eq!(EdgionStatus::BodyReplayFailed.http_status(), Some(500));
+        assert_eq!(EdgionStatus::BodyCaptureStorageFailed.http_status(), Some(500));
     }
 }

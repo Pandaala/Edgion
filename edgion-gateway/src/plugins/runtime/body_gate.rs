@@ -185,6 +185,10 @@ impl UpstreamResponse for BodyGatedUpstreamResponse {
 /// - A gateway-wide **physical cap** (`BufferLimitExceeded`) is also always
 ///   fail-close: capture has been discarded and the original body cannot be
 ///   forwarded.
+/// - A **storage failure** (`StorageFailure`) is likewise always fail-close:
+///   consumed bytes were never stored, so no forwarding copy exists. It gets
+///   its own status (`BodyCaptureStorageFailed`) because it is an
+///   infrastructure fault, not client behavior.
 /// - A **read failure** (`TooLarge` / `Incomplete` / `Timeout` /
 ///   `Unimplemented`) is a runtime condition an operator may reasonably choose
 ///   to tolerate, so it keeps the `on_read_failure` knob. Oversize maps to 413
@@ -213,6 +217,20 @@ pub(crate) fn body_read_failure_result(
         };
     }
 
+    if matches!(err, BodyReadError::StorageFailure) {
+        // The storage backend failed mid-capture: consumed bytes were never
+        // stored, so no forwarding copy of the body exists and fail-open is
+        // impossible — same reasoning as the physical cap above. Recorded
+        // under its own status (not `BodyReadAborted`) because this is an
+        // infrastructure fault (e.g. full disk), not a client abort.
+        session.add_error(EdgionStatus::BodyCaptureStorageFailed);
+        log.push_err("body-storage-failed");
+        return PluginRunningResult::ErrResponse {
+            status: 500,
+            body: None,
+        };
+    }
+
     // R17: a read failure is alertable too, and only `ctx.add_error` reaches the
     // access log — a `PluginLog` line alone stays inside a nested per-plugin array.
     session.add_error(match err {
@@ -223,6 +241,7 @@ pub(crate) fn body_read_failure_result(
         BodyReadError::Unimplemented => EdgionStatus::BodyReadUnimplemented,
         // Handled above; unreachable.
         BodyReadError::NotBuffered => EdgionStatus::BodyRefusedStage,
+        BodyReadError::StorageFailure => EdgionStatus::BodyCaptureStorageFailed,
     });
 
     match requirement.on_read_failure {
@@ -798,6 +817,32 @@ mod tests {
 
         let mut log = PluginLog::new("test");
         gate.run_request(&mut session, &mut log).await;
+    }
+
+    #[tokio::test]
+    async fn storage_failure_records_status_and_cannot_fail_open() {
+        // A storage failure means consumed bytes were never stored: no
+        // forwarding copy exists, so even a fail-open plugin must reject —
+        // and the access log must carry the infra-fault status, not the
+        // client-abort one.
+        let req = BodyRequirement {
+            on_read_failure: BodyReadFailureMode::FailOpen,
+            ..Default::default()
+        };
+        let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), req);
+        let mut session = session_expecting_error(EdgionStatus::BodyCaptureStorageFailed);
+        session
+            .expect_read_request_body()
+            .returning(|_| Err(BodyReadError::StorageFailure));
+
+        let mut log = PluginLog::new("test");
+        assert_eq!(
+            gate.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            }
+        );
     }
 
     #[tokio::test]

@@ -23,6 +23,7 @@ Edgion 提供的 HTTP Route 级别插件，通过 `EdgionPlugins` CRD 配置。
 | [hmac-auth.md](hmac-auth.md) | HMAC 签名验证 |
 | [ip-restriction.md](ip-restriction.md) | IP 黑白名单 |
 | [jwe-decrypt.md](jwe-decrypt.md) | JWE Token 解密 |
+| [json-schema-validation.md](json-schema-validation.md) | 使用内联 JSON Schema 校验 JSON 请求体 |
 | [jwt-auth.md](jwt-auth.md) | JWT 认证 |
 | [key-auth.md](key-auth.md) | API Key 认证 |
 | [ldap-auth.md](ldap-auth.md) | LDAP 认证 |

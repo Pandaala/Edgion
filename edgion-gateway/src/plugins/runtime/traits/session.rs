@@ -41,6 +41,12 @@ pub enum BodyReadError {
     TooLarge { limit: u64 },
     /// The body stream ended prematurely / was aborted.
     Incomplete,
+    /// The capture storage backend failed (spill file create/write, or the
+    /// capture was poisoned mid-chunk): an infrastructure fault, not a client
+    /// abort. Kept distinct from `Incomplete` so operators can alert on it,
+    /// and always fail-close — the consumed bytes were not stored, so no
+    /// forwarding copy of the body exists.
+    StorageFailure,
     /// The buffering read exceeded its time bound. Distinct from `Incomplete`
     /// (an aborted stream): a deadline expiry is a client error and maps to
     /// HTTP 408, not 500. Only produced once the P0 buffering runtime exists.
@@ -57,6 +63,7 @@ impl std::fmt::Display for BodyReadError {
             }
             BodyReadError::TooLarge { limit } => write!(f, "body exceeds buffer cap of {limit} bytes"),
             BodyReadError::Incomplete => write!(f, "body stream incomplete"),
+            BodyReadError::StorageFailure => write!(f, "body capture storage failed"),
             BodyReadError::Timeout => write!(f, "body read timed out"),
         }
     }
@@ -87,6 +94,22 @@ pub trait PluginSession: Send + Sync {
     /// represented as separate entries with the same name.
     /// Used by plugins that need to forward/inspect all headers (e.g., ForwardAuth).
     fn request_headers(&self) -> Vec<(String, String)>;
+
+    /// Get every value for one request header without combining duplicates.
+    ///
+    /// `Some(empty)` means the header is absent. `None` means at least one
+    /// matching value is not valid UTF-8 and must not be silently ignored.
+    /// Adapters with raw header access should override this method so invalid
+    /// values remain distinguishable from missing values.
+    fn request_header_values(&self, name: &str) -> Option<Vec<String>> {
+        Some(
+            self.request_headers()
+                .into_iter()
+                .filter(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value)
+                .collect(),
+        )
+    }
 
     // ========== Condition evaluation methods (read-only) ==========
 

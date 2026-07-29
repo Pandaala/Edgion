@@ -725,6 +725,22 @@ mod compile_plugins_tests {
         fn request_body_buffer() -> EdgionPlugin {
             EdgionPlugin::RequestBodyBuffer(Default::default())
         }
+        fn json_schema() -> EdgionPlugin {
+            use edgion_resources::resources::edgion_plugins::JsonSchemaValidationConfig;
+            EdgionPlugin::JsonSchemaValidation(JsonSchemaValidationConfig {
+                schema: serde_json::json!({"type": "object"}),
+            })
+        }
+        fn json_schema_entry_with_body(max_body_size: Option<&str>, with_conditions: bool) -> RequestFilterEntry {
+            use edgion_resources::resources::edgion_plugins::BodyRequirement;
+            let mut entry = RequestFilterEntry::new(json_schema());
+            entry.body = Some(BodyRequirement {
+                max_body_size: max_body_size.map(str::to_string),
+                conditions: with_conditions.then(Default::default),
+                ..Default::default()
+            });
+            entry
+        }
         fn aliased(mut e: RequestFilterEntry, alias: &str) -> RequestFilterEntry {
             e.alias = Some(alias.to_string());
             e
@@ -899,6 +915,42 @@ mod compile_plugins_tests {
                 mk(
                     None,
                     Some(vec![UpstreamResponseFilterEntry::new(request_body_buffer())]),
+                ),
+            ),
+            (
+                "json_schema_invalid_body_limit",
+                mk(Some(vec![json_schema_entry_with_body(Some("notasize"), false)]), None),
+            ),
+            (
+                "json_schema_zero_body_limit",
+                mk(Some(vec![json_schema_entry_with_body(Some("0"), false)]), None),
+            ),
+            (
+                "json_schema_body_limit_above_absolute_max",
+                mk(Some(vec![json_schema_entry_with_body(Some("1048577"), false)]), None),
+            ),
+            (
+                "json_schema_body_conditions",
+                mk(Some(vec![json_schema_entry_with_body(None, true)]), None),
+            ),
+            (
+                "json_schema_two_enabled",
+                mk(
+                    Some(vec![
+                        RequestFilterEntry::new(json_schema()),
+                        RequestFilterEntry::new(json_schema()),
+                    ]),
+                    None,
+                ),
+            ),
+            (
+                "json_schema_enabled_and_disabled",
+                mk(
+                    Some(vec![
+                        RequestFilterEntry::new(json_schema()),
+                        RequestFilterEntry::with_enable(json_schema(), false),
+                    ]),
+                    None,
                 ),
             ),
             (

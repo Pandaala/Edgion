@@ -23,6 +23,7 @@ HTTP Route-level plugins provided by Edgion, configured via the `EdgionPlugins` 
 | [hmac-auth.md](hmac-auth.md) | HMAC signature verification |
 | [ip-restriction.md](ip-restriction.md) | IP allowlist/denylist |
 | [jwe-decrypt.md](jwe-decrypt.md) | JWE Token decryption |
+| [json-schema-validation.md](json-schema-validation.md) | Validate JSON request bodies against an inline JSON Schema |
 | [jwt-auth.md](jwt-auth.md) | JWT authentication |
 | [key-auth.md](key-auth.md) | API Key authentication |
 | [ldap-auth.md](ldap-auth.md) | LDAP authentication |

@@ -194,6 +194,7 @@ spec:
                           - RealIp
                           - RequestRestriction
                           - RequestBodyBuffer
+                          - JsonSchemaValidation
                           - RequestHeaderModifier
                           - ResponseHeaderModifier
                           - RequestRedirect

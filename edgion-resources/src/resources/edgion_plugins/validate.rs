@@ -81,6 +81,7 @@ fn applicable_stages(plugin: &EdgionPlugin) -> StageSet {
         | Mock(_)
         | ProxyRewrite(_)
         | RequestBodyBuffer(_)
+        | JsonSchemaValidation(_)
         | RequestRestriction(_)
         | RateLimit(_)
         | RateLimitRedis(_)
@@ -343,6 +344,10 @@ impl EdgionPlugins {
                                 "{}[{}] ({}): body: plugin does not consume a body",
                                 $label, i, name
                             ));
+                        } else if matches!(entry.plugin, EdgionPlugin::JsonSchemaValidation(_)) {
+                            for error in super::plugin_configs::json_schema_body_validation_errors(body) {
+                                errors.push(format!("{}[{}] ({}): {}", $label, i, name, error));
+                            }
                         } else if let Some(err) = body.validation_error() {
                             errors.push(format!("{}[{}] ({}): body: {}", $label, i, name, err));
                         }
@@ -357,9 +362,20 @@ impl EdgionPlugins {
             BodyStage::Response
         );
 
-        // At most one TraceContext in the request stage — multiple would each
-        // overwrite x-trace-id (last-write-wins), which is confusing.
         if let Some(entries) = &self.spec.request_plugins {
+            // Disabled entries are inert and do not participate in cardinality.
+            let json_schema_count = entries
+                .iter()
+                .filter(|entry| entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::JsonSchemaValidation(_)))
+                .count();
+            if json_schema_count > 1 {
+                errors.push(format!(
+                    "requestPlugins: at most one JsonSchemaValidation plugin is allowed, found {json_schema_count}"
+                ));
+            }
+
+            // Multiple enabled TraceContext entries would each overwrite
+            // x-trace-id (last-write-wins), which is confusing.
             let count = entries
                 .iter()
                 .filter(|e| e.is_enabled() && e.plugin.type_name() == "TraceContext")
@@ -402,9 +418,13 @@ impl EdgionPlugins {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resources::edgion_plugins::plugin_configs::DslConfig;
-    use crate::resources::edgion_plugins::{EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseFilterEntry};
+    use crate::resources::edgion_plugins::plugin_configs::{DslConfig, JsonSchemaValidationConfig};
+    use crate::resources::edgion_plugins::{
+        BodyReadFailureMode, BodyRequirement, EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseFilterEntry,
+        ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES,
+    };
     use crate::resources::http_route::HTTPHeaderFilter;
+    use serde_json::json;
 
     fn header_filter() -> HTTPHeaderFilter {
         HTTPHeaderFilter {
@@ -479,6 +499,118 @@ mod tests {
             ..Default::default()
         });
         assert!(with_request_plugins(vec![entry]).validate_plugins().is_empty());
+    }
+
+    fn json_schema_entry() -> RequestFilterEntry {
+        RequestFilterEntry::new(EdgionPlugin::JsonSchemaValidation(JsonSchemaValidationConfig {
+            schema: json!({"type": "object"}),
+        }))
+    }
+
+    #[test]
+    fn json_schema_intrinsic_body_limit_defaults_to_64_kib() {
+        let entry = json_schema_entry();
+        let intrinsic = entry.plugin.body_requirement(BodyStage::Request).unwrap();
+        assert_eq!(intrinsic.max_body_size_bytes(), Some(Ok(DEFAULT_INSTANCE_MAX_BYTES)));
+
+        let operator = BodyRequirement {
+            on_read_failure: BodyReadFailureMode::FailOpen,
+            ..Default::default()
+        };
+        let resolved = BodyRequirement::resolve(Some(operator), Some(intrinsic)).unwrap();
+        assert_eq!(resolved.max_body_size_bytes(), Some(Ok(DEFAULT_INSTANCE_MAX_BYTES)));
+        assert!(resolved.is_fail_close());
+    }
+
+    #[test]
+    fn json_schema_body_policy_rejects_conditions_and_limit_above_1_mib() {
+        let mut entry = json_schema_entry();
+        entry.body = Some(BodyRequirement {
+            max_body_size: Some((ABSOLUTE_INSTANCE_MAX_BYTES + 1).to_string()),
+            conditions: Some(Default::default()),
+            ..Default::default()
+        });
+        let errors = with_request_plugins(vec![entry]).validate_plugins();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("conditions are not supported")),
+            "{errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| error.contains("must not exceed 1MiB")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn json_schema_body_policy_rejects_invalid_and_zero_limits() {
+        for limit in ["notasize", "0"] {
+            let mut entry = json_schema_entry();
+            entry.body = Some(BodyRequirement {
+                max_body_size: Some(limit.to_string()),
+                ..Default::default()
+            });
+            let errors = with_request_plugins(vec![entry]).validate_plugins();
+            assert!(
+                errors.iter().any(|error| error.contains("body.maxBodySize")),
+                "limit {limit:?} should fail: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn json_schema_body_limit_allows_exactly_1_mib() {
+        let mut entry = json_schema_entry();
+        entry.body = Some(BodyRequirement {
+            max_body_size: Some(ABSOLUTE_INSTANCE_MAX_BYTES.to_string()),
+            ..Default::default()
+        });
+        assert!(with_request_plugins(vec![entry]).validate_plugins().is_empty());
+    }
+
+    #[test]
+    fn rejects_multiple_json_schema_plugins_in_one_request_list() {
+        let errors = with_request_plugins(vec![json_schema_entry(), json_schema_entry()]).validate_plugins();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("at most one JsonSchemaValidation")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn disabled_json_schema_plugin_is_inert_for_cardinality() {
+        let enabled = json_schema_entry();
+        let disabled = RequestFilterEntry::with_enable(json_schema_entry().plugin, false);
+        let errors = with_request_plugins(vec![enabled, disabled]).validate_plugins();
+        assert!(
+            !errors
+                .iter()
+                .any(|error| error.contains("at most one JsonSchemaValidation")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn json_schema_plugin_is_request_stage_only() {
+        let entry = UpstreamResponseFilterEntry::new(json_schema_entry().plugin);
+        let plugins = EdgionPlugins {
+            metadata: Default::default(),
+            spec: EdgionPluginsSpec {
+                upstream_response_filter_plugins: Some(vec![entry]),
+                ..Default::default()
+            },
+            status: None,
+        };
+        let errors = plugins.validate_plugins();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("plugin is not valid for upstream response filter stage")),
+            "{errors:?}"
+        );
     }
 
     #[test]

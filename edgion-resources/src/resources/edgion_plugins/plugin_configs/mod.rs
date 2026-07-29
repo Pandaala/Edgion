@@ -18,6 +18,7 @@ mod global_access_control;
 mod header_cert_auth;
 mod hmac_auth;
 mod ip_restriction;
+mod json_schema_validation;
 mod jwe_decrypt;
 mod jwt_auth;
 mod key_auth;
@@ -71,6 +72,11 @@ pub use global_access_control::{AllowOutcome, AllowProfile, AllowRuleGroup, Glob
 pub use header_cert_auth::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderCertAuthConfig, UpstreamHeaderConfig};
 pub use hmac_auth::{HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup, HmacCredential};
 pub use ip_restriction::{DefaultAction, IpRestrictionConfig, IpSource};
+pub use json_schema_validation::{
+    json_schema_body_validation_errors, parse_json_instance, CompiledJsonSchema, InstanceValidationError,
+    JsonSchemaValidationConfig, ParsedJsonInstance, SchemaComplexityProfile, StrictJsonError,
+    ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES,
+};
 pub use jwe_decrypt::{JweContentEncryption, JweDecryptConfig, JweKeyManagement, ResolvedJweCredential};
 pub use jwt_auth::{JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup, ResolvedJwtCredential, ResolvedJwtIssuerGroup};
 pub use key_auth::{KeyAuthConfig, KeyAuthSecretGroup, KeyMetadata};

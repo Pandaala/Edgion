@@ -23,6 +23,7 @@
   - [HmacAuth](./edgion-plugins/hmac-auth.md)
   - [IP 限制](./edgion-plugins/ip-restriction.md)
   - [JweDecrypt](./edgion-plugins/jwe-decrypt.md)
+  - [JSON Schema 校验](./edgion-plugins/json-schema-validation.md)
   - [JWT Auth](./edgion-plugins/jwt-auth.md)
   - [KeyAuth](./edgion-plugins/key-auth.md)
   - [LdapAuth](./edgion-plugins/ldap-auth.md)

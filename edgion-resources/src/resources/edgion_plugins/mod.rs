@@ -33,6 +33,9 @@ pub use entry::{
     UpstreamResponseFilterEntry,
 };
 pub use plugin_configs::{
+    json_schema_body_validation_errors, parse_json_instance, CompiledJsonSchema, ParsedJsonInstance,
+};
+pub use plugin_configs::{
     AccessLogExternField, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, BasicAuthSecretGroup,
     CaseType, CertHeaderFormat, CertSourceMode, CompiledTemplate, ConsumerBy, CorsConfig, CsrfConfig, CtxSetConfig,
     CtxVarRule, DebugAccessLogToHeaderConfig, DefaultAction, DirectEndpointConfig, DirectEndpointOnInvalid,
@@ -41,15 +44,16 @@ pub use plugin_configs::{
     ExtUpstreamExtract, ExtUpstreamOnMissing, ExtUpstreamOnNoMatch, ExtractConfig, FaultHeaderEntry,
     FaultInjectionConfig, ForwardAuthConfig, ForwardAuthDecision, HashAlgorithm, HashCalcConfig, HeaderActions,
     HeaderCertAuthConfig, HeaderEntry, HeaderRename, HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup,
-    HmacCredential, HttpMethod, IpRestrictionConfig, IpSource, JsonBodyRewrite, JweContentEncryption, JweDecryptConfig,
-    JweKeyManagement, JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup, KeyAuthConfig, KeyMetadata, LdapAuthConfig,
-    LimitHeaderNames, LogExtSource, LruCacheConfig, MappingConfig, MockConfig, OnMissing, OnMissingKey, OnRedisFailure,
-    OpenidConnectConfig, ProxyRewriteConfig, RateLimitAlgorithm, RateLimitConfig, RateLimitPolicy,
-    RateLimitRedisConfig, RealIpConfig, RegexUri, RegionDef, RegionRouteConfig, ReplaceConfig, RequestBodyBufferConfig,
-    RequestRestrictionConfig, ResolvedBasicAuthUser, ResolvedJweCredential, ResolvedJwtCredential,
-    ResolvedJwtIssuerGroup, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionMode,
-    RestrictionRule, RestrictionSource, RouteRule, RuleGroup, SanType, TemplateSegment, TemplateVarType,
-    TransformConfig, TransformType, UnauthAction, UpstreamHeaderConfig, VerificationMode,
+    HmacCredential, HttpMethod, InstanceValidationError, IpRestrictionConfig, IpSource, JsonBodyRewrite,
+    JsonSchemaValidationConfig, JweContentEncryption, JweDecryptConfig, JweKeyManagement, JwtAlgorithm, JwtAuthConfig,
+    JwtIssuerGroup, KeyAuthConfig, KeyMetadata, LdapAuthConfig, LimitHeaderNames, LogExtSource, LruCacheConfig,
+    MappingConfig, MockConfig, OnMissing, OnMissingKey, OnRedisFailure, OpenidConnectConfig, ProxyRewriteConfig,
+    RateLimitAlgorithm, RateLimitConfig, RateLimitPolicy, RateLimitRedisConfig, RealIpConfig, RegexUri, RegionDef,
+    RegionRouteConfig, ReplaceConfig, RequestBodyBufferConfig, RequestRestrictionConfig, ResolvedBasicAuthUser,
+    ResolvedJweCredential, ResolvedJwtCredential, ResolvedJwtIssuerGroup, ResponseHeaderActions, ResponseHeaderEntry,
+    ResponseRewriteConfig, RestrictionMode, RestrictionRule, RestrictionSource, RouteRule, RuleGroup, SanType,
+    SchemaComplexityProfile, StrictJsonError, TemplateSegment, TemplateVarType, TransformConfig, TransformType,
+    UnauthAction, UpstreamHeaderConfig, VerificationMode, ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES,
 };
 pub use plugin_validation::PluginValidation;
 

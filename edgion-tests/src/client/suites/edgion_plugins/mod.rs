@@ -30,6 +30,7 @@ mod hmac_auth;
 mod ip_restriction;
 mod ip_restriction_partial_good;
 mod ip_restriction_refs;
+mod json_schema_validation;
 mod jwe_decrypt;
 mod jwt_auth;
 mod key_auth;
@@ -90,6 +91,10 @@ pub use hmac_auth::HmacAuthTestSuite;
 pub use ip_restriction::IpRestrictionPluginTestSuite;
 pub use ip_restriction_partial_good::IpRestrictionPartialGoodPluginTestSuite;
 pub use ip_restriction_refs::IpRestrictionRefsPluginTestSuite;
+pub use json_schema_validation::{
+    JsonSchemaValidationDynamicInvalidTestSuite, JsonSchemaValidationDynamicV1TestSuite,
+    JsonSchemaValidationDynamicV2TestSuite, JsonSchemaValidationTestSuite,
+};
 pub use jwe_decrypt::JweDecryptTestSuite;
 pub use jwt_auth::JwtAuthTestSuite;
 pub use key_auth::KeyAuthTestSuite;

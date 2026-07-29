@@ -220,6 +220,18 @@ impl ProxyHttp for EdgionHttpProxy {
         ctx.local_reply_written
     }
 
+    fn request_summary(&self, session: &Session, ctx: &Self::CTX) -> String {
+        // Default summary plus the request's trace id (always present: client
+        // header or generated at entry), so a "Fail to proxy" error-log line
+        // can be joined with its access-log entry instead of a heuristic
+        // timestamp+path match.
+        let summary = session.as_ref().request_summary();
+        match ctx.request_info.x_trace_id.as_deref() {
+            Some(trace_id) => format!("{summary}, x-trace-id: {trace_id}"),
+            None => summary,
+        }
+    }
+
     async fn connected_to_upstream(
         &self,
         session: &mut Session,

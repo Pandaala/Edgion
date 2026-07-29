@@ -8,6 +8,7 @@ pub fn all() -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::gateway_dynamic::SCENARIO,
         crate::dynamic::scenarios::dsl_dynamic::SCENARIO,
         crate::dynamic::scenarios::body_dynamic::SCENARIO,
+        crate::dynamic::scenarios::json_schema_validation::SCENARIO,
         crate::dynamic::scenarios::basic_auth_dynamic::SCENARIO,
         crate::dynamic::scenarios::basic_auth_dynamic::GROUPED_SCENARIO,
         crate::dynamic::scenarios::rate_limit_dynamic::SCENARIO,

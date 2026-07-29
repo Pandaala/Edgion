@@ -281,6 +281,18 @@ impl WasmPlugin {
                     body: None,
                 };
             }
+            // A capture-storage failure is unconditionally fail-close, matching
+            // `body_gate.rs::body_read_failure_result`: consumed bytes were
+            // never stored, so no forwarding copy of the body exists and
+            // `failOpen` cannot help this request.
+            Err(BodyReadError::StorageFailure) => {
+                session.add_error(EdgionStatus::BodyCaptureStorageFailed);
+                log.push_err("wasm body-storage-failed");
+                return PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: None,
+                };
+            }
             // Genuine read failures keep the configured policy, but must still
             // be alertable: `fail_mode` only writes a `PluginLog` line (nested
             // per-plugin array), while the access log's structured `errors`
@@ -296,6 +308,7 @@ impl WasmPlugin {
                     BodyReadError::Unimplemented => EdgionStatus::BodyReadUnimplemented,
                     // Handled above; unreachable here.
                     BodyReadError::NotBuffered => EdgionStatus::BodyRefusedStage,
+                    BodyReadError::StorageFailure => EdgionStatus::BodyCaptureStorageFailed,
                 });
                 return self.fail_mode(session, log, "body read");
             }

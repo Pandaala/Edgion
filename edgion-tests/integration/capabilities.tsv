@@ -5,4 +5,6 @@
 # when the selected Gateway does not advertise the required capability.
 suite	EdgionPlugins/DslBody	body-buffering
 suite	EdgionPlugins/BodyPlugins	body-buffering
+suite	EdgionPlugins/JsonSchemaValidation	body-buffering
+dynamic	JsonSchemaValidationDynamic	body-buffering
 dynamic	BodyDynamic	body-buffering

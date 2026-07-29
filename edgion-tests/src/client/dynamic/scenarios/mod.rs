@@ -11,6 +11,7 @@ pub mod edgion_tls_last_known_good;
 pub mod gateway_class_params_flap;
 pub mod gateway_dynamic;
 pub mod grpc_route_delegation_dynamic;
+pub mod json_schema_validation;
 pub mod observed_gen_high_freq;
 pub mod rate_limit_dynamic;
 pub mod route_delegation_dynamic;

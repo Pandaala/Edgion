@@ -20,6 +20,7 @@ pub mod global_access_control;
 pub mod header_cert_auth;
 pub mod hmac_auth;
 pub mod ip_restriction;
+pub mod json_schema_validation;
 pub mod jwe_decrypt;
 pub mod jwt_auth;
 pub mod key_auth;
@@ -53,6 +54,7 @@ pub use global_access_control::GlobalAccessControl;
 pub use header_cert_auth::HeaderCertAuth;
 pub use hmac_auth::HmacAuth;
 pub use ip_restriction::IpRestriction;
+pub use json_schema_validation::JsonSchemaValidation;
 pub use jwe_decrypt::JweDecrypt;
 pub use jwt_auth::JwtAuth;
 pub use key_auth::KeyAuth;
@@ -75,7 +77,7 @@ pub use wasm::WasmPlugin;
 pub use edgion_resources::resources::edgion_plugins::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, DslConfig,
     DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, FaultInjectionConfig, ForwardAuthConfig,
-    HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig,
-    LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig,
-    RealIpConfig, RegionRouteConfig, RequestRestrictionConfig, ResponseRewriteConfig,
+    HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig,
+    JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig,
+    RateLimitRedisConfig, RealIpConfig, RegionRouteConfig, RequestRestrictionConfig, ResponseRewriteConfig,
 };

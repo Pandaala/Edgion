@@ -156,7 +156,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -167,7 +167,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1710,6 +1710,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "metrics-util",
  "mimalloc",
+ "mime",
  "mockall",
  "notify",
  "opentelemetry",
@@ -1784,6 +1785,7 @@ dependencies = [
  "edgion-dsl",
  "hex",
  "http",
+ "jsonschema",
  "jsonwebtoken",
  "k8s-openapi",
  "kube",
@@ -1970,7 +1972,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2502,7 +2504,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 dependencies = [
  "ahash",
- "allocator-api2",
 ]
 
 [[package]]
@@ -2533,6 +2534,8 @@ version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash 0.2.0",
  "serde",
  "serde_core",
@@ -2762,7 +2765,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -3818,7 +3821,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4302,7 +4305,7 @@ dependencies = [
 [[package]]
 name = "pingora-boringssl"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#c710f39c35160cb0956a6e15c26a0d0b34fe980d"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#ad8635a7a8f27909740eb468191911167fc7630e"
 dependencies = [
  "boring",
  "boring-sys",
@@ -4352,7 +4355,7 @@ dependencies = [
 [[package]]
 name = "pingora-cache"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#c710f39c35160cb0956a6e15c26a0d0b34fe980d"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#ad8635a7a8f27909740eb468191911167fc7630e"
 dependencies = [
  "ahash",
  "async-trait",
@@ -4428,7 +4431,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "sfv",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "strum 0.26.3",
  "strum_macros 0.26.4",
  "tokio",
@@ -4443,7 +4446,7 @@ dependencies = [
 [[package]]
 name = "pingora-core"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#c710f39c35160cb0956a6e15c26a0d0b34fe980d"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#ad8635a7a8f27909740eb468191911167fc7630e"
 dependencies = [
  "ahash",
  "async-trait",
@@ -4482,7 +4485,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "sfv",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "strum 0.26.3",
  "strum_macros 0.26.4",
  "tokio",
@@ -4503,7 +4506,7 @@ checksum = "b23f7bc013de67e44ed902a82843f6157460b89d11da882bcc6f09f8ae380af1"
 [[package]]
 name = "pingora-error"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#c710f39c35160cb0956a6e15c26a0d0b34fe980d"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#ad8635a7a8f27909740eb468191911167fc7630e"
 
 [[package]]
 name = "pingora-header-serde"
@@ -4524,7 +4527,7 @@ dependencies = [
 [[package]]
 name = "pingora-header-serde"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#c710f39c35160cb0956a6e15c26a0d0b34fe980d"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#ad8635a7a8f27909740eb468191911167fc7630e"
 dependencies = [
  "bytes",
  "http",
@@ -4550,7 +4553,7 @@ dependencies = [
 [[package]]
 name = "pingora-http"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#c710f39c35160cb0956a6e15c26a0d0b34fe980d"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#ad8635a7a8f27909740eb468191911167fc7630e"
 dependencies = [
  "bytes",
  "http",
@@ -4569,7 +4572,7 @@ dependencies = [
 [[package]]
 name = "pingora-ketama"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#c710f39c35160cb0956a6e15c26a0d0b34fe980d"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#ad8635a7a8f27909740eb468191911167fc7630e"
 dependencies = [
  "crc32fast",
 ]
@@ -4586,7 +4589,7 @@ dependencies = [
 [[package]]
 name = "pingora-limits"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#c710f39c35160cb0956a6e15c26a0d0b34fe980d"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#ad8635a7a8f27909740eb468191911167fc7630e"
 dependencies = [
  "ahash",
 ]
@@ -4616,7 +4619,7 @@ dependencies = [
 [[package]]
 name = "pingora-load-balancing"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#c710f39c35160cb0956a6e15c26a0d0b34fe980d"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#ad8635a7a8f27909740eb468191911167fc7630e"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -4641,7 +4644,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6705a26ad89d241a989a5395641931ba37076f5ab5fbd19ee92402414a43af32"
 dependencies = [
  "arrayvec",
- "hashbrown 0.14.5",
+ "hashbrown 0.17.0",
  "parking_lot",
  "rand 0.8.7",
 ]
@@ -4649,10 +4652,10 @@ dependencies = [
 [[package]]
 name = "pingora-lru"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#c710f39c35160cb0956a6e15c26a0d0b34fe980d"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#ad8635a7a8f27909740eb468191911167fc7630e"
 dependencies = [
  "arrayvec",
- "hashbrown 0.14.5",
+ "hashbrown 0.17.0",
  "parking_lot",
  "rand 0.8.7",
 ]
@@ -4675,7 +4678,7 @@ dependencies = [
 [[package]]
 name = "pingora-pool"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#c710f39c35160cb0956a6e15c26a0d0b34fe980d"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#ad8635a7a8f27909740eb468191911167fc7630e"
 dependencies = [
  "crossbeam-queue",
  "log",
@@ -4712,7 +4715,7 @@ dependencies = [
 [[package]]
 name = "pingora-proxy"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#c710f39c35160cb0956a6e15c26a0d0b34fe980d"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#ad8635a7a8f27909740eb468191911167fc7630e"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4746,7 +4749,7 @@ dependencies = [
 [[package]]
 name = "pingora-runtime"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#c710f39c35160cb0956a6e15c26a0d0b34fe980d"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#ad8635a7a8f27909740eb468191911167fc7630e"
 dependencies = [
  "once_cell",
  "rand 0.8.7",
@@ -4774,7 +4777,7 @@ dependencies = [
 [[package]]
 name = "pingora-rustls"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#c710f39c35160cb0956a6e15c26a0d0b34fe980d"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#ad8635a7a8f27909740eb468191911167fc7630e"
 dependencies = [
  "log",
  "no_debug",
@@ -4803,7 +4806,7 @@ dependencies = [
 [[package]]
 name = "pingora-timeout"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#c710f39c35160cb0956a6e15c26a0d0b34fe980d"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#ad8635a7a8f27909740eb468191911167fc7630e"
 dependencies = [
  "once_cell",
  "parking_lot",
@@ -5180,7 +5183,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -5217,7 +5220,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -5671,7 +5674,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5752,7 +5755,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6130,7 +6133,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6304,7 +6307,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7672,7 +7675,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
