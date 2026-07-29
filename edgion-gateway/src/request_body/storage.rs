@@ -851,7 +851,10 @@ impl RequestBodyBuffer for BodyStorage {
             .checked_add(data_len)
             .ok_or_else(|| Self::replay_error("request body captured length overflow"))?;
         if next_len > self.view.max_body_size_bytes {
-            return Err(Self::replay_error("request body capture exceeds physical limit"));
+            return Err(PingoraError::explain(
+                ErrorType::HTTPStatus(413),
+                "request body capture exceeds physical limit",
+            ));
         }
 
         match &mut self.storage {

@@ -276,10 +276,10 @@ impl<'a> PingoraSessionAdapter<'a> {
                 Ok(Some(chunk)) => chunk,
                 Ok(None) => break,
                 Err(err) => {
-                    return Err(if matches!(err.etype(), pingora_core::ErrorType::ReadTimedout) {
-                        BodyReadError::Timeout
-                    } else {
-                        BodyReadError::Incomplete
+                    return Err(match err.etype() {
+                        pingora_core::ErrorType::ReadTimedout => BodyReadError::Timeout,
+                        pingora_core::ErrorType::HTTPStatus(413) => self.reject_over_limit_request_body(cap),
+                        _ => BodyReadError::Incomplete,
                     });
                 }
             };
