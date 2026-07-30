@@ -106,7 +106,7 @@ pub use request_restriction::{RequestRestrictionConfig, RestrictionMode, RuleGro
 pub use response_rewrite::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig};
 pub use trace_context::TraceContextConfig;
 pub use wasm::{
-    normalize_callout_origin, WasmAuthHeaderSecretRef, WasmConfig, WasmFetchRetry, WasmFetchSpec, WasmSourceSpec,
-    INLINE_WARN_DECODED_BYTES, MAX_INLINE_DECODED_BYTES,
+    normalize_callout_origin, normalize_callout_origin_quiet, WasmAuthHeaderSecretRef, WasmConfig, WasmFetchRetry,
+    WasmFetchSpec, WasmSourceSpec, INLINE_WARN_DECODED_BYTES, MAX_INLINE_DECODED_BYTES,
 };
 pub use wasm_oci::{OciImageRef, OciPullPolicy, WasmOciSpec};

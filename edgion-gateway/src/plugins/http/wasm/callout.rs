@@ -15,7 +15,6 @@ use super::host_abi::{CalloutResponse, PendingCallout};
 use super::vm_manager::VmLease;
 use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
 use crate::observe::metrics::registry::record_wasm_callout;
-use crate::plugins::http::common::http_client::get_http_client_arc;
 use crate::plugins::http::common::outbound::call::stream_body_capped;
 use crate::plugins::http::common::outbound::egress::{
     default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver,
@@ -45,31 +44,32 @@ fn callout_permits() -> &'static tokio::sync::Semaphore {
 /// exact IPs reqwest connects to — the same guard the webhook/forward_auth
 /// path uses — and redirect-Deny prevents a redirect-based escape. One shared
 /// client is enough: its address memo is capped (`EGRESS_CACHE_MAX_ENTRIES`).
-fn callout_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        let egress: Arc<dyn reqwest::dns::Resolve> = Arc::new(EgressResolver::new(
-            ResolverSpec::System,
-            EgressPolicy {
-                block_private: default_block_private(),
-            },
-            egress_dns_cache_ttl(),
-        ));
-        build_outbound_client(OutboundClientConfig {
-            pool_max_idle_per_host: Some(32),
-            connect_timeout: Some(Duration::from_secs(5)),
-            total_timeout: None, // per-call `.timeout()` governs
-            redirect: OutboundRedirect::Deny,
-            dns_resolver: Some(egress),
-            ..Default::default()
+/// Callouts run on the request hot path, so blocked addresses emit only the
+/// bounded egress metric; per-address tracing is intentionally disabled.
+fn callout_client() -> Result<&'static reqwest::Client, &'static str> {
+    static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            let egress: Arc<dyn reqwest::dns::Resolve> = Arc::new(EgressResolver::new_metric_only(
+                ResolverSpec::System,
+                EgressPolicy {
+                    block_private: default_block_private(),
+                },
+                egress_dns_cache_ttl(),
+            ));
+            build_outbound_client(OutboundClientConfig {
+                pool_max_idle_per_host: Some(32),
+                connect_timeout: Some(Duration::from_secs(5)),
+                total_timeout: None, // the outer callout deadline governs
+                redirect: OutboundRedirect::Deny,
+                disable_proxy: true,
+                dns_resolver: Some(egress),
+                ..Default::default()
+            })
+            .map_err(|e| format!("wasm callout client unavailable: {e}"))
         })
-        // Fall back to the plain shared client only if the guarded build fails
-        // (should not happen — no TLS backend to init); never panic the process.
-        .unwrap_or_else(|e| {
-            tracing::error!(error = %e, "wasm callout: egress-guarded client build failed; using shared client");
-            (*get_http_client_arc()).clone()
-        })
-    })
+        .as_ref()
+        .map_err(String::as_str)
 }
 
 /// Delivery counters from one [`resolve_callouts_on`] run; the caller decides
@@ -129,31 +129,63 @@ pub(super) async fn resolve_callouts_on(
 /// convention for a failed call, letting the guest pick its own fail
 /// behavior instead of trapping.
 pub async fn execute_callout(callout: &PendingCallout, timeout_cap_ms: u64, metrics_label: &str) -> CalloutResponse {
-    let failure = CalloutResponse {
-        token: callout.token,
+    execute_callout_with_client_and_permits(
+        callout,
+        timeout_cap_ms,
+        metrics_label,
+        callout_client().map_err(|_| ()),
+        callout_permits(),
+    )
+    .await
+}
+
+fn failed_callout_response(token: u32) -> CalloutResponse {
+    CalloutResponse {
+        token,
         headers: Vec::new(),
         body: Vec::new(),
-    };
+    }
+}
 
-    let Ok(_permit) = callout_permits().acquire().await else {
-        return failure;
-    };
-
+async fn execute_callout_with_client_and_permits(
+    callout: &PendingCallout,
+    timeout_cap_ms: u64,
+    metrics_label: &str,
+    client: Result<&reqwest::Client, ()>,
+    permits: &tokio::sync::Semaphore,
+) -> CalloutResponse {
+    let failure = failed_callout_response(callout.token);
     let timeout_ms = match callout.timeout_ms as u64 {
         0 => timeout_cap_ms,
         t => t.min(timeout_cap_ms),
     };
-    let url = format!("{}{}", callout.origin, callout.path);
-    let Ok(method) = reqwest::Method::from_bytes(callout.method.as_bytes()) else {
-        // Request hot path: bounded metric only. The guest-supplied method /
-        // URL (query may carry credentials) must not reach tracing.
-        record_wasm_callout(metrics_label, "error");
-        return failure;
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms.max(1));
+
+    let attempt = async {
+        let _permit = permits.acquire().await.map_err(|_| ())?;
+        let client = client?;
+        execute_callout_attempt(callout, client).await
     };
 
-    let mut req = callout_client()
-        .request(method, &url)
-        .timeout(Duration::from_millis(timeout_ms.max(1)));
+    match tokio::time::timeout_at(deadline, attempt).await {
+        Ok(Ok(response)) => {
+            record_wasm_callout(metrics_label, "ok");
+            response
+        }
+        Ok(Err(())) | Err(_) => {
+            record_wasm_callout(metrics_label, "error");
+            failure
+        }
+    }
+}
+
+async fn execute_callout_attempt(callout: &PendingCallout, client: &reqwest::Client) -> Result<CalloutResponse, ()> {
+    let url = format!("{}{}", callout.origin, callout.path);
+    // Request hot path: the guest-supplied method / URL (query may carry
+    // credentials) must not reach tracing.
+    let method = reqwest::Method::from_bytes(callout.method.as_bytes()).map_err(|_| ())?;
+
+    let mut req = client.request(method, &url);
     if let Some(authority) = &callout.authority {
         req = req.header(reqwest::header::HOST, authority.clone());
     }
@@ -169,13 +201,7 @@ pub async fn execute_callout(callout: &PendingCallout, timeout_cap_ms: u64, metr
         req = req.body(callout.body.clone());
     }
 
-    let resp = match req.send().await {
-        Ok(r) => r,
-        Err(_) => {
-            record_wasm_callout(metrics_label, "error");
-            return failure;
-        }
-    };
+    let resp = req.send().await.map_err(|_| ())?;
 
     let status = resp.status().as_u16();
     let mut headers = Vec::with_capacity(resp.headers().len() + 1);
@@ -187,22 +213,170 @@ pub async fn execute_callout(callout: &PendingCallout, timeout_cap_ms: u64, metr
         ));
     }
 
-    let (body, truncated) = match stream_body_capped(resp, CALLOUT_MAX_RESPONSE_BYTES).await {
-        Ok(v) => v,
-        Err(_) => {
-            record_wasm_callout(metrics_label, "error");
-            return failure;
-        }
-    };
+    let (body, truncated) = stream_body_capped(resp, CALLOUT_MAX_RESPONSE_BYTES)
+        .await
+        .map_err(|_| ())?;
     if truncated {
-        record_wasm_callout(metrics_label, "error");
-        return failure;
+        return Err(());
     }
 
-    record_wasm_callout(metrics_label, "ok");
-    CalloutResponse {
+    Ok(CalloutResponse {
         token: callout.token,
         headers,
         body: body.to_vec(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+
+    fn callout(origin: String, timeout_ms: u32) -> PendingCallout {
+        PendingCallout {
+            token: 7,
+            origin,
+            path: "/callout".to_string(),
+            method: "GET".to_string(),
+            authority: None,
+            headers: Vec::new(),
+            body: Vec::new(),
+            timeout_ms,
+        }
+    }
+
+    fn test_client() -> reqwest::Client {
+        reqwest::Client::builder().no_proxy().build().expect("test client")
+    }
+
+    #[tokio::test]
+    async fn unavailable_guarded_client_fails_without_network() {
+        let server = wiremock::MockServer::start().await;
+        let callout = callout(server.uri(), 1_000);
+        let permits = tokio::sync::Semaphore::new(1);
+
+        let response = execute_callout_with_client_and_permits(&callout, 1_000, "test", Err(()), &permits).await;
+
+        assert_eq!(response.token, callout.token);
+        assert!(response.headers.is_empty());
+        assert!(response.body.is_empty());
+        assert!(
+            server.received_requests().await.expect("read mock requests").is_empty(),
+            "client initialization failure must not fall back to an unguarded request"
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_permit_semaphore_is_bounded_by_callout_deadline() {
+        let client = test_client();
+        let permits = tokio::sync::Semaphore::new(0);
+        let callout = callout("http://127.0.0.1:9".to_string(), 0);
+
+        let response = tokio::time::timeout(
+            Duration::from_secs(2),
+            execute_callout_with_client_and_permits(&callout, 25, "test", Ok(&client), &permits),
+        )
+        .await
+        .expect("callout deadline must bound semaphore wait");
+
+        assert!(response.headers.is_empty());
+        assert!(response.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn held_permit_until_deadline_prevents_network_request() {
+        let server = wiremock::MockServer::start().await;
+        let client = test_client();
+        let permits = tokio::sync::Semaphore::new(1);
+        let held = permits.acquire().await.expect("hold only permit");
+        let callout = callout(server.uri(), 30);
+
+        let response = tokio::time::timeout(
+            Duration::from_secs(2),
+            execute_callout_with_client_and_permits(&callout, 1_000, "test", Ok(&client), &permits),
+        )
+        .await
+        .expect("callout deadline must expire");
+
+        assert!(response.headers.is_empty());
+        assert!(response.body.is_empty());
+        assert!(server.received_requests().await.expect("read mock requests").is_empty());
+        drop(held);
+    }
+
+    #[tokio::test]
+    async fn permit_released_before_deadline_allows_real_callout() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/callout"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"ok".to_vec()))
+            .mount(&server)
+            .await;
+        let client = test_client();
+        let permits = tokio::sync::Semaphore::new(1);
+        let held = permits.acquire().await.expect("hold only permit");
+        let callout = callout(server.uri(), 1_000);
+
+        let run_callout = execute_callout_with_client_and_permits(&callout, 1_000, "test", Ok(&client), &permits);
+        let release = async move {
+            tokio::task::yield_now().await;
+            drop(held);
+        };
+        let (response, ()) = tokio::time::timeout(Duration::from_secs(2), async { tokio::join!(run_callout, release) })
+            .await
+            .expect("released permit must unblock callout");
+
+        assert_eq!(response.headers.first().map(|h| h.1.as_str()), Some("200"));
+        assert_eq!(response.body, b"ok");
+    }
+
+    #[tokio::test]
+    async fn body_stream_timeout_drops_in_flight_permit_without_leak() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("test server address");
+        let (headers_sent_tx, headers_sent_rx) = tokio::sync::oneshot::channel();
+        let server_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept callout");
+            let mut request = [0u8; 1024];
+            let bytes_read = stream.read(&mut request).await.expect("read callout");
+            assert!(bytes_read > 0, "callout request must not be empty");
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")
+                .await
+                .expect("write response headers");
+            let _ = headers_sent_tx.send(());
+            std::future::pending::<()>().await;
+        });
+
+        let client = std::sync::Arc::new(test_client());
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let callout = callout(format!("http://{addr}"), 500);
+        let call_client = client.clone();
+        let call_permits = permits.clone();
+        let call_task = tokio::spawn(async move {
+            execute_callout_with_client_and_permits(&callout, 1_000, "test", Ok(&call_client), &call_permits).await
+        });
+
+        tokio::time::timeout(Duration::from_secs(2), headers_sent_rx)
+            .await
+            .expect("callout must receive response headers before its deadline")
+            .expect("test server must report sent headers");
+        let response = tokio::time::timeout(Duration::from_secs(2), call_task)
+            .await
+            .expect("body stream must obey callout deadline")
+            .expect("callout task must not panic");
+
+        assert!(response.headers.is_empty());
+        assert!(response.body.is_empty());
+        let reacquired = tokio::time::timeout(Duration::from_secs(1), permits.acquire())
+            .await
+            .expect("timed-out callout must release permit")
+            .expect("semaphore remains open");
+        drop(reacquired);
+        server_task.abort();
     }
 }

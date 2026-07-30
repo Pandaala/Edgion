@@ -323,6 +323,11 @@ jsonBody:
 `body.maxBodySize` 同时提高，但固定上限为 1 MiB。JSON 深度、节点数量和修改
 工作量也都有硬限制；单个 JSON 数字的文本表示最多为 4 KiB。
 
+配置 `jsonBody` 时，条目级 `body` 策略必须具备确定性：
+不支持 `body.conditions`，`body.onReadFailure` 必须省略或设为
+`failClose`。配置校验会拒绝 `failOpen`，因为结构化重写失败后继续转发原始
+Body 会使已配置的修改变成可选行为。
+
 只接受唯一的 `application/json` 或具体的 `application/*+json`
 Content-Type；charset 如存在必须为 UTF-8，Content-Encoding 必须缺省或为
 `identity`。非法 JSON、重复对象键、操作失败、`test` 失败或模板值缺失返回

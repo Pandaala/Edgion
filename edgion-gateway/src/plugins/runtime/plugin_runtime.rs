@@ -102,7 +102,7 @@ pub struct PluginRuntime {
     /// never run in the request path). `seal_fail_closed` consumes this list to
     /// prepend a single request-stage `RejectFilter`, so the whole route fails
     /// closed with 500 instead of silently dropping the misconfigured plugin.
-    invalid_plugins: Vec<&'static str>,
+    invalid_plugins: InvalidPlugins,
     /// Qualified names + status of Block-stamped entries, in spec order across
     /// all four stages (builders run request → urf → urbf → ur). The first
     /// element's status is the one the gate returns.
@@ -127,6 +127,51 @@ enum CreateResult<T> {
     Ok(Option<T>),
     /// Plugin variant does not belong to this stage (config error).
     WrongStage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InvalidUpdatePolicy {
+    ReplaceFailClosed,
+    RetainPrevious,
+}
+
+#[derive(Debug, Default)]
+struct InvalidPlugins {
+    names: Vec<&'static str>,
+    update_policy: Option<InvalidUpdatePolicy>,
+}
+
+impl InvalidPlugins {
+    fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+
+    fn record(&mut self, plugin: &EdgionPlugin) {
+        let update_policy = match plugin {
+            EdgionPlugin::Dsl(_) => InvalidUpdatePolicy::RetainPrevious,
+            _ => InvalidUpdatePolicy::ReplaceFailClosed,
+        };
+        self.record_with_policy(PluginRuntime::get_plugin_name(plugin), update_policy);
+    }
+
+    fn record_non_retainable(&mut self, plugin_name: &'static str) {
+        self.record_with_policy(plugin_name, InvalidUpdatePolicy::ReplaceFailClosed);
+    }
+
+    fn record_with_policy(&mut self, plugin_name: &'static str, update_policy: InvalidUpdatePolicy) {
+        self.names.push(plugin_name);
+        self.update_policy = Some(match (self.update_policy, update_policy) {
+            (None, policy) => policy,
+            (Some(InvalidUpdatePolicy::RetainPrevious), InvalidUpdatePolicy::RetainPrevious) => {
+                InvalidUpdatePolicy::RetainPrevious
+            }
+            _ => InvalidUpdatePolicy::ReplaceFailClosed,
+        });
+    }
+
+    fn update_policy(&self) -> Option<InvalidUpdatePolicy> {
+        self.update_policy
+    }
 }
 
 // Intentionally no `impl Clone for PluginRuntime`: a Clone impl would have to
@@ -169,7 +214,7 @@ impl PluginRuntime {
             upstream_response_async_plugins: vec![],
             ext_ref_keys: Vec::new(),
             cors_config: None,
-            invalid_plugins: Vec::new(),
+            invalid_plugins: InvalidPlugins::default(),
             policy_blocks: Vec::new(),
             policy_bypassed: Vec::new(),
         }
@@ -184,9 +229,9 @@ impl PluginRuntime {
         !self.invalid_plugins.is_empty()
     }
 
-    /// Whether every activation failure belongs to one plugin type.
-    pub(crate) fn has_only_invalid_plugin(&self, plugin_name: &'static str) -> bool {
-        !self.invalid_plugins.is_empty() && self.invalid_plugins.iter().all(|name| *name == plugin_name)
+    /// Publication policy for an update that failed runtime construction.
+    pub(crate) fn invalid_update_policy(&self) -> Option<InvalidUpdatePolicy> {
+        self.invalid_plugins.update_policy()
     }
 
     /// Prepend a fail-closed `RejectFilter` to the request stage when any plugin
@@ -204,7 +249,7 @@ impl PluginRuntime {
         if self.invalid_plugins.is_empty() {
             return;
         }
-        let reject = RejectFilter::new(std::mem::take(&mut self.invalid_plugins));
+        let reject = RejectFilter::new(std::mem::take(&mut self.invalid_plugins.names));
         self.request_plugins.insert(0, Box::new(reject));
     }
 
@@ -324,7 +369,7 @@ impl PluginRuntime {
                     if let Some(config) = &filter.external_auth {
                         match ForwardAuth::new(config) {
                             Ok(fa) => self.add_request_filter(Box::new(fa)),
-                            Err(_) => self.invalid_plugins.push("ForwardAuth"),
+                            Err(_) => self.invalid_plugins.record_non_retainable("ForwardAuth"),
                         }
                     }
                 }
@@ -442,7 +487,7 @@ impl PluginRuntime {
             errors.push(format!(
                 "requestPlugins: at most one JsonSchemaValidation plugin is allowed, found {json_schema_count}"
             ));
-            self.invalid_plugins.push("JsonSchemaValidation");
+            self.invalid_plugins.record_non_retainable("JsonSchemaValidation");
         }
 
         for (index, entry) in entries.iter().enumerate() {
@@ -471,7 +516,7 @@ impl PluginRuntime {
             }
             invalid_bounded_structured_entries[index] = true;
             let plugin_name = Self::get_plugin_name(&entry.plugin);
-            self.invalid_plugins.push(plugin_name);
+            self.invalid_plugins.record(&entry.plugin);
             errors.extend(
                 body_errors
                     .into_iter()
@@ -507,7 +552,7 @@ impl PluginRuntime {
                 if let Some(error) = &config_validation_errors[index] {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, error));
-                    self.invalid_plugins.push(plugin_name);
+                    self.invalid_plugins.record(&entry.plugin);
                     continue;
                 }
 
@@ -560,7 +605,6 @@ impl PluginRuntime {
                     Self::compile_entry_dye_plan(
                         entry.dye.as_ref(),
                         &entry.plugin,
-                        plugin_name,
                         &format!("requestPlugins[{}] ({})", index, plugin_name),
                         &mut errors,
                         &mut self.invalid_plugins,
@@ -625,7 +669,7 @@ impl PluginRuntime {
                             "requestPlugins[{}] ({}): plugin construction failed",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.push(plugin_name);
+                        self.invalid_plugins.record(&entry.plugin);
                     }
                     CreateResult::WrongStage => {
                         // A plugin placed in the wrong stage array is a misconfiguration:
@@ -636,7 +680,7 @@ impl PluginRuntime {
                             "requestPlugins[{}] ({}): plugin is not valid for request stage",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.push(plugin_name);
+                        self.invalid_plugins.record(&entry.plugin);
                     }
                 }
             }
@@ -686,7 +730,7 @@ impl PluginRuntime {
                         "upstreamResponseFilterPlugins[{}] ({}): {}",
                         index, plugin_name, error
                     ));
-                    self.invalid_plugins.push(plugin_name);
+                    self.invalid_plugins.record(&entry.plugin);
                     continue;
                 }
 
@@ -722,7 +766,6 @@ impl PluginRuntime {
                     Self::compile_entry_dye_plan(
                         entry.dye.as_ref(),
                         &entry.plugin,
-                        plugin_name,
                         &format!("upstreamResponseFilterPlugins[{}] ({})", index, plugin_name),
                         &mut errors,
                         &mut self.invalid_plugins,
@@ -752,7 +795,7 @@ impl PluginRuntime {
                             "upstreamResponseFilterPlugins[{}] ({}): plugin construction failed",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.push(plugin_name);
+                        self.invalid_plugins.record(&entry.plugin);
                     }
                     CreateResult::WrongStage => {
                         // A plugin placed in the wrong stage array is a misconfiguration:
@@ -763,7 +806,7 @@ impl PluginRuntime {
                             "upstreamResponseFilterPlugins[{}] ({}): plugin is not valid for upstream response filter stage",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.push(plugin_name);
+                        self.invalid_plugins.record(&entry.plugin);
                     }
                 }
             }
@@ -809,7 +852,7 @@ impl PluginRuntime {
                         "upstreamResponsePlugins[{}] ({}): {}",
                         index, plugin_name, error
                     ));
-                    self.invalid_plugins.push(plugin_name);
+                    self.invalid_plugins.record(&entry.plugin);
                     continue;
                 }
 
@@ -857,7 +900,6 @@ impl PluginRuntime {
                     Self::compile_entry_dye_plan(
                         entry.dye.as_ref(),
                         &entry.plugin,
-                        plugin_name,
                         &format!("upstreamResponsePlugins[{}] ({})", index, plugin_name),
                         &mut errors,
                         &mut self.invalid_plugins,
@@ -900,7 +942,7 @@ impl PluginRuntime {
                             "upstreamResponsePlugins[{}] ({}): plugin construction failed",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.push(plugin_name);
+                        self.invalid_plugins.record(&entry.plugin);
                     }
                     CreateResult::WrongStage => {
                         // A plugin placed in the wrong stage array is a misconfiguration:
@@ -911,7 +953,7 @@ impl PluginRuntime {
                             "upstreamResponsePlugins[{}] ({}): plugin is not valid for upstream response stage",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.push(plugin_name);
+                        self.invalid_plugins.record(&entry.plugin);
                     }
                 }
             }
@@ -961,7 +1003,7 @@ impl PluginRuntime {
                         "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
                         index, plugin_name, error
                     ));
-                    self.invalid_plugins.push(plugin_name);
+                    self.invalid_plugins.record(&entry.plugin);
                     continue;
                 }
 
@@ -997,7 +1039,6 @@ impl PluginRuntime {
                     Self::compile_entry_dye_plan(
                         entry.dye.as_ref(),
                         &entry.plugin,
-                        plugin_name,
                         &format!("upstreamResponseBodyFilterPlugins[{}] ({})", index, plugin_name),
                         &mut errors,
                         &mut self.invalid_plugins,
@@ -1027,7 +1068,7 @@ impl PluginRuntime {
                             "upstreamResponseBodyFilterPlugins[{}] ({}): plugin construction failed",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.push(plugin_name);
+                        self.invalid_plugins.record(&entry.plugin);
                     }
                     CreateResult::WrongStage => {
                         // A plugin placed in the wrong stage array is a misconfiguration:
@@ -1038,7 +1079,7 @@ impl PluginRuntime {
                             "upstreamResponseBodyFilterPlugins[{}] ({}): plugin is not valid for upstream response body filter stage",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.push(plugin_name);
+                        self.invalid_plugins.record(&entry.plugin);
                     }
                 }
             }
@@ -1418,10 +1459,9 @@ impl PluginRuntime {
     fn compile_entry_dye_plan(
         dye: Option<&edgion_resources::resources::edgion_plugins::DyeSuite>,
         plugin: &EdgionPlugin,
-        plugin_name: &'static str,
         context: &str,
         errors: &mut Vec<String>,
-        invalid_plugins: &mut Vec<&'static str>,
+        invalid_plugins: &mut InvalidPlugins,
     ) -> Option<Arc<super::dye_plan::CompiledDyePlan>> {
         let suite = dye?;
         match super::dye_plan::CompiledDyePlan::compile(suite, plugin.dye_type_prefix()) {
@@ -1430,7 +1470,7 @@ impl PluginRuntime {
                 errors.push(format!(
                     "{context}: dye plan compile error (bug, already validated): {e}"
                 ));
-                invalid_plugins.push(plugin_name);
+                invalid_plugins.record(plugin);
                 None
             }
         }
@@ -1777,7 +1817,23 @@ fn check_response_stage_terminate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_resources::resources::edgion_plugins::DslConfig;
     use edgion_resources::resources::{EdgionPlugin, KeyAuthConfig, RequestFilterEntry};
+
+    #[test]
+    fn invalid_update_policy_uses_plugin_variants_and_strictest_policy_wins() {
+        let dsl = EdgionPlugin::Dsl(DslConfig::default());
+        let key_auth = EdgionPlugin::KeyAuth(KeyAuthConfig::default());
+        let mut invalid = InvalidPlugins::default();
+
+        invalid.record(&dsl);
+        invalid.record(&dsl);
+        assert_eq!(invalid.update_policy(), Some(InvalidUpdatePolicy::RetainPrevious));
+
+        invalid.record(&key_auth);
+        invalid.record(&dsl);
+        assert_eq!(invalid.update_policy(), Some(InvalidUpdatePolicy::ReplaceFailClosed));
+    }
 
     fn json_schema_entry(
         body: Option<edgion_resources::resources::edgion_plugins::BodyRequirement>,

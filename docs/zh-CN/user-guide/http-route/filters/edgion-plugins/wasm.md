@@ -218,6 +218,7 @@ Wasm 条目列在 `requestPlugins` 下且 guest 导出了 `proxy_on_request_body
 - **上限**：缓冲受已解析的 `EdgionGatewayConfig.spec.requestBody` 策略约束，不是某个插件专属的分配值。
 - **共享且有界的捕获。** 该模式复用其他完整请求体插件使用的请求级 body 存储。捕获是懒执行的，受网关物理上限约束，超过内存阈值后会溢写磁盘，并向 guest 暴露此前插件产生的当前不可变 body 版本。网关物理上限和不符合缓冲条件的请求始终 fail-close。
 - **严格的范围语义。** `[start, start + size)` 必须完全包含在当前暂存 body 内。长度为零的范围表示插入；`start == body length` 且 `size == 0` 表示追加；替换字节为空表示删除所选范围。无效范围返回 `BAD_ARGUMENT`，超过物理 body 上限返回 `INTERNAL_FAILURE`。
+- **有界的修改工作量。** 每次请求 body 钩子的累计修改工作量上限，为已解析网关物理 body 上限的两倍。每个操作计入替换字节；如果操作改变长度，还会计入必须搬移的尾部字节。该预算允许正常的范围修改，以及在任意已配置 body 上限下最多两次等长完整重写，同时阻止反复整体重写或在开头循环插入/删除放大 CPU 和内存带宽消耗；物理上限较小时，该预算也会同比缩小。超过预算的操作返回 `INTERNAL_FAILURE`，且不会改变暂存 body。
 - **SDK 错误行为。** host 返回上述 ABI 状态时不会主动 trap guest，但部分高级 proxy-wasm SDK helper（包括 Rust 的 `set_http_request_body`）会在 host 调用返回非 OK 状态时 panic；使用此类 helper 时应在 guest 内先校验范围和输出大小。
 - **原子发布。** 同一钩子内的所有成功写入先更新私有暂存区；被拒绝的 host 调用不会由该次调用改变暂存区。继续转发的钩子返回后，网关才把最终字节一次性发布到共享请求 body 存储；trap 或发布失败不会暴露发布到一半的 body。本地响应已经终止代理请求，因此跳过发布。后续插件、请求镜像、重试和上游重放均读取已提交的同一代 body；上游 framing 按最终长度重新计算。
 - **捕获时机取决于是否配置 `body:`。** 配置后，通用门控会先捕获并应用策略，再运行任何 Wasm 钩子；未配置时，先运行请求头钩子，只有干净的 `Continue` 才继续懒捕获并运行 body 钩子。两条路径中的 body 钩子看到的是同一个完整请求版本。未导出 `proxy_on_request_body` 的 guest 会完全跳过 body 阶段。

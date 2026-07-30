@@ -334,6 +334,12 @@ to 64 KiB; an entry-level `body.maxBodySize` may raise both limits up to the
 fixed 1 MiB ceiling. JSON nesting, node count, and mutation work are also
 bounded.
 
+When `jsonBody` is configured, the entry-level `body` policy must be
+deterministic: `body.conditions` is not supported, and `body.onReadFailure`
+must be omitted or set to `failClose`. A `failOpen` policy is rejected during
+configuration validation because forwarding the original body after a failed
+structured rewrite would make the configured mutation optional.
+
 Only one `application/json` or concrete `application/*+json` Content-Type is
 accepted. Charset, when present, must be UTF-8, and Content-Encoding must be
 absent or `identity`. Invalid JSON, duplicate object keys, failed operations,

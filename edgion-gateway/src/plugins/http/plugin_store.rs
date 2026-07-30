@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::LazyLock;
 
-use crate::plugins::runtime::PluginRuntime;
+use crate::plugins::runtime::{InvalidUpdatePolicy, PluginRuntime};
 use edgion_resources::resources::EdgionPlugins;
 
 static GLOBAL_PLUGIN_STORE: LazyLock<Arc<PluginStore>> = LazyLock::new(|| Arc::new(PluginStore::new()));
@@ -170,7 +170,8 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     }
 
     let is_activatable = !runtime.has_invalid_plugins();
-    let retain_previous_on_invalid_update = runtime.has_only_invalid_plugin("Dsl");
+    let retain_previous_on_invalid_update =
+        runtime.invalid_update_policy() == Some(InvalidUpdatePolicy::RetainPrevious);
 
     // Fail closed: if any plugin (any stage) had an invalid config, prepend a
     // request-stage RejectFilter so every request through this EdgionPlugins is

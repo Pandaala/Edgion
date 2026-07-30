@@ -4,26 +4,29 @@
 //! Design:
 //! - One global `Engine`, built once behind a `OnceLock`, using the pooling
 //!   allocator (`InstanceAllocationStrategy::Pooling`) for fast per-request
-//!   instantiation and epoch interruption (`epoch_interruption(true)`). A
-//!   detached background thread increments the engine epoch every
+//!   instantiation and epoch interruption (`epoch_interruption(true)`). An
+//!   owned background thread increments the engine epoch every
 //!   `EPOCH_TICK_MS`; each lease sets a deadline derived from the config's
 //!   `timeout_ms` before running guest code, so a stuck/looping guest traps
-//!   instead of hanging a worker thread.
-//! - Module cache: `DashMap<cache_key, LoadSlot>` where `LoadSlot` is an
-//!   `Arc<tokio::sync::Mutex<LoadState>>`. Concurrent `get_or_load` callers
-//!   for the same source share one in-flight compile (they all await the
-//!   same per-key async mutex) instead of racing independent compiles. A
-//!   load error is cached for `LOAD_RETRY_SECS` so a broken source doesn't
-//!   get hammered on every request; after that window it is retried.
+//!   instead of hanging a worker thread. Dropping a test manager stops and
+//!   joins its ticker so its Engine and pooling mappings can be released.
+//! - Module cache: `DashMap<cache_key, Arc<LoadSlot>>`. Each slot publishes
+//!   its last-known-good entry through an `ArcSwapOption`, while an async
+//!   mutex serializes only the initial load / failure state. Concurrent
+//!   `get_or_load` callers for a cold source share one in-flight compile.
+//!   OCI `Always` refresh runs in the background and never makes readers
+//!   wait for registry IO or compilation. A cold-load error is cached for
+//!   `LOAD_RETRY_SECS` so a broken source doesn't get hammered on every
+//!   request; after that window it is retried.
 //! - Bytecode fetch supports `file` (read relative to the gateway work dir),
 //!   `inline` (base64), `url` (plain `reqwest::get` with a fixed timeout,
 //!   200-only), and `oci` (pulled via `super::oci::fetch_oci_bytes`, which is
 //!   disk-cache-first; see `oci::cache` for the on-disk layer). An `oci`
 //!   source with `pullPolicy: Always` is re-checked against the registry at
-//!   most every `OCI_ALWAYS_RECHECK_SECS` on `get_or_load`
-//!   (`oci_needs_refresh`): an unchanged digest keeps the cached entry, a
-//!   changed digest reloads in the same slot, and a re-check failure keeps
-//!   the loaded module (fail-open on transient registry errors). When
+//!   most every `OCI_ALWAYS_RECHECK_SECS`: request and response paths can
+//!   claim one background refresh with lock-free checks. An unchanged digest
+//!   keeps the cached entry; a changed digest is fully loaded before an
+//!   atomic swap; and any refresh failure keeps the loaded module. When
 //!   `sha256` is configured it is verified before compilation, covering
 //!   OCI-fetched bytes too; a mismatch is a load error (never compiled).
 //! - Compilation (`Module::new`) runs on `spawn_blocking` since it is a CPU
@@ -47,9 +50,13 @@
 //!   capacity); a poisoned (trapped) or over-capacity VM is simply dropped,
 //!   freeing its pooling-allocator slot.
 
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
+use arc_swap::ArcSwapOption;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
@@ -119,6 +126,12 @@ const MIN_TICK_PERIOD_MS: u64 = 100;
 /// runs its own verification, rather than the second silently executing the
 /// first's already-loaded bytes. A digest-only hot reload likewise re-keys and
 /// re-verifies. Identical digests still share one entry (no efficiency loss).
+///
+/// The effective OCI pull policy is also part of the key. It is runtime
+/// behavior owned by the slot: an `Always` plugin schedules background
+/// refreshes, while `IfNotPresent` never does. Keeping them in separate slots
+/// prevents a policy-only reload from inheriting an old refresh task. Registry
+/// credentials remain deliberately excluded.
 pub fn runtime_cache_key(config: &WasmConfig) -> String {
     let mut key = config.source.cache_key();
     if let Some(path) = &config.source.file {
@@ -140,7 +153,11 @@ pub fn runtime_cache_key(config: &WasmConfig) -> String {
         .as_deref()
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
-    format!("{key};rt={};sha={sha}", wasm_runtime_config_digest(config))
+    let pull_policy = effective_oci_pull_policy_key(config);
+    format!(
+        "{key};rt={};sha={sha};pull={pull_policy}",
+        wasm_runtime_config_digest(config)
+    )
 }
 
 /// Digest of the per-plugin runtime fields that `ModuleEntry` copies out of
@@ -179,7 +196,83 @@ pub fn global_vm_manager() -> &'static WasmVmManager {
     GLOBAL.get_or_init(WasmVmManager::new)
 }
 
-type LoadSlot = Arc<tokio::sync::Mutex<LoadState>>;
+type SharedLoadSlot = Arc<LoadSlot>;
+
+/// One cache-key slot. Readers never take `state`: a fully initialized,
+/// last-known-good module is published independently and remains available
+/// throughout an OCI registry re-check, download, compile, or init failure.
+struct LoadSlot {
+    published: ArcSwapOption<ModuleEntry>,
+    state: tokio::sync::Mutex<LoadState>,
+    /// Monotonic process-relative millisecond deadline for an OCI `Always`
+    /// re-check. `u64::MAX` disables refresh for cold/non-Always entries.
+    refresh_due_ms: AtomicU64,
+    /// Single-flight claim for the background refresh task. This is checked
+    /// on response-body chunks, so it must stay lock-free.
+    refresh_in_flight: AtomicBool,
+    /// Effective OCI policy, resolved once when the policy-keyed slot is
+    /// created. Hot response-body scheduling never parses the image ref.
+    refresh_always: bool,
+    /// Single-flight claim for best-effort preload tasks. The cold-load state
+    /// mutex still serializes actual loads; this claim prevents sync response
+    /// misses (especially one per body chunk) from piling up waiter tasks.
+    preload_in_flight: AtomicBool,
+    /// Earliest monotonic time at which a failed cold load may be preloaded
+    /// again. Checked before task creation, so the negative-cache window does
+    /// not create no-op tasks.
+    load_retry_due_ms: AtomicU64,
+}
+
+impl LoadSlot {
+    fn new(refresh_always: bool) -> Self {
+        Self {
+            published: ArcSwapOption::empty(),
+            state: tokio::sync::Mutex::new(LoadState::NotLoaded),
+            refresh_due_ms: AtomicU64::new(u64::MAX),
+            refresh_in_flight: AtomicBool::new(false),
+            refresh_always,
+            preload_in_flight: AtomicBool::new(false),
+            load_retry_due_ms: AtomicU64::new(0),
+        }
+    }
+
+    fn try_claim_refresh(self: &Arc<Self>) -> Option<RefreshClaimGuard> {
+        self.refresh_in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| RefreshClaimGuard { slot: self.clone() })
+    }
+
+    fn try_claim_preload(self: &Arc<Self>) -> Option<PreloadClaimGuard> {
+        self.preload_in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| PreloadClaimGuard { slot: self.clone() })
+    }
+}
+
+/// Cancellation-safe ownership of one refresh claim. Tokio task abort,
+/// runtime shutdown, panic, and every early return all release the claim.
+struct RefreshClaimGuard {
+    slot: SharedLoadSlot,
+}
+
+impl Drop for RefreshClaimGuard {
+    fn drop(&mut self) {
+        self.slot.refresh_in_flight.store(false, Ordering::Release);
+    }
+}
+
+/// Cancellation-safe ownership of one preload task claim.
+struct PreloadClaimGuard {
+    slot: SharedLoadSlot,
+}
+
+impl Drop for PreloadClaimGuard {
+    fn drop(&mut self) {
+        self.slot.preload_in_flight.store(false, Ordering::Release);
+    }
+}
 
 /// One plugin instance's callout configuration, registered against its cache
 /// key so the module tick task can decide whether (and with which allowlist)
@@ -218,6 +311,31 @@ pub struct TickCalloutState {
     /// Latch so the tick-side conflict WARN fires once per module entry
     /// lifetime instead of once per tick.
     conflict_warned: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    active_tick_tasks: AtomicUsize,
+    #[cfg(test)]
+    max_active_tick_tasks: AtomicUsize,
+}
+
+#[cfg(test)]
+struct TestTickTaskGuard {
+    state: Arc<TickCalloutState>,
+}
+
+#[cfg(test)]
+impl TestTickTaskGuard {
+    fn new(state: Arc<TickCalloutState>) -> Self {
+        let active = state.active_tick_tasks.fetch_add(1, Ordering::AcqRel) + 1;
+        state.max_active_tick_tasks.fetch_max(active, Ordering::AcqRel);
+        Self { state }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestTickTaskGuard {
+    fn drop(&mut self) {
+        self.state.active_tick_tasks.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 /// Tick-phase callout decision derived from the registered grants.
@@ -305,12 +423,10 @@ impl TickCalloutState {
 enum LoadState {
     NotLoaded,
     Loaded {
-        entry: Arc<ModuleEntry>,
         /// OCI digest bookkeeping (`Always` re-check); `None` for other sources.
         oci: Option<OciLoadedMeta>,
     },
     Failed {
-        at: Instant,
         error: String,
     },
 }
@@ -318,7 +434,52 @@ enum LoadState {
 /// Digest bookkeeping for a loaded OCI-sourced module.
 struct OciLoadedMeta {
     manifest_digest: String,
-    checked_at: Instant,
+}
+
+struct PreparedModule {
+    entry: Arc<ModuleEntry>,
+    oci: Option<OciLoadedMeta>,
+    tick_period_ms: u64,
+}
+
+/// Cancellation guard for the narrow refresh handoff window after the old
+/// tick task is stopped but before the new entry is published. If the refresh
+/// future is dropped, re-arm the old task only when it is still the current
+/// publication for this exact cache slot.
+struct TickHandoffGuard {
+    cache: Arc<CacheInner>,
+    cache_key: String,
+    slot: SharedLoadSlot,
+    old_entry: Arc<ModuleEntry>,
+    committed: bool,
+}
+
+impl TickHandoffGuard {
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for TickHandoffGuard {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        let slot_is_current = self
+            .cache
+            .modules
+            .get(&self.cache_key)
+            .is_some_and(|current| Arc::ptr_eq(current.value(), &self.slot));
+        let entry_is_current = self
+            .slot
+            .published
+            .load_full()
+            .is_some_and(|current| Arc::ptr_eq(&current, &self.old_entry));
+        if slot_is_current && entry_is_current {
+            let period = self.old_entry.tick_period_ms.load(Ordering::Acquire);
+            self.old_entry.activate_tick(period);
+        }
+    }
 }
 
 /// Global engine + per-source compiled module cache.
@@ -330,6 +491,10 @@ struct OciLoadedMeta {
 /// process during `OnceLock` init.
 pub struct WasmVmManager {
     engine: Result<Engine, String>,
+    /// Owns the epoch thread for a successfully constructed Engine. Dropped
+    /// explicitly before the Engine/cache so no thread retains an Engine
+    /// clone beyond this manager's lifetime.
+    epoch_ticker: Option<EpochTicker>,
     /// Module cache + plugin refcounts. Behind one `Arc` so the delayed
     /// eviction task can hold the maps without a `'static` borrow of the
     /// manager (test managers are not `'static`).
@@ -339,8 +504,50 @@ pub struct WasmVmManager {
     evict_grace: Duration,
 }
 
+struct EpochTicker {
+    stop: std::sync::mpsc::Sender<()>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl EpochTicker {
+    fn spawn(engine: Engine) -> std::io::Result<Self> {
+        let (stop, stopped) = std::sync::mpsc::channel();
+        let thread = std::thread::Builder::new()
+            .name("wasm-epoch-ticker".to_string())
+            .spawn(move || loop {
+                match stopped.recv_timeout(Duration::from_millis(EPOCH_TICK_MS)) {
+                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => engine.increment_epoch(),
+                }
+            })?;
+        Ok(Self {
+            stop,
+            thread: Some(thread),
+        })
+    }
+}
+
+impl Drop for EpochTicker {
+    fn drop(&mut self) {
+        // An unbounded channel send is non-blocking and wakes recv_timeout
+        // immediately. Ignore shutdown races and thread panics during Drop.
+        let _ = self.stop.send(());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for WasmVmManager {
+    fn drop(&mut self) {
+        // Stop the thread before field teardown drops the manager's Engine
+        // and the module-cache Engine clones.
+        drop(self.epoch_ticker.take());
+    }
+}
+
 struct CacheInner {
-    modules: DashMap<String, LoadSlot>,
+    modules: DashMap<String, SharedLoadSlot>,
     /// cache_key → number of live `WasmPlugin` instances built on it.
     refs: DashMap<String, usize>,
     /// cache_key → the callout grants of those instances (tick-callout
@@ -379,29 +586,21 @@ impl WasmVmManager {
                 tracing::error!(error = %msg, "wasm engine unavailable; all Wasm plugins will fail-mode per configured failOpen");
                 return WasmVmManager {
                     engine: Err(msg),
+                    epoch_ticker: None,
                     cache: CacheInner::new(),
                     evict_grace: Duration::from_secs(EVICT_GRACE_SECS),
                 };
             }
         };
-        // Detached epoch ticker: bounds guest execution time. One thread per
+        // Owned epoch ticker: bounds guest execution time. One thread per
         // process (this constructor runs once via OnceLock in production;
-        // tests use `new_for_test` and get their own ticker thread, which is
-        // fine since threads are cheap and each engine only lives as long as
-        // its `WasmVmManager`). Only spawned once the engine itself is known
+        // tests use `new_for_test` and get a ticker that is stopped when that
+        // manager is dropped). Only spawned once the engine itself is known
         // good; a failed engine has nothing for the ticker to advance.
-        {
-            let engine = engine.clone();
-            std::thread::Builder::new()
-                .name("wasm-epoch-ticker".to_string())
-                .spawn(move || loop {
-                    std::thread::sleep(Duration::from_millis(EPOCH_TICK_MS));
-                    engine.increment_epoch();
-                })
-                .expect("spawn epoch ticker");
-        }
+        let epoch_ticker = EpochTicker::spawn(engine.clone()).expect("spawn epoch ticker");
         WasmVmManager {
             engine: Ok(engine),
+            epoch_ticker: Some(epoch_ticker),
             cache: CacheInner::new(),
             evict_grace: Duration::from_secs(EVICT_GRACE_SECS),
         }
@@ -428,6 +627,7 @@ impl WasmVmManager {
     pub fn new_with_engine_result(engine: Result<Engine, String>) -> Self {
         WasmVmManager {
             engine,
+            epoch_ticker: None,
             cache: CacheInner::new(),
             evict_grace: Duration::from_secs(EVICT_GRACE_SECS),
         }
@@ -440,16 +640,38 @@ impl WasmVmManager {
         self.engine.as_ref().map_err(|e| e.clone())
     }
 
+    /// Canonical policy-keyed slot lookup/creation shared by direct loads and
+    /// best-effort preload. The effective OCI policy is parsed only when a
+    /// slot is first created; warm lookups clone the existing Arc.
+    fn get_or_create_slot(&self, config: &WasmConfig, cache_key: &str) -> SharedLoadSlot {
+        match self.cache.modules.get(cache_key) {
+            Some(slot) => slot.clone(),
+            None => self
+                .cache
+                .modules
+                .entry(cache_key.to_string())
+                .or_insert_with(|| Arc::new(LoadSlot::new(effective_oci_always(config))))
+                .clone(),
+        }
+    }
+
     /// Fast, non-blocking lookup for sync stages. Returns `None` while the
-    /// module has not finished loading (or failed recently) rather than
-    /// blocking on the load mutex.
+    /// module has not finished its first successful load. A background OCI
+    /// refresh never hides the published last-known-good entry.
     pub fn try_get(&self, cache_key: &str) -> Option<Arc<ModuleEntry>> {
         let slot = self.cache.modules.get(cache_key)?;
-        let guard = slot.try_lock().ok()?;
-        match &*guard {
-            LoadState::Loaded { entry, .. } => Some(entry.clone()),
-            _ => None,
-        }
+        slot.published.load_full()
+    }
+
+    /// Non-blocking lookup for synchronous response stages. It returns the
+    /// published entry immediately and, for an expired OCI `Always` source,
+    /// lets one caller claim a background refresh. This also gives modules
+    /// configured only on response stages their documented refresh behavior.
+    pub fn try_get_or_schedule_refresh(&self, config: &WasmConfig, cache_key: &str) -> Option<Arc<ModuleEntry>> {
+        let slot = self.cache.modules.get(cache_key)?.clone();
+        let entry = slot.published.load_full()?;
+        self.schedule_oci_refresh(config, cache_key, slot, entry.clone());
+        Some(entry)
     }
 
     /// Register one live `WasmPlugin` built on `cache_key`, along with its
@@ -517,18 +739,53 @@ impl WasmVmManager {
     /// running tokio runtime; silently skips otherwise (the first real
     /// request will trigger a lazy load via `get_or_load`).
     pub fn spawn_preload(&'static self, config: &WasmConfig, cache_key: String) {
-        if let Err(e) = self.engine() {
-            tracing::warn!(error = %e, "wasm engine unavailable, skipping preload");
+        let Some((claim, config, cache_key)) = self.prepare_preload(config, cache_key) else {
             return;
+        };
+        tokio::spawn(async move {
+            let _claim = claim;
+            let _ = self.get_or_load(&config, &cache_key).await;
+        });
+    }
+
+    fn prepare_preload(
+        &self,
+        config: &WasmConfig,
+        cache_key: String,
+    ) -> Option<(PreloadClaimGuard, WasmConfig, String)> {
+        // Engine initialization already emitted one process-level error. This
+        // method is reachable from sync response/body misses, so stay silent
+        // and inspect the field by reference: `engine()` clones the cached
+        // error text, which would allocate once per chunk on a permanent
+        // engine failure. Do not create cache/task state either.
+        if self.engine.is_err() {
+            return None;
         }
         if tokio::runtime::Handle::try_current().is_err() {
-            return;
+            return None;
         }
-        let config = config.clone();
+        let slot = self.get_or_create_slot(config, &cache_key);
+        if slot.published.load_full().is_some() || monotonic_millis() < slot.load_retry_due_ms.load(Ordering::Acquire) {
+            return None;
+        }
+        let Some(claim) = slot.try_claim_preload() else {
+            return None;
+        };
+        Some((claim, config.clone(), cache_key))
+    }
+
+    /// Test-only preload path whose task owns an `Arc` manager instead of
+    /// requiring a leaked `'static` manager. Production still uses the
+    /// process-global manager and its zero-allocation static borrow.
+    #[cfg(test)]
+    fn spawn_preload_for_test(self: &Arc<Self>, config: &WasmConfig, cache_key: String) {
+        let Some((claim, config, cache_key)) = self.prepare_preload(config, cache_key) else {
+            return;
+        };
+        let manager = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = self.get_or_load(&config, &cache_key).await {
-                tracing::warn!(error = %e, "wasm module preload failed");
-            }
+            let _claim = claim;
+            let _ = manager.get_or_load(&config, &cache_key).await;
         });
     }
 
@@ -540,55 +797,68 @@ impl WasmVmManager {
     /// in-flight load. Errors are cached for `LOAD_RETRY_SECS` to avoid
     /// hammering a bad source.
     pub async fn get_or_load(&self, config: &WasmConfig, cache_key: &str) -> Result<Arc<ModuleEntry>, String> {
-        self.engine()?;
-        let slot = self
-            .cache
-            .modules
-            .entry(cache_key.to_string())
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(LoadState::NotLoaded)))
-            .clone();
-        let mut guard = slot.lock().await;
+        let engine = self.engine()?.clone();
+        let slot = self.get_or_create_slot(config, cache_key);
+
+        // The common path is one lock-free snapshot load. Registry IO and
+        // compilation happen only in the claimed background task.
+        if let Some(entry) = slot.published.load_full() {
+            self.schedule_oci_refresh(config, cache_key, slot, entry.clone());
+            return Ok(entry);
+        }
+
+        // Cold loads retain the existing same-key serialization. Re-check the
+        // publication after acquiring the lock because another waiter may
+        // have completed the first load while this task was suspended.
+        let mut guard = slot.state.lock().await;
+        if let Some(entry) = slot.published.load_full() {
+            drop(guard);
+            self.schedule_oci_refresh(config, cache_key, slot, entry.clone());
+            return Ok(entry);
+        }
         match &mut *guard {
-            LoadState::Loaded { entry, oci } => {
-                if !oci_needs_refresh(config, oci).await {
-                    return Ok(entry.clone());
-                }
-                // The tag moved to a new digest: fall through and reload.
-            }
-            LoadState::Failed { at, error } if at.elapsed() < Duration::from_secs(LOAD_RETRY_SECS) => {
+            LoadState::Failed { error } if monotonic_millis() < slot.load_retry_due_ms.load(Ordering::Acquire) => {
                 return Err(error.clone());
             }
             _ => {}
         }
         let label = config.source.metrics_label();
-        match self.load_inner(config, self.cache.tick_callout_state(cache_key)).await {
-            Ok((entry, oci)) => {
+        match Self::load_inner(engine, config, self.cache.tick_callout_state(cache_key)).await {
+            Ok(prepared) => {
                 record_wasm_module_load(&label, "ok");
-                *guard = LoadState::Loaded {
-                    entry: entry.clone(),
-                    oci,
-                };
+                slot.load_retry_due_ms.store(u64::MAX, Ordering::Release);
+                slot.refresh_due_ms.store(
+                    next_oci_refresh_deadline(&slot, prepared.oci.is_some()),
+                    Ordering::Release,
+                );
+                *guard = LoadState::Loaded { oci: prepared.oci };
+                // Publish only after fetch, verification, compile, linker
+                // setup, and eager VM initialization all succeeded. Tick is
+                // activated only after publication, so a prepared entry has
+                // no externally visible background behavior.
+                slot.published.store(Some(prepared.entry.clone()));
+                prepared.entry.activate_tick(prepared.tick_period_ms);
                 set_wasm_modules_loaded(self.cache.modules.len());
-                Ok(entry)
+                Ok(prepared.entry)
             }
             Err(e) => {
                 record_wasm_module_load(&label, "error");
                 tracing::warn!(error = %e, "wasm module load failed");
-                *guard = LoadState::Failed {
-                    at: Instant::now(),
-                    error: e.clone(),
-                };
+                slot.load_retry_due_ms.store(
+                    monotonic_millis().saturating_add(LOAD_RETRY_SECS.saturating_mul(1000)),
+                    Ordering::Release,
+                );
+                *guard = LoadState::Failed { error: e.clone() };
                 Err(e)
             }
         }
     }
 
     async fn load_inner(
-        &self,
+        engine: Engine,
         config: &WasmConfig,
         tick_callouts: Arc<TickCalloutState>,
-    ) -> Result<(Arc<ModuleEntry>, Option<OciLoadedMeta>), String> {
-        let engine = self.engine()?.clone();
+    ) -> Result<PreparedModule, String> {
         let (bytes, oci_meta) = match &config.source.oci {
             Some(spec) => {
                 let fetched = super::oci::fetch_oci_bytes(spec).await?;
@@ -596,7 +866,6 @@ impl WasmVmManager {
                     fetched.bytes,
                     Some(OciLoadedMeta {
                         manifest_digest: fetched.manifest_digest,
-                        checked_at: Instant::now(),
                     }),
                 )
             }
@@ -644,35 +913,206 @@ impl WasmVmManager {
             metrics_label: label,
             hook_timeout_ms: config.timeout_ms,
             tick_task: Mutex::new(None),
+            tick_period_ms: AtomicU64::new(0),
+            tick_enabled: AtomicBool::new(false),
             tick_callouts,
             has_body_hook,
             has_request_body_hook,
         });
-        // Eagerly warm one instance: validates guest init at load time (an
-        // init failure becomes a clear, negative-cached load error instead
-        // of a per-request acquire failure) and lets a tick period the guest
-        // set during on_configure start the tick task even before the first
-        // request arrives.
+        // Eagerly warm one instance to validate guest init at load time. Do
+        // not activate tick here: refresh builds are not published yet and
+        // must have no external side effects.
         let warm = entry
-            .acquire(entry.hook_timeout_ms)
+            .acquire_prepared(entry.hook_timeout_ms)
             .map_err(|e| format!("wasm instance init failed: {e}"))?;
+        let tick_period_ms = warm.state().tick_period_ms;
         drop(warm);
-        Ok((entry, oci_meta))
+        Ok(PreparedModule {
+            entry,
+            oci: oci_meta,
+            tick_period_ms,
+        })
+    }
+
+    /// Claim and spawn one background OCI `Always` refresh if its monotonic
+    /// deadline expired. All checks on the response-body hot path are atomic;
+    /// no mutex is acquired unless this caller wins the single-flight claim.
+    fn schedule_oci_refresh(
+        &self,
+        config: &WasmConfig,
+        cache_key: &str,
+        slot: SharedLoadSlot,
+        old_entry: Arc<ModuleEntry>,
+    ) {
+        if monotonic_millis() < slot.refresh_due_ms.load(Ordering::Acquire) {
+            return;
+        }
+        let Some(claim) = slot.try_claim_refresh() else {
+            return;
+        };
+
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let Ok(engine) = self.engine().cloned() else {
+            return;
+        };
+        let cache = self.cache.clone();
+        let config = config.clone();
+        let cache_key = cache_key.to_string();
+        let tick_callouts = cache.tick_callout_state(&cache_key);
+        handle.spawn(async move {
+            Self::refresh_oci_entry(engine, cache, cache_key, config, tick_callouts, slot, old_entry, claim).await;
+        });
+    }
+
+    async fn refresh_oci_entry(
+        engine: Engine,
+        cache: Arc<CacheInner>,
+        cache_key: String,
+        config: WasmConfig,
+        tick_callouts: Arc<TickCalloutState>,
+        slot: SharedLoadSlot,
+        old_entry: Arc<ModuleEntry>,
+        _claim: RefreshClaimGuard,
+    ) {
+        let previous_digest = {
+            let guard = slot.state.lock().await;
+            match &*guard {
+                LoadState::Loaded {
+                    oci: Some(OciLoadedMeta { manifest_digest }),
+                } => manifest_digest.clone(),
+                _ => {
+                    slot.refresh_due_ms.store(u64::MAX, Ordering::Release);
+                    return;
+                }
+            }
+        };
+
+        let Some(spec) = config.source.oci.as_ref() else {
+            slot.refresh_due_ms.store(u64::MAX, Ordering::Release);
+            return;
+        };
+        let resolved_digest = match super::oci::resolve_manifest_digest(spec).await {
+            Ok(digest) => digest,
+            Err(e) => {
+                tracing::warn!(error = %e, "wasm oci Always re-check failed; keeping the loaded module");
+                finish_oci_refresh(&slot);
+                return;
+            }
+        };
+        if resolved_digest == previous_digest {
+            finish_oci_refresh(&slot);
+            return;
+        }
+
+        let label = config.source.metrics_label();
+        let prepared = match Self::load_inner(engine, &config, tick_callouts).await {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                record_wasm_module_load(&label, "error");
+                tracing::warn!(error = %e, "wasm oci Always refresh failed; keeping the loaded module");
+                finish_oci_refresh(&slot);
+                return;
+            }
+        };
+
+        // Confirm the old publication before touching its tick task. The
+        // prepared entry remains inactive throughout this handoff.
+        let mut state = slot.state.lock().await;
+        let slot_is_current = cache
+            .modules
+            .get(&cache_key)
+            .is_some_and(|current| Arc::ptr_eq(current.value(), &slot));
+        let entry_is_current = slot
+            .published
+            .load_full()
+            .is_some_and(|current| Arc::ptr_eq(&current, &old_entry));
+        if !slot_is_current || !entry_is_current {
+            return;
+        }
+
+        let mut handoff = TickHandoffGuard {
+            cache: cache.clone(),
+            cache_key: cache_key.clone(),
+            slot: slot.clone(),
+            old_entry: old_entry.clone(),
+            committed: false,
+        };
+        // `abort` alone is insufficient: an old tick may be inside guest code
+        // or a callout future. Await termination so old/new tick side effects
+        // can never overlap.
+        old_entry.stop_tick().await;
+
+        // Re-check after the await. Keep the DashMap guard alive through the
+        // synchronous publication so this exact slot cannot be replaced.
+        let current_slot = cache.modules.get(&cache_key);
+        let slot_is_current = current_slot
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current.value(), &slot));
+        let entry_is_current = slot
+            .published
+            .load_full()
+            .is_some_and(|current| Arc::ptr_eq(&current, &old_entry));
+        if !slot_is_current || !entry_is_current {
+            return;
+        }
+
+        slot.refresh_due_ms.store(
+            next_oci_refresh_deadline(&slot, prepared.oci.is_some()),
+            Ordering::Release,
+        );
+        *state = LoadState::Loaded { oci: prepared.oci };
+        slot.published.store(Some(prepared.entry.clone()));
+        prepared.entry.activate_tick(prepared.tick_period_ms);
+        handoff.commit();
+        record_wasm_module_load(&label, "ok");
     }
 
     /// Test-only: force the next `get_or_load` on an OCI entry to run the
-    /// `Always` re-check immediately (backdates `checked_at`).
+    /// `Always` re-check immediately.
     #[cfg(test)]
     pub async fn backdate_oci_check_for_test(&self, cache_key: &str) {
         let Some(slot) = self.cache.modules.get(cache_key).map(|s| s.clone()) else {
             return;
         };
-        let mut guard = slot.lock().await;
-        if let LoadState::Loaded { oci: Some(meta), .. } = &mut *guard {
-            meta.checked_at = Instant::now()
-                .checked_sub(Duration::from_secs(OCI_ALWAYS_RECHECK_SECS + 1))
-                .unwrap_or_else(Instant::now);
-        }
+        slot.refresh_due_ms.store(0, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    async fn wait_for_oci_refresh_for_test(&self, cache_key: &str) {
+        let Some(slot) = self.cache.modules.get(cache_key).map(|s| s.clone()) else {
+            return;
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while slot.refresh_in_flight.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("OCI refresh finishes within the test deadline");
+    }
+
+    #[cfg(test)]
+    fn backdate_load_retry_for_test(&self, cache_key: &str) {
+        let Some(slot) = self.cache.modules.get(cache_key).map(|slot| slot.clone()) else {
+            return;
+        };
+        slot.load_retry_due_ms.store(0, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    async fn wait_for_preload_for_test(&self, cache_key: &str) {
+        let Some(slot) = self.cache.modules.get(cache_key).map(|s| s.clone()) else {
+            return;
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while slot.preload_in_flight.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("preload finishes within the test deadline");
     }
 }
 
@@ -704,36 +1144,46 @@ fn check_abi_version(module: &Module) -> Result<(), String> {
     ))
 }
 
-/// `Always`-policy staleness check for a loaded OCI module. Re-resolves the
-/// tag's manifest digest at most every `OCI_ALWAYS_RECHECK_SECS`. A re-check
-/// failure keeps the loaded module (a transient registry error must not take
-/// a healthy plugin down) and pushes the next check a full interval out.
-async fn oci_needs_refresh(config: &WasmConfig, oci: &mut Option<OciLoadedMeta>) -> bool {
+/// Whether this source's effective OCI pull policy requires periodic
+/// re-resolution. Admission validates the image reference; a residual parse
+/// failure safely disables refresh rather than affecting an already-loaded
+/// module.
+fn effective_oci_pull_policy_key(config: &WasmConfig) -> &'static str {
     use edgion_resources::plugin_configs::{OciImageRef, OciPullPolicy};
-    let (Some(spec), Some(meta)) = (&config.source.oci, oci.as_mut()) else {
-        return false;
+    let Some(spec) = &config.source.oci else {
+        return "none";
     };
     let Ok(image) = OciImageRef::parse(&spec.image) else {
-        return false; // admission validated this; never refresh on a parse error
+        return "invalid";
     };
-    if spec.effective_pull_policy(&image) != OciPullPolicy::Always {
-        return false;
+    match spec.effective_pull_policy(&image) {
+        OciPullPolicy::Always => "always",
+        OciPullPolicy::IfNotPresent => "if-not-present",
     }
-    if meta.checked_at.elapsed() < Duration::from_secs(OCI_ALWAYS_RECHECK_SECS) {
-        return false;
+}
+
+fn effective_oci_always(config: &WasmConfig) -> bool {
+    effective_oci_pull_policy_key(config) == "always"
+}
+
+/// Process-monotonic clock encoded as milliseconds for atomic deadlines.
+fn monotonic_millis() -> u64 {
+    static ORIGIN: OnceLock<Instant> = OnceLock::new();
+    let elapsed = ORIGIN.get_or_init(Instant::now).elapsed().as_millis();
+    elapsed.min(u64::MAX as u128) as u64
+}
+
+fn next_oci_refresh_deadline(slot: &LoadSlot, has_oci_meta: bool) -> u64 {
+    if has_oci_meta && slot.refresh_always {
+        monotonic_millis().saturating_add(OCI_ALWAYS_RECHECK_SECS.saturating_mul(1000))
+    } else {
+        u64::MAX
     }
-    match super::oci::resolve_manifest_digest(spec).await {
-        Ok(digest) if digest == meta.manifest_digest => {
-            meta.checked_at = Instant::now();
-            false
-        }
-        Ok(_) => true,
-        Err(e) => {
-            tracing::warn!(error = %e, "wasm oci Always re-check failed; keeping the loaded module");
-            meta.checked_at = Instant::now();
-            false
-        }
-    }
+}
+
+fn finish_oci_refresh(slot: &LoadSlot) {
+    slot.refresh_due_ms
+        .store(next_oci_refresh_deadline(slot, true), Ordering::Release);
 }
 
 async fn fetch_bytes(source: &WasmSourceSpec) -> Result<Vec<u8>, String> {
@@ -783,6 +1233,14 @@ async fn fetch_url_bytes(
     url: &str,
     fetch: Option<&edgion_resources::plugin_configs::WasmFetchSpec>,
 ) -> Result<Vec<u8>, String> {
+    fetch_url_bytes_with_permits(url_fetch_permits(), url, fetch).await
+}
+
+async fn fetch_url_bytes_with_permits(
+    permits: &tokio::sync::Semaphore,
+    url: &str,
+    fetch: Option<&edgion_resources::plugin_configs::WasmFetchSpec>,
+) -> Result<Vec<u8>, String> {
     use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
     use crate::plugins::http::common::outbound::egress::{
         default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver,
@@ -809,6 +1267,7 @@ async fn fetch_url_bytes(
         connect_timeout: Some(Duration::from_secs(5)),
         total_timeout: Some(timeout),
         redirect: OutboundRedirect::Deny,
+        disable_proxy: true,
         tls,
         tls_context: Some("WasmFetch"),
         dns_resolver: Some(egress),
@@ -829,22 +1288,22 @@ async fn fetch_url_bytes(
     let attempts = fetch.and_then(|f| f.retry.as_ref()).map(|r| r.attempts).unwrap_or(1);
     let backoff_ms = fetch.and_then(|f| f.retry.as_ref()).map(|r| r.backoff_ms).unwrap_or(0);
 
-    let _permit = url_fetch_permits()
-        .acquire()
-        .await
-        .map_err(|_| "wasm fetch semaphore closed".to_string())?;
-
     let mut last_error = String::new();
     for attempt in 0..attempts {
         if attempt > 0 {
             let delay = backoff_ms.saturating_mul(1u64 << (attempt - 1).min(10));
             tokio::time::sleep(Duration::from_millis(delay)).await;
         }
+        let permit = permits
+            .acquire()
+            .await
+            .map_err(|_| "wasm fetch semaphore closed".to_string())?;
         let mut req = client.get(url).timeout(timeout);
         if let Some(auth) = &auth_header {
             req = req.header(reqwest::header::AUTHORIZATION, auth.clone());
         }
-        match req.send().await {
+        let response = req.send().await;
+        match response {
             Err(e) => {
                 last_error = format!("fetch wasm url '{url}': {e}");
             }
@@ -877,6 +1336,9 @@ async fn fetch_url_bytes(
                 }
             }
         }
+        // Response streaming/error classification for this attempt is done;
+        // release before any retry backoff or next permit competition.
+        drop(permit);
     }
     Err(last_error)
 }
@@ -901,6 +1363,13 @@ pub struct ModuleEntry {
     /// Background `proxy_on_tick` driver, started once when a guest sets a
     /// nonzero tick period. Holds a `Weak` back-reference; aborted on Drop.
     tick_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Latest guest-selected tick period. Retained when a refresh handoff
+    /// stops the task so cancellation can safely re-arm the still-published
+    /// old entry.
+    tick_period_ms: AtomicU64,
+    /// Publication/lifecycle gate. Prepared entries and entries being stopped
+    /// for refresh cannot spawn a replacement task from a concurrent acquire.
+    tick_enabled: AtomicBool,
     /// The callout grants of the plugins registered on this entry's cache
     /// key (shared with the manager's map). Read every tick round to decide
     /// whether `on_tick` may dispatch callouts, and with which allowlist.
@@ -951,6 +1420,17 @@ impl ModuleEntry {
     /// fresh from `InstancePre`. `timeout_ms` bounds the guest calls made
     /// through the returned lease (via epoch interruption).
     pub fn acquire(self: &Arc<Self>, timeout_ms: u64) -> Result<VmLease, String> {
+        self.acquire_inner(timeout_ms, true)
+    }
+
+    /// Eager initialization for an entry that is not published yet. Guest
+    /// initialization runs normally, but a configured tick period is merely
+    /// observed by the caller and cannot start background work.
+    fn acquire_prepared(self: &Arc<Self>, timeout_ms: u64) -> Result<VmLease, String> {
+        self.acquire_inner(timeout_ms, false)
+    }
+
+    fn acquire_inner(self: &Arc<Self>, timeout_ms: u64, activate_tick: bool) -> Result<VmLease, String> {
         let (vm, pool_len) = {
             let mut pool = self.pool.lock();
             let vm = pool.pop();
@@ -965,7 +1445,9 @@ impl ModuleEntry {
                 // A guest typically requests its tick period during
                 // on_vm_start/on_configure, which just ran inside new_vm.
                 let period = vm.store.data().tick_period_ms;
-                self.maybe_start_tick(period);
+                if activate_tick {
+                    self.maybe_start_tick(period);
+                }
                 vm
             }
         };
@@ -981,6 +1463,7 @@ impl ModuleEntry {
             vm: Some(vm),
             timeout_ms,
             healthy: true,
+            open_context: None,
         })
     }
 
@@ -988,17 +1471,30 @@ impl ModuleEntry {
     /// Idempotent; requires a tokio runtime (skipped otherwise, e.g. in
     /// sync-only unit tests). The task holds only a `Weak` back-reference,
     /// so cache eviction still drops the entry — `Drop` aborts the task.
+    fn activate_tick(self: &Arc<Self>, period_ms: u64) {
+        self.tick_enabled.store(true, Ordering::Release);
+        self.maybe_start_tick(period_ms);
+    }
+
     fn maybe_start_tick(self: &Arc<Self>, period_ms: u64) {
-        if period_ms == 0 || tokio::runtime::Handle::try_current().is_err() {
+        if !self.tick_enabled.load(Ordering::Acquire)
+            || period_ms == 0
+            || tokio::runtime::Handle::try_current().is_err()
+        {
             return;
         }
         let mut guard = self.tick_task.lock();
         if guard.is_some() {
             return;
         }
+        self.tick_period_ms.store(period_ms, Ordering::Release);
         let weak = Arc::downgrade(self);
         let label = self.metrics_label.clone();
+        #[cfg(test)]
+        let test_tick_state = self.tick_callouts.clone();
         let handle = tokio::spawn(async move {
+            #[cfg(test)]
+            let _test_task = TestTickTaskGuard::new(test_tick_state);
             let mut period = period_ms.max(MIN_TICK_PERIOD_MS);
             loop {
                 tokio::time::sleep(Duration::from_millis(period)).await;
@@ -1070,7 +1566,9 @@ impl ModuleEntry {
                 // The guest may adjust (or stop) its own tick period.
                 let next = lease.state().tick_period_ms;
                 drop(lease);
+                entry.tick_period_ms.store(next, Ordering::Release);
                 if next == 0 {
+                    entry.tick_enabled.store(false, Ordering::Release);
                     tracing::info!(module = %label, "wasm tick stopped by guest (period 0)");
                     break;
                 }
@@ -1078,6 +1576,17 @@ impl ModuleEntry {
             }
         });
         *guard = Some(handle);
+    }
+
+    /// Stop and fully quiesce this entry's background tick task. Ordinary
+    /// request leases remain valid because only the task handle is affected.
+    async fn stop_tick(&self) {
+        self.tick_enabled.store(false, Ordering::Release);
+        let handle = self.tick_task.lock().take();
+        if let Some(handle) = handle {
+            handle.abort();
+            let _ = handle.await;
+        }
     }
 
     /// Whether the guest exports `proxy_on_response_body`. The body
@@ -1180,6 +1689,11 @@ pub struct VmLease {
     /// continuously-advancing engine epoch.
     timeout_ms: u64,
     healthy: bool,
+    /// Request context intentionally kept alive across async callout
+    /// resolution. If the owning future is cancelled before `close_context`,
+    /// the VM must be discarded rather than pooled with abandoned guest
+    /// state. Drop never calls guest lifecycle hooks.
+    open_context: Option<i32>,
 }
 
 impl VmLease {
@@ -1271,7 +1785,15 @@ impl VmLease {
     /// `proxy_on_http_call_response` on it. The caller must eventually call
     /// `close_context` (any outcome, including local response).
     pub fn call_on_request_headers_open(&mut self, num_headers: i32) -> Result<(i32, i32), String> {
-        self.open_and_call("proxy_on_request_headers", "request_headers", num_headers)
+        if self.open_context.is_some() {
+            self.poison();
+            return Err("request context already open on this lease".to_string());
+        }
+        let result = self.open_and_call("proxy_on_request_headers", "request_headers", num_headers);
+        if let Ok((ctx_id, _)) = &result {
+            self.open_context = Some(*ctx_id);
+        }
+        result
     }
 
     /// Deliver one callout result to the paused guest. The response payload
@@ -1358,6 +1880,8 @@ impl VmLease {
         if result.is_err() {
             record_wasm_trap(&self.entry.metrics_label, "context_close");
             self.poison();
+        } else if self.open_context == Some(ctx_id) {
+            self.open_context = None;
         }
         result
     }
@@ -1432,7 +1956,7 @@ impl VmLease {
 impl Drop for VmLease {
     fn drop(&mut self) {
         if let Some(vm) = self.vm.take() {
-            if self.healthy {
+            if self.healthy && self.open_context.is_none() {
                 let pool_len = {
                     let mut pool = self.entry.pool.lock();
                     if pool.len() < self.entry.pool_cap {
@@ -1447,7 +1971,9 @@ impl Drop for VmLease {
                 };
                 set_wasm_pool_size(&self.entry.metrics_label, pool_len);
             } else {
-                // Unhealthy: drop the Store (frees pooled slots) without reuse.
+                // A trapped lease and a healthy lease abandoned with an open
+                // request context are both unsafe to reuse. Drop the Store
+                // without invoking guest code or returning it to the pool.
                 record_wasm_instance_discard(&self.entry.metrics_label, "poisoned");
             }
         }
@@ -1615,6 +2141,109 @@ mod tests {
         assert_eq!(entry.pool_len(), 1);
         let _l2 = entry.acquire(100).unwrap();
         assert_eq!(entry.pool_len(), 0); // popped, not re-created
+    }
+
+    #[tokio::test]
+    async fn repeated_test_manager_drop_releases_engine_pooling_state() {
+        let f = write_temp_wasm(MINI_GUEST);
+        for _ in 0..24 {
+            let mgr = WasmVmManager::new_for_test();
+            assert!(mgr.epoch_ticker.is_some());
+            let entry = load(&mgr, &file_config(f.path())).await.expect("manager loads module");
+            let mut lease = entry.acquire(100).expect("manager leases VM");
+            lease
+                .state_mut()
+                .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], HashMap::new());
+            assert_eq!(lease.call_on_request_headers(0).expect("guest hook runs"), 0);
+        }
+
+        // A manager created after the churn must still reserve pooling
+        // mappings and run a module; leaked ticker Engine clones used to make
+        // this eventually fail after the wider suite created many managers.
+        let mgr = WasmVmManager::new_for_test();
+        let entry = load(&mgr, &file_config(f.path())).await.expect("final manager loads");
+        let mut lease = entry.acquire(100).expect("final manager leases VM");
+        lease
+            .state_mut()
+            .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], HashMap::new());
+        assert_eq!(lease.call_on_request_headers(0).expect("final guest hook runs"), 0);
+    }
+
+    #[tokio::test]
+    async fn abandoned_open_request_context_is_not_returned_to_pool() {
+        let f = write_temp_wasm(MINI_GUEST);
+        let mgr = WasmVmManager::new_for_test();
+        let entry = load(&mgr, &file_config(f.path())).await.unwrap();
+        {
+            let mut lease = entry.acquire(100).expect("lease");
+            lease
+                .state_mut()
+                .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], HashMap::new());
+            lease.call_on_request_headers_open(0).expect("open request context");
+        }
+
+        assert_eq!(
+            entry.pool_len(),
+            0,
+            "cancellation with an open guest context must discard the VM"
+        );
+    }
+
+    #[tokio::test]
+    async fn closed_request_context_returns_vm_to_pool_for_reuse() {
+        let f = write_temp_wasm(MINI_GUEST);
+        let mgr = WasmVmManager::new_for_test();
+        let entry = load(&mgr, &file_config(f.path())).await.unwrap();
+        {
+            let mut lease = entry.acquire(100).expect("lease");
+            lease
+                .state_mut()
+                .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], HashMap::new());
+            let (ctx_id, _) = lease.call_on_request_headers_open(0).expect("open request context");
+            lease.close_context(ctx_id).expect("close request context");
+        }
+
+        assert_eq!(entry.pool_len(), 1, "fully closed guest context is reusable");
+        let _reused = entry.acquire(100).expect("reacquire pooled VM");
+        assert_eq!(entry.pool_len(), 0, "reacquire must pop the pooled VM");
+    }
+
+    #[tokio::test]
+    async fn close_context_trap_discards_vm() {
+        let wat = MINI_GUEST.replace(
+            "(func (export \"proxy_on_done\") (param i32) (result i32) (i32.const 1))",
+            "(func (export \"proxy_on_done\") (param i32) (result i32) unreachable)",
+        );
+        let f = write_temp_wasm(&wat);
+        let mgr = WasmVmManager::new_for_test();
+        let entry = load(&mgr, &file_config(f.path())).await.unwrap();
+        {
+            let mut lease = entry.acquire(100).expect("lease");
+            lease
+                .state_mut()
+                .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], HashMap::new());
+            let (ctx_id, _) = lease.call_on_request_headers_open(0).expect("open request context");
+            assert!(lease.close_context(ctx_id).is_err(), "close trap must surface");
+        }
+
+        assert_eq!(entry.pool_len(), 0, "close trap must discard the VM");
+    }
+
+    #[tokio::test]
+    async fn second_open_request_context_poisons_lease() {
+        let f = write_temp_wasm(MINI_GUEST);
+        let mgr = WasmVmManager::new_for_test();
+        let entry = load(&mgr, &file_config(f.path())).await.unwrap();
+        {
+            let mut lease = entry.acquire(100).expect("lease");
+            lease
+                .state_mut()
+                .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], HashMap::new());
+            lease.call_on_request_headers_open(0).expect("first open");
+            assert!(lease.call_on_request_headers_open(0).is_err(), "second open must fail");
+        }
+
+        assert_eq!(entry.pool_len(), 0, "duplicate open must discard the VM");
     }
 
     #[tokio::test]
@@ -1837,6 +2466,73 @@ mod tests {
         assert!(inline_key.contains(";rt="), "runtime config digest is always present");
     }
 
+    #[test]
+    fn runtime_cache_key_separates_effective_oci_pull_policy_in_both_reload_directions() {
+        use edgion_resources::plugin_configs::OciPullPolicy;
+
+        let mut always = WasmConfig::default();
+        always.source.oci = Some(edgion_resources::plugin_configs::WasmOciSpec {
+            image: "registry.example.com/team/module:1.0".to_string(),
+            pull_policy: Some(OciPullPolicy::Always),
+            ..Default::default()
+        });
+        let mut if_not_present = always.clone();
+        if_not_present.source.oci.as_mut().unwrap().pull_policy = Some(OciPullPolicy::IfNotPresent);
+
+        let always_key = runtime_cache_key(&always);
+        let if_not_present_key = runtime_cache_key(&if_not_present);
+        for (old, new) in [(&always_key, &if_not_present_key), (&if_not_present_key, &always_key)] {
+            assert_ne!(
+                old, new,
+                "a policy-only reload in either direction must move to a new slot"
+            );
+        }
+
+        let mut implicit_latest = always.clone();
+        let oci = implicit_latest.source.oci.as_mut().unwrap();
+        oci.image = "registry.example.com/team/module:latest".to_string();
+        oci.pull_policy = None;
+        let mut explicit_latest = implicit_latest.clone();
+        explicit_latest.source.oci.as_mut().unwrap().pull_policy = Some(OciPullPolicy::Always);
+        assert_eq!(
+            runtime_cache_key(&implicit_latest),
+            runtime_cache_key(&explicit_latest),
+            "equivalent effective policies should still share a slot"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_claim_is_released_when_task_is_aborted() {
+        let slot = Arc::new(LoadSlot::new(true));
+        let claim = slot.try_claim_refresh().expect("first task claims refresh");
+        let task = tokio::spawn(async move {
+            let _claim = claim;
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+        task.abort();
+        let _ = task.await;
+
+        assert!(
+            !slot.refresh_in_flight.load(Ordering::Acquire),
+            "aborting the task must release the refresh claim"
+        );
+        assert!(
+            slot.try_claim_refresh().is_some(),
+            "a later refresh must be able to claim the slot"
+        );
+    }
+
+    #[test]
+    fn non_always_slot_disables_refresh_without_runtime_config_parsing() {
+        let slot = LoadSlot::new(false);
+        assert_eq!(
+            next_oci_refresh_deadline(&slot, true),
+            u64::MAX,
+            "the precomputed slot policy alone disables refresh"
+        );
+    }
+
     /// Regression (contract-01): the runtime cache key folds in the per-plugin
     /// runtime fields that `ModuleEntry` owns (instance pool size, hook
     /// timeout, `vmConfig`, `pluginConfig`) but NOT the callout fields, which
@@ -2019,6 +2715,85 @@ mod tests {
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 
+    #[tokio::test]
+    async fn url_retry_backoff_releases_permit_for_another_fetch() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Mutex as StdMutex;
+        use tokio::sync::{Notify, Semaphore};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let order = Arc::new(StdMutex::new(Vec::new()));
+        let first_a_seen = Arc::new(Notify::new());
+        let a_calls = Arc::new(AtomicUsize::new(0));
+        Mock::given(method("GET"))
+            .and(path("/a.wasm"))
+            .respond_with({
+                let order = order.clone();
+                let first_a_seen = first_a_seen.clone();
+                let a_calls = a_calls.clone();
+                move |_: &wiremock::Request| {
+                    let call = a_calls.fetch_add(1, Ordering::SeqCst);
+                    order.lock().unwrap().push(if call == 0 { "a1" } else { "a2" });
+                    if call == 0 {
+                        first_a_seen.notify_one();
+                        ResponseTemplate::new(503)
+                    } else {
+                        ResponseTemplate::new(200).set_body_bytes(b"a".to_vec())
+                    }
+                }
+            })
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/b.wasm"))
+            .respond_with({
+                let order = order.clone();
+                move |_: &wiremock::Request| {
+                    order.lock().unwrap().push("b");
+                    ResponseTemplate::new(200).set_body_bytes(b"b".to_vec())
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let retry = edgion_resources::plugin_configs::WasmFetchSpec {
+            timeout_ms: 5000,
+            retry: Some(edgion_resources::plugin_configs::WasmFetchRetry {
+                attempts: 2,
+                backoff_ms: 500,
+            }),
+            ..Default::default()
+        };
+        let permits = Arc::new(Semaphore::new(1));
+        let url_a = format!("{}/a.wasm", server.uri());
+        let url_b = format!("{}/b.wasm", server.uri());
+        let permits_a = permits.clone();
+        let a = tokio::spawn(async move { fetch_url_bytes_with_permits(&permits_a, &url_a, Some(&retry)).await });
+        first_a_seen.notified().await;
+        let permits_b = permits.clone();
+        let b = tokio::spawn(async move { fetch_url_bytes_with_permits(&permits_b, &url_b, None).await });
+
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), b)
+                .await
+                .expect("B completes while A is backing off")
+                .unwrap()
+                .unwrap(),
+            b"b"
+        );
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), a)
+                .await
+                .expect("A completes its retry")
+                .unwrap()
+                .unwrap(),
+            b"a"
+        );
+        assert_eq!(&*order.lock().unwrap(), &["a1", "b", "a2"]);
+    }
+
     /// url fetch retry: 4xx is definitive — exactly one request, no retry.
     #[tokio::test]
     async fn url_fetch_does_not_retry_4xx() {
@@ -2051,6 +2826,105 @@ mod tests {
             1,
             "4xx must not be retried"
         );
+    }
+
+    #[tokio::test]
+    async fn preload_is_single_flight_and_respects_negative_cache_deadline() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let bytes = wat::parse_str(MINI_GUEST).unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/ok.wasm"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(250))
+                    .set_body_bytes(bytes),
+            )
+            .mount(&server)
+            .await;
+        let manager = Arc::new(WasmVmManager::new_for_test());
+
+        let mut ok = WasmConfig::default();
+        ok.source.url = Some(format!("{}/ok.wasm", server.uri()));
+        let ok_key = runtime_cache_key(&ok);
+        for _ in 0..64 {
+            manager.spawn_preload_for_test(&ok, ok_key.clone());
+        }
+        manager.wait_for_preload_for_test(&ok_key).await;
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            1,
+            "repeated sync misses must create one preload request"
+        );
+
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/bad.wasm"))
+            .respond_with(ResponseTemplate::new(400))
+            .mount(&server)
+            .await;
+        let mut bad = WasmConfig::default();
+        bad.source.url = Some(format!("{}/bad.wasm", server.uri()));
+        let bad_key = runtime_cache_key(&bad);
+
+        for _ in 0..64 {
+            manager.spawn_preload_for_test(&bad, bad_key.clone());
+        }
+        manager.wait_for_preload_for_test(&bad_key).await;
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+
+        // During the negative-cache window no task (and therefore no request)
+        // is created, even if a response-body hook reports the miss per chunk.
+        for _ in 0..64 {
+            manager.spawn_preload_for_test(&bad, bad_key.clone());
+        }
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+
+        manager.backdate_load_retry_for_test(&bad_key);
+        for _ in 0..64 {
+            manager.spawn_preload_for_test(&bad, bad_key.clone());
+        }
+        manager.wait_for_preload_for_test(&bad_key).await;
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            2,
+            "an expired negative-cache deadline permits exactly one retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn aborted_preload_releases_claim_for_retry() {
+        let slot = Arc::new(LoadSlot::new(false));
+        let claim = slot.try_claim_preload().expect("first preload claims slot");
+        let task = tokio::spawn(async move {
+            let _claim = claim;
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+        task.abort();
+        let _ = task.await;
+
+        assert!(
+            !slot.preload_in_flight.load(Ordering::Acquire),
+            "aborting preload must release its claim"
+        );
+        assert!(
+            slot.try_claim_preload().is_some(),
+            "a later preload must be able to retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn engine_unavailable_preload_creates_no_slot_or_task() {
+        let manager = Arc::new(WasmVmManager::new_with_engine_result(Err(
+            "wasm engine unavailable: test".to_string(),
+        )));
+        let mut config = WasmConfig::default();
+        config.source.inline = Some("AAAA".to_string());
+        manager.spawn_preload_for_test(&config, runtime_cache_key(&config));
+        assert!(manager.cache.modules.is_empty());
     }
 
     /// url fetch: a body exceeding the module cap is rejected by the streaming
@@ -2457,7 +3331,7 @@ mod tests {
 
         // The module never gets far enough to populate the cache, so a
         // sync-path caller sees a plain miss rather than a panic too.
-        assert!(mgr.try_get(&config.source.cache_key()).is_none());
+        assert!(mgr.try_get(&runtime_cache_key(&config)).is_none());
     }
 
     #[tokio::test]
@@ -2507,7 +3381,7 @@ mod tests {
             "timeoutMs": 500
         }))
         .unwrap();
-        let cache_key = config.source.cache_key();
+        let cache_key = runtime_cache_key(&config);
 
         let mgr = WasmVmManager::new_for_test();
         let entry1 = mgr.get_or_load(&config, &cache_key).await.unwrap();
@@ -2519,13 +3393,270 @@ mod tests {
         server.reset().await;
         mount(&server, WASM_B).await;
         mgr.backdate_oci_check_for_test(&cache_key).await;
-        let entry2 = mgr.get_or_load(&config, &cache_key).await.unwrap();
+        let during_refresh = mgr.get_or_load(&config, &cache_key).await.unwrap();
+        assert!(
+            Arc::ptr_eq(&entry1, &during_refresh),
+            "the last-known-good entry must remain published while refresh runs"
+        );
+        mgr.wait_for_oci_refresh_for_test(&cache_key).await;
+        let entry2 = mgr.try_get(&cache_key).expect("refreshed entry is published");
         assert!(!Arc::ptr_eq(&entry1, &entry2), "digest change must reload the module");
 
         // Unchanged digest after another backdate: entry is kept.
         mgr.backdate_oci_check_for_test(&cache_key).await;
         let entry2b = mgr.get_or_load(&config, &cache_key).await.unwrap();
         assert!(Arc::ptr_eq(&entry2, &entry2b));
+        mgr.wait_for_oci_refresh_for_test(&cache_key).await;
+        assert!(Arc::ptr_eq(
+            &entry2,
+            &mgr.try_get(&cache_key).expect("unchanged entry stays published")
+        ));
+
+        // A moved tag whose bytes fail compilation must not replace the
+        // healthy entry or turn the slot into the cold-load Failed state.
+        const INVALID_WASM: &[u8] = b"not a wasm module";
+        server.reset().await;
+        mount(&server, INVALID_WASM).await;
+        mgr.backdate_oci_check_for_test(&cache_key).await;
+        assert!(Arc::ptr_eq(
+            &entry2,
+            &mgr.get_or_load(&config, &cache_key).await.unwrap()
+        ));
+        mgr.wait_for_oci_refresh_for_test(&cache_key).await;
+        assert!(Arc::ptr_eq(
+            &entry2,
+            &mgr.try_get(&cache_key).expect("compile failure preserves LKG")
+        ));
+
+        // A policy-only reload gets a distinct slot. The old Always task may
+        // finish after the IfNotPresent slot is published, but cannot commit
+        // into or replace that new-policy slot.
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/v2/test/wasm/manifests/latest"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(250))
+                    .set_body_bytes(manifest_for(WASM_A)),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/v2/test/wasm/blobs/{}", digest_of(WASM_A))))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(WASM_A.to_vec()))
+            .mount(&server)
+            .await;
+        mgr.backdate_oci_check_for_test(&cache_key).await;
+        assert!(Arc::ptr_eq(
+            &entry2,
+            &mgr.get_or_load(&config, &cache_key).await.unwrap()
+        ));
+        let mut if_not_present = config.clone();
+        if_not_present.source.oci.as_mut().unwrap().pull_policy =
+            Some(edgion_resources::plugin_configs::OciPullPolicy::IfNotPresent);
+        let if_not_present_key = runtime_cache_key(&if_not_present);
+        assert_ne!(cache_key, if_not_present_key);
+        let if_not_present_entry = mgr
+            .get_or_load(&if_not_present, &if_not_present_key)
+            .await
+            .expect("new-policy slot loads independently");
+        mgr.wait_for_oci_refresh_for_test(&cache_key).await;
+        assert!(
+            Arc::ptr_eq(
+                &if_not_present_entry,
+                &mgr.try_get(&if_not_present_key)
+                    .expect("new-policy entry remains published")
+            ),
+            "the old Always task must not publish into the new-policy slot"
+        );
+    }
+
+    #[tokio::test]
+    async fn oci_always_refresh_is_non_blocking_single_flight_and_keeps_lkg_on_failure() {
+        use sha2::{Digest as _, Sha256};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        const WASM: &[u8] = b"\0asm\x01\x00\x00\x00";
+        let digest = format!("sha256:{}", hex::encode(Sha256::digest(WASM)));
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "layers": [{
+                "mediaType": "application/vnd.module.wasm.content.layer.v1+wasm",
+                "digest": digest,
+                "size": WASM.len()
+            }]
+        }))
+        .unwrap();
+        let manifest_path = "/v2/test/wasm/manifests/latest";
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(manifest_path))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(manifest.clone()))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/v2/test/wasm/blobs/{digest}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(WASM.to_vec()))
+            .mount(&server)
+            .await;
+
+        let host = server.uri().trim_start_matches("http://").to_string();
+        let config: WasmConfig = serde_json::from_value(serde_json::json!({
+            "source": { "oci": { "image": format!("{host}/test/wasm:latest") } },
+            "timeoutMs": 500
+        }))
+        .unwrap();
+        let cache_key = runtime_cache_key(&config);
+        let mgr = WasmVmManager::new_for_test();
+        let lkg = mgr.get_or_load(&config, &cache_key).await.unwrap();
+
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path(manifest_path))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(250))
+                    .set_body_bytes(manifest),
+            )
+            .mount(&server)
+            .await;
+        mgr.backdate_oci_check_for_test(&cache_key).await;
+
+        let request_entry = tokio::time::timeout(Duration::from_millis(50), mgr.get_or_load(&config, &cache_key))
+            .await
+            .expect("request lookup must not wait for the delayed manifest")
+            .unwrap();
+        assert!(Arc::ptr_eq(&lkg, &request_entry));
+        for _ in 0..32 {
+            let response_entry = mgr
+                .try_get_or_schedule_refresh(&config, &cache_key)
+                .expect("response-only lookup serves LKG");
+            assert!(Arc::ptr_eq(&lkg, &response_entry));
+        }
+        mgr.wait_for_oci_refresh_for_test(&cache_key).await;
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            1,
+            "concurrent request/response claims must share one manifest re-check"
+        );
+        assert!(Arc::ptr_eq(
+            &lkg,
+            &mgr.try_get(&cache_key).expect("unchanged LKG remains published")
+        ));
+
+        // A definitive registry failure advances the refresh deadline but
+        // cannot clear or replace the healthy published module.
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path(manifest_path))
+            .respond_with(ResponseTemplate::new(400))
+            .mount(&server)
+            .await;
+        mgr.backdate_oci_check_for_test(&cache_key).await;
+        let response_entry = mgr
+            .try_get_or_schedule_refresh(&config, &cache_key)
+            .expect("failed refresh still serves LKG");
+        assert!(Arc::ptr_eq(&lkg, &response_entry));
+        mgr.wait_for_oci_refresh_for_test(&cache_key).await;
+        assert!(Arc::ptr_eq(
+            &lkg,
+            &mgr.try_get(&cache_key).expect("failed refresh preserves LKG")
+        ));
+    }
+
+    #[tokio::test]
+    async fn oci_refresh_handoff_never_overlaps_old_and_new_tick_tasks() {
+        use sha2::{Digest as _, Sha256};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn digest_of(bytes: &[u8]) -> String {
+            format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+        }
+        fn manifest_for(blob: &[u8]) -> Vec<u8> {
+            serde_json::to_vec(&serde_json::json!({
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "layers": [{
+                    "mediaType": "application/vnd.module.wasm.content.layer.v1+wasm",
+                    "digest": digest_of(blob),
+                    "size": blob.len()
+                }]
+            }))
+            .unwrap()
+        }
+        async fn mount(server: &MockServer, blob: Vec<u8>) {
+            let digest = digest_of(&blob);
+            Mock::given(method("GET"))
+                .and(path("/v2/test/tick/manifests/latest"))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(manifest_for(&blob)))
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/v2/test/tick/blobs/{digest}")))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(blob))
+                .mount(server)
+                .await;
+        }
+        async fn wait_for_active(state: &TickCalloutState, expected: usize) {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while state.active_tick_tasks.load(Ordering::Acquire) != expected {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("tick task count reaches expected value");
+        }
+
+        let wasm_a = wat::parse_str(TICK_GUEST).unwrap();
+        let wasm_b = wat::parse_str(&TICK_GUEST.replace(
+            "(func (export \"proxy_on_tick\")",
+            "(func (export \"version_b\"))\n      (func (export \"proxy_on_tick\")",
+        ))
+        .unwrap();
+        let server = MockServer::start().await;
+        mount(&server, wasm_a).await;
+        let server_uri = server.uri();
+        let host = server_uri.trim_start_matches("http://");
+        let config: WasmConfig = serde_json::from_value(serde_json::json!({
+            "source": { "oci": { "image": format!("{host}/test/tick:latest") } },
+            "timeoutMs": 500
+        }))
+        .unwrap();
+        let cache_key = runtime_cache_key(&config);
+        let mgr = WasmVmManager::new_for_test();
+        let old_entry = mgr.get_or_load(&config, &cache_key).await.unwrap();
+        let tick_state = old_entry.tick_callouts.clone();
+        wait_for_active(&tick_state, 1).await;
+
+        server.reset().await;
+        mount(&server, wasm_b).await;
+        mgr.backdate_oci_check_for_test(&cache_key).await;
+        let served_during_refresh = mgr.get_or_load(&config, &cache_key).await.unwrap();
+        assert!(Arc::ptr_eq(&old_entry, &served_during_refresh));
+        mgr.wait_for_oci_refresh_for_test(&cache_key).await;
+        let new_entry = mgr.try_get(&cache_key).expect("new entry published");
+        assert!(!Arc::ptr_eq(&old_entry, &new_entry));
+        wait_for_active(&tick_state, 1).await;
+
+        assert_eq!(
+            tick_state.max_active_tick_tasks.load(Ordering::Acquire),
+            1,
+            "old and new entries must never own tick tasks concurrently"
+        );
+        assert!(old_entry.tick_task.lock().is_none(), "old tick task must be stopped");
+        assert!(!old_entry.tick_enabled.load(Ordering::Acquire));
+        assert!(new_entry.tick_enabled.load(Ordering::Acquire));
+
+        // Holding the old Arc models an in-flight request. Tick shutdown must
+        // not poison or otherwise prevent its ordinary hooks from completing.
+        let mut old_lease = old_entry.acquire(500).expect("old request lease remains usable");
+        old_lease
+            .state_mut()
+            .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], HashMap::new());
+        assert_eq!(old_lease.call_on_request_headers(0).unwrap(), 0);
     }
 
     #[tokio::test]
@@ -2566,7 +3697,7 @@ mod tests {
         }))
         .unwrap();
         let mgr = WasmVmManager::new_for_test();
-        let err = mgr.get_or_load(&config, &config.source.cache_key()).await.unwrap_err();
+        let err = mgr.get_or_load(&config, &runtime_cache_key(&config)).await.unwrap_err();
         assert!(err.contains("sha256 mismatch"), "got: {err}");
     }
 }

@@ -247,23 +247,45 @@ pub struct WasmConfig {
 /// admission validation (here) and the gateway's dispatch-time allowlist
 /// check so the two can never disagree.
 pub fn normalize_callout_origin(raw: &str) -> Result<String, String> {
-    let parsed = url::Url::parse(raw).map_err(|e| format!("'{raw}' is not a valid URL: {e}"))?;
+    normalize_callout_origin_inner(raw).map_err(|error| match error {
+        CalloutOriginError::InvalidUrl(error) => format!("'{raw}' is not a valid URL: {error}"),
+        CalloutOriginError::Scheme => format!("'{raw}': only http/https origins are allowed"),
+        CalloutOriginError::Components => format!("'{raw}': origin only — no path, query, or fragment"),
+        CalloutOriginError::Credentials => format!("'{raw}': credentials are not allowed in an origin"),
+        CalloutOriginError::Host => format!("'{raw}': origin must include a host"),
+        CalloutOriginError::Port => format!("'{raw}': origin must include a port"),
+    })
+}
+
+/// Runtime variant of [`normalize_callout_origin`] that deliberately avoids
+/// formatting the untrusted raw origin into an error allocation.
+pub fn normalize_callout_origin_quiet(raw: &str) -> Option<String> {
+    normalize_callout_origin_inner(raw).ok()
+}
+
+enum CalloutOriginError {
+    InvalidUrl(url::ParseError),
+    Scheme,
+    Components,
+    Credentials,
+    Host,
+    Port,
+}
+
+fn normalize_callout_origin_inner(raw: &str) -> Result<String, CalloutOriginError> {
+    let parsed = url::Url::parse(raw).map_err(CalloutOriginError::InvalidUrl)?;
     let scheme = parsed.scheme();
     if scheme != "http" && scheme != "https" {
-        return Err(format!("'{raw}': only http/https origins are allowed"));
+        return Err(CalloutOriginError::Scheme);
     }
     if !matches!(parsed.path(), "" | "/") || parsed.query().is_some() || parsed.fragment().is_some() {
-        return Err(format!("'{raw}': origin only — no path, query, or fragment"));
+        return Err(CalloutOriginError::Components);
     }
     if !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err(format!("'{raw}': credentials are not allowed in an origin"));
+        return Err(CalloutOriginError::Credentials);
     }
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| format!("'{raw}': origin must include a host"))?;
-    let port = parsed
-        .port_or_known_default()
-        .ok_or_else(|| format!("'{raw}': origin must include a port"))?;
+    let host = parsed.host_str().ok_or(CalloutOriginError::Host)?;
+    let port = parsed.port_or_known_default().ok_or(CalloutOriginError::Port)?;
     Ok(format!("{scheme}://{host}:{port}"))
 }
 
@@ -534,15 +556,25 @@ mod tests {
 
     #[test]
     fn callout_origin_normalization() {
-        assert_eq!(
-            normalize_callout_origin("https://auth.example.com").unwrap(),
-            "https://auth.example.com:443"
-        );
-        assert_eq!(normalize_callout_origin("http://svc:8080/").unwrap(), "http://svc:8080");
-        assert!(normalize_callout_origin("https://a.example.com/v1").is_err());
-        assert!(normalize_callout_origin("ftp://a.example.com").is_err());
-        assert!(normalize_callout_origin("https://user:pw@a.example.com").is_err());
-        assert!(normalize_callout_origin("https://a.example.com?q=1").is_err());
+        for (raw, expected) in [
+            ("https://auth.example.com", Some("https://auth.example.com:443")),
+            ("http://svc:8080/", Some("http://svc:8080")),
+            ("https://a.example.com/v1", None),
+            ("ftp://a.example.com", None),
+            ("https://user:pw@a.example.com", None),
+            ("https://a.example.com?q=1", None),
+        ] {
+            assert_eq!(
+                normalize_callout_origin(raw).ok().as_deref(),
+                expected,
+                "diagnostic normalization result for {raw}"
+            );
+            assert_eq!(
+                normalize_callout_origin_quiet(raw).as_deref(),
+                expected,
+                "quiet runtime normalization result for {raw}"
+            );
+        }
     }
 
     #[test]

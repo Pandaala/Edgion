@@ -202,6 +202,9 @@ mod tests {
             HashMap::new(),
             HashSet::new(),
         );
+        let previous_runtime = store
+            .get_plugin_runtime("default/plugin1")
+            .expect("valid plugin runtime should be stored");
 
         store.partial_update(
             HashMap::new(),
@@ -216,6 +219,10 @@ mod tests {
             store.with_plugin("default/plugin1", |compiled| compiled.is_activatable),
             Some(true)
         );
+        let retained_runtime = store
+            .get_plugin_runtime("default/plugin1")
+            .expect("last-known-good runtime should be retained");
+        assert!(Arc::ptr_eq(&previous_runtime, &retained_runtime));
     }
 
     #[test]
@@ -231,6 +238,9 @@ mod tests {
                 Arc::new(create_test_plugin("default", "removed")),
             ),
         ]));
+        let previous_runtime = store
+            .get_plugin_runtime("default/kept")
+            .expect("valid plugin runtime should be stored");
 
         store.full_set(&HashMap::from([(
             "default/kept".to_string(),
@@ -241,6 +251,10 @@ mod tests {
             store.with_plugin("default/kept", |compiled| compiled.is_activatable),
             Some(true)
         );
+        let retained_runtime = store
+            .get_plugin_runtime("default/kept")
+            .expect("last-known-good runtime should be retained");
+        assert!(Arc::ptr_eq(&previous_runtime, &retained_runtime));
         assert!(!store.contains("default/removed"));
     }
 

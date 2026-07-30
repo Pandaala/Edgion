@@ -43,9 +43,10 @@ pub const MAX_CALLOUTS_PER_REQUEST: u32 = 8;
 /// `read_guest` bounds each individual copy to guest linear-memory size, but
 /// nothing bounds the SUM a guest retains across many host calls in one hook:
 /// a guest can reuse one small buffer and append arbitrarily many owned copies
-/// to `pending_ops` / `log_lines` / `properties` until `begin_phase` clears
-/// them after the hook. Epoch interruption bounds execution TIME, not
-/// allocation. This budget bounds the host-heap peak a single hook can drive.
+/// to `pending_ops` / `pending_callouts` / `log_lines` / `properties` until
+/// `begin_phase` clears them after the hook. Epoch interruption bounds
+/// execution TIME, not allocation. This budget bounds the host-heap peak a
+/// single hook can drive.
 /// 32 MiB is far above any legitimate header/log/property working set; only a
 /// pathological accumulation loop trips it.
 pub const MAX_RETAINED_ABI_BYTES: usize = 32 * 1024 * 1024;
@@ -54,6 +55,15 @@ pub const MAX_RETAINED_ABI_BYTES: usize = 32 * 1024 * 1024;
 /// flood of tiny (near-zero-byte) operations whose per-item structural
 /// overhead the byte budget alone under-charges.
 pub const MAX_RETAINED_ABI_OPS: usize = 200_000;
+
+/// Aggregate request-body mutation work allowed in one request-body hook,
+/// measured in passes over the request's resolved physical Body cap.
+///
+/// Work is charged as replacement bytes plus the tail bytes that `Vec::splice`
+/// must move when an edit changes length. Two passes permit two equal-size
+/// full rewrites while preventing a small configured Body cap from inheriting
+/// a fixed, much larger mutation allowance.
+const MAX_REQUEST_BODY_MUTATION_WORK_PASSES: usize = 2;
 
 /// Fixed per-operation structural overhead (Vec/String headers, enum
 /// discriminant) charged in addition to payload bytes, so many tiny ops are
@@ -206,6 +216,10 @@ pub struct HostState {
     /// Whether `proxy_set_buffer_bytes(HttpRequestBody, ...)` changed the
     /// staging buffer during the current hook.
     pub request_body_modified: bool,
+    /// Cumulative copy/move work charged for request-body mutations in the
+    /// current hook. This is separate from retained heap because successful
+    /// replacements retain only the final bounded staging buffer.
+    request_body_mutation_work: usize,
 
     /// Guest-requested tick period in ms (0 = no tick). Module-lifetime
     /// state (typically set during `on_configure`), NOT reset per phase;
@@ -218,7 +232,8 @@ pub struct HostState {
 
     // ---- Per-phase ABI retention budget (see `charge_abi`) ----
     /// Host-retained ABI payload bytes charged this phase across the
-    /// append-only accumulators (`pending_ops`, `log_lines`, `properties`).
+    /// append-only accumulators (`pending_ops`, `pending_callouts`,
+    /// `log_lines`, `properties`).
     /// Reset by `begin_phase`. Bounds the host-heap peak a single hook can
     /// drive before `begin_phase` clears it.
     retained_bytes: usize,
@@ -272,6 +287,7 @@ impl HostState {
         self.request_body.clear();
         self.request_body_limit = 0;
         self.request_body_modified = false;
+        self.request_body_mutation_work = 0;
         self.retained_bytes = 0;
         self.retained_ops = 0;
     }
@@ -282,14 +298,50 @@ impl HostState {
     /// so the caller rejects before touching the snapshot (no partial
     /// mutation). Commits the charge and returns `Ok(())` otherwise.
     fn charge_abi(&mut self, payload: usize) -> Result<(), i32> {
+        let checked = self.checked_abi_charge(payload)?;
+        self.commit_abi_charge(checked);
+        Ok(())
+    }
+
+    fn checked_abi_charge(&self, payload: usize) -> Result<(usize, usize), i32> {
+        self.checked_abi_charge_with_limits(payload, MAX_RETAINED_ABI_BYTES, MAX_RETAINED_ABI_OPS)
+    }
+
+    fn checked_abi_charge_with_limits(
+        &self,
+        payload: usize,
+        max_bytes: usize,
+        max_ops: usize,
+    ) -> Result<(usize, usize), i32> {
         let cost = payload.saturating_add(ABI_OP_OVERHEAD_BYTES);
         let new_bytes = self.retained_bytes.saturating_add(cost);
         let new_ops = self.retained_ops.saturating_add(1);
-        if new_bytes > MAX_RETAINED_ABI_BYTES || new_ops > MAX_RETAINED_ABI_OPS {
+        if new_bytes > max_bytes || new_ops > max_ops {
             return Err(STATUS_INTERNAL_FAILURE);
         }
-        self.retained_bytes = new_bytes;
-        self.retained_ops = new_ops;
+        Ok((new_bytes, new_ops))
+    }
+
+    fn commit_abi_charge(&mut self, checked: (usize, usize)) {
+        self.retained_bytes = checked.0;
+        self.retained_ops = checked.1;
+    }
+
+    /// Validate a request-body mutation charge without changing counters.
+    ///
+    /// The ABI bridge uses this before copying guest memory so a guest cannot
+    /// keep forcing large transient reads after exhausting the work budget.
+    fn check_request_body_mutation_charge(&self, work: usize) -> Result<(), i32> {
+        self.checked_abi_charge(0)?;
+        checked_request_body_mutation_total(self.request_body_mutation_work, work, self.request_body_limit).map(drop)
+    }
+
+    /// Commit a previously validated request-body mutation charge.
+    fn charge_request_body_mutation(&mut self, work: usize) -> Result<(), i32> {
+        let new_work =
+            checked_request_body_mutation_total(self.request_body_mutation_work, work, self.request_body_limit)?;
+        self.charge_abi(0)?;
+        self.request_body_mutation_work = new_work;
         Ok(())
     }
 
@@ -363,42 +415,135 @@ pub fn encode_map(pairs: &[(String, String)]) -> Vec<u8> {
     out
 }
 
+#[derive(Clone, Copy)]
+struct SerializedMapProfile {
+    pair_count: usize,
+    lossy_string_bytes: usize,
+    path_normalization_bytes: usize,
+}
+
+fn lossy_utf8_output_len(mut bytes: &[u8]) -> Result<usize, i32> {
+    let mut output_len = 0usize;
+    loop {
+        match std::str::from_utf8(bytes) {
+            Ok(_) => {
+                return output_len.checked_add(bytes.len()).ok_or(STATUS_INTERNAL_FAILURE);
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                output_len = output_len
+                    .checked_add(valid)
+                    .and_then(|len| len.checked_add('\u{FFFD}'.len_utf8()))
+                    .ok_or(STATUS_INTERNAL_FAILURE)?;
+                let invalid = error.error_len().unwrap_or(bytes.len().saturating_sub(valid));
+                bytes = bytes
+                    .get(valid.saturating_add(invalid)..)
+                    .ok_or(STATUS_INTERNAL_FAILURE)?;
+            }
+        }
+    }
+}
+
+fn string_from_utf8_lossy_with_capacity(bytes: &[u8], capacity: usize) -> String {
+    let mut output = String::with_capacity(capacity);
+    let mut remaining = bytes;
+    loop {
+        match std::str::from_utf8(remaining) {
+            Ok(valid) => {
+                output.push_str(valid);
+                break;
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                if let Ok(valid_prefix) = std::str::from_utf8(&remaining[..valid]) {
+                    output.push_str(valid_prefix);
+                }
+                output.push('\u{FFFD}');
+                let invalid = error.error_len().unwrap_or(remaining.len() - valid);
+                remaining = &remaining[valid + invalid..];
+            }
+        }
+    }
+    debug_assert_eq!(output.len(), capacity);
+    output
+}
+
+fn scan_serialized_map(bytes: &[u8]) -> Result<SerializedMapProfile, i32> {
+    let count_bytes = bytes.get(..4).ok_or(STATUS_BAD_ARGUMENT)?;
+    let pair_count = u32::from_le_bytes(count_bytes.try_into().map_err(|_| STATUS_BAD_ARGUMENT)?) as usize;
+    let table_bytes = pair_count.checked_mul(8).ok_or(STATUS_INTERNAL_FAILURE)?;
+    let table_end = 4usize.checked_add(table_bytes).ok_or(STATUS_INTERNAL_FAILURE)?;
+    if table_end > bytes.len() {
+        return Err(STATUS_BAD_ARGUMENT);
+    }
+
+    let mut data_offset = table_end;
+    let mut lossy_string_bytes = 0usize;
+    let mut path_normalization_bytes = 1usize;
+    for index in 0..pair_count {
+        let size_offset = 4usize
+            .checked_add(index.checked_mul(8).ok_or(STATUS_INTERNAL_FAILURE)?)
+            .ok_or(STATUS_INTERNAL_FAILURE)?;
+        let key_len = u32::from_le_bytes(
+            bytes[size_offset..size_offset + 4]
+                .try_into()
+                .map_err(|_| STATUS_BAD_ARGUMENT)?,
+        ) as usize;
+        let value_len = u32::from_le_bytes(
+            bytes[size_offset + 4..size_offset + 8]
+                .try_into()
+                .map_err(|_| STATUS_BAD_ARGUMENT)?,
+        ) as usize;
+        let key_end = data_offset.checked_add(key_len).ok_or(STATUS_INTERNAL_FAILURE)?;
+        let value_start = key_end.checked_add(1).ok_or(STATUS_INTERNAL_FAILURE)?;
+        let value_end = value_start.checked_add(value_len).ok_or(STATUS_INTERNAL_FAILURE)?;
+        let next = value_end.checked_add(1).ok_or(STATUS_INTERNAL_FAILURE)?;
+        if next > bytes.len() {
+            return Err(STATUS_BAD_ARGUMENT);
+        }
+        let key_lossy_bytes = lossy_utf8_output_len(&bytes[data_offset..key_end])?;
+        let value_lossy_bytes = lossy_utf8_output_len(&bytes[value_start..value_end])?;
+        lossy_string_bytes = lossy_string_bytes
+            .checked_add(key_lossy_bytes)
+            .and_then(|len| len.checked_add(value_lossy_bytes))
+            .ok_or(STATUS_INTERNAL_FAILURE)?;
+        if &bytes[data_offset..key_end] == b":path" {
+            path_normalization_bytes = if bytes[value_start..value_end].starts_with(b"/") {
+                0
+            } else {
+                value_lossy_bytes.checked_add(1).ok_or(STATUS_INTERNAL_FAILURE)?
+            };
+        }
+        data_offset = next;
+    }
+    Ok(SerializedMapProfile {
+        pair_count,
+        lossy_string_bytes,
+        path_normalization_bytes,
+    })
+}
+
 pub fn decode_map(bytes: &[u8]) -> Option<Vec<(String, String)>> {
-    if bytes.len() < 4 {
-        return None;
-    }
-    let n = u32::from_le_bytes(bytes[0..4].try_into().ok()?) as usize;
-    // `n` is guest-controlled and unbounded (up to u32::MAX); pre-allocating
-    // `Vec::with_capacity(n)` directly on a malformed payload can request
-    // tens of GB and abort the whole host process. Cap the pre-allocation by
-    // what `bytes` could actually hold: the wire size-table entry is 8 bytes
-    // (two u32 LE lengths), hence the `/ 8` below — not to be confused with
-    // the 16-byte `(usize, usize)` in-memory element that `sizes` collects
-    // those wire entries into on a 64-bit host. The per-iteration
-    // `off + 8 > bytes.len()` guard below still rejects an oversized `n`
-    // exactly as before for genuinely malformed input.
-    let cap = n.min(bytes.len().saturating_sub(4) / 8);
-    let mut sizes = Vec::with_capacity(cap);
-    let mut off = 4;
-    for _ in 0..n {
-        if off + 8 > bytes.len() {
-            return None;
-        }
-        let k = u32::from_le_bytes(bytes[off..off + 4].try_into().ok()?) as usize;
-        let v = u32::from_le_bytes(bytes[off + 4..off + 8].try_into().ok()?) as usize;
-        sizes.push((k, v));
-        off += 8;
-    }
-    let mut pairs = Vec::with_capacity(cap);
-    for (k, v) in sizes {
-        if off + k + 1 + v + 1 > bytes.len() {
-            return None;
-        }
-        let key = String::from_utf8_lossy(&bytes[off..off + k]).into_owned();
-        off += k + 1; // skip NUL
-        let val = String::from_utf8_lossy(&bytes[off..off + v]).into_owned();
-        off += v + 1; // skip NUL
-        pairs.push((key, val));
+    let profile = scan_serialized_map(bytes).ok()?;
+    let table_end = 4 + profile.pair_count * 8;
+    let mut data_offset = table_end;
+    let mut pairs = Vec::with_capacity(profile.pair_count);
+    for index in 0..profile.pair_count {
+        let size_offset = 4 + index * 8;
+        let key_len = u32::from_le_bytes(bytes[size_offset..size_offset + 4].try_into().ok()?) as usize;
+        let value_len = u32::from_le_bytes(bytes[size_offset + 4..size_offset + 8].try_into().ok()?) as usize;
+        let key_end = data_offset + key_len;
+        let value_start = key_end + 1;
+        let value_end = value_start + value_len;
+        let key_bytes = &bytes[data_offset..key_end];
+        let value_bytes = &bytes[value_start..value_end];
+        let key_capacity = lossy_utf8_output_len(key_bytes).ok()?;
+        let value_capacity = lossy_utf8_output_len(value_bytes).ok()?;
+        pairs.push((
+            string_from_utf8_lossy_with_capacity(key_bytes, key_capacity),
+            string_from_utf8_lossy_with_capacity(value_bytes, value_capacity),
+        ));
+        data_offset = value_end + 1;
     }
     Some(pairs)
 }
@@ -466,16 +611,38 @@ fn request_body_replacement_range(
     Ok(start..end)
 }
 
+fn request_body_mutation_work(current_len: usize, range: &std::ops::Range<usize>, replacement_len: usize) -> usize {
+    let shifted_tail = if replacement_len == range.len() {
+        0
+    } else {
+        current_len.saturating_sub(range.end)
+    };
+    replacement_len.saturating_add(shifted_tail)
+}
+
+fn request_body_mutation_work_limit(physical_cap: usize) -> usize {
+    physical_cap.saturating_mul(MAX_REQUEST_BODY_MUTATION_WORK_PASSES)
+}
+
+fn checked_request_body_mutation_total(
+    current_work: usize,
+    added_work: usize,
+    physical_cap: usize,
+) -> Result<usize, i32> {
+    let new_work = current_work.checked_add(added_work).ok_or(STATUS_INTERNAL_FAILURE)?;
+    if new_work > request_body_mutation_work_limit(physical_cap) {
+        return Err(STATUS_INTERNAL_FAILURE);
+    }
+    Ok(new_work)
+}
+
 fn replace_request_body_buffer(state: &mut HostState, start: usize, size: usize, replacement: Vec<u8>) -> i32 {
     let range = match request_body_replacement_range(state, start, size, replacement.len()) {
         Ok(range) => range,
         Err(status) => return status,
     };
-    // The staging Vec is already bounded by the request physical Body cap.
-    // Charge only structural operation overhead here: charging replacement
-    // bytes cumulatively would reject repeated same-size rewrites even though
-    // the host retains only the final bounded staging buffer.
-    if let Err(status) = state.charge_abi(0) {
+    let work = request_body_mutation_work(state.request_body.len(), &range, replacement.len());
+    if let Err(status) = state.charge_request_body_mutation(work) {
         return status;
     }
     if range.is_empty() && replacement.is_empty() {
@@ -517,6 +684,18 @@ fn read_guest(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<
     Ok(buf)
 }
 
+fn guest_range(ptr: i32, len: i32, memory_size: usize) -> Result<std::ops::Range<usize>, i32> {
+    if ptr < 0 || len < 0 {
+        return Err(STATUS_BAD_ARGUMENT);
+    }
+    let start = ptr as usize;
+    let end = start
+        .checked_add(len as usize)
+        .filter(|end| *end <= memory_size)
+        .ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
+    Ok(start..end)
+}
+
 fn read_guest_string(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<String, i32> {
     Ok(String::from_utf8_lossy(&read_guest(caller, ptr, len)?).into_owned())
 }
@@ -555,6 +734,92 @@ fn write_to_guest(caller: &mut Caller<'_, HostState>, data: &[u8], ret_ptr: i32,
     STATUS_OK
 }
 
+fn callout_input_payload_bytes(upstream_size: i32, headers_size: i32, body_size: i32) -> Result<usize, i32> {
+    let upstream = usize::try_from(upstream_size).map_err(|_| STATUS_BAD_ARGUMENT)?;
+    let headers = usize::try_from(headers_size).map_err(|_| STATUS_BAD_ARGUMENT)?;
+    // Preserve the existing ABI behavior: a non-positive body size means an
+    // empty body and does not dereference `body_ptr`.
+    let body = usize::try_from(body_size.max(0)).map_err(|_| STATUS_BAD_ARGUMENT)?;
+    upstream
+        .checked_add(headers)
+        .and_then(|n| n.checked_add(body))
+        .ok_or(STATUS_BAD_ARGUMENT)
+}
+
+fn callout_allocation_preflight_payload(
+    upstream_bytes: &[u8],
+    header_bytes: &[u8],
+    body_size: usize,
+) -> Result<usize, i32> {
+    let profile = scan_serialized_map(header_bytes)?;
+    let raw_guest_copies = upstream_bytes
+        .len()
+        .checked_add(header_bytes.len())
+        .and_then(|len| len.checked_add(body_size))
+        .ok_or(STATUS_INTERNAL_FAILURE)?;
+    let lossy_owned_bytes = lossy_utf8_output_len(upstream_bytes)?
+        .checked_add(profile.lossy_string_bytes)
+        .ok_or(STATUS_INTERNAL_FAILURE)?;
+    // `decode_map`'s Vec is consumed while the filtered PendingCallout header
+    // Vec is built, so both pair allocations coexist briefly.
+    let pair_vec_bytes = profile
+        .pair_count
+        .checked_mul(std::mem::size_of::<(String, String)>())
+        .and_then(|bytes| bytes.checked_mul(2))
+        .ok_or(STATUS_INTERNAL_FAILURE)?;
+    // `url::Url` owns a normalized serialization while parsing. Percent
+    // encoding expands one byte to at most three ASCII bytes; the fourth
+    // factor plus fixed slack covers IDNA's `xn--` label prefix and URL
+    // delimiters. The returned normalized origin is a second concurrently
+    // live String of no greater size.
+    let upstream_lossy_bytes = lossy_utf8_output_len(upstream_bytes)?;
+    let one_origin_representation = upstream_lossy_bytes
+        .checked_mul(4)
+        .and_then(|bytes| bytes.checked_add(64))
+        .ok_or(STATUS_INTERNAL_FAILURE)?;
+    let origin_bytes = one_origin_representation
+        .checked_mul(2)
+        .ok_or(STATUS_INTERNAL_FAILURE)?;
+    // The default method/path Strings are allocated before pseudo headers are
+    // consumed. A non-slash :path is rebuilt into an exactly pre-sized String
+    // instead of `insert(0)`, whose growth policy could temporarily allocate
+    // an unaccounted larger buffer.
+    let callout_fixed_bytes = std::mem::size_of::<PendingCallout>()
+        .checked_add(4)
+        .and_then(|bytes| bytes.checked_add(profile.path_normalization_bytes))
+        .ok_or(STATUS_INTERNAL_FAILURE)?;
+    raw_guest_copies
+        .checked_add(lossy_owned_bytes)
+        .and_then(|bytes| bytes.checked_add(pair_vec_bytes))
+        .and_then(|bytes| bytes.checked_add(origin_bytes))
+        .and_then(|bytes| bytes.checked_add(callout_fixed_bytes))
+        .ok_or(STATUS_INTERNAL_FAILURE)
+}
+
+fn pending_callout_retained_payload(callout: &PendingCallout) -> Result<usize, i32> {
+    let mut payload = std::mem::size_of::<PendingCallout>()
+        .checked_add(callout.origin.capacity())
+        .and_then(|n| n.checked_add(callout.path.capacity()))
+        .and_then(|n| n.checked_add(callout.method.capacity()))
+        .and_then(|n| n.checked_add(callout.authority.as_ref().map_or(0, String::capacity)))
+        .and_then(|n| n.checked_add(callout.body.capacity()))
+        .and_then(|n| {
+            callout
+                .headers
+                .capacity()
+                .checked_mul(std::mem::size_of::<(String, String)>())
+                .and_then(|overhead| n.checked_add(overhead))
+        })
+        .ok_or(STATUS_INTERNAL_FAILURE)?;
+    for (name, value) in &callout.headers {
+        payload = payload
+            .checked_add(name.capacity())
+            .and_then(|n| n.checked_add(value.capacity()))
+            .ok_or(STATUS_INTERNAL_FAILURE)?;
+    }
+    Ok(payload)
+}
+
 /// Host handler for the guest callout dispatch (`proxy_http_call` /
 /// `proxy_dispatch_http_call`). Queues the call in `HostState`; an async
 /// host path (the plugin's request path while the guest is paused, or the
@@ -583,6 +848,51 @@ fn host_http_call(
     if !caller.data().dispatch_enabled {
         return STATUS_UNIMPLEMENTED;
     }
+    if caller.data().callouts_dispatched >= MAX_CALLOUTS_PER_REQUEST {
+        crate::observe::metrics::registry::record_wasm_callout(&caller.data().metrics_label, "over_limit");
+        return STATUS_INTERNAL_FAILURE;
+    }
+    let input_payload = match callout_input_payload_bytes(upstream_size, headers_size, body_size) {
+        Ok(payload) => payload,
+        Err(status) => return status,
+    };
+    // Reject from guest-provided lengths before copying any large buffer. This
+    // is only a preflight; the exact final owned representation is checked
+    // again after normalization/decoding and committed atomically at the end.
+    if let Err(status) = caller.data().checked_abi_charge(input_payload) {
+        return status;
+    }
+    let body_len = body_size.max(0) as usize;
+    let allocation_preflight = {
+        let Some(memory) = guest_memory(&mut caller) else {
+            return STATUS_INVALID_MEMORY_ACCESS;
+        };
+        let memory_bytes = memory.data(&caller);
+        let upstream_range = match guest_range(upstream_ptr, upstream_size, memory_bytes.len()) {
+            Ok(range) => range,
+            Err(status) => return status,
+        };
+        let headers_range = match guest_range(headers_ptr, headers_size, memory_bytes.len()) {
+            Ok(range) => range,
+            Err(status) => return status,
+        };
+        if body_size > 0 {
+            if let Err(status) = guest_range(body_ptr, body_size, memory_bytes.len()) {
+                return status;
+            }
+        }
+        match callout_allocation_preflight_payload(
+            &memory_bytes[upstream_range],
+            &memory_bytes[headers_range],
+            body_len,
+        ) {
+            Ok(payload) => payload,
+            Err(status) => return status,
+        }
+    };
+    if let Err(status) = caller.data().checked_abi_charge(allocation_preflight) {
+        return status;
+    }
     let upstream = match read_guest_string(&mut caller, upstream_ptr, upstream_size) {
         Ok(s) => s,
         Err(s) => return s,
@@ -594,6 +904,7 @@ fn host_http_call(
     let Some(all_headers) = decode_map(&header_bytes) else {
         return STATUS_BAD_ARGUMENT;
     };
+    drop(header_bytes);
     let body = if body_size > 0 {
         match read_guest(&mut caller, body_ptr, body_size) {
             Ok(b) => b,
@@ -605,11 +916,11 @@ fn host_http_call(
 
     // The upstream parameter addresses the target directly as an origin URL
     // (Edgion has no Envoy-style cluster registry for guests to name).
-    let origin = match edgion_resources::plugin_configs::normalize_callout_origin(&upstream) {
-        Ok(o) => o,
+    let origin = match edgion_resources::plugin_configs::normalize_callout_origin_quiet(&upstream) {
+        Some(origin) => origin,
         // Data-plane hot path (Iron rule 3), guest-supplied origin (Iron rule 1):
-        // reject via status code only, no tracing.
-        Err(_) => return STATUS_BAD_ARGUMENT,
+        // reject via status code only, no tracing or raw-bearing error String.
+        None => return STATUS_BAD_ARGUMENT,
     };
 
     let state = caller.data_mut();
@@ -619,27 +930,33 @@ fn host_http_call(
         crate::observe::metrics::registry::record_wasm_callout(&state.metrics_label, "denied");
         return STATUS_INTERNAL_FAILURE;
     }
-    if state.callouts_dispatched >= MAX_CALLOUTS_PER_REQUEST {
-        crate::observe::metrics::registry::record_wasm_callout(&state.metrics_label, "over_limit");
-        return STATUS_INTERNAL_FAILURE;
-    }
-
-    let mut method = "GET".to_string();
-    let mut path = "/".to_string();
+    let mut method = None;
+    let mut path = None;
     let mut authority = None;
     let mut headers = Vec::with_capacity(all_headers.len());
     for (name, value) in all_headers {
         match name.as_str() {
-            ":method" => method = value,
-            ":path" => path = value,
+            ":method" => method = Some(value),
+            ":path" => path = Some(value),
             ":authority" => authority = Some(value),
             n if n.starts_with(':') => {}
             _ => headers.push((name, value)),
         }
     }
-    if !path.starts_with('/') {
-        path.insert(0, '/');
-    }
+    let method = method.unwrap_or_else(|| "GET".to_string());
+    let path = match path {
+        Some(path) if path.starts_with('/') => path,
+        Some(path) => {
+            let Some(capacity) = path.len().checked_add(1) else {
+                return STATUS_INTERNAL_FAILURE;
+            };
+            let mut normalized = String::with_capacity(capacity);
+            normalized.push('/');
+            normalized.push_str(&path);
+            normalized
+        }
+        None => "/".to_string(),
+    };
 
     let token = state.next_callout_token;
     let pending = PendingCallout {
@@ -652,11 +969,18 @@ fn host_http_call(
         body,
         timeout_ms: timeout_ms.max(0) as u32,
     };
+    let retained_payload = match pending_callout_retained_payload(&pending) {
+        Ok(payload) => payload,
+        Err(status) => return status,
+    };
+    let checked_charge = match state.checked_abi_charge(retained_payload) {
+        Ok(charge) => charge,
+        Err(status) => return status,
+    };
 
     // Deliver the token to the guest FIRST; only commit the dispatch (increment
-    // counter + queue) if the write succeeds. A bad return_token_ptr must not
-    // leave a phantom callout queued (and a consumed cap slot) that the guest
-    // never received a handle for.
+    // counter + queue + retained budget) if the write succeeds. A bad
+    // return_token_ptr must not leave any partial host-side state.
     let Some(mem) = guest_memory(&mut caller) else {
         return STATUS_INVALID_MEMORY_ACCESS;
     };
@@ -667,6 +991,7 @@ fn host_http_call(
         return STATUS_INVALID_MEMORY_ACCESS;
     }
     let state = caller.data_mut();
+    state.commit_abi_charge(checked_charge);
     state.callouts_dispatched += 1;
     state.next_callout_token = token.wrapping_add(1);
     state.pending_callouts.push(pending);
@@ -936,7 +1261,12 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             // guest memory. Any operation that can succeed is now bounded by
             // the physical Body cap, so a malicious guest cannot force a
             // large allocation for an obviously impossible mutation.
-            if let Err(status) = request_body_replacement_range(caller.data(), start, size, len as usize) {
+            let range = match request_body_replacement_range(caller.data(), start, size, len as usize) {
+                Ok(range) => range,
+                Err(status) => return status,
+            };
+            let work = request_body_mutation_work(caller.data().request_body.len(), &range, len as usize);
+            if let Err(status) = caller.data().check_request_body_mutation_charge(work) {
                 return status;
             }
             let replacement = match read_guest(&mut caller, ptr, len) {
@@ -1233,6 +1563,38 @@ mod tests {
         assert!(decode_map(&[1, 2]).is_none());
     }
 
+    fn encode_raw_map(pairs: &[(&[u8], &[u8])]) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&(pairs.len() as u32).to_le_bytes());
+        for (key, value) in pairs {
+            encoded.extend_from_slice(&(key.len() as u32).to_le_bytes());
+            encoded.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        }
+        for (key, value) in pairs {
+            encoded.extend_from_slice(key);
+            encoded.push(0);
+            encoded.extend_from_slice(value);
+            encoded.push(0);
+        }
+        encoded
+    }
+
+    #[test]
+    fn decode_map_preserves_lossy_utf8_compatibility() {
+        let invalid_key = [b'x', 0xFF, b'y'];
+        let invalid_value = [0xF0, 0x80, 0x80, 0x80];
+        let encoded = encode_raw_map(&[(&invalid_key, &invalid_value)]);
+        let decoded = decode_map(&encoded).unwrap();
+
+        assert_eq!(
+            decoded,
+            vec![(
+                String::from_utf8_lossy(&invalid_key).into_owned(),
+                String::from_utf8_lossy(&invalid_value).into_owned(),
+            )]
+        );
+    }
+
     /// A malformed guest payload claiming an absurd element count must be
     /// rejected by length validation, not by pre-allocating gigabytes of
     /// memory (which would trip Rust's alloc-error handler and abort the
@@ -1328,6 +1690,267 @@ mod tests {
         assert!(s.retained_bytes < MAX_RETAINED_ABI_BYTES);
     }
 
+    const CALLOUT_BUDGET_GUEST: &str = r#"
+    (module
+      (import "env" "proxy_dispatch_http_call"
+        (func $call (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 0) "http://example.com")
+      ;; encoded empty header map
+      (data (i32.const 32) "\00\00\00\00")
+      ;; malformed map: count=0xffffffff but only one size-table entry
+      (data (i32.const 64) "\ff\ff\ff\ff\00\00\00\00\00\00\00\00")
+      (func (export "dispatch") (param $token_ptr i32) (result i32)
+        (call $call
+          (i32.const 0) (i32.const 18)
+          (i32.const 32) (i32.const 4)
+          (i32.const 0) (i32.const 0)
+          (i32.const 0) (i32.const 0)
+          (i32.const 1000) (local.get $token_ptr)))
+      (func (export "dispatch_bad_map") (param $token_ptr i32) (result i32)
+        (call $call
+          (i32.const 0) (i32.const 18)
+          (i32.const 64) (i32.const 12)
+          (i32.const 0) (i32.const 0)
+          (i32.const 0) (i32.const 0)
+          (i32.const 1000) (local.get $token_ptr)))
+      (func (export "dispatch_custom_headers")
+        (param $headers_ptr i32) (param $headers_size i32) (param $token_ptr i32)
+        (result i32)
+        (call $call
+          (i32.const 0) (i32.const 18)
+          (local.get $headers_ptr) (local.get $headers_size)
+          (i32.const 0) (i32.const 0)
+          (i32.const 0) (i32.const 0)
+          (i32.const 1000) (local.get $token_ptr))))
+    "#;
+
+    fn instantiate_callout_guest() -> (Store<HostState>, Instance) {
+        let engine = Engine::default();
+        let module = Module::new(&engine, CALLOUT_BUDGET_GUEST).expect("callout guest compiles");
+        let mut linker: Linker<HostState> = Linker::new(&engine);
+        add_to_linker(&mut linker).unwrap();
+        let mut store = Store::new(&engine, HostState::default());
+        let instance = linker.instantiate(&mut store, &module).unwrap();
+        store
+            .data_mut()
+            .begin_phase(WasmPhase::RequestHeaders, Vec::new(), Vec::new(), HashMap::new());
+        store
+            .data_mut()
+            .arm_dispatch(Arc::from(vec!["http://example.com:80".to_string()]), 1000);
+        (store, instance)
+    }
+
+    #[test]
+    fn callout_budget_rejects_next_dispatch_without_partial_state() {
+        let (mut store, instance) = instantiate_callout_guest();
+        let dispatch = instance.get_typed_func::<i32, i32>(&mut store, "dispatch").unwrap();
+        assert_eq!(dispatch.call(&mut store, 124).unwrap(), STATUS_OK);
+        let callout_cost = store.data().retained_bytes;
+        store
+            .data_mut()
+            .begin_phase(WasmPhase::RequestHeaders, Vec::new(), Vec::new(), HashMap::new());
+        store
+            .data_mut()
+            .arm_dispatch(Arc::from(vec!["http://example.com:80".to_string()]), 1000);
+        let preflight_cost = callout_allocation_preflight_payload(b"http://example.com", &[0, 0, 0, 0], 0).unwrap()
+            + ABI_OP_OVERHEAD_BYTES;
+        let admission_cost = callout_cost.max(preflight_cost);
+        let retained_before = MAX_RETAINED_ABI_BYTES - admission_cost;
+        store.data_mut().retained_bytes = retained_before;
+
+        assert_eq!(dispatch.call(&mut store, 128).unwrap(), STATUS_OK);
+        let state = store.data();
+        assert_eq!(state.retained_bytes, retained_before + callout_cost);
+        assert_eq!(state.retained_ops, 1);
+        assert_eq!(state.pending_callouts.len(), 1);
+        assert_eq!(state.callouts_dispatched, 1);
+        assert_eq!(state.next_callout_token, 2);
+
+        assert_eq!(dispatch.call(&mut store, 132).unwrap(), STATUS_INTERNAL_FAILURE);
+        let state = store.data();
+        assert_eq!(state.retained_bytes, retained_before + callout_cost);
+        assert_eq!(state.retained_ops, 1);
+        assert_eq!(state.pending_callouts.len(), 1);
+        assert_eq!(state.callouts_dispatched, 1);
+        assert_eq!(state.next_callout_token, 2);
+    }
+
+    #[test]
+    fn malformed_callout_map_count_is_bad_argument_without_state_change() {
+        let (mut store, instance) = instantiate_callout_guest();
+        let dispatch = instance
+            .get_typed_func::<i32, i32>(&mut store, "dispatch_bad_map")
+            .unwrap();
+        assert_eq!(dispatch.call(&mut store, 128).unwrap(), STATUS_BAD_ARGUMENT);
+        let state = store.data();
+        assert_eq!(state.retained_bytes, 0);
+        assert_eq!(state.retained_ops, 0);
+        assert!(state.pending_callouts.is_empty());
+        assert_eq!(state.callouts_dispatched, 0);
+        assert_eq!(state.next_callout_token, 1);
+    }
+
+    #[test]
+    fn final_callout_capacity_charge_rejects_atomically_after_raw_preflight() {
+        let (mut store, instance) = instantiate_callout_guest();
+        let dispatch = instance.get_typed_func::<i32, i32>(&mut store, "dispatch").unwrap();
+        let raw_preflight_cost = 18 + 4 + ABI_OP_OVERHEAD_BYTES;
+        let retained_before = MAX_RETAINED_ABI_BYTES - raw_preflight_cost;
+        store.data_mut().retained_bytes = retained_before;
+        let memory = instance.get_memory(&mut store, "memory").unwrap();
+        memory.write(&mut store, 128, &[0xA5; 4]).unwrap();
+
+        assert_eq!(dispatch.call(&mut store, 128).unwrap(), STATUS_INTERNAL_FAILURE);
+        let mut token_bytes = [0u8; 4];
+        memory.read(&store, 128, &mut token_bytes).unwrap();
+        assert_eq!(token_bytes, [0xA5; 4]);
+        let state = store.data();
+        assert_eq!(state.retained_bytes, retained_before);
+        assert_eq!(state.retained_ops, 0);
+        assert!(state.pending_callouts.is_empty());
+        assert_eq!(state.callouts_dispatched, 0);
+        assert_eq!(state.next_callout_token, 1);
+    }
+
+    #[test]
+    fn invalid_callout_token_pointer_commits_nothing() {
+        let (mut store, instance) = instantiate_callout_guest();
+        let dispatch = instance.get_typed_func::<i32, i32>(&mut store, "dispatch").unwrap();
+        assert_eq!(
+            dispatch.call(&mut store, i32::MAX).unwrap(),
+            STATUS_INVALID_MEMORY_ACCESS
+        );
+        let state = store.data();
+        assert_eq!(state.retained_bytes, 0);
+        assert_eq!(state.retained_ops, 0);
+        assert!(state.pending_callouts.is_empty());
+        assert_eq!(state.callouts_dispatched, 0);
+        assert_eq!(state.next_callout_token, 1);
+    }
+
+    #[test]
+    fn callout_budget_precheck_and_phase_reset_use_canonical_budget() {
+        let mut state = HostState::default();
+        let payload = 10;
+        let per_callout = payload + ABI_OP_OVERHEAD_BYTES;
+        for _ in 0..2 {
+            let checked = state
+                .checked_abi_charge_with_limits(payload, per_callout * 2, 2)
+                .expect("callout fits small test cap");
+            state.commit_abi_charge(checked);
+        }
+        assert_eq!(
+            state.checked_abi_charge_with_limits(payload, per_callout * 2, 2),
+            Err(STATUS_INTERNAL_FAILURE)
+        );
+
+        state.retained_bytes = MAX_RETAINED_ABI_BYTES;
+        let large_input = callout_input_payload_bytes(i32::MAX, i32::MAX, i32::MAX).unwrap();
+        assert_eq!(
+            state.checked_abi_charge(large_input),
+            Err(STATUS_INTERNAL_FAILURE),
+            "length preflight rejects before any guest-memory copy"
+        );
+
+        state.begin_phase(WasmPhase::Tick, Vec::new(), Vec::new(), HashMap::new());
+        assert_eq!(state.retained_bytes, 0);
+        assert_eq!(state.retained_ops, 0);
+    }
+
+    #[test]
+    fn callout_preflight_rejects_lossy_utf8_expansion_without_retained_state_change() {
+        let upstream = b"http://example.com";
+        let invalid_name = [0xFF; 16];
+        let headers = encode_raw_map(&[(&invalid_name, b"value")]);
+        let raw_payload = upstream.len() + headers.len();
+        let allocation_payload = callout_allocation_preflight_payload(upstream, &headers, 0).unwrap();
+        let valid_name = [b'x'; 16];
+        let valid_headers = encode_raw_map(&[(&valid_name, b"value")]);
+        let valid_allocation_payload = callout_allocation_preflight_payload(upstream, &valid_headers, 0).unwrap();
+        assert_eq!(
+            allocation_payload - valid_allocation_payload,
+            invalid_name.len() * 2,
+            "each invalid byte expands from one raw byte to a three-byte replacement"
+        );
+
+        let state = HostState {
+            retained_bytes: MAX_RETAINED_ABI_BYTES - raw_payload - ABI_OP_OVERHEAD_BYTES,
+            ..Default::default()
+        };
+        let retained_before = state.retained_bytes;
+        assert!(state.checked_abi_charge(raw_payload).is_ok());
+        assert_eq!(
+            state.checked_abi_charge(allocation_payload),
+            Err(STATUS_INTERNAL_FAILURE)
+        );
+        assert_eq!(state.retained_bytes, retained_before);
+        assert_eq!(state.retained_ops, 0);
+        assert!(state.pending_callouts.is_empty());
+    }
+
+    #[test]
+    fn high_pair_count_is_rejected_on_real_host_call_before_token_or_state_commit() {
+        let (mut store, instance) = instantiate_callout_guest();
+        let dispatch = instance
+            .get_typed_func::<(i32, i32, i32), i32>(&mut store, "dispatch_custom_headers")
+            .unwrap();
+        let empty_pairs = vec![(&[][..], &[][..]); 128];
+        let headers = encode_raw_map(&empty_pairs);
+        let headers_ptr = 1024;
+        let token_ptr = 512;
+        let memory = instance.get_memory(&mut store, "memory").unwrap();
+        memory.write(&mut store, headers_ptr, &headers).unwrap();
+        memory.write(&mut store, token_ptr, &[0xA5; 4]).unwrap();
+
+        let raw_payload = b"http://example.com".len() + headers.len();
+        let retained_before = MAX_RETAINED_ABI_BYTES - raw_payload - ABI_OP_OVERHEAD_BYTES;
+        store.data_mut().retained_bytes = retained_before;
+        assert_eq!(
+            dispatch
+                .call(&mut store, (headers_ptr as i32, headers.len() as i32, token_ptr as i32),)
+                .unwrap(),
+            STATUS_INTERNAL_FAILURE
+        );
+
+        let mut token = [0u8; 4];
+        memory.read(&store, token_ptr, &mut token).unwrap();
+        assert_eq!(token, [0xA5; 4]);
+        let state = store.data();
+        assert_eq!(state.retained_bytes, retained_before);
+        assert_eq!(state.retained_ops, 0);
+        assert!(state.pending_callouts.is_empty());
+        assert_eq!(state.callouts_dispatched, 0);
+        assert_eq!(state.next_callout_token, 1);
+    }
+
+    #[test]
+    fn callout_preflight_rejects_high_pair_count_without_retained_state_change() {
+        let upstream = b"http://example.com";
+        let empty_pairs = vec![(&[][..], &[][..]); 128];
+        let headers = encode_raw_map(&empty_pairs);
+        let raw_payload = upstream.len() + headers.len();
+        let allocation_payload = callout_allocation_preflight_payload(upstream, &headers, 0).unwrap();
+        assert!(
+            allocation_payload >= raw_payload + 128 * 2 * std::mem::size_of::<(String, String)>(),
+            "both concurrently-live pair Vec capacities must be preflighted"
+        );
+
+        let state = HostState {
+            retained_bytes: MAX_RETAINED_ABI_BYTES - raw_payload - ABI_OP_OVERHEAD_BYTES,
+            ..Default::default()
+        };
+        let retained_before = state.retained_bytes;
+        assert!(state.checked_abi_charge(raw_payload).is_ok());
+        assert_eq!(
+            state.checked_abi_charge(allocation_payload),
+            Err(STATUS_INTERNAL_FAILURE)
+        );
+        assert_eq!(state.retained_bytes, retained_before);
+        assert_eq!(state.retained_ops, 0);
+        assert!(state.pending_callouts.is_empty());
+    }
+
     /// `begin_phase` must clear the staged request body between phases so a
     /// stale buffer-mode body never leaks into a later phase's `HostState`.
     #[test]
@@ -1336,10 +1959,12 @@ mod tests {
         state.request_body = vec![1, 2, 3];
         state.request_body_limit = 9;
         state.request_body_modified = true;
+        state.request_body_mutation_work = 123;
         state.begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
         assert!(state.request_body.is_empty());
         assert_eq!(state.request_body_limit, 0);
         assert!(!state.request_body_modified);
+        assert_eq!(state.request_body_mutation_work, 0);
         assert_eq!(state.phase, WasmPhase::RequestBody);
     }
 
@@ -1491,18 +2116,122 @@ mod tests {
         );
         assert_eq!(state.request_body, before);
 
-        // Body replacement payload is not append-only retained ABI memory.
-        // Even near the generic byte budget, an equal-size rewrite succeeds
-        // and charges only one operation's structural overhead.
+        // Body replacement payload is not append-only retained ABI memory, so
+        // it uses the separate mutation-work counter. Even near the generic
+        // retained-byte budget, one equal-size rewrite succeeds.
         state.retained_bytes = MAX_RETAINED_ABI_BYTES - ABI_OP_OVERHEAD_BYTES;
         let replacement = vec![b'z'; state.request_body.len()];
         let body_len = state.request_body.len();
+        let work_before = state.request_body_mutation_work;
         assert_eq!(
             replace_request_body_buffer(&mut state, 0, body_len, replacement),
             STATUS_OK
         );
         assert_eq!(state.retained_bytes, MAX_RETAINED_ABI_BYTES);
+        assert_eq!(state.request_body_mutation_work, work_before + body_len);
         assert!(state.request_body_modified);
+    }
+
+    #[test]
+    fn request_body_repeated_full_rewrites_stop_at_work_budget_atomically() {
+        let mut state = HostState::default();
+        state.begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
+        state.request_body = b"abcd".to_vec();
+        state.request_body_limit = 4;
+        state.request_body_mutation_work = request_body_mutation_work_limit(state.request_body_limit) - 4;
+
+        assert_eq!(
+            replace_request_body_buffer(&mut state, 0, 4, b"WXYZ".to_vec()),
+            STATUS_OK
+        );
+        assert_eq!(state.request_body, b"WXYZ");
+        assert_eq!(
+            state.request_body_mutation_work,
+            request_body_mutation_work_limit(state.request_body_limit)
+        );
+
+        let retained_bytes = state.retained_bytes;
+        let retained_ops = state.retained_ops;
+        assert_eq!(
+            replace_request_body_buffer(&mut state, 0, 4, b"nope".to_vec()),
+            STATUS_INTERNAL_FAILURE
+        );
+        assert_eq!(state.request_body, b"WXYZ");
+        assert_eq!(
+            state.request_body_mutation_work,
+            request_body_mutation_work_limit(state.request_body_limit)
+        );
+        assert_eq!(state.retained_bytes, retained_bytes);
+        assert_eq!(state.retained_ops, retained_ops);
+    }
+
+    #[test]
+    fn request_body_length_change_charges_shifted_tail_work() {
+        let mut state = HostState::default();
+        state.begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
+        state.request_body = b"abcd".to_vec();
+        state.request_body_limit = 4;
+        state.request_body_mutation_work = request_body_mutation_work_limit(state.request_body_limit) - 3;
+
+        // Deleting the first byte moves the remaining three-byte tail.
+        assert_eq!(replace_request_body_buffer(&mut state, 0, 1, Vec::new()), STATUS_OK);
+        assert_eq!(state.request_body, b"bcd");
+        assert_eq!(
+            state.request_body_mutation_work,
+            request_body_mutation_work_limit(state.request_body_limit)
+        );
+
+        // A second front deletion would move another two-byte tail and must
+        // be rejected without changing either the body or the counters.
+        let retained_bytes = state.retained_bytes;
+        let retained_ops = state.retained_ops;
+        assert_eq!(
+            replace_request_body_buffer(&mut state, 0, 1, Vec::new()),
+            STATUS_INTERNAL_FAILURE
+        );
+        assert_eq!(state.request_body, b"bcd");
+        assert_eq!(state.retained_bytes, retained_bytes);
+        assert_eq!(state.retained_ops, retained_ops);
+    }
+
+    #[test]
+    fn request_body_mutation_budget_scales_with_physical_cap_without_overflow() {
+        const MIB: usize = 1024 * 1024;
+        let large_cap = 96 * MIB;
+        assert_eq!(request_body_mutation_work_limit(large_cap), 192 * MIB);
+        assert_eq!(
+            checked_request_body_mutation_total(0, large_cap, large_cap),
+            Ok(large_cap),
+            "a first equal-size rewrite at a 96 MiB physical cap must fit"
+        );
+        assert_eq!(
+            checked_request_body_mutation_total(large_cap, large_cap, large_cap),
+            Ok(192 * MIB)
+        );
+        assert_eq!(
+            checked_request_body_mutation_total(192 * MIB, 1, large_cap),
+            Err(STATUS_INTERNAL_FAILURE),
+            "repeated mutation must stop at two physical-cap passes"
+        );
+
+        let small_cap = 4 * 1024;
+        assert_eq!(request_body_mutation_work_limit(small_cap), 8 * 1024);
+        assert_eq!(
+            checked_request_body_mutation_total(8 * 1024, 1, small_cap),
+            Err(STATUS_INTERNAL_FAILURE),
+            "a small physical cap must not inherit a fixed 64 MiB work allowance"
+        );
+
+        assert_eq!(request_body_mutation_work_limit(usize::MAX), usize::MAX);
+        assert_eq!(
+            checked_request_body_mutation_total(usize::MAX - 1, 1, usize::MAX),
+            Ok(usize::MAX)
+        );
+        assert_eq!(
+            checked_request_body_mutation_total(usize::MAX, 1, usize::MAX),
+            Err(STATUS_INTERNAL_FAILURE),
+            "cumulative work overflow must fail closed"
+        );
     }
 
     /// The import remains defined for every buffer type. Request Body mutation
@@ -1554,6 +2283,15 @@ mod tests {
             f.call(&mut store, (BUF_HTTP_REQUEST_BODY, 0, 0, i32::MAX, 3)).unwrap(),
             STATUS_INVALID_MEMORY_ACCESS
         );
+        let mutation_limit = request_body_mutation_work_limit(store.data().request_body_limit);
+        store.data_mut().request_body_mutation_work = mutation_limit;
+        let body_before = store.data().request_body.clone();
+        assert_eq!(
+            f.call(&mut store, (BUF_HTTP_REQUEST_BODY, 0, 3, i32::MAX, 3)).unwrap(),
+            STATUS_INTERNAL_FAILURE,
+            "an exhausted work budget must reject before guest-memory copying"
+        );
+        assert_eq!(store.data().request_body, body_before);
         assert_eq!(
             f.call(&mut store, (BUF_HTTP_REQUEST_BODY, 0, 0, 0, -1)).unwrap(),
             STATUS_BAD_ARGUMENT

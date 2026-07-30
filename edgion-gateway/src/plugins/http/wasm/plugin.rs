@@ -517,7 +517,7 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
         end_of_stream: bool,
         _session: &mut dyn PluginSession,
     ) -> Option<std::time::Duration> {
-        let Some(entry) = global_vm_manager().try_get(&self.cache_key) else {
+        let Some(entry) = global_vm_manager().try_get_or_schedule_refresh(&self.config, &self.cache_key) else {
             global_vm_manager().spawn_preload(&self.config, self.cache_key.clone());
             return None;
         };
@@ -692,7 +692,7 @@ impl UpstreamResponseFilter for WasmPlugin {
     ) -> PluginRunningResult {
         // Sync hook: no await available. Use the non-blocking cache lookup;
         // on miss kick a background load and apply the fail mode this time.
-        let Some(entry) = global_vm_manager().try_get(&self.cache_key) else {
+        let Some(entry) = global_vm_manager().try_get_or_schedule_refresh(&self.config, &self.cache_key) else {
             global_vm_manager().spawn_preload(&self.config, self.cache_key.clone());
             return self.fail_mode(session, log, "not loaded");
         };

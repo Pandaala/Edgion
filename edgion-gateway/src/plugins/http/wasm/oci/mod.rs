@@ -12,10 +12,11 @@
 //! dockerconfigjson Basic credentials into a short-lived Bearer token.
 //!
 //! Redirect policy: manifest and token requests deny redirects; blob
-//! requests follow up to 3 (registries routinely 307 blobs to CDN/S3). That
-//! stays SSRF-safe because the `EgressResolver` classifies every hop's
-//! addresses at DNS resolution time, and reqwest strips `Authorization` on
-//! cross-host redirects.
+//! requests follow up to 3 (registries routinely 307 blobs to CDN/S3).
+//! `EgressResolver` classifies hostname targets at dial time, while a custom
+//! redirect policy classifies IP literals (which bypass DNS resolution) on
+//! every remote-controlled hop. Reqwest strips `Authorization` on cross-host
+//! redirects.
 
 pub mod auth;
 pub mod cache;
@@ -25,6 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
+use url::{Host, Origin, Url};
 
 use edgion_resources::plugin_configs::{OciImageRef, WasmOciSpec};
 
@@ -34,7 +36,12 @@ use self::manifest::{
     extract_wasm_from_tar_gz, parse_manifest, select_wasm_layer, OciManifest, ParsedManifest, WasmLayer,
     MANIFEST_ACCEPT,
 };
+use crate::observe::metrics::record_egress_blocked;
 use crate::plugins::http::common::outbound::call::stream_body_capped;
+use crate::plugins::http::common::outbound::egress::{
+    default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver,
+};
+use crate::util::net::{classify_ip, IpClass};
 
 /// Default per-request timeout for pull requests (manifest, token, blob).
 const DEFAULT_PULL_TIMEOUT_SECS: u64 = 60;
@@ -75,6 +82,9 @@ const MAX_BLOB_BYTES: usize = 64 * 1024 * 1024;
 /// Cap for the token-endpoint JSON response. Bearer tokens are small; this
 /// bounds host allocation against a hostile or malfunctioning auth service.
 const MAX_TOKEN_BYTES: usize = 64 * 1024;
+/// Blob registries may redirect to object storage/CDNs. Match the historical
+/// `Limit(3)` contract: allow three redirect responses after the initial URL.
+const OCI_BLOB_MAX_REDIRECTS: usize = 3;
 
 /// Result of a successful OCI fetch.
 #[derive(Debug)]
@@ -158,6 +168,8 @@ struct RegistrySession {
     repo: String,
     auth: Option<RegistryAuth>,
     bearer: Option<String>,
+    registry_origin: Origin,
+    egress_policy: EgressPolicy,
     client_deny: reqwest::Client,
     client_blob: reqwest::Client,
 }
@@ -175,23 +187,45 @@ impl RegistrySession {
             Some(json) => select_registry_auth(json, &api_host)?,
             None => None,
         };
+        let base = registry_base(&api_host);
+        let registry_origin = Url::parse(&base)
+            .map_err(|_| "wasm oci registry URL is invalid".to_string())?
+            .origin();
+        let egress_policy = EgressPolicy {
+            block_private: default_block_private(),
+        };
         Ok(RegistrySession {
-            base: registry_base(&api_host),
+            base,
             repo: image.repository.clone(),
             auth,
             bearer: None,
-            client_deny: outbound_client(OutboundRedirect::Deny, pull_timeout())?,
-            client_blob: outbound_client(OutboundRedirect::Limit(3), pull_timeout())?,
+            registry_origin: registry_origin.clone(),
+            egress_policy,
+            client_deny: outbound_client(OutboundRedirect::Deny, pull_timeout(), egress_policy)?,
+            client_blob: outbound_client(
+                OutboundRedirect::Custom(blob_redirect_policy(registry_origin, egress_policy)),
+                pull_timeout(),
+                egress_policy,
+            )?,
         })
     }
 
     /// GET with credentials, the 401 Bearer-challenge flow, and the fixed
-    /// retry policy. Shares the global wasm fetch semaphore per request.
+    /// retry policy. Each logical attempt competes for the global Wasm fetch
+    /// semaphore independently; retry backoff never occupies a permit.
     async fn get(&mut self, blob: bool, url: &str, accept: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
-        let _permit = super::vm_manager::url_fetch_permits()
-            .acquire()
+        self.get_with_permits(super::vm_manager::url_fetch_permits(), blob, url, accept, max_bytes)
             .await
-            .map_err(|_| "wasm fetch semaphore closed".to_string())?;
+    }
+
+    async fn get_with_permits(
+        &mut self,
+        permits: &tokio::sync::Semaphore,
+        blob: bool,
+        url: &str,
+        accept: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, String> {
         let mut last_error = String::new();
         let attempts = pull_attempts();
         for attempt in 0..attempts {
@@ -199,7 +233,16 @@ impl RegistrySession {
                 let delay = BACKOFF_MS.saturating_mul(1u64 << (attempt - 1).min(10));
                 tokio::time::sleep(Duration::from_millis(delay)).await;
             }
-            match self.get_authed(blob, url, accept, max_bytes).await {
+            let permit = permits
+                .acquire()
+                .await
+                .map_err(|_| "wasm fetch semaphore closed".to_string())?;
+            // One logical attempt includes the initial registry request and,
+            // when challenged, token fetch + Bearer resend. None of those
+            // helpers acquires recursively.
+            let result = self.get_authed(blob, url, accept, max_bytes).await;
+            drop(permit);
+            match result {
                 Ok(bytes) => return Ok(bytes),
                 Err(GetError::Definitive(e)) => return Err(e),
                 Err(GetError::Retryable(e)) => last_error = e,
@@ -263,9 +306,13 @@ impl RegistrySession {
         } else if let Some(a) = &self.auth {
             req = req.basic_auth(&a.username, Some(&a.password));
         }
-        req.send()
-            .await
-            .map_err(|e| GetError::Retryable(format!("GET {url}: {e}")))
+        req.send().await.map_err(|e| {
+            if e.is_redirect() {
+                GetError::Definitive("OCI redirect blocked by policy".to_string())
+            } else {
+                GetError::Retryable(format!("GET {url}: {e}"))
+            }
+        })
     }
 
     async fn fetch_token(&self, challenge: &BearerChallenge) -> Result<String, GetError> {
@@ -284,7 +331,11 @@ impl RegistrySession {
         if let Some(service) = &challenge.service {
             query.push(("service", service));
         }
-        let mut req = self.client_deny.get(&challenge.realm).query(&query);
+        let realm = Url::parse(&challenge.realm)
+            .map_err(|_| GetError::Definitive("token endpoint URL is invalid".to_string()))?;
+        guard_remote_target_and_record(&realm, &self.registry_origin, self.egress_policy)
+            .map_err(|_| GetError::Definitive("token endpoint blocked by egress policy".to_string()))?;
+        let mut req = self.client_deny.get(realm).query(&query);
         if let Some(a) = &self.auth {
             req = req.basic_auth(&a.username, Some(&a.password));
         }
@@ -351,21 +402,84 @@ fn registry_base(registry: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteTargetError {
+    Invalid,
+    Blocked(&'static str),
+}
+
+/// Guard only targets introduced by a remote OCI response. The operator's
+/// configured registry origin is an explicit trust decision and remains
+/// allowed even when it is a local development registry. Cross-origin
+/// hostnames continue through the shared `EgressResolver`; IP literals are
+/// classified here because reqwest does not send them through DNS resolution.
+fn guard_remote_target(target: &Url, registry_origin: &Origin, policy: EgressPolicy) -> Result<(), RemoteTargetError> {
+    if &target.origin() == registry_origin {
+        return Ok(());
+    }
+    let ip = match target.host() {
+        Some(Host::Domain(_)) => return Ok(()),
+        Some(Host::Ipv4(ip)) => std::net::IpAddr::V4(ip),
+        Some(Host::Ipv6(ip)) => std::net::IpAddr::V6(ip),
+        None => return Err(RemoteTargetError::Invalid),
+    };
+    let reason = match classify_ip(ip) {
+        IpClass::Loopback => "loopback",
+        IpClass::LinkLocal => "link_local",
+        IpClass::Unspecified => "unspecified",
+        IpClass::Private | IpClass::UniqueLocal if policy.block_private => "private",
+        IpClass::Private | IpClass::UniqueLocal | IpClass::Global => return Ok(()),
+    };
+    Err(RemoteTargetError::Blocked(reason))
+}
+
+fn guard_remote_target_and_record(
+    target: &Url,
+    registry_origin: &Origin,
+    policy: EgressPolicy,
+) -> Result<(), RemoteTargetError> {
+    guard_remote_target(target, registry_origin, policy).map_err(|error| {
+        if let RemoteTargetError::Blocked(reason) = error {
+            record_egress_blocked(reason);
+        }
+        error
+    })
+}
+
+fn blob_redirect_policy(registry_origin: Origin, policy: EgressPolicy) -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(move |attempt| {
+        // `previous` contains the initial URL, so the fourth redirect is the
+        // first attempt whose history length exceeds the three-hop limit.
+        if attempt.previous().len() > OCI_BLOB_MAX_REDIRECTS {
+            return attempt.error("too many OCI blob redirects");
+        }
+        if redirect_downgrades_tls(attempt.previous(), attempt.url()) {
+            return attempt.error("OCI blob redirect blocked by transport policy");
+        }
+        match guard_remote_target_and_record(attempt.url(), &registry_origin, policy) {
+            Ok(()) => attempt.follow(),
+            Err(_) => attempt.error("OCI blob redirect blocked by egress policy"),
+        }
+    })
+}
+
+fn redirect_downgrades_tls(previous: &[Url], target: &Url) -> bool {
+    previous
+        .last()
+        .is_some_and(|source| source.scheme() == "https" && target.scheme() == "http")
+}
+
 fn outbound_client(
     redirect: crate::link_sys::http_client::OutboundRedirect,
     total_timeout: Duration,
+    egress_policy: EgressPolicy,
 ) -> Result<reqwest::Client, String> {
     use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig};
-    use crate::plugins::http::common::outbound::egress::{
-        default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver,
-    };
     use edgion_common::dns::ResolverSpec;
 
     let egress: Arc<dyn reqwest::dns::Resolve> = Arc::new(EgressResolver::new(
         ResolverSpec::System,
-        EgressPolicy {
-            block_private: default_block_private(),
-        },
+        egress_policy,
         egress_dns_cache_ttl(),
     ));
     build_outbound_client(OutboundClientConfig {
@@ -373,6 +487,7 @@ fn outbound_client(
         connect_timeout: Some(Duration::from_secs(5)),
         total_timeout: Some(total_timeout),
         redirect,
+        disable_proxy: true,
         tls_context: Some("WasmOciFetch"),
         dns_resolver: Some(egress),
         ..Default::default()
@@ -552,6 +667,333 @@ mod tests {
         assert_eq!(fetched.bytes, WASM);
     }
 
+    #[test]
+    fn remote_target_policy_covers_origins_and_ip_classes() {
+        let registry = Url::parse("http://127.0.0.1:5000").unwrap().origin();
+        let permissive = EgressPolicy { block_private: false };
+        let strict = EgressPolicy { block_private: true };
+
+        assert_eq!(
+            guard_remote_target(&Url::parse("http://127.0.0.1:5000/token").unwrap(), &registry, strict),
+            Ok(()),
+            "the operator-selected registry origin is always allowed"
+        );
+        assert_eq!(
+            guard_remote_target(
+                &Url::parse("http://127.0.0.1:5001/token").unwrap(),
+                &registry,
+                permissive,
+            ),
+            Err(RemoteTargetError::Blocked("loopback"))
+        );
+        assert_eq!(
+            guard_remote_target(
+                &Url::parse("http://169.254.169.254/token").unwrap(),
+                &registry,
+                permissive,
+            ),
+            Err(RemoteTargetError::Blocked("link_local"))
+        );
+        assert_eq!(
+            guard_remote_target(&Url::parse("http://0.0.0.0/token").unwrap(), &registry, permissive),
+            Err(RemoteTargetError::Blocked("unspecified"))
+        );
+        for target in ["http://10.0.0.1/token", "http://[fd00::1]/token"] {
+            let target = Url::parse(target).unwrap();
+            assert_eq!(guard_remote_target(&target, &registry, permissive), Ok(()));
+            assert_eq!(
+                guard_remote_target(&target, &registry, strict),
+                Err(RemoteTargetError::Blocked("private"))
+            );
+        }
+        for target in [
+            "http://8.8.8.8/token",
+            "http://[2606:4700:4700::1111]/token",
+            "http://cdn.example/token",
+        ] {
+            assert_eq!(
+                guard_remote_target(&Url::parse(target).unwrap(), &registry, strict),
+                Ok(()),
+                "global literals and hostnames remain allowed: {target}"
+            );
+        }
+        assert_eq!(
+            guard_remote_target(
+                &Url::parse("http://[::ffff:127.0.0.1]/token").unwrap(),
+                &registry,
+                permissive,
+            ),
+            Err(RemoteTargetError::Blocked("loopback"))
+        );
+    }
+
+    #[tokio::test]
+    async fn cross_origin_unsafe_literal_bearer_realm_is_never_requested() {
+        let registry = MockServer::start().await;
+        let target = MockServer::start().await;
+        let challenge = format!(r#"Bearer realm="{}/token",service="test-registry""#, target.uri());
+        Mock::given(method("GET"))
+            .and(path("/v2/test/wasm/manifests/1.0.0"))
+            .respond_with(ResponseTemplate::new(401).insert_header("www-authenticate", challenge.as_str()))
+            .mount(&registry)
+            .await;
+
+        let err = fetch_oci_bytes(&spec_for(&registry, "test/wasm:1.0.0"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, "token endpoint blocked by egress policy");
+        assert!(
+            target.received_requests().await.unwrap().is_empty(),
+            "a remote-controlled loopback realm must be rejected before GET"
+        );
+    }
+
+    #[tokio::test]
+    async fn cross_origin_unsafe_literal_blob_redirect_is_never_requested() {
+        const REDIRECT_BLOB: &[u8] = b"issue-9-redirect-target";
+        let registry = MockServer::start().await;
+        let target = MockServer::start().await;
+        let manifest = image_manifest(REDIRECT_BLOB, manifest::MEDIA_TYPE_WASM_LAYER);
+        Mock::given(method("GET"))
+            .and(path("/v2/test/wasm/manifests/redirect"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(manifest))
+            .mount(&registry)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/v2/test/wasm/blobs/{}", digest_of(REDIRECT_BLOB))))
+            .respond_with(
+                ResponseTemplate::new(307).insert_header("location", format!("{}/blob", target.uri()).as_str()),
+            )
+            .mount(&registry)
+            .await;
+
+        let err = fetch_oci_bytes(&spec_for(&registry, "test/wasm:redirect"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, "OCI redirect blocked by policy");
+        assert!(
+            target.received_requests().await.unwrap().is_empty(),
+            "a remote-controlled loopback redirect must be rejected before GET"
+        );
+    }
+
+    #[tokio::test]
+    async fn cross_origin_hostname_blob_redirect_is_followed() {
+        let registry = MockServer::start().await;
+        let target = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/blob"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"ok".to_vec()))
+            .mount(&target)
+            .await;
+        let location = format!("http://cdn.test:{}/blob", target.address().port());
+        Mock::given(method("GET"))
+            .and(path("/start"))
+            .respond_with(ResponseTemplate::new(307).insert_header("location", location.as_str()))
+            .mount(&registry)
+            .await;
+
+        let registry_origin = Url::parse(&registry.uri()).unwrap().origin();
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .resolve("cdn.test", *target.address())
+            .redirect(blob_redirect_policy(
+                registry_origin,
+                EgressPolicy { block_private: true },
+            ))
+            .build()
+            .unwrap();
+        let response = client.get(format!("{}/start", registry.uri())).send().await.unwrap();
+
+        assert_eq!(response.bytes().await.unwrap(), b"ok".as_slice());
+        assert_eq!(target.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn blob_redirect_transport_policy_only_rejects_https_to_http() {
+        let source_https = Url::parse("https://registry.example/blob").unwrap();
+        let source_http = Url::parse("http://registry.example/blob").unwrap();
+
+        assert!(redirect_downgrades_tls(
+            std::slice::from_ref(&source_https),
+            &Url::parse("http://registry.example/blob-2").unwrap(),
+        ));
+        for (source, target) in [
+            (&source_http, Url::parse("http://registry.example/blob-2").unwrap()),
+            (&source_http, Url::parse("https://registry.example/blob-2").unwrap()),
+            (&source_https, Url::parse("https://registry.example/blob-2").unwrap()),
+        ] {
+            assert!(
+                !redirect_downgrades_tls(std::slice::from_ref(source), &target),
+                "non-downgrade redirect must remain allowed: {source} -> {target}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn authorized_https_blob_redirect_to_http_is_rejected_before_target_request() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let key = rustls::pki_types::PrivatePkcs8KeyDer::from(certified.signing_key.serialize_der());
+        let tls_config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![certified.cert.der().clone()], key.into())
+            .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_config));
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let saw_authorization = Arc::new(AtomicBool::new(false));
+        let plaintext_requests = Arc::new(AtomicUsize::new(0));
+
+        let server = {
+            let saw_authorization = saw_authorization.clone();
+            let plaintext_requests = plaintext_requests.clone();
+            tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut tls = acceptor.accept(stream).await.unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0_u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let read = tls.read(&mut chunk).await.unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..read]);
+                }
+                let request = String::from_utf8_lossy(&request);
+                saw_authorization.store(
+                    request
+                        .lines()
+                        .any(|line| line.eq_ignore_ascii_case("authorization: Bearer test-token")),
+                    Ordering::Release,
+                );
+                let response = format!(
+                    "HTTP/1.1 307 Temporary Redirect\r\n\
+                     Location: http://{address}/plaintext-target\r\n\
+                     Content-Length: 0\r\n\
+                     Connection: close\r\n\r\n"
+                );
+                tls.write_all(response.as_bytes()).await.unwrap();
+                tls.shutdown().await.unwrap();
+                drop(tls);
+
+                if let Ok(Ok((_stream, _))) = tokio::time::timeout(Duration::from_millis(500), listener.accept()).await
+                {
+                    plaintext_requests.fetch_add(1, Ordering::AcqRel);
+                }
+            })
+        };
+
+        let source = Url::parse(&format!("https://{address}/blob")).unwrap();
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .danger_accept_invalid_certs(true)
+            .redirect(blob_redirect_policy(
+                source.origin(),
+                EgressPolicy { block_private: false },
+            ))
+            .build()
+            .unwrap();
+        let error = client.get(source).bearer_auth("test-token").send().await.unwrap_err();
+
+        assert!(error.is_redirect(), "downgrade must fail in the redirect policy");
+        server.await.unwrap();
+        assert!(
+            saw_authorization.load(Ordering::Acquire),
+            "the source request must carry Authorization so the leak boundary is exercised"
+        );
+        assert_eq!(
+            plaintext_requests.load(Ordering::Acquire),
+            0,
+            "the plaintext downgrade target must receive zero requests"
+        );
+    }
+
+    #[tokio::test]
+    async fn blob_redirect_policy_allows_exactly_three_hops() {
+        let server = MockServer::start().await;
+        for (from, to) in [
+            ("/three-0", "/three-1"),
+            ("/three-1", "/three-2"),
+            ("/three-2", "/three-3"),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(from))
+                .respond_with(ResponseTemplate::new(307).insert_header("location", to))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(path("/three-3"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"ok".to_vec()))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let spec = spec_for(&server, "test/wasm:redirect-limit");
+        let image = OciImageRef::parse(&spec.image).unwrap();
+        let mut session = RegistrySession::new(&image, &spec).unwrap();
+        let body = session
+            .get(
+                true,
+                &format!("{}/three-0", server.uri()),
+                "application/octet-stream",
+                16,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(body, b"ok");
+    }
+
+    #[tokio::test]
+    async fn blob_redirect_policy_rejects_fourth_hop_before_target_request() {
+        let server = MockServer::start().await;
+        for (from, to) in [
+            ("/four-0", "/four-1"),
+            ("/four-1", "/four-2"),
+            ("/four-2", "/four-3"),
+            ("/four-3", "/four-never"),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(from))
+                .respond_with(ResponseTemplate::new(307).insert_header("location", to))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+
+        let spec = spec_for(&server, "test/wasm:redirect-limit");
+        let image = OciImageRef::parse(&spec.image).unwrap();
+        let mut session = RegistrySession::new(&image, &spec).unwrap();
+        let err = session
+            .get(
+                true,
+                &format!("{}/four-0", server.uri()),
+                "application/octet-stream",
+                16,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, "OCI redirect blocked by policy");
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .all(|request| request.url.path() != "/four-never"),
+            "the fourth redirect target must not be requested"
+        );
+    }
+
     #[tokio::test]
     async fn token_endpoint_5xx_retries_and_then_succeeds() {
         let server = MockServer::start().await;
@@ -635,6 +1077,88 @@ mod tests {
         spec.resolved_pull_secret = Some(format!(r#"{{"auths":{{"{host}":{{"auth":"{auth_b64}"}}}}}}"#));
         let err = fetch_oci_bytes(&spec).await.unwrap_err();
         assert!(err.contains("token endpoint: status 403"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn retry_backoff_releases_permit_for_another_registry_request() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Mutex;
+        use tokio::sync::{Notify, Semaphore};
+
+        let server = MockServer::start().await;
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let first_a_seen = Arc::new(Notify::new());
+        let a_calls = Arc::new(AtomicUsize::new(0));
+        Mock::given(method("GET"))
+            .and(path("/a"))
+            .respond_with({
+                let order = order.clone();
+                let first_a_seen = first_a_seen.clone();
+                let a_calls = a_calls.clone();
+                move |_: &wiremock::Request| {
+                    let call = a_calls.fetch_add(1, Ordering::SeqCst);
+                    order.lock().unwrap().push(if call == 0 { "a1" } else { "a2" });
+                    if call == 0 {
+                        first_a_seen.notify_one();
+                        ResponseTemplate::new(503)
+                    } else {
+                        ResponseTemplate::new(200).set_body_bytes(b"a".to_vec())
+                    }
+                }
+            })
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/b"))
+            .respond_with({
+                let order = order.clone();
+                move |_: &wiremock::Request| {
+                    order.lock().unwrap().push("b");
+                    ResponseTemplate::new(200).set_body_bytes(b"b".to_vec())
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let spec = spec_for(&server, "test/wasm:1.0");
+        let image = OciImageRef::parse(&spec.image).unwrap();
+        let mut session_a = RegistrySession::new(&image, &spec).unwrap();
+        let mut session_b = RegistrySession::new(&image, &spec).unwrap();
+        let permits = Arc::new(Semaphore::new(1));
+        let url_a = format!("{}/a", server.uri());
+        let url_b = format!("{}/b", server.uri());
+
+        let permits_a = permits.clone();
+        let a = tokio::spawn(async move {
+            session_a
+                .get_with_permits(&permits_a, false, &url_a, "application/octet-stream", 16)
+                .await
+        });
+        first_a_seen.notified().await;
+        let permits_b = permits.clone();
+        let b = tokio::spawn(async move {
+            session_b
+                .get_with_permits(&permits_b, false, &url_b, "application/octet-stream", 16)
+                .await
+        });
+
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), b)
+                .await
+                .expect("B completes while A is backing off")
+                .unwrap()
+                .unwrap(),
+            b"b"
+        );
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), a)
+                .await
+                .expect("A completes its retry")
+                .unwrap()
+                .unwrap(),
+            b"a"
+        );
+        assert_eq!(&*order.lock().unwrap(), &["a1", "b", "a2"]);
     }
 
     #[tokio::test]
