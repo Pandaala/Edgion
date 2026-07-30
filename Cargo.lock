@@ -1518,6 +1518,7 @@ dependencies = [
  "clap",
  "edgion-common",
  "edgion-resources",
+ "edgion-wasm",
  "hex",
  "k8s-openapi",
  "kube",
@@ -1525,6 +1526,7 @@ dependencies = [
  "rand 0.9.5",
  "rcgen",
  "reqwest",
+ "serde",
  "serde_json",
  "serde_yaml",
  "sha2",
@@ -1533,6 +1535,8 @@ dependencies = [
  "tikv-jemallocator",
  "time",
  "tokio",
+ "url",
+ "wat",
  "wiremock",
  "zeroize",
 ]
@@ -1687,6 +1691,7 @@ dependencies = [
  "edgion-common",
  "edgion-dsl",
  "edgion-resources",
+ "edgion-wasm",
  "etcd-client",
  "expect-test",
  "filetime",
@@ -1867,6 +1872,18 @@ dependencies = [
  "uuid",
  "wiremock",
  "x509-parser 0.18.1",
+]
+
+[[package]]
+name = "edgion-wasm"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "wasmparser 0.251.0",
+ "wat",
 ]
 
 [[package]]

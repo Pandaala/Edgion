@@ -7,6 +7,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::wasm_oci::{OciImageRef, WasmOciSpec};
 use crate::resources::common::{SecretObjectReference, TlsConfig};
@@ -188,7 +189,9 @@ impl WasmSourceSpec {
 /// config:
 ///   source:
 ///     file: ./plugins/header_demo.wasm
-///   pluginConfig: '{"add_header":"x-wasm-added"}'
+///   pluginConfig:
+///     json:
+///       add_header: x-wasm-added
 ///   failOpen: false
 ///   timeoutMs: 100
 /// ```
@@ -203,15 +206,15 @@ pub struct WasmConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
 
-    /// Opaque configuration passed to the guest `on_configure` hook
-    /// (readable via the PluginConfiguration buffer).
+    /// Opaque bytes passed to the guest `on_configure` hook (readable via the
+    /// PluginConfiguration buffer).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub plugin_config: Option<String>,
+    pub plugin_config: Option<WasmRawConfig>,
 
-    /// Opaque configuration passed to the guest `on_vm_start` hook
-    /// (readable via the VmConfiguration buffer).
+    /// Opaque bytes passed to the guest `on_vm_start` hook (readable via the
+    /// VmConfiguration buffer).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub vm_config: Option<String>,
+    pub vm_config: Option<WasmRawConfig>,
 
     /// On load failure / trap / timeout: `false` (default) returns 500,
     /// `true` continues the plugin chain.
@@ -238,6 +241,154 @@ pub struct WasmConfig {
     /// milliseconds. Also the effective timeout when the guest passes 0.
     #[serde(default = "default_callout_timeout_ms")]
     pub callout_timeout_ms: u64,
+}
+
+/// One strict representation of opaque bytes passed to a Proxy-Wasm guest.
+///
+/// Exactly one object shape is accepted:
+///
+/// - `{ string: "..." }` passes the string's UTF-8 bytes.
+/// - `{ base64: "..." }` decodes canonical padded RFC 4648 Standard base64.
+/// - `{ json: ... }` accepts any JSON value and emits compact UTF-8 JSON with
+///   object keys sorted recursively. Original whitespace, object-key order,
+///   and number spelling are not preserved.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum WasmRawConfig {
+    String(WasmRawString),
+    Json(WasmRawJson),
+    Base64(WasmRawBase64),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WasmRawString {
+    pub string: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WasmRawJson {
+    pub json: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WasmRawBase64 {
+    pub base64: String,
+}
+
+/// Hard cap for each decoded guest configuration field.
+pub const MAX_WASM_RAW_CONFIG_BYTES: usize = 64 * 1024;
+const MAX_WASM_RAW_BASE64_BYTES: usize = MAX_WASM_RAW_CONFIG_BYTES.div_ceil(3) * 4;
+
+impl WasmRawConfig {
+    pub fn string(value: impl Into<String>) -> Self {
+        Self::String(WasmRawString { string: value.into() })
+    }
+
+    pub fn base64(value: impl Into<String>) -> Self {
+        Self::Base64(WasmRawBase64 { base64: value.into() })
+    }
+
+    /// Decode the exact bytes that the Gateway passes to the guest.
+    ///
+    /// The Gateway calls this independently even after Controller validation;
+    /// callers must handle the error rather than assuming conf_sync is trusted.
+    pub fn guest_bytes(&self) -> Result<Vec<u8>, String> {
+        let bytes = match self {
+            Self::String(value) => {
+                if value.string.len() > MAX_WASM_RAW_CONFIG_BYTES {
+                    return Err(raw_config_size_error());
+                }
+                value.string.as_bytes().to_vec()
+            }
+            Self::Base64(value) => {
+                use base64::Engine as _;
+
+                if value.base64.len() > MAX_WASM_RAW_BASE64_BYTES {
+                    return Err(raw_config_size_error());
+                }
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(value.base64.as_bytes())
+                    .map_err(|_| "must be canonical padded Standard base64".to_string())?;
+                if decoded.len() > MAX_WASM_RAW_CONFIG_BYTES {
+                    return Err(raw_config_size_error());
+                }
+                if base64::engine::general_purpose::STANDARD.encode(&decoded) != value.base64 {
+                    return Err("must be canonical padded Standard base64".to_string());
+                }
+                decoded
+            }
+            Self::Json(value) => canonical_json_bytes(&value.json)?,
+        };
+        Ok(bytes)
+    }
+}
+
+fn raw_config_size_error() -> String {
+    format!(
+        "decoded value exceeds the {}KiB limit",
+        MAX_WASM_RAW_CONFIG_BYTES / 1024
+    )
+}
+
+struct CappedJsonWriter {
+    bytes: Vec<u8>,
+}
+
+impl std::io::Write for CappedJsonWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.bytes.len().saturating_add(buf.len()) > MAX_WASM_RAW_CONFIG_BYTES {
+            return Err(std::io::Error::other("canonical JSON exceeds the guest config limit"));
+        }
+        self.bytes.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn canonical_json_bytes(value: &Value) -> Result<Vec<u8>, String> {
+    let mut writer = CappedJsonWriter {
+        bytes: Vec::with_capacity(256),
+    };
+    write_canonical_json(&mut writer, value).map_err(|_| raw_config_size_error())?;
+    Ok(writer.bytes)
+}
+
+fn write_canonical_json(writer: &mut CappedJsonWriter, value: &Value) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    match value {
+        Value::Object(object) => {
+            writer.write_all(b"{")?;
+            let mut entries: Vec<_> = object.iter().collect();
+            entries.sort_unstable_by_key(|(key, _)| *key);
+            for (index, (key, child)) in entries.into_iter().enumerate() {
+                if index != 0 {
+                    writer.write_all(b",")?;
+                }
+                serde_json::to_writer(&mut *writer, key).map_err(std::io::Error::other)?;
+                writer.write_all(b":")?;
+                write_canonical_json(writer, child)?;
+            }
+            writer.write_all(b"}")
+        }
+        Value::Array(array) => {
+            writer.write_all(b"[")?;
+            for (index, child) in array.iter().enumerate() {
+                if index != 0 {
+                    writer.write_all(b",")?;
+                }
+                write_canonical_json(writer, child)?;
+            }
+            writer.write_all(b"]")
+        }
+        _ => serde_json::to_writer(writer, value).map_err(std::io::Error::other),
+    }
 }
 
 /// Normalize a callout origin to `scheme://host:port` canonical form.
@@ -397,6 +548,12 @@ impl WasmConfig {
                 }
                 Ok(_) => {}
             }
+        }
+        if let Some(config) = &self.plugin_config {
+            config.guest_bytes().map_err(|error| format!("pluginConfig {error}"))?;
+        }
+        if let Some(config) = &self.vm_config {
+            config.guest_bytes().map_err(|error| format!("vmConfig {error}"))?;
         }
         if self.timeout_ms == 0 || self.timeout_ms > MAX_TIMEOUT_MS {
             return Err(format!(
@@ -690,7 +847,8 @@ mod tests {
     fn serde_camel_case_roundtrip() {
         let json = r#"{
             "source": { "file": "./demo.wasm" },
-            "pluginConfig": "{}",
+            "pluginConfig": { "json": {} },
+            "vmConfig": { "base64": "/wA=" },
             "failOpen": true,
             "timeoutMs": 50,
             "instancePoolSize": 4
@@ -700,6 +858,135 @@ mod tests {
         assert!(c.fail_open);
         assert_eq!(c.timeout_ms, 50);
         assert_eq!(c.instance_pool_size, 4);
+        assert_eq!(c.plugin_config.as_ref().unwrap().guest_bytes().unwrap(), b"{}");
+        assert_eq!(c.vm_config.as_ref().unwrap().guest_bytes().unwrap(), [0xff, 0x00]);
+        let roundtrip: WasmConfig = serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
+        assert_eq!(
+            roundtrip.plugin_config.unwrap().guest_bytes().unwrap(),
+            b"{}",
+            "conf_sync serde roundtrip must preserve the representation and effective bytes"
+        );
+    }
+
+    #[test]
+    fn raw_config_accepts_all_three_strict_shapes() {
+        let string: WasmRawConfig = serde_json::from_str(r#"{"string":"hello"}"#).unwrap();
+        let json: WasmRawConfig = serde_json::from_str(r#"{"json":{"b":2,"a":1}}"#).unwrap();
+        let base64: WasmRawConfig = serde_json::from_str(r#"{"base64":"aGVsbG8="}"#).unwrap();
+        assert_eq!(string.guest_bytes().unwrap(), b"hello");
+        assert_eq!(json.guest_bytes().unwrap(), br#"{"a":1,"b":2}"#);
+        assert_eq!(base64.guest_bytes().unwrap(), b"hello");
+    }
+
+    #[test]
+    fn raw_config_rejects_bare_missing_multiple_and_unknown_shapes() {
+        for invalid in [
+            r#""legacy""#,
+            r#"{}"#,
+            r#"{"string":"a","base64":"YQ=="}"#,
+            r#"{"string":"a","typo":true}"#,
+            r#"{"typo":"a"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<WasmRawConfig>(invalid).is_err(),
+                "shape must be rejected: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_config_json_schema_is_a_strict_three_way_union() {
+        let schema = serde_json::to_value(schemars::schema_for!(WasmRawConfig)).unwrap();
+        let any_of = schema["anyOf"].as_array().expect("untagged union must use anyOf");
+        assert_eq!(any_of.len(), 3);
+        let rendered = serde_json::to_string(&schema).unwrap();
+        for selector in ["string", "json", "base64"] {
+            assert!(rendered.contains(&format!("\"{selector}\"")));
+        }
+        assert_eq!(
+            rendered.matches("\"additionalProperties\":false").count(),
+            3,
+            "every selector object must reject unknown or second fields"
+        );
+    }
+
+    #[test]
+    fn raw_base64_is_strict_canonical_standard() {
+        for invalid in ["***", "YQ", "YQ=", "YR==", "YQ==\n"] {
+            let config = WasmRawConfig::base64(invalid);
+            assert!(config.guest_bytes().is_err(), "base64 must be rejected: {invalid:?}");
+        }
+        assert_eq!(WasmRawConfig::base64("YQ==").guest_bytes().unwrap(), b"a");
+    }
+
+    #[test]
+    fn raw_config_decoded_cap_boundary() {
+        use base64::Engine as _;
+
+        let at_cap = vec![0xff; MAX_WASM_RAW_CONFIG_BYTES];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&at_cap);
+        assert_eq!(encoded.len(), MAX_WASM_RAW_BASE64_BYTES);
+        assert_eq!(WasmRawConfig::base64(encoded).guest_bytes().unwrap(), at_cap);
+
+        let over_cap = vec![0xff; MAX_WASM_RAW_CONFIG_BYTES + 1];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(over_cap);
+        let error = WasmRawConfig::base64(encoded).guest_bytes().unwrap_err();
+        assert!(error.contains("64KiB"), "got: {error}");
+
+        assert!(WasmRawConfig::string("x".repeat(MAX_WASM_RAW_CONFIG_BYTES))
+            .guest_bytes()
+            .is_ok());
+        assert!(WasmRawConfig::string("x".repeat(MAX_WASM_RAW_CONFIG_BYTES + 1))
+            .guest_bytes()
+            .is_err());
+    }
+
+    #[test]
+    fn raw_json_is_recursive_compact_and_accepts_every_value_kind() {
+        let config: WasmRawConfig =
+            serde_json::from_str(r#"{"json":{"z":{"b":1,"a":2},"a":[null,true,"x"],"n":1.0}}"#).unwrap();
+        assert_eq!(
+            config.guest_bytes().unwrap(),
+            br#"{"a":[null,true,"x"],"n":1.0,"z":{"a":2,"b":1}}"#
+        );
+
+        for (input, expected) in [
+            (r#"{"json":null}"#, "null"),
+            (r#"{"json":true}"#, "true"),
+            (r#"{"json":7}"#, "7"),
+            (r#"{"json":"text"}"#, r#""text""#),
+            (r#"{"json":[3,2,1]}"#, "[3,2,1]"),
+        ] {
+            let value: WasmRawConfig = serde_json::from_str(input).unwrap();
+            assert_eq!(value.guest_bytes().unwrap(), expected.as_bytes());
+        }
+    }
+
+    #[test]
+    fn raw_json_canonical_bytes_obey_cap() {
+        let at_cap_payload = "x".repeat(MAX_WASM_RAW_CONFIG_BYTES - 2);
+        let at_cap = WasmRawConfig::Json(WasmRawJson {
+            json: Value::String(at_cap_payload),
+        });
+        assert_eq!(at_cap.guest_bytes().unwrap().len(), MAX_WASM_RAW_CONFIG_BYTES);
+
+        let over_cap = WasmRawConfig::Json(WasmRawJson {
+            json: Value::String("x".repeat(MAX_WASM_RAW_CONFIG_BYTES - 1)),
+        });
+        assert!(over_cap.guest_bytes().is_err());
+    }
+
+    #[test]
+    fn wasm_validation_names_raw_config_field_without_echoing_content() {
+        let marker = "sensitive-marker";
+        let mut config = file_config();
+        config.plugin_config = Some(WasmRawConfig::string(format!(
+            "{marker}{}",
+            "x".repeat(MAX_WASM_RAW_CONFIG_BYTES)
+        )));
+        let error = config.validate().unwrap_err();
+        assert!(error.starts_with("pluginConfig decoded value exceeds"));
+        assert!(!error.contains(marker));
     }
 
     #[test]

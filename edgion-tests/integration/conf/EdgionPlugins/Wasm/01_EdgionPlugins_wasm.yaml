@@ -20,7 +20,8 @@ spec:
       config:
         source:
           file: ../../../edgion-tests/wasm/artifacts/header_demo.wasm
-        pluginConfig: '{}'
+        pluginConfig:
+          json: {}
         failOpen: false
         timeoutMs: 500
   upstreamResponseFilterPlugins:

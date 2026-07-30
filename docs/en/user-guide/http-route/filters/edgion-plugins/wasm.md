@@ -1,5 +1,14 @@
 # Wasm Plugin
 
+> Migrating from Envoy? `edgion-cli wasm inspect` checks a module against
+> Edgion's exact host profile, and `edgion-cli wasm convert-envoy` strictly
+> converts one v3 HTTP Wasm filter or bare PluginConfig into a `WasmConfig`
+> fragment. See the [CLI guide](../../../../ops-guide/edgion-cli.md#wasm---local-inspection-and-envoy-migration).
+> This is a migration assistant, not seamless-compatibility proof. You must
+> choose the EdgionPlugins stage, and response-body processing remains
+> per-chunk streaming. Edgion also fixes the guest-visible `plugin_name` to
+> `Wasm`; the converter warns even when Envoy's plugin name is empty.
+
 > **🔌 Edgion extension**
 >
 > Wasm executes a [proxy-wasm](https://github.com/proxy-wasm/spec) ABI guest module — an ordinary WebAssembly binary compiled from Rust, C++, Go, TinyGo, or any other proxy-wasm SDK — directly inside the gateway process via [wasmtime](https://wasmtime.dev/). It is provided by the `EdgionPlugins` CRD and is not part of standard Gateway API.
@@ -41,22 +50,30 @@ such as DSL, but response-stage Wasm host phases do not expose that cache.
 | `proxy_continue_request` / `proxy_continue_stream(Request)` | ✅ | Resumes a request paused on a callout. `proxy_continue_response` remains an accepted no-op |
 | `proxy_get_shared_data` / `proxy_set_shared_data` | ✅ | Per-module KV with CAS — see [Shared data](#shared-data-and-timers) |
 | `proxy_set_tick_period_milliseconds` | ✅ | Arms the per-module tick task; `0` stops it. Period floor 100ms |
-| `proxy_get_property` / `proxy_set_property` | ✅ (basic subset) | Readable keys: `request.path`, `request.method`, `request.host`, `source.address`, `plugin_name`, `response.code` (response phase only). `proxy_set_property` writes into the current phase's in-memory property map only |
+| `proxy_get_property` / `proxy_set_property` | ✅ (basic subset) | Readable keys: `request.path`, `request.method`, `request.host`, `source.address`, `plugin_name` (fixed to `Wasm`), `response.code` (response phase only). `proxy_set_property` writes into the current phase's in-memory property map only |
 | `proxy_get_buffer_bytes` | ✅ | `VmConfiguration`, `PluginConfiguration`, `HttpCallResponseBody` (inside the callout callback), `HttpRequestBody` (the **whole buffered request body** in the request-body hook — see [Request-body buffer mode](#request-body-buffer-mode)), and `HttpResponseBody` (the **current chunk window** in the response-body hook) |
 | `proxy_set_buffer_bytes` | ✅ (request body only) | Replaces, inserts, appends, or deletes bytes in `HttpRequestBody` during the whole request-body hook. Response-body writes return `STATUS_UNIMPLEMENTED` (12) |
-| `proxy_log` | ✅ | Forwarded to the gateway's own `tracing::debug!` output (target `wasm_guest`) — **never** written to the access log |
+| `proxy_log` | ✅ | Guest text is retained only within the current hook's bounded in-memory diagnostics and then discarded; the access log records only the bounded line count, never the guest-controlled text |
 | `proxy_get_current_time_nanoseconds` | ✅ | Wall-clock time |
 | `proxy_get_configuration` (legacy 0.1) | ✅ | Returns the same bytes as the `PluginConfiguration` buffer |
 | `proxy_set_effective_context` / `proxy_done` | Accepted no-ops | Return `STATUS_OK` without doing anything |
-| Everything else (gRPC callouts, shared queues, foreign function calls, metrics, …) | ❌ | Not registered with the linker. If a guest module imports one of these and actually calls it, the call **traps** (the request then follows [failure semantics](#failure-semantics)); importing but never calling is harmless |
+| Standard SDK-declared but unimplemented calls (gRPC callouts, shared queues, foreign function calls, guest metrics, and log-level lookup) | ⚠️ | Their exact standard signatures are accepted because SDKs may declare them even when unused. The compatibility report marks them `known_unsupported_trap` and warns; invoking one traps and follows [failure semantics](#failure-semantics) |
+| Everything else | ❌ | Rejected by the compatibility check at module load. Truly unknown imports are not accepted even when the guest never calls them |
 
 ### ABI version check
 
-At load time the host inspects the guest's `proxy_abi_version_*` marker export:
+After source integrity verification and before Wasmtime compilation, the host parses the core Wasm module and checks its ABI markers, imports, and recognized hook exports:
 
 - `proxy_abi_version_0_2_0` / `proxy_abi_version_0_2_1` — accepted.
-- Any other `proxy_abi_version_*` — **load error** with a clear "unsupported proxy-wasm ABI version" message (instead of a confusing runtime trap).
+- Any unsupported marker, or any module exporting more than one ABI marker, is a **load error**.
 - No marker at all — accepted with a WARN (hand-written test modules and non-standard guests).
+- Every import must be a function from module `env`, appear in this host's exact profile, and exactly match that function's parameter and result types.
+- Standard Proxy-Wasm hook names must be function exports with their exact SDK ABI signatures. Any other `proxy_on_*` export is rejected as an unknown or misspelled hook; unrelated custom exports remain allowed. WebAssembly components, malformed modules, non-function imports, wrong import modules, unknown imports, and signature mismatches are rejected before JIT compilation.
+- The 64MiB source-byte cap is separate from structural complexity limits. Before full validation, the analyzer rejects modules exceeding 100,000 combined entries across validator-indexed core sections (types, imports, functions, tables, memories, tags, globals, exports, elements, and data), 50,000 combined import/export inventory items, 4MiB of import/export name bytes, 100,000 function-type signature cells, or 100,000 signature cells materialized in the report. Expanded locals are capped at 100,000 per function and 1,000,000 per module; each encoded function body is capped at 256KiB to bound per-function validator work. It returns `analysis_limit_exceeded`; it never truncates the report and then claims compatibility.
+
+Compatibility failures intentionally use one bounded generic load error. The gateway does not copy attacker-controlled import/export names or parser detail into request-visible failure text.
+
+In compatibility reports, `compatible: true` means **load-compatible with this host profile**, not that every declared feature is implemented or every exported hook is invoked. Check the `support` field on imports and hooks, plus the warnings list. `known_unsupported_trap` imports are safe to leave unused but trap if called. Standard SDK hooks marked `known_not_invoked`—including request/response trailers, queue-ready, gRPC callbacks, foreign-function callbacks, and stream callbacks—are accepted because SDKs commonly export them by default, but Edgion never calls them. Hooks marked `implemented` do not produce that warning.
 
 ## Configuration reference
 
@@ -65,7 +82,9 @@ type: Wasm
 config:
   source:
     file: ./plugins/header_demo.wasm
-  pluginConfig: '{"add_header":"x-wasm-added"}'
+  pluginConfig:
+    json:
+      add_header: x-wasm-added
   failOpen: false
   timeoutMs: 100
 ```
@@ -82,22 +101,45 @@ config:
 | `source.fetch.retry` | Object | — | `{attempts, backoffMs}` — total attempts including the first (`1..=10`, default 3) and base backoff doubled per retry (default 500, max 30000). Fixed policy: transport errors and `5xx` retry; **`4xx` never retries**. |
 | `source.oci` | Object | — | Pull the module from an OCI registry: `{image, pullPolicy?, pullSecretRef?}`. See [`source.oci` — pull from an OCI registry](#sourceoci--pull-from-an-oci-registry). |
 | `sha256` | String (64 hex chars) | — | SHA-256 of the raw bytecode, verified before compilation. Optional for `file` / `inline` / `oci`; **required** for `url`. |
-| `pluginConfig` | String | — | Opaque configuration passed to `proxy_on_configure`, readable via the `PluginConfiguration` buffer. |
-| `vmConfig` | String | — | Opaque configuration passed to `proxy_on_vm_start`, readable via the `VmConfiguration` buffer. |
+| `pluginConfig` | Raw bytes object | — | Opaque bytes passed to `proxy_on_configure`, readable via the `PluginConfiguration` buffer. See [Guest configuration bytes](#guest-configuration-bytes). |
+| `vmConfig` | Raw bytes object | — | Opaque bytes passed to `proxy_on_vm_start`, readable via the `VmConfiguration` buffer. See [Guest configuration bytes](#guest-configuration-bytes). |
 | `failOpen` | Boolean | `false` | Governs behavior on load failure / trap / timeout / Body access failure / callout no-resume — see [Failure semantics](#failure-semantics). |
 | `timeoutMs` | Integer | `100` | Per-hook wall-clock budget in milliseconds (epoch interruption). Range `1..=10000`. Body-chunk hooks run at `timeoutMs / 10`. |
 | `instancePoolSize` | Integer | `8` | Max pooled instances kept per compiled module, per gateway process. Range `1..=64`. |
 | `calloutAllowlist` | String list | `[]` | Origins (`scheme://host[:port]`) the guest may target with `proxy_http_call`. **Empty = callouts disabled** (dispatch fails with a host error the guest can observe). Exact-origin match after normalization. |
 | `calloutTimeoutMs` | Integer | `5000` | Upper bound on each callout's guest-supplied timeout (also the effective timeout when the guest passes 0). Range `1..=10000`. |
 
+### Guest configuration bytes
+
+`pluginConfig` and `vmConfig` each accept exactly one of these object shapes:
+
+```yaml
+pluginConfig:
+  string: "plain UTF-8"
+vmConfig:
+  base64: "/wA=" # arbitrary bytes, including non-UTF-8
+```
+
+Use `{json: <value>}` for structured data. Any JSON value is valid, including an
+object, array, string, number, boolean, or null. Edgion serializes the parsed
+value as compact UTF-8 JSON with object keys sorted recursively. This canonical
+form is what the guest receives and what the module-cache identity hashes;
+original whitespace, key order, and number spelling are not preserved.
+
+The three forms are strictly mutually exclusive. A missing selector, multiple
+selectors, unknown fields, a bare legacy string, non-canonical Standard padded
+base64, or a decoded value above 64KiB is rejected. Absence differs from an
+explicit empty value. Different forms that produce the same bytes intentionally
+share the same initialized module-cache entry.
+
 ## Choosing a source form
 
 | Form | Position | Size bound | Distribution path |
 |---|---|---|---|
 | `inline` | **Dev/test convenience.** Not a production distribution mechanism. | 1MiB decoded (hard cap); K8s object + etcd limits apply on top | Rides the CR through etcd; every conf_sync carries it in full |
-| `file` | Modules baked into the gateway image or mounted via initContainer | none | Image build / volume mount |
-| `url` | **Recommended for production** — internal artifact repository (Nexus, Artifactory, S3 presigned) | none | Gateway fetches directly, with `source.fetch` TLS/auth/retry and mandatory `sha256` |
-| `oci` | **Recommended for production** — Istio-style OCI image distribution | none | Gateway pulls directly from an OCI registry, with a content-addressed disk cache |
+| `file` | Modules baked into the gateway image or mounted via initContainer | 64MiB hard cap | Image build / volume mount |
+| `url` | **Recommended for production** — internal artifact repository (Nexus, Artifactory, S3 presigned) | 64MiB hard cap | Gateway fetches directly, with `source.fetch` TLS/auth/retry and mandatory `sha256` |
+| `oci` | **Recommended for production** — Istio-style OCI image distribution | 64MiB blob and extracted-module hard caps | Gateway pulls directly from an OCI registry, with a content-addressed disk cache |
 
 This mirrors Istio's posture: Istio's `WasmPlugin` has **no inline field** at all and treats `oci://` as the primary channel with `http(s)` as the second. Edgion keeps `inline` for fast iteration but caps and warns on it; a ConfigMap-based form was evaluated and rejected (same etcd object cap as inline, plus ref-tracking complexity, no added value).
 
@@ -308,7 +350,7 @@ All failure modes route through the same `failOpen` decision:
 
 | Reason | Trigger | PluginLog |
 |---|---|---|
-| `load` | The module fails to download / decode / compile, its `sha256` doesn't match, its ABI version is unsupported, or instance init fails (`on_vm_start`/`on_configure` returned false). Load errors are cached for 30s. | `wasm load:fail-open` / `fail-close` |
+| `load` | The module fails to download, decode, compatibility-check, or compile; its `sha256` does not match; or instance init fails (`on_vm_start`/`on_configure` returned false). Load errors are cached for 30s. | `wasm load:fail-open` / `fail-close` |
 | `acquire` | The instance pool cannot produce a usable VM at request time (e.g. pooling-allocator slots exhausted). | `wasm acquire:…` |
 | `trap` | The guest panics, hits `unreachable`, blows its CPU budget, or otherwise faults while running a hook (including the callout callback and context close). | `wasm trap:…` |
 | `callout` | Callout resolution failed structurally (e.g. the guest's callback trapped mid-delivery). | `wasm callout:…` |
@@ -455,7 +497,7 @@ See `edgion-tests/wasm/README.md` for the full contract the reference guest impl
 
 ### Q: Which proxy-wasm ABI versions are supported?
 
-`0.2.0` and `0.2.1` (the versions the Rust/C++ SDKs export as `proxy_abi_version_0_2_x`). A module exporting a different `proxy_abi_version_*` marker fails at load with an explicit message; a module exporting none loads with a WARN.
+`0.2.0` and `0.2.1` (the versions the Rust/C++ SDKs export as `proxy_abi_version_0_2_x`). An unsupported or mixed marker set fails the compatibility check; a module exporting none loads with a WARN when all imports and hooks are otherwise compatible.
 
 ### Q: My callout is never executed?
 

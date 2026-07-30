@@ -212,6 +212,7 @@ tower.workspace = true
 tempfile = { workspace = true, optional = true }
 # Wasm runtime for the proxy-wasm host plugin
 wasmtime.workspace = true
+edgion-wasm.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 # Disk-usage probe for LocalFile log sink health (statvfs).

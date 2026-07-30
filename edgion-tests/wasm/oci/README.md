@@ -134,7 +134,8 @@ spec:
         source:
           oci:
             image: localhost:5000/wasm/header-demo:1.0.0
-        pluginConfig: '{}'
+        pluginConfig:
+          json: {}
         failOpen: false
         timeoutMs: 500
   upstreamResponseFilterPlugins:
@@ -165,7 +166,8 @@ spec:
         source:
           oci:
             image: "localhost:5000/wasm/header-demo@sha256:<manifest-digest-from-step-2>"
-        pluginConfig: '{}'
+        pluginConfig:
+          json: {}
         failOpen: false
         timeoutMs: 500
   upstreamResponseFilterPlugins:
@@ -350,7 +352,8 @@ spec:
             image: localhost:5001/wasm/header-demo:1.0.0
             pullSecretRef:
               name: wasm-oci-pull-creds
-        pluginConfig: '{}'
+        pluginConfig:
+          json: {}
         failOpen: false
         timeoutMs: 500
 ```

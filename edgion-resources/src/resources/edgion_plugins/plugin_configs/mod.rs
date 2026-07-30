@@ -107,6 +107,7 @@ pub use response_rewrite::{HeaderRename, ResponseHeaderActions, ResponseHeaderEn
 pub use trace_context::TraceContextConfig;
 pub use wasm::{
     normalize_callout_origin, normalize_callout_origin_quiet, WasmAuthHeaderSecretRef, WasmConfig, WasmFetchRetry,
-    WasmFetchSpec, WasmSourceSpec, INLINE_WARN_DECODED_BYTES, MAX_INLINE_DECODED_BYTES,
+    WasmFetchSpec, WasmRawBase64, WasmRawConfig, WasmRawJson, WasmRawString, WasmSourceSpec, INLINE_WARN_DECODED_BYTES,
+    MAX_INLINE_DECODED_BYTES, MAX_WASM_RAW_CONFIG_BYTES,
 };
 pub use wasm_oci::{OciImageRef, OciPullPolicy, WasmOciSpec};

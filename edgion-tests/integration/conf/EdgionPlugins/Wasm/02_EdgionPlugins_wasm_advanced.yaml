@@ -34,7 +34,8 @@ spec:
       config:
         source:
           file: ../../../edgion-tests/wasm/artifacts/header_demo.wasm
-        pluginConfig: "http://127.0.0.1:30040"
+        pluginConfig:
+          string: "http://127.0.0.1:30040"
         failOpen: false
         timeoutMs: 1000
         calloutAllowlist:
@@ -46,6 +47,7 @@ spec:
       config:
         source:
           file: ../../../edgion-tests/wasm/artifacts/header_demo.wasm
-        pluginConfig: "http://127.0.0.1:30040"
+        pluginConfig:
+          string: "http://127.0.0.1:30040"
         failOpen: false
         timeoutMs: 1000

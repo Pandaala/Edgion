@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use wasmtime::{Caller, Extern, Linker};
+use wasmtime::{Caller, Extern, FuncType, Linker, ValType};
+
+use edgion_wasm::{host, HostBehavior, WasmValueType};
 
 pub const MAP_HTTP_REQUEST_HEADERS: i32 = 0;
 pub const MAP_HTTP_RESPONSE_HEADERS: i32 = 2;
@@ -998,13 +1000,13 @@ fn host_http_call(
     STATUS_OK
 }
 
-/// Register the implemented proxy-wasm host functions. Call
-/// `linker.define_unknown_imports_as_traps(&module)` AFTER this so any
-/// import outside the v1 subset traps only if the guest actually calls it.
+/// Register the implemented proxy-wasm host functions. Compatibility analysis
+/// rejects unknown imports before compilation; the caller may still define
+/// unknown imports as traps after this as defense in depth.
 pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     linker.func_wrap(
-        "env",
-        "proxy_log",
+        host::MODULE,
+        host::PROXY_LOG,
         |mut caller: Caller<'_, HostState>, level: i32, ptr: i32, len: i32| -> i32 {
             match read_guest_string(&mut caller, ptr, len) {
                 Ok(msg) => {
@@ -1025,8 +1027,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     )?;
 
     linker.func_wrap(
-        "env",
-        "proxy_get_current_time_nanoseconds",
+        host::MODULE,
+        host::PROXY_GET_CURRENT_TIME_NANOSECONDS,
         |mut caller: Caller<'_, HostState>, ret_ptr: i32| -> i32 {
             let nanos = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -1043,8 +1045,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     )?;
 
     linker.func_wrap(
-        "env",
-        "proxy_get_header_map_pairs",
+        host::MODULE,
+        host::PROXY_GET_HEADER_MAP_PAIRS,
         |mut caller: Caller<'_, HostState>, map: i32, ret_ptr: i32, ret_size: i32| -> i32 {
             // Encode into an owned buffer inside a scope so the immutable
             // borrow of the header map is released before write_to_guest takes
@@ -1060,8 +1062,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     )?;
 
     linker.func_wrap(
-        "env",
-        "proxy_get_header_map_value",
+        host::MODULE,
+        host::PROXY_GET_HEADER_MAP_VALUE,
         |mut caller: Caller<'_, HostState>, map: i32, kp: i32, kl: i32, ret_ptr: i32, ret_size: i32| -> i32 {
             let key = match read_guest_string(&mut caller, kp, kl) {
                 Ok(k) => k,
@@ -1085,8 +1087,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     )?;
 
     linker.func_wrap(
-        "env",
-        "proxy_replace_header_map_value",
+        host::MODULE,
+        host::PROXY_REPLACE_HEADER_MAP_VALUE,
         |mut caller: Caller<'_, HostState>, map: i32, kp: i32, kl: i32, vp: i32, vl: i32| -> i32 {
             let key = match read_guest_string(&mut caller, kp, kl) {
                 Ok(k) => k,
@@ -1113,8 +1115,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     )?;
 
     linker.func_wrap(
-        "env",
-        "proxy_add_header_map_value",
+        host::MODULE,
+        host::PROXY_ADD_HEADER_MAP_VALUE,
         |mut caller: Caller<'_, HostState>, map: i32, kp: i32, kl: i32, vp: i32, vl: i32| -> i32 {
             let key = match read_guest_string(&mut caller, kp, kl) {
                 Ok(k) => k,
@@ -1140,8 +1142,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     )?;
 
     linker.func_wrap(
-        "env",
-        "proxy_remove_header_map_value",
+        host::MODULE,
+        host::PROXY_REMOVE_HEADER_MAP_VALUE,
         |mut caller: Caller<'_, HostState>, map: i32, kp: i32, kl: i32| -> i32 {
             let key = match read_guest_string(&mut caller, kp, kl) {
                 Ok(k) => k,
@@ -1162,8 +1164,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     )?;
 
     linker.func_wrap(
-        "env",
-        "proxy_set_header_map_pairs",
+        host::MODULE,
+        host::PROXY_SET_HEADER_MAP_PAIRS,
         |mut caller: Caller<'_, HostState>, map: i32, ptr: i32, len: i32| -> i32 {
             let bytes = match read_guest(&mut caller, ptr, len) {
                 Ok(b) => b,
@@ -1208,8 +1210,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     )?;
 
     linker.func_wrap(
-        "env",
-        "proxy_get_buffer_bytes",
+        host::MODULE,
+        host::PROXY_GET_BUFFER_BYTES,
         |mut caller: Caller<'_, HostState>,
          buf_type: i32,
          start: i32,
@@ -1234,8 +1236,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     )?;
 
     linker.func_wrap(
-        "env",
-        "proxy_set_buffer_bytes",
+        host::MODULE,
+        host::PROXY_SET_BUFFER_BYTES,
         |mut caller: Caller<'_, HostState>, buf: i32, start: i32, size: i32, ptr: i32, len: i32| -> i32 {
             if buf == BUF_HTTP_RESPONSE_BODY {
                 // Proxied upstream responses remain streaming-only and
@@ -1278,8 +1280,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     )?;
 
     linker.func_wrap(
-        "env",
-        "proxy_send_local_response",
+        host::MODULE,
+        host::PROXY_SEND_LOCAL_RESPONSE,
         |mut caller: Caller<'_, HostState>,
          status: i32,
          _detail_ptr: i32,
@@ -1322,8 +1324,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     )?;
 
     linker.func_wrap(
-        "env",
-        "proxy_get_property",
+        host::MODULE,
+        host::PROXY_GET_PROPERTY,
         |mut caller: Caller<'_, HostState>, pp: i32, pl: i32, ret_ptr: i32, ret_size: i32| -> i32 {
             let raw = match read_guest(&mut caller, pp, pl) {
                 Ok(b) => b,
@@ -1344,8 +1346,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     )?;
 
     linker.func_wrap(
-        "env",
-        "proxy_set_property",
+        host::MODULE,
+        host::PROXY_SET_PROPERTY,
         |mut caller: Caller<'_, HostState>, pp: i32, pl: i32, vp: i32, vl: i32| -> i32 {
             let raw = match read_guest(&mut caller, pp, pl) {
                 Ok(b) => b,
@@ -1374,8 +1376,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
 
     // Legacy 0.1 configuration accessor (some SDKs call it from on_configure).
     linker.func_wrap(
-        "env",
-        "proxy_get_configuration",
+        host::MODULE,
+        host::PROXY_GET_CONFIGURATION,
         |mut caller: Caller<'_, HostState>, ret_ptr: i32, ret_size: i32| -> i32 {
             let data = caller.data().plugin_config.clone();
             write_to_guest(&mut caller, &data, ret_ptr, ret_size)
@@ -1387,14 +1389,14 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     // Rust/C++ SDKs actually call). Older/hand-written guests sometimes spell it
     // `proxy_dispatch_http_call`; register the same handler under both so an SDK
     // guest is not silently trapped by `define_unknown_imports_as_traps`.
-    linker.func_wrap("env", "proxy_http_call", host_http_call)?;
-    linker.func_wrap("env", "proxy_dispatch_http_call", host_http_call)?;
+    linker.func_wrap(host::MODULE, host::PROXY_HTTP_CALL, host_http_call)?;
+    linker.func_wrap(host::MODULE, host::PROXY_DISPATCH_HTTP_CALL, host_http_call)?;
 
     // Shared data (per-module KV with CAS). Process-local: shared across
     // all pooled VMs of one ModuleEntry, freed with the cache entry.
     linker.func_wrap(
-        "env",
-        "proxy_get_shared_data",
+        host::MODULE,
+        host::PROXY_GET_SHARED_DATA,
         |mut caller: Caller<'_, HostState>,
          key_ptr: i32,
          key_size: i32,
@@ -1424,8 +1426,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     )?;
 
     linker.func_wrap(
-        "env",
-        "proxy_set_shared_data",
+        host::MODULE,
+        host::PROXY_SET_SHARED_DATA,
         |mut caller: Caller<'_, HostState>,
          key_ptr: i32,
          key_size: i32,
@@ -1457,25 +1459,27 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
 
     // Accepted no-ops for the v1 subset.
     linker.func_wrap(
-        "env",
-        "proxy_set_effective_context",
+        host::MODULE,
+        host::PROXY_SET_EFFECTIVE_CONTEXT,
         |_: Caller<'_, HostState>, _ctx: i32| -> i32 { STATUS_OK },
     )?;
     linker.func_wrap(
-        "env",
-        "proxy_set_tick_period_milliseconds",
+        host::MODULE,
+        host::PROXY_SET_TICK_PERIOD_MILLISECONDS,
         |mut caller: Caller<'_, HostState>, ms: i32| -> i32 {
             caller.data_mut().tick_period_ms = ms.max(0) as u64;
             STATUS_OK
         },
     )?;
-    linker.func_wrap("env", "proxy_done", |_: Caller<'_, HostState>| -> i32 { STATUS_OK })?;
+    linker.func_wrap(host::MODULE, host::PROXY_DONE, |_: Caller<'_, HostState>| -> i32 {
+        STATUS_OK
+    })?;
     // Pause/resume: the guest resumes a paused request either through the
     // 0.1-style proxy_continue_request or the 0.2-style
     // proxy_continue_stream(stream_type=0 /* Request */).
     linker.func_wrap(
-        "env",
-        "proxy_continue_stream",
+        host::MODULE,
+        host::PROXY_CONTINUE_STREAM,
         |mut caller: Caller<'_, HostState>, stream: i32| -> i32 {
             if stream == 0 {
                 caller.data_mut().continue_requested = true;
@@ -1484,24 +1488,103 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         },
     )?;
     linker.func_wrap(
-        "env",
-        "proxy_continue_request",
+        host::MODULE,
+        host::PROXY_CONTINUE_REQUEST,
         |mut caller: Caller<'_, HostState>| -> i32 {
             caller.data_mut().continue_requested = true;
             STATUS_OK
         },
     )?;
-    linker.func_wrap("env", "proxy_continue_response", |_: Caller<'_, HostState>| -> i32 {
-        STATUS_OK
-    })?;
+    linker.func_wrap(
+        host::MODULE,
+        host::PROXY_CONTINUE_RESPONSE,
+        |_: Caller<'_, HostState>| -> i32 { STATUS_OK },
+    )?;
+
+    for function in host::FUNCTIONS
+        .iter()
+        .filter(|function| function.behavior == HostBehavior::Trap)
+    {
+        let ty = FuncType::new(
+            linker.engine(),
+            function.signature.params.iter().copied().map(linker_value_type),
+            function.signature.results.iter().copied().map(linker_value_type),
+        );
+        linker.func_new(function.module, function.name, ty, |_, _, _| {
+            Err(wasmtime::Error::msg("unsupported proxy-wasm host function"))
+        })?;
+    }
 
     Ok(())
+}
+
+fn linker_value_type(value: WasmValueType) -> ValType {
+    match value {
+        WasmValueType::I32 => ValType::I32,
+        WasmValueType::I64 => ValType::I64,
+        WasmValueType::F32 => ValType::F32,
+        WasmValueType::F64 => ValType::F64,
+        WasmValueType::V128 => ValType::V128,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::http::wasm::shared_data::SharedData;
+    use edgion_wasm::HostFunction;
     use wasmtime::{Engine, Instance, Module, Store};
+
+    fn profile_value_type(value: wasmtime::ValType) -> WasmValueType {
+        match value {
+            wasmtime::ValType::I32 => WasmValueType::I32,
+            wasmtime::ValType::I64 => WasmValueType::I64,
+            wasmtime::ValType::F32 => WasmValueType::F32,
+            wasmtime::ValType::F64 => WasmValueType::F64,
+            wasmtime::ValType::V128 => WasmValueType::V128,
+            other => panic!("host linker unexpectedly uses reference type {other}"),
+        }
+    }
+
+    #[test]
+    fn host_profile_matches_linker_names_and_signatures() {
+        let engine = Engine::default();
+        let mut linker = Linker::new(&engine);
+        add_to_linker(&mut linker).expect("host linker registration");
+        let state = HostState::new(
+            Vec::new(),
+            Vec::new(),
+            "contract-test".to_string(),
+            Arc::new(SharedData::new("contract-test".to_string())),
+        );
+        let mut store = Store::new(&engine, state);
+        let linker_items: Vec<(String, String, Extern)> = linker
+            .iter(&mut store)
+            .map(|(module, name, item)| (module.to_string(), name.to_string(), item))
+            .collect();
+        let mut linked: Vec<HostFunction> = linker_items
+            .into_iter()
+            .map(|(module, name, item)| {
+                let Extern::Func(function) = item else {
+                    panic!("host linker item {module}::{name} must be a function");
+                };
+                let ty = function.ty(&store);
+                let params: Vec<WasmValueType> = ty.params().map(profile_value_type).collect();
+                let results: Vec<WasmValueType> = ty.results().map(profile_value_type).collect();
+                let profile = host::FUNCTIONS
+                    .iter()
+                    .find(|profile| profile.module == module && profile.name == name)
+                    .unwrap_or_else(|| panic!("linker function {module}::{name} is absent from the host profile"));
+                assert_eq!(params, profile.signature.params, "parameter drift for {module}::{name}");
+                assert_eq!(results, profile.signature.results, "result drift for {module}::{name}");
+                *profile
+            })
+            .collect();
+        linked.sort_by_key(|function| (function.module, function.name));
+        let mut profiled = host::FUNCTIONS.to_vec();
+        profiled.sort_by_key(|function| (function.module, function.name));
+        assert_eq!(linked, profiled, "host profile and linker name sets differ");
+    }
 
     /// Minimal guest: bump allocator + on request headers sets the header
     /// `x-wat-added: yes`, and on response headers sends a 403 local

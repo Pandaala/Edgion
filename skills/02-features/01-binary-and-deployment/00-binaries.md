@@ -156,7 +156,16 @@ edgion-cli reload
 
 # Inspect Gateway-side cache
 edgion-cli -t client --server http://localhost:12001 get httproute
+
+# Local-only Proxy-Wasm inspection and strict Envoy v3 conversion
+edgion-cli wasm inspect --file plugin.wasm --format json
+edgion-cli wasm convert-envoy --file envoy-wasm.yaml --format yaml --report report.json
 ```
+
+The `wasm` command group short-circuits before token resolution, client
+construction, authentication, and network access. `convert-envoy` emits only a
+`WasmConfig` fragment; the operator still chooses the EdgionPlugins resource
+identity and stage.
 
 ### Subcommand Argument Schemas
 

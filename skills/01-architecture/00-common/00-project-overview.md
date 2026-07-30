@@ -11,6 +11,7 @@ description: Edgion project high-level architecture diagram, workspace crate str
 flowchart TD
     YAML["YAML / K8s CRD"] --> CC
     CLI["edgion-cli"] --> AdminCtrl
+    WasmLib["edgion-wasm"] --> CLI
 
     subgraph Controller["edgion-controller"]
         CC["ConfCenter\n(File/K8s/Etcd)"] --> WQ["Workqueue\n(per-kind)"] --> RP["ResourceProcessor\n(validate/preparse/parse)"]
@@ -24,6 +25,7 @@ flowchart TD
 
     subgraph Gateway["edgion-gateway"]
         SyncClient["ConfigSyncClient"] --> ClientCache["ClientCache\n(per-kind)"] --> Preparse["Preparse"]
+        WasmLoad["Wasm compatibility + load"]
         subgraph Pingora["Pingora Server"]
             ConnFilter["ConnectionFilter\n(TCP-level, StreamPlugins)"]
             ProxyHttp["ProxyHttp (HTTP/gRPC lifecycle)"]
@@ -40,6 +42,7 @@ flowchart TD
         AdminGw["Admin API (:12001 default)"]
         MetricsGw["Metrics API (:12090)"]
     end
+    WasmLib --> WasmLoad
 ```
 
 ## Crate structure
@@ -63,6 +66,7 @@ not share those binary-feature defaults.
 ## Code directory organization
 
 ```
+edgion-wasm/                     # Proxy-Wasm compatibility/profile analysis (leaf crate)
 edgion-dsl/                      # DSL parser, compiler, and static validator (leaf crate)
 edgion-resources/                # Shared resource/config schemas and validation helpers
 edgion-common/                   # Shared infra: config, observability, secret store, link system, proto codegen
@@ -72,12 +76,15 @@ edgion-cli/                      # CLI binary and library
 edgion-tests/                    # Integration test assets, scripts, and validators
 ```
 
-**Design principles**: `edgion-dsl` is the leaf crate and `edgion-resources`
-depends on it for real DSL compilation and static validation;
+**Design principles**: `edgion-wasm` is an external-dependencies-only leaf
+consumed by the Gateway before Wasmtime compilation and by the CLI for local
+Wasm inspection. `edgion-dsl` is a leaf and
+`edgion-resources` depends on it for real DSL compilation and static validation;
 `edgion-common` holds backend-agnostic shared infrastructure; controller,
 gateway, and CLI code stay in their owning crates. The in-repo dependency graph
-remains a DAG (`dsl → resources → common → {controller, gateway, cli}`); the
-Gateway also uses `edgion-dsl` directly for VM/runtime integration.
+remains a DAG (`dsl → resources → common → {controller, gateway, cli}`, plus
+the independent `wasm → {gateway, cli}` edges); the Gateway also uses `edgion-dsl`
+directly for VM/runtime integration.
 
 ## EdgionHttpContext — per-request state container
 

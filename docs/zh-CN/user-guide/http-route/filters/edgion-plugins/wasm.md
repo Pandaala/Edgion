@@ -1,5 +1,13 @@
 # Wasm 插件
 
+> 从 Envoy 迁移时，可使用 `edgion-cli wasm inspect` 按 Edgion 精确 Host
+> Profile 检查模块，并使用 `edgion-cli wasm convert-envoy` 将单个 v3 HTTP
+> Wasm Filter 或裸 PluginConfig 严格转换为 `WasmConfig` 片段。参见
+> [CLI 指南](../../../../ops-guide/edgion-cli.md#wasm---本地检查与-envoy-迁移)。
+> 这是迁移助手，不是无缝兼容证明；用户仍须选择 EdgionPlugins stage，响应 body
+> 仍保持逐 chunk 流式处理。Edgion 还会把 guest 可见的 `plugin_name` 固定为
+> `Wasm`；即使 Envoy plugin name 为空，转换器也会报告差异 warning。
+
 > **🔌 Edgion 扩展**
 >
 > Wasm 插件在网关进程内通过 [wasmtime](https://wasmtime.dev/) 直接执行 [proxy-wasm](https://github.com/proxy-wasm/spec) ABI guest 模块——一个用 Rust、C++、Go、TinyGo 或任意 proxy-wasm SDK 编译出的普通 WebAssembly 二进制文件。它由 `EdgionPlugins` CRD 提供，不属于标准 Gateway API。
@@ -40,22 +48,30 @@ Wasm **不支持**（异步的）`upstreamResponsePlugins` 阶段。
 | `proxy_continue_request` / `proxy_continue_stream(Request)` | ✅ | 恢复因 callout 挂起的请求。`proxy_continue_response` 仍是接受型 no-op |
 | `proxy_get_shared_data` / `proxy_set_shared_data` | ✅ | 模块级 KV + CAS——见 [shared data](#shared-data-与定时器) |
 | `proxy_set_tick_period_milliseconds` | ✅ | 启动模块级 tick 任务；`0` 停止。周期下限 100ms |
-| `proxy_get_property` / `proxy_set_property` | ✅（基础子集） | 可读键：`request.path`、`request.method`、`request.host`、`source.address`、`plugin_name`、`response.code`（仅响应阶段）。`proxy_set_property` 仅写入当前阶段的内存属性表 |
+| `proxy_get_property` / `proxy_set_property` | ✅（基础子集） | 可读键：`request.path`、`request.method`、`request.host`、`source.address`、`plugin_name`（固定为 `Wasm`）、`response.code`（仅响应阶段）。`proxy_set_property` 仅写入当前阶段的内存属性表 |
 | `proxy_get_buffer_bytes` | ✅ | `VmConfiguration`、`PluginConfiguration`、`HttpCallResponseBody`（callout 回调内）、`HttpRequestBody`（请求 body 钩子内的**完整缓冲 body**——见[请求 body 整体缓冲模式](#请求-body-整体缓冲模式)）、`HttpResponseBody`（响应 body 钩子内的**当前 chunk 窗口**） |
 | `proxy_set_buffer_bytes` | ✅（仅请求 body） | 在完整请求 body 钩子内替换、插入、追加或删除 `HttpRequestBody` 字节。响应 body 写入返回 `STATUS_UNIMPLEMENTED`（12） |
-| `proxy_log` | ✅ | 转发到网关自身的 `tracing::debug!` 输出（target `wasm_guest`），**绝不**写入访问日志 |
+| `proxy_log` | ✅ | Guest 文本仅在当前 hook 的有界内存诊断中暂存，随后丢弃；访问日志只记录有界行数，绝不记录 guest 控制的原文 |
 | `proxy_get_current_time_nanoseconds` | ✅ | 系统时钟 |
 | `proxy_get_configuration`（0.1 遗留） | ✅ | 返回与 `PluginConfiguration` buffer 相同的字节 |
 | `proxy_set_effective_context` / `proxy_done` | 接受型 no-op | 返回 `STATUS_OK`，不做任何事 |
-| 其余全部（gRPC callout、shared queue、foreign function、metrics 等） | ❌ | 未注册进 linker。guest 导入且真正调用会 **trap**（随后按[失败语义](#失败语义)处理）；只导入不调用无害 |
+| SDK 标准声明但 Edgion 未实现的调用（gRPC callout、shared queue、foreign function、guest metrics、log-level 查询） | ⚠️ | SDK 即使不使用也可能声明，因此其精确标准签名可通过加载。兼容性报告会标为 `known_unsupported_trap` 并给出 warning；一旦调用就会 trap，并进入[失败语义](#失败语义) |
+| 其余全部 | ❌ | 模块加载时由兼容性检查拒绝；即使 guest 从不调用，真正未知的 import 也不会被接受 |
 
 ### ABI 版本检查
 
-加载时 host 会检查 guest 导出的 `proxy_abi_version_*` 标记：
+完成来源完整性校验后、交给 Wasmtime 编译前，host 会解析 core Wasm 模块并检查 ABI 标记、import 与已识别的 hook export：
 
 - `proxy_abi_version_0_2_0` / `proxy_abi_version_0_2_1`——接受。
-- 其他 `proxy_abi_version_*`——**加载错误**，报错信息明确为 "unsupported proxy-wasm ABI version"（而不是令人困惑的运行时 trap）。
+- 任何不支持的标记，或同时导出多个 ABI 标记——**加载错误**。
 - 完全没有标记——WARN 后放行（兼容手写测试模块与非标 guest）。
+- 每个 import 都必须是来自 `env` 模块的 function，名称必须存在于当前 host 的精确 profile 中，参数和返回值类型必须精确匹配。
+- 标准 Proxy-Wasm hook 名称必须是 function export，且精确匹配 SDK ABI 签名。其他任何 `proxy_on_*` export 都会按未知或拼写错误的 hook 拒绝；不相关的自定义 export 仍允许。WebAssembly component、畸形模块、非 function import、错误 import 模块、未知 import 与签名不匹配都会在 JIT 编译前被拒绝。
+- 64MiB 来源字节上限与结构复杂度限制相互独立。完整校验前，分析器会拒绝以下任一情况：会建立 validator 索引的 core section（type、import、function、table、memory、tag、global、export、element、data）条目合计超过 100,000 项；import/export inventory 合计超过 50,000 项；import/export 名称字节合计超过 4MiB；function type 签名单元合计超过 100,000；或报告需要实例化的签名单元超过 100,000。展开后的 local 每个 function 最多 100,000 个、每个模块合计最多 1,000,000 个；单个 function 编码 body 上限为 256KiB，以限制 validator 对单个 function 的展开工作。此时返回 `analysis_limit_exceeded`；不会截断报告后仍声称兼容。
+
+兼容性失败统一使用一条有界的通用加载错误；网关不会把攻击者可控的 import/export 名称或 parser 细节复制到请求可见的失败文本。
+
+兼容性报告中的 `compatible: true` 表示**可按当前 host profile 安全加载**，不表示每项已声明功能都已实现，也不表示每个导出的 hook 都会被调用。请同时检查 import 与 hook 的 `support` 字段和 warning 列表。`known_unsupported_trap` import 可以保持未调用，但调用时会 trap。SDK 经常默认导出的标准 hook 若标为 `known_not_invoked`（包括请求/响应 trailer、queue-ready、gRPC 回调、foreign-function 回调及 stream 回调），可以通过加载，但 Edgion 永远不会调用；标为 `implemented` 的 hook 不会产生此 warning。
 
 ## 配置参考
 
@@ -64,7 +80,9 @@ type: Wasm
 config:
   source:
     file: ./plugins/header_demo.wasm
-  pluginConfig: '{"add_header":"x-wasm-added"}'
+  pluginConfig:
+    json:
+      add_header: x-wasm-added
   failOpen: false
   timeoutMs: 100
 ```
@@ -81,22 +99,43 @@ config:
 | `source.fetch.retry` | Object | — | `{attempts, backoffMs}`——含首次的总尝试数（`1..=10`，默认 3）与逐次翻倍的基础退避（默认 500，上限 30000）。策略固定：传输错误与 `5xx` 重试；**`4xx` 永不重试**。 |
 | `source.oci` | Object | — | 从 OCI 镜像仓库拉取模块：`{image, pullPolicy?, pullSecretRef?}`。见[`source.oci`——从 OCI 镜像仓库拉取](#sourceoci从-oci-镜像仓库拉取)。 |
 | `sha256` | String (64 hex) | — | 原始字节码的 SHA-256，编译前校验。`file` / `inline` / `oci` 可选；`url` **必填**。 |
-| `pluginConfig` | String | — | 传给 `proxy_on_configure` 的不透明配置，经 `PluginConfiguration` buffer 可读。 |
-| `vmConfig` | String | — | 传给 `proxy_on_vm_start` 的不透明配置，经 `VmConfiguration` buffer 可读。 |
+| `pluginConfig` | 原始字节对象 | — | 传给 `proxy_on_configure` 的不透明字节，经 `PluginConfiguration` buffer 可读。见[Guest 配置字节](#guest-配置字节)。 |
+| `vmConfig` | 原始字节对象 | — | 传给 `proxy_on_vm_start` 的不透明字节，经 `VmConfiguration` buffer 可读。见[Guest 配置字节](#guest-配置字节)。 |
 | `failOpen` | Boolean | `false` | 加载失败 / trap / 超时 / body 访问失败 / callout 不恢复时的行为——见[失败语义](#失败语义)。 |
 | `timeoutMs` | Integer | `100` | 每次钩子调用的墙钟预算（epoch 中断）。范围 `1..=10000`。body chunk 钩子按 `timeoutMs / 10` 执行。 |
 | `instancePoolSize` | Integer | `8` | 每个编译模块、每个网关进程保留的池化实例上限。范围 `1..=64`。 |
 | `calloutAllowlist` | String 列表 | `[]` | guest 可通过 `proxy_http_call` 访问的 origin（`scheme://host[:port]`）。**空 = 禁用 callout**（dispatch 返回 guest 可观测的宿主错误）。规范化后精确匹配。 |
 | `calloutTimeoutMs` | Integer | `5000` | 每个 callout 的 guest 超时上限（guest 传 0 时的生效值）。范围 `1..=10000`。 |
 
+### Guest 配置字节
+
+`pluginConfig` 与 `vmConfig` 各自必须且只能使用以下一种对象形态：
+
+```yaml
+pluginConfig:
+  string: "plain UTF-8"
+vmConfig:
+  base64: "/wA=" # 可表达包括非 UTF-8 在内的任意字节
+```
+
+结构化数据使用 `{json: <value>}`。它允许任意 JSON value，包括 object、array、
+string、number、boolean 与 null。Edgion 将解析后的 value 编码为紧凑 UTF-8 JSON，
+并递归排序 object key。guest 收到的正是这组 canonical 字节，模块缓存 identity
+也对它做 hash；原始空白、key 顺序与 number 写法不会保留。
+
+三种形态严格互斥。缺少 selector、同时设置多个 selector、未知字段、旧式裸 string、
+非 canonical 的 Standard padded base64，以及解码后超过 64KiB 的值都会被拒绝。
+字段缺省与显式 empty 的语义不同；不同形态若产生相同字节，则会有意共享同一个
+已初始化模块缓存 entry。
+
 ## 来源形态选型
 
 | 形态 | 定位 | 大小上限 | 分发路径 |
 |---|---|---|---|
 | `inline` | **开发/测试便利**，不是生产分发机制 | 解码后 1MiB（硬上限）；另受 K8s 对象/etcd 限制 | 随 CR 进 etcd；每次 conf_sync 全量携带 |
-| `file` | 打进网关镜像或 initContainer 挂载的模块 | 无 | 镜像构建 / volume 挂载 |
-| `url` | **生产推荐**——内部制品库（Nexus、Artifactory、S3 presigned） | 无 | 网关直拉，配合 `source.fetch` 的 TLS/认证/重试与强制 `sha256` |
-| `oci` | **生产推荐**——对齐 Istio 的 OCI 镜像分发 | 无 | 网关直接从 OCI 镜像仓库拉取，配合内容寻址的磁盘缓存 |
+| `file` | 打进网关镜像或 initContainer 挂载的模块 | 64MiB 硬上限 | 镜像构建 / volume 挂载 |
+| `url` | **生产推荐**——内部制品库（Nexus、Artifactory、S3 presigned） | 64MiB 硬上限 | 网关直拉，配合 `source.fetch` 的 TLS/认证/重试与强制 `sha256` |
+| `oci` | **生产推荐**——对齐 Istio 的 OCI 镜像分发 | blob 与解压后模块均为 64MiB 硬上限 | 网关直接从 OCI 镜像仓库拉取，配合内容寻址的磁盘缓存 |
 
 这与 Istio 的取向一致：Istio 的 `WasmPlugin` **根本没有 inline 字段**，以 `oci://` 为主通道、`http(s)` 次之。Edgion 保留 inline 用于快速迭代，但加上限并告警；ConfigMap 形态经评估后否决（与 inline 同受 etcd 对象上限，还引入 ref 追踪复杂度，无增量价值）。
 
@@ -303,7 +342,7 @@ guest 调用 `proxy_set_tick_period_milliseconds(N)`（通常在 `on_configure` 
 
 | Reason | 触发条件 | PluginLog |
 |---|---|---|
-| `load` | 模块下载/解码/编译失败、`sha256` 不匹配、ABI 版本不支持、或实例初始化失败（`on_vm_start`/`on_configure` 返回 false）。加载错误缓存 30s。 | `wasm load:fail-open` / `fail-close` |
+| `load` | 模块下载、解码、兼容性检查或编译失败，`sha256` 不匹配，或实例初始化失败（`on_vm_start`/`on_configure` 返回 false）。加载错误缓存 30s。 | `wasm load:fail-open` / `fail-close` |
 | `acquire` | 请求时实例池无法产出可用 VM（如 pooling allocator 槽位耗尽）。 | `wasm acquire:…` |
 | `trap` | guest panic、`unreachable`、CPU 预算超限，或在钩子（含 callout 回调与上下文关闭）中出错。 | `wasm trap:…` |
 | `callout` | callout 解析结构性失败（如 guest 回调在投递中 trap）。 | `wasm callout:…` |
@@ -450,7 +489,7 @@ impl Context for AuthPlugin {
 
 ### Q：支持哪些 proxy-wasm ABI 版本？
 
-`0.2.0` 与 `0.2.1`（Rust/C++ SDK 导出的 `proxy_abi_version_0_2_x`）。导出其他 `proxy_abi_version_*` 标记的模块在加载时以明确信息失败；不导出任何标记的模块 WARN 后放行。
+`0.2.0` 与 `0.2.1`（Rust/C++ SDK 导出的 `proxy_abi_version_0_2_x`）。不支持或混合的标记集合会使兼容性检查失败；完全没有标记时，只要 import 与 hook 均兼容，模块会在 WARN 后加载。
 
 ### Q：我的 callout 从未被执行？
 

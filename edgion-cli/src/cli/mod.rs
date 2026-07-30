@@ -162,6 +162,9 @@ pub enum Commands {
     /// The full `edg_`-prefixed token is hashed — the exact string sent as Bearer.
     /// Does not contact the controller.
     GenToken,
+
+    /// Inspect or convert Proxy-Wasm artifacts locally (no authentication or network).
+    Wasm(commands::wasm::WasmArgs),
 }
 
 impl Cli {
@@ -189,6 +192,13 @@ impl Cli {
         // GenToken does not contact the controller at all — short-circuit before auth
         if let Commands::GenToken = &self.command {
             return token::gen_token();
+        }
+
+        // Wasm tooling is deliberately local-only. Keep this short-circuit before
+        // token resolution and EdgionClient construction so even an invalid
+        // server/token environment cannot cause authentication or network work.
+        if let Commands::Wasm(args) = &self.command {
+            return commands::wasm::execute(args);
         }
 
         // Pre-flight compat check: --metadata-only only works with --target center.
@@ -292,7 +302,7 @@ impl Cli {
                 }
                 commands::reload::reload(&client).await
             }
-            Commands::GenCerts(_) | Commands::Login { .. } | Commands::GenToken => {
+            Commands::GenCerts(_) | Commands::Login { .. } | Commands::GenToken | Commands::Wasm(_) => {
                 unreachable!() // all handled before dispatch
             }
         }

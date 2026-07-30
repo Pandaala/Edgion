@@ -710,6 +710,7 @@ mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use crate::plugins::runtime::PluginLog;
+    use edgion_resources::plugin_configs::WasmRawConfig;
 
     /// Guest whose request-headers hook sets `x-wat-added: yes`, and whose
     /// response-headers hook sends a 403 local response with body "denied"
@@ -768,6 +769,25 @@ mod tests {
       (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32) unreachable)
       (func (export "proxy_on_done") (param i32) (result i32) (i32.const 1))
       (func (export "proxy_on_delete") (param i32))
+    )
+    "#;
+
+    /// The Rust SDK declares some standard ABI imports that Edgion does not
+    /// implement. They are load-compatible for SDK portability, but invoking
+    /// one must trap and enter the ordinary guest-trap failure policy.
+    const GUEST_KNOWN_UNSUPPORTED_TRAP: &str = r#"
+    (module
+      (import "env" "proxy_close_stream" (func $close (param i32) (result i32)))
+      (memory (export "memory") 1)
+      (func (export "proxy_on_memory_allocate") (param i32) (result i32) (i32.const 1024))
+      (func (export "proxy_on_context_create") (param i32 i32))
+      (func (export "proxy_on_vm_start") (param i32 i32) (result i32) (i32.const 1))
+      (func (export "proxy_on_configure") (param i32 i32) (result i32) (i32.const 1))
+      (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32)
+        (call $close (i32.const 0)))
+      (func (export "proxy_on_done") (param i32) (result i32) (i32.const 1))
+      (func (export "proxy_on_delete") (param i32))
+      (func (export "proxy_abi_version_0_2_0"))
     )
     "#;
 
@@ -953,6 +973,21 @@ mod tests {
         let mut log = PluginLog::new("Wasm");
         let res = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(res, PluginRunningResult::GoodNext);
+    }
+
+    #[tokio::test]
+    async fn known_unsupported_sdk_import_traps_through_failure_policy() {
+        let f = write_temp_wasm(GUEST_KNOWN_UNSUPPORTED_TRAP);
+        let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).unwrap();
+        let mut session = base_mock();
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "trap")
+            .times(1)
+            .return_const(());
+        let mut log = PluginLog::new("Wasm");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
     }
 
     #[tokio::test]
@@ -1612,7 +1647,7 @@ mod tests {
 
         let mut c = WasmConfig::default();
         c.source.file = Some(f.path().to_string_lossy().into_owned());
-        c.plugin_config = Some(server.uri());
+        c.plugin_config = Some(WasmRawConfig::string(server.uri()));
         c.callout_allowlist = vec![server.uri()];
         // Not testing body-read policy here; the SDK guest also exports
         // `proxy_on_request_body`, whose `Unimplemented` stub now runs through

@@ -440,7 +440,8 @@ impl EdgionPlugins {
 mod tests {
     use super::*;
     use crate::resources::edgion_plugins::plugin_configs::{
-        DslConfig, FormJsonDirection, FormJsonTransformConfig, JsonSchemaValidationConfig,
+        DslConfig, FormJsonDirection, FormJsonTransformConfig, JsonSchemaValidationConfig, WasmConfig, WasmRawConfig,
+        MAX_WASM_RAW_CONFIG_BYTES,
     };
     use crate::resources::edgion_plugins::{
         BodyReadFailureMode, BodyRequirement, EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseFilterEntry,
@@ -466,6 +467,25 @@ mod tests {
             },
             status: None,
         }
+    }
+
+    #[test]
+    fn controller_validate_plugins_matches_wasm_raw_config_validation() {
+        let mut config = WasmConfig::default();
+        config.source.file = Some("./demo.wasm".to_string());
+        config.plugin_config = Some(WasmRawConfig::base64("/wA="));
+        let valid = RequestFilterEntry::new(EdgionPlugin::Wasm(config.clone()));
+        assert!(with_request_plugins(vec![valid]).validate_plugins().is_empty());
+
+        config.plugin_config = Some(WasmRawConfig::string("x".repeat(MAX_WASM_RAW_CONFIG_BYTES + 1)));
+        let invalid = RequestFilterEntry::new(EdgionPlugin::Wasm(config));
+        let errors = with_request_plugins(vec![invalid]).validate_plugins();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("pluginConfig decoded value exceeds the 64KiB limit")),
+            "{errors:?}"
+        );
     }
 
     fn dsl_entry(source: &str) -> RequestFilterEntry {

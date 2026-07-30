@@ -60,6 +60,51 @@ edgion-cli -t client --server http://gateway:12001 get service -n default
 
 ## 命令详解
 
+### wasm - 本地检查与 Envoy 迁移
+
+`wasm` 命令组完全在本地运行：不会解析 CLI Token、创建 Admin API
+客户端、执行认证或发起网络请求。
+
+```bash
+edgion-cli wasm inspect --file ./plugin.wasm --format text
+edgion-cli wasm inspect --file ./plugin.wasm --format json
+
+edgion-cli wasm convert-envoy \
+  --file ./envoy-wasm.yaml \
+  --format yaml \
+  --report ./conversion-report.json
+```
+
+`inspect` 支持 `text`、`json`、`yaml`，最多读取 64 MiB。模块畸形或不兼容时，
+它仍会输出兼容性报告，但命令返回非零。
+
+`convert-envoy` 只接受一个 `envoy.filters.http.wasm` wrapper、其 v3
+`typed_config`，或一个裸 `envoy.extensions.wasm.v3.PluginConfig`。它不会遍历
+bootstrap、listener 或 filter chain。stdout 是可放入 EdgionPlugins 条目
+`config` 字段的 `WasmConfig` 片段；转换器不会猜测 resource namespace 或
+plugin stage，用户必须显式选择 Edgion stage。
+
+转换严格执行，且没有有损放行选项。不支持的 runtime、context identity、非空
+Envoy plugin name、环境变量或 capability 注入、基于 cluster 的远程拉取、
+reload/cache 行为、冲突 oneof、未知字段和任意 `google.protobuf.Any` 都会成为 blocker。出现 blocker 时 stdout
+不生成配置；可选 JSON 报告仍会以拒绝覆盖的方式创建；命令返回非零。
+未指定 `--report` 时，同一份结构化报告写入 stderr，stdout 仍专用于生成的配置。
+
+Envoy 会把非空 `PluginConfig.name` 作为 `plugin_name` 暴露给 guest。Edgion 的
+`plugin_name` 属性固定为 `Wasm`，Edgion resource name 不能替代该值，因此转换器
+只接受空的 Envoy plugin name。空 name 仍可转换，但报告会警告：Envoy 向 guest
+暴露的是空 `plugin_name`；应测试 guest 不依赖该属性。
+
+Envoy runtime 为空时允许转换，但报告会警告，并明确固定为 Edgion 的 Wasmtime
+runtime。合法的 Envoy v3 远程 `HttpUri` 必须包含非空 cluster，而其传输与安全语义
+无法恢复，因此远程来源始终阻止自动输出。报告可以给出 URL、timeout、retry 次数
+和基础退避的暂定映射，供手工迁移参考；它不是兼容的生成配置。
+
+这是迁移助手，不是“Envoy 无缝兼容”的证明。Edgion 使用其文档定义的 Wasmtime
+Host ABI；fail-close 行为存在差异；guest callout 默认关闭；上游响应 body 始终
+流式传输，Wasm 只能逐 chunk 观察。转换器不会下载远程模块、读取 Envoy
+`source.file`、解析 cluster 或 Secret、读取环境变量，也不会改变响应缓冲策略。
+
 ### get - 获取资源
 
 获取单个资源或列出资源列表。

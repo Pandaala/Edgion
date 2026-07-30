@@ -64,6 +64,61 @@ edgion-cli -t client --server http://gateway:12001 get service -n default
 
 ## Command Reference
 
+### wasm - Local inspection and Envoy migration
+
+The `wasm` command group is entirely local. It does not resolve a CLI token,
+create an Admin API client, authenticate, or make network requests.
+
+```bash
+edgion-cli wasm inspect --file ./plugin.wasm --format text
+edgion-cli wasm inspect --file ./plugin.wasm --format json
+
+edgion-cli wasm convert-envoy \
+  --file ./envoy-wasm.yaml \
+  --format yaml \
+  --report ./conversion-report.json
+```
+
+`inspect` accepts `text`, `json`, or `yaml`. It reads at most 64 MiB and returns
+non-zero for a malformed or incompatible module while still printing its
+compatibility report.
+
+`convert-envoy` accepts one `envoy.filters.http.wasm` wrapper, its v3
+`typed_config`, or one bare `envoy.extensions.wasm.v3.PluginConfig`. It does not
+walk a bootstrap, listener, or filter chain. Generated stdout is a `WasmConfig`
+fragment suitable for an EdgionPlugins entry's `config` field; the converter
+does not guess a resource namespace or plugin stage. Choose the Edgion stage
+explicitly.
+
+Conversion is strict and has no lossy override. Unsupported runtime, context
+identity, a non-empty Envoy plugin name, environment/capability injection, cluster-based remote fetch,
+reload/cache behavior, ambiguous oneofs, unknown fields, and arbitrary
+`google.protobuf.Any` payloads are blockers. On a blocker, no configuration is
+written to stdout, the optional JSON report is still created, and the command
+returns non-zero. Reports are created with no-overwrite semantics.
+Without `--report`, the same structured report is written to stderr so stdout
+remains reserved for the generated configuration.
+
+Envoy exposes a non-empty `PluginConfig.name` to the guest as `plugin_name`.
+Edgion's `plugin_name` property is fixed to `Wasm`, and an Edgion resource name
+does not replace it, so the converter accepts only an empty Envoy plugin name.
+An empty Envoy name remains convertible, but the report warns that Envoy would
+expose an empty `plugin_name`; test that the guest does not depend on it.
+
+An empty Envoy runtime is allowed with a warning and resolves explicitly to
+Edgion's Wasmtime runtime. Every valid Envoy v3 remote `HttpUri` requires a
+non-empty cluster, whose transport and security semantics cannot be recovered,
+so remote sources always block automatic output. The report may show a
+tentative URL, timeout, retry-attempt, and base-backoff mapping to aid manual
+migration; it is not a compatible generated configuration.
+
+This is a migration assistant, not proof of seamless Envoy compatibility.
+Edgion uses its documented Wasmtime host ABI, fail-closed behavior differs,
+guest callouts default to disabled, and upstream response bodies remain
+streaming and visible only as individual chunks. The converter never downloads
+the remote module, reads the referenced source file, resolves a cluster or
+Secret, reads environment variables, or changes response buffering policy.
+
 ### get - Retrieve Resources
 
 Get a single resource or list resources.

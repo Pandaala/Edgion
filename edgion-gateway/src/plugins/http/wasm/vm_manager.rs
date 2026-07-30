@@ -29,16 +29,18 @@
 //!   atomic swap; and any refresh failure keeps the loaded module. When
 //!   `sha256` is configured it is verified before compilation, covering
 //!   OCI-fetched bytes too; a mismatch is a load error (never compiled).
-//! - Compilation (`Module::new`) runs on `spawn_blocking` since it is a CPU
-//!   bound synchronous call that must not block the async executor.
+//! - The optional SHA-256 check, compatibility analysis, and Wasmtime
+//!   compilation run in that order inside one `spawn_blocking` task. Analysis
+//!   rejects malformed/component binaries, unsupported or mixed ABI markers,
+//!   and imports/hooks outside the exact host profile. All three operations
+//!   may scan the full module and must not block the async executor.
 //! - Per module: a `Linker` gets the proxy-wasm host functions registered
 //!   via `host_abi::add_to_linker`, then
 //!   `linker.define_unknown_imports_as_traps(&module)` is called *after* —
-//!   this must come after `add_to_linker` so real host functions are wired
-//!   first and only the imports outside the supported subset become traps
-//!   (calling them would panic the guest, not the host). The resulting
-//!   `InstancePre` is stored on `ModuleEntry` so new instances are cheap to
-//!   spin up.
+//!   compatibility analysis has already rejected unknown imports, but the trap
+//!   linker remains defense in depth. It must come after `add_to_linker` so
+//!   real host functions win. The resulting `InstancePre` is stored on
+//!   `ModuleEntry` so new instances are cheap to spin up.
 //! - Instance init sequence (`ModuleEntry::new_vm`): instantiate from
 //!   `InstancePre` → optional `_initialize`/`_start` → optional
 //!   `proxy_on_context_create(ROOT_CONTEXT_ID, 0)` → `proxy_on_vm_start` →
@@ -89,16 +91,13 @@ const ROOT_CONTEXT_ID: i32 = 1;
 /// Fixed timeout for `url`-sourced bytecode fetches when the config carries
 /// no `source.fetch.timeoutMs` override.
 const URL_FETCH_TIMEOUT_SECS: u64 = 10;
-/// Cap on a `url`-sourced module body. Mirrors the OCI blob cap so a hostile
-/// or malfunctioning artifact server cannot make the host buffer an arbitrarily
-/// large body (no/false/chunked Content-Length) before the size check fires.
-const MAX_URL_MODULE_BYTES: usize = 64 * 1024 * 1024;
+/// Hard cap on module bytes loaded from file or URL sources. This matches the
+/// OCI blob/extracted-module caps and the CLI inspector cap.
+const MAX_MODULE_BYTES: usize = 64 * 1024 * 1024;
 /// How long a cache entry whose plugin refcount dropped to zero is kept
 /// before eviction. The grace absorbs reload thrash (full_set replaces every
 /// plugin instance, briefly dropping every refcount to zero).
 const EVICT_GRACE_SECS: u64 = 60;
-/// proxy-wasm ABI version exports the host accepts.
-const SUPPORTED_ABI_EXPORTS: [&str; 2] = ["proxy_abi_version_0_2_0", "proxy_abi_version_0_2_1"];
 /// Floor for guest-requested tick periods (busy-loop protection).
 const MIN_TICK_PERIOD_MS: u64 = 100;
 
@@ -169,19 +168,30 @@ pub fn runtime_cache_key(config: &WasmConfig) -> String {
 /// merged per-key by `TickCalloutState`, not stored as per-entry config, so
 /// two plugins differing only in callout config should still share the entry.
 ///
-/// Each string field is length-prefixed and carries a present/absent marker so
+/// Each byte field is length-prefixed and carries a present/absent marker so
 /// no field-boundary ambiguity can collide two distinct configs (e.g.
-/// `vm="a"`/`plugin="b"` vs `vm="ab"`/`plugin=""`, or `Some("")` vs `None`).
+/// `vm=b"a"`/`plugin=b"b"` vs `vm=b"ab"`/`plugin=b""`, or an explicit
+/// empty value vs absence). Representation does not participate: string and
+/// base64 forms that decode to the same bytes intentionally share an entry.
 fn wasm_runtime_config_digest(config: &WasmConfig) -> String {
     let mut hasher = Sha256::new();
     hasher.update(config.instance_pool_size.to_le_bytes());
     hasher.update(config.timeout_ms.to_le_bytes());
-    for field in [config.vm_config.as_deref(), config.plugin_config.as_deref()] {
+    for field in [config.vm_config.as_ref(), config.plugin_config.as_ref()] {
         match field {
-            Some(s) => {
+            Some(raw) => {
                 hasher.update([1u8]);
-                hasher.update((s.len() as u64).to_le_bytes());
-                hasher.update(s.as_bytes());
+                match raw.guest_bytes() {
+                    Ok(bytes) => {
+                        hasher.update([0u8]);
+                        hasher.update((bytes.len() as u64).to_le_bytes());
+                        hasher.update(bytes);
+                    }
+                    // Invalid raw config is rejected before module loading.
+                    // Keep key generation total and collision-safe relative
+                    // to valid empty bytes without exposing the bad value.
+                    Err(_) => hasher.update([0xff]),
+                }
             }
             None => hasher.update([0u8]),
         }
@@ -859,6 +869,8 @@ impl WasmVmManager {
         config: &WasmConfig,
         tick_callouts: Arc<TickCalloutState>,
     ) -> Result<PreparedModule, String> {
+        let vm_config = decode_guest_config("vmConfig", config.vm_config.as_ref())?;
+        let plugin_config = decode_guest_config("pluginConfig", config.plugin_config.as_ref())?;
         let (bytes, oci_meta) = match &config.source.oci {
             Some(spec) => {
                 let fetched = super::oci::fetch_oci_bytes(spec).await?;
@@ -871,31 +883,57 @@ impl WasmVmManager {
             }
             None => (fetch_bytes(&config.source).await?, None),
         };
-        if let Some(expected) = &config.sha256 {
-            let actual = hex::encode(Sha256::digest(&bytes));
-            if !actual.eq_ignore_ascii_case(expected) {
-                return Err(format!("sha256 mismatch: expected {expected}, got {actual}"));
-            }
-        }
         let label = config.source.metrics_label();
+        let expected_sha256 = config.sha256.clone();
         let compile_engine = engine.clone();
-        let compile_start = Instant::now();
-        let module = tokio::task::spawn_blocking(move || Module::new(&compile_engine, &bytes))
-            .await
-            .map_err(|e| format!("compile task join error: {e}"))?
-            .map_err(|e| format!("wasm compile error: {e}"))?;
-        record_wasm_compile_duration(&label, compile_start.elapsed().as_secs_f64() * 1000.0);
-        check_abi_version(&module)?;
+        // Hashing, full wasmparser validation/reporting, and Wasmtime
+        // compilation are all CPU-bound and may process the full 64 MiB input.
+        // Keep the entire ordered pipeline off Tokio worker threads. Measure
+        // only Module::new inside the closure so the compile metric retains its
+        // historical meaning.
+        let (module, compatibility, compile_duration) = tokio::task::spawn_blocking(
+            move || -> Result<(Module, edgion_wasm::CompatibilityReport, Duration), String> {
+                if let Some(expected) = expected_sha256 {
+                    let actual = hex::encode(Sha256::digest(&bytes));
+                    if !actual.eq_ignore_ascii_case(&expected) {
+                        return Err(format!("sha256 mismatch: expected {expected}, got {actual}"));
+                    }
+                }
+                let compatibility = edgion_wasm::analyze(&bytes);
+                if !compatibility.compatible {
+                    return Err("wasm compatibility check failed".to_string());
+                }
+                let compile_start = Instant::now();
+                let module = Module::new(&compile_engine, &bytes).map_err(|_| "wasm compile failed".to_string())?;
+                Ok((module, compatibility, compile_start.elapsed()))
+            },
+        )
+        .await
+        .map_err(|_| "wasm validation/compile task failed".to_string())??;
+        record_wasm_compile_duration(&label, compile_duration.as_secs_f64() * 1000.0);
+        if compatibility
+            .warnings
+            .iter()
+            .any(|warning| warning.code == edgion_wasm::CompatibilityCode::MissingAbiMarker)
+        {
+            tracing::warn!("wasm module exports no proxy_abi_version_* marker; loading anyway");
+        }
+        let has_body_hook = compatibility
+            .hooks
+            .iter()
+            .any(|hook| hook.name == "proxy_on_response_body");
+        let has_request_body_hook = compatibility
+            .hooks
+            .iter()
+            .any(|hook| hook.name == "proxy_on_request_body");
         // Probe the body hook once at load so the per-chunk body filter can
         // skip leasing an instance for header-only guests (see
         // `has_body_hook`); export lookup on every chunk would otherwise
         // contend the pool mutex for no benefit on large streamed responses.
-        let has_body_hook = module.exports().any(|e| e.name() == "proxy_on_response_body");
-        let has_request_body_hook = module.exports().any(|e| e.name() == "proxy_on_request_body");
         let mut linker: Linker<HostState> = Linker::new(&engine);
         host_abi::add_to_linker(&mut linker).map_err(|e| format!("linker setup: {e}"))?;
-        // Must run AFTER add_to_linker: only imports outside the supported
-        // proxy-wasm subset become trap stubs; real host functions win.
+        // Defense in depth after the compatibility profile rejects unknown
+        // imports. Must run after add_to_linker so real host functions win.
         linker
             .define_unknown_imports_as_traps(&module)
             .map_err(|e| format!("linker traps: {e}"))?;
@@ -907,8 +945,8 @@ impl WasmVmManager {
             instance_pre,
             pool: Mutex::new(Vec::new()),
             pool_cap: config.instance_pool_size,
-            vm_config: config.vm_config.clone().unwrap_or_default().into_bytes(),
-            plugin_config: config.plugin_config.clone().unwrap_or_default().into_bytes(),
+            vm_config,
+            plugin_config,
             shared_data: Arc::new(SharedData::new(label.clone())),
             metrics_label: label,
             hook_timeout_ms: config.timeout_ms,
@@ -1116,34 +1154,6 @@ impl WasmVmManager {
     }
 }
 
-/// Enforce the proxy-wasm ABI version marker exported by the guest.
-///
-/// - A supported marker (`proxy_abi_version_0_2_0` / `_0_2_1`) passes.
-/// - Any other `proxy_abi_version_*` export is a load error: the guest
-///   targets an ABI the host does not implement, and failing the load with a
-///   clear message beats the runtime "unknown import trapped" fallback.
-/// - No marker at all passes with a WARN: hand-written test modules and
-///   non-standard guests do not export one, and the defined-as-trap fallback
-///   still bounds whatever they call.
-fn check_abi_version(module: &Module) -> Result<(), String> {
-    let versions: Vec<&str> = module
-        .exports()
-        .map(|e| e.name())
-        .filter(|n| n.starts_with("proxy_abi_version_"))
-        .collect();
-    if versions.is_empty() {
-        tracing::warn!("wasm module exports no proxy_abi_version_* marker; loading anyway (non-standard guest)");
-        return Ok(());
-    }
-    if versions.iter().any(|v| SUPPORTED_ABI_EXPORTS.contains(v)) {
-        return Ok(());
-    }
-    Err(format!(
-        "unsupported proxy-wasm ABI version ({}); supported: proxy_abi_version_0_2_0, proxy_abi_version_0_2_1",
-        versions.join(", ")
-    ))
-}
-
 /// Whether this source's effective OCI pull policy requires periodic
 /// re-resolution. Admission validates the image reference; a residual parse
 /// failure safely disables refresh rather than affecting an already-loaded
@@ -1191,9 +1201,7 @@ async fn fetch_bytes(source: &WasmSourceSpec) -> Result<Vec<u8>, String> {
         // Relative paths resolve against the gateway work dir, same as other
         // file-backed configs (access log LocalFile fallback, etc.).
         let resolved = edgion_resources::work_dir().resolve(path);
-        return tokio::fs::read(&resolved)
-            .await
-            .map_err(|e| format!("read wasm file '{}': {e}", resolved.display()));
+        return read_file_bounded(&resolved).await;
     }
     if let Some(b64) = &source.inline {
         use base64::Engine as _;
@@ -1212,6 +1220,63 @@ async fn fetch_bytes(source: &WasmSourceSpec) -> Result<Vec<u8>, String> {
         return fetch_url_bytes(url, source.fetch.as_ref()).await;
     }
     Err("wasm source has no file/inline/url".to_string())
+}
+
+#[derive(Debug)]
+enum BoundedFileReadError {
+    Io(std::io::Error),
+    TooLarge,
+}
+
+async fn read_file_bounded(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| format!("read wasm file '{}': {e}", path.display()))?;
+    // This metadata check cheaply rejects large and sparse files. It is only
+    // an optimization: the bounded read below uses the already-open file and
+    // remains authoritative if the file grows after this check.
+    let metadata = file
+        .metadata()
+        .await
+        .map_err(|e| format!("read wasm file '{}': {e}", path.display()))?;
+    if metadata.len() > MAX_MODULE_BYTES as u64 {
+        return Err(module_too_large_error());
+    }
+    let initial_capacity = usize::try_from(metadata.len())
+        .unwrap_or(MAX_MODULE_BYTES)
+        .min(MAX_MODULE_BYTES);
+    match read_open_file_bounded(file, initial_capacity, MAX_MODULE_BYTES).await {
+        Ok(bytes) => Ok(bytes),
+        Err(BoundedFileReadError::TooLarge) => Err(module_too_large_error()),
+        Err(BoundedFileReadError::Io(error)) => Err(format!("read wasm file '{}': {error}", path.display())),
+    }
+}
+
+async fn read_open_file_bounded<R>(
+    reader: R,
+    initial_capacity: usize,
+    max_bytes: usize,
+) -> Result<Vec<u8>, BoundedFileReadError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt as _;
+
+    let mut bytes = Vec::with_capacity(initial_capacity.min(max_bytes));
+    let limit = u64::try_from(max_bytes).unwrap_or(u64::MAX).saturating_add(1);
+    reader
+        .take(limit)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(BoundedFileReadError::Io)?;
+    if bytes.len() > max_bytes {
+        return Err(BoundedFileReadError::TooLarge);
+    }
+    Ok(bytes)
+}
+
+fn module_too_large_error() -> String {
+    format!("wasm module exceeds {MAX_MODULE_BYTES} bytes")
 }
 
 /// Bound on concurrently in-flight url/OCI fetches across all modules. Same-url
@@ -1313,19 +1378,15 @@ async fn fetch_url_bytes_with_permits(
                     // Fast-reject an honest oversized Content-Length before
                     // opening the body stream; the streaming counter below still
                     // guards absent/false/chunked lengths.
-                    if resp.content_length().is_some_and(|cl| cl > MAX_URL_MODULE_BYTES as u64) {
-                        return Err(format!(
-                            "fetch wasm url '{url}': body exceeds {MAX_URL_MODULE_BYTES} bytes"
-                        ));
+                    if resp.content_length().is_some_and(|cl| cl > MAX_MODULE_BYTES as u64) {
+                        return Err(format!("fetch wasm url '{url}': body exceeds {MAX_MODULE_BYTES} bytes"));
                     }
                     let (body, truncated) =
-                        crate::plugins::http::common::outbound::call::stream_body_capped(resp, MAX_URL_MODULE_BYTES)
+                        crate::plugins::http::common::outbound::call::stream_body_capped(resp, MAX_MODULE_BYTES)
                             .await
                             .map_err(|e| format!("read wasm body: {e}"))?;
                     if truncated {
-                        return Err(format!(
-                            "fetch wasm url '{url}': body exceeds {MAX_URL_MODULE_BYTES} bytes"
-                        ));
+                        return Err(format!("fetch wasm url '{url}': body exceeds {MAX_MODULE_BYTES} bytes"));
                     }
                     return Ok(body.to_vec());
                 }
@@ -1676,6 +1737,16 @@ impl ModuleEntry {
     }
 }
 
+fn decode_guest_config(
+    field_name: &str,
+    raw: Option<&edgion_resources::plugin_configs::WasmRawConfig>,
+) -> Result<Vec<u8>, String> {
+    raw.map_or_else(
+        || Ok(Vec::new()),
+        |value| value.guest_bytes().map_err(|error| format!("{field_name} {error}")),
+    )
+}
+
 /// A leased VM, borrowed from a `ModuleEntry` pool. Returns to the pool on
 /// drop unless poisoned (a trap or protocol violation during the lease).
 pub struct VmLease {
@@ -1984,6 +2055,7 @@ impl Drop for VmLease {
 mod tests {
     use super::*;
     use crate::plugins::http::wasm::host_abi::WasmPhase;
+    use edgion_resources::plugin_configs::WasmRawConfig;
     use std::collections::HashMap;
 
     fn write_temp_wasm(wat: &str) -> tempfile::NamedTempFile {
@@ -2025,6 +2097,68 @@ mod tests {
     )
     "#;
 
+    /// Initialization-only guest that rejects unless both Proxy-Wasm config
+    /// paths expose the exact configured non-UTF-8 bytes.
+    const RAW_CONFIG_GUEST: &str = r#"
+    (module
+      (import "env" "proxy_get_buffer_bytes"
+        (func $get_buffer (param i32 i32 i32 i32 i32) (result i32)))
+      (import "env" "proxy_get_configuration"
+        (func $get_configuration (param i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (func (export "proxy_on_memory_allocate") (param i32) (result i32)
+        (i32.const 1024))
+      (func (export "proxy_on_context_create") (param i32 i32))
+      (func (export "proxy_on_vm_start") (param i32 i32) (result i32)
+        (if (i32.ne (local.get 1) (i32.const 3)) (then (return (i32.const 0))))
+        (if (i32.ne
+              (call $get_buffer
+                (i32.const 6) (i32.const 0) (i32.const -1)
+                (i32.const 0) (i32.const 4))
+              (i32.const 0))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.load (i32.const 4)) (i32.const 3))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.load8_u (i32.const 1024)) (i32.const 254))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.load8_u (i32.const 1025)) (i32.const 1))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.load8_u (i32.const 1026)) (i32.const 127))
+          (then (return (i32.const 0))))
+        (i32.const 1))
+      (func (export "proxy_on_configure") (param i32 i32) (result i32)
+        (if (i32.ne (local.get 1) (i32.const 3)) (then (return (i32.const 0))))
+        (if (i32.ne
+              (call $get_buffer
+                (i32.const 7) (i32.const 0) (i32.const -1)
+                (i32.const 0) (i32.const 4))
+              (i32.const 0))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.load (i32.const 4)) (i32.const 3))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.load8_u (i32.const 1024)) (i32.const 255))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.load8_u (i32.const 1025)) (i32.const 0))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.load8_u (i32.const 1026)) (i32.const 128))
+          (then (return (i32.const 0))))
+        (if (i32.ne
+              (call $get_configuration (i32.const 0) (i32.const 4))
+              (i32.const 0))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.load (i32.const 4)) (i32.const 3))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.load8_u (i32.const 1024)) (i32.const 255))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.load8_u (i32.const 1025)) (i32.const 0))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.load8_u (i32.const 1026)) (i32.const 128))
+          (then (return (i32.const 0))))
+        (i32.const 1))
+      (func (export "proxy_abi_version_0_2_0"))
+    )
+    "#;
+
     fn file_config(path: &std::path::Path) -> edgion_resources::plugin_configs::WasmConfig {
         let mut c = edgion_resources::plugin_configs::WasmConfig::default();
         c.source.file = Some(path.to_string_lossy().into_owned());
@@ -2049,9 +2183,9 @@ mod tests {
     async fn same_source_distinct_plugin_config_do_not_alias() {
         let f = write_temp_wasm(MINI_GUEST);
         let mut cfg_a = file_config(f.path());
-        cfg_a.plugin_config = Some("tenant-a".to_string());
+        cfg_a.plugin_config = Some(WasmRawConfig::string("tenant-a"));
         let mut cfg_b = file_config(f.path());
-        cfg_b.plugin_config = Some("tenant-b".to_string());
+        cfg_b.plugin_config = Some(WasmRawConfig::string("tenant-b"));
 
         let mgr = WasmVmManager::new_for_test();
         let entry_a = load(&mgr, &cfg_a).await.expect("loads a");
@@ -2072,19 +2206,46 @@ mod tests {
     async fn plugin_config_only_reload_lands_new_entry() {
         let f = write_temp_wasm(MINI_GUEST);
         let mut cfg = file_config(f.path());
-        cfg.plugin_config = Some("v1".to_string());
+        cfg.plugin_config = Some(WasmRawConfig::string("v1"));
         let mgr = WasmVmManager::new_for_test();
         let e1 = load(&mgr, &cfg).await.expect("loads v1");
         let e1b = load(&mgr, &cfg).await.expect("cached v1");
         assert!(Arc::ptr_eq(&e1, &e1b), "unchanged config shares the entry");
 
-        cfg.plugin_config = Some("v2".to_string());
+        cfg.plugin_config = Some(WasmRawConfig::string("v2"));
         let e2 = load(&mgr, &cfg).await.expect("loads v2");
         assert!(
             !Arc::ptr_eq(&e1, &e2),
             "pluginConfig-only reload must produce a new entry"
         );
         assert_eq!(e2.plugin_config, b"v2");
+    }
+
+    #[tokio::test]
+    async fn real_guest_receives_exact_non_utf8_vm_and_plugin_config_bytes() {
+        let file = write_temp_wasm(RAW_CONFIG_GUEST);
+        let mut config = file_config(file.path());
+        config.vm_config = Some(WasmRawConfig::base64("/gF/"));
+        config.plugin_config = Some(WasmRawConfig::base64("/wCA"));
+
+        let manager = WasmVmManager::new_for_test();
+        let entry = load(&manager, &config)
+            .await
+            .expect("guest accepts exact VM, plugin, and legacy configuration bytes");
+        assert_eq!(entry.vm_config, [0xfe, 0x01, 0x7f]);
+        assert_eq!(entry.plugin_config, [0xff, 0x00, 0x80]);
+    }
+
+    #[tokio::test]
+    async fn gateway_rejects_invalid_raw_config_without_assuming_controller_validation() {
+        let file = write_temp_wasm(MINI_GUEST);
+        let mut config = file_config(file.path());
+        config.plugin_config = Some(WasmRawConfig::base64("YR=="));
+
+        let error = load(&WasmVmManager::new_for_test(), &config)
+            .await
+            .expect_err("non-canonical base64 must be rejected at the Gateway boundary");
+        assert_eq!(error, "pluginConfig must be canonical padded Standard base64");
     }
 
     #[tokio::test]
@@ -2362,8 +2523,8 @@ mod tests {
         assert!(load(&mgr, &file_config(f.path())).await.is_ok());
     }
 
-    /// ABI check branch 2: an unsupported proxy_abi_version_* export is a
-    /// load error with a readable message (not a runtime trap).
+    /// An unsupported proxy_abi_version_* export fails with the same bounded
+    /// compatibility error used for all untrusted module-shape failures.
     #[tokio::test]
     async fn abi_unsupported_version_rejected() {
         let wat = MINI_GUEST.replace(
@@ -2373,8 +2534,19 @@ mod tests {
         let f = write_temp_wasm(&wat);
         let mgr = WasmVmManager::new_for_test();
         let err = load(&mgr, &file_config(f.path())).await.unwrap_err();
-        assert!(err.contains("unsupported proxy-wasm ABI version"), "got: {err}");
-        assert!(err.contains("proxy_abi_version_0_1_0"), "got: {err}");
+        assert_eq!(err, "wasm compatibility check failed");
+    }
+
+    #[tokio::test]
+    async fn unknown_proxy_hook_export_is_rejected_before_compilation() {
+        let wat = MINI_GUEST.replace(
+            "(func (export \"proxy_on_request_headers\") (param i32 i32 i32) (result i32) (i32.const 0))",
+            "(func (export \"proxy_on_request_headers\") (param i32 i32 i32) (result i32) (i32.const 0))\n      (func (export \"proxy_on_request_header\") (param i32 i32 i32) (result i32) (i32.const 0))",
+        );
+        let file = write_temp_wasm(&wat);
+        let manager = WasmVmManager::new_for_test();
+        let error = load(&manager, &file_config(file.path())).await.unwrap_err();
+        assert_eq!(error, "wasm compatibility check failed");
     }
 
     /// ABI check branch 3: no version export at all loads with a WARN
@@ -2384,6 +2556,25 @@ mod tests {
         let f = write_temp_wasm(MINI_GUEST);
         let mgr = WasmVmManager::new_for_test();
         assert!(load(&mgr, &file_config(f.path())).await.is_ok());
+    }
+
+    #[test]
+    fn reference_guest_matches_host_compatibility_profile() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../edgion-tests/wasm/artifacts/header_demo.wasm");
+        let bytes = std::fs::read(path).expect("committed reference guest must be readable");
+        let report = edgion_wasm::analyze(&bytes);
+        assert!(report.compatible, "{:#?}\n{:#?}", report.errors, report.imports);
+        assert!(report.hooks.iter().any(|hook| {
+            hook.name == "proxy_on_request_headers" && hook.support == edgion_wasm::HookSupport::Implemented
+        }));
+        assert!(report.hooks.iter().any(|hook| {
+            hook.name == "proxy_on_request_trailers" && hook.support == edgion_wasm::HookSupport::KnownNotInvoked
+        }));
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.code == edgion_wasm::CompatibilityCode::KnownNotInvokedHook));
     }
 
     /// Refcount eviction: when the last plugin unregisters a cache key, the
@@ -2547,11 +2738,11 @@ mod tests {
         let k0 = runtime_cache_key(&base);
 
         let mut c = base.clone();
-        c.plugin_config = Some("x".to_string());
+        c.plugin_config = Some(WasmRawConfig::string("x"));
         assert_ne!(runtime_cache_key(&c), k0, "pluginConfig must affect the key");
 
         let mut c = base.clone();
-        c.vm_config = Some("x".to_string());
+        c.vm_config = Some(WasmRawConfig::string("x"));
         assert_ne!(runtime_cache_key(&c), k0, "vmConfig must affect the key");
 
         let mut c = base.clone();
@@ -2573,8 +2764,31 @@ mod tests {
 
         // Present-vs-absent must not collide (Some("") differs from None).
         let mut some_empty = base.clone();
-        some_empty.plugin_config = Some(String::new());
+        some_empty.plugin_config = Some(WasmRawConfig::string(""));
         assert_ne!(runtime_cache_key(&some_empty), k0, "Some(\"\") must differ from None");
+
+        // Representation is not identity: both decode to the same guest bytes.
+        let mut string = base.clone();
+        string.plugin_config = Some(WasmRawConfig::string("same"));
+        let mut base64 = base.clone();
+        base64.plugin_config = Some(WasmRawConfig::base64("c2FtZQ=="));
+        assert_eq!(
+            runtime_cache_key(&string),
+            runtime_cache_key(&base64),
+            "equal effective bytes must share the cache entry"
+        );
+
+        let json: edgion_resources::plugin_configs::WasmRawConfig =
+            serde_json::from_str(r#"{"json":{"z":1,"a":2}}"#).expect("valid raw JSON config");
+        let mut json_config = base.clone();
+        json_config.plugin_config = Some(json);
+        let mut canonical_string = base.clone();
+        canonical_string.plugin_config = Some(WasmRawConfig::string(r#"{"a":2,"z":1}"#));
+        assert_eq!(
+            runtime_cache_key(&json_config),
+            runtime_cache_key(&canonical_string),
+            "JSON cache identity must hash the exact canonical bytes passed to the guest"
+        );
     }
 
     /// Regression (contract-04): the per-resource `sha256` pin participates in
@@ -2927,6 +3141,38 @@ mod tests {
         assert!(manager.cache.modules.is_empty());
     }
 
+    #[tokio::test]
+    async fn bounded_file_reader_accepts_exact_limit() {
+        let expected = vec![b'x'; 32];
+        let actual = read_open_file_bounded(std::io::Cursor::new(expected.clone()), 32, 32)
+            .await
+            .expect("a file exactly at the cap is accepted");
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn file_fetch_fast_rejects_sparse_metadata_over_limit() {
+        let file = tempfile::NamedTempFile::new().expect("temporary file");
+        file.as_file()
+            .set_len(MAX_MODULE_BYTES as u64 + 1)
+            .expect("create sparse oversized file");
+
+        let error = read_file_bounded(file.path()).await.unwrap_err();
+        assert_eq!(error, module_too_large_error());
+        assert!(!error.contains(&file.path().display().to_string()));
+    }
+
+    #[tokio::test]
+    async fn bounded_file_reader_rejects_actual_bytes_over_metadata_hint() {
+        // The initial capacity represents a metadata length observed before a
+        // concurrent writer grew the already-open file. The read limit remains
+        // authoritative and detects the extra byte.
+        let error = read_open_file_bounded(std::io::Cursor::new(vec![b'x'; 33]), 32, 32)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, BoundedFileReadError::TooLarge));
+    }
+
     /// url fetch: a body exceeding the module cap is rejected by the streaming
     /// counter rather than buffered whole. The helper counts actually-streamed
     /// bytes, so the same rejection holds for absent/false/chunked
@@ -2937,7 +3183,7 @@ mod tests {
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
-        let big = vec![b'x'; MAX_URL_MODULE_BYTES + 1];
+        let big = vec![b'x'; MAX_MODULE_BYTES + 1];
         Mock::given(method("GET"))
             .and(path("/m.wasm"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(big))
@@ -3164,7 +3410,7 @@ mod tests {
 
         let f = write_temp_wasm(TICK_CALLOUT_GUEST);
         let mut config = file_config(f.path());
-        config.plugin_config = Some(server.uri());
+        config.plugin_config = Some(WasmRawConfig::string(server.uri()));
         let key = runtime_cache_key(&config);
         let mgr = WasmVmManager::new_for_test();
         mgr.register_plugin(&key, grant(vec![server.uri()], 1000));
@@ -3187,7 +3433,7 @@ mod tests {
         let f = write_temp_wasm(TICK_CALLOUT_GUEST);
         let mut config = file_config(f.path());
         // Port 1 is unreachable; still allowlisted so dispatch succeeds.
-        config.plugin_config = Some("http://127.0.0.1:1".to_string());
+        config.plugin_config = Some(WasmRawConfig::string("http://127.0.0.1:1"));
         let key = runtime_cache_key(&config);
         let mgr = WasmVmManager::new_for_test();
         mgr.register_plugin(&key, grant(vec!["http://127.0.0.1:1".to_string()], 300));
@@ -3213,7 +3459,7 @@ mod tests {
 
         let f = write_temp_wasm(TICK_CALLOUT_GUEST);
         let mut config = file_config(f.path());
-        config.plugin_config = Some(server.uri());
+        config.plugin_config = Some(WasmRawConfig::string(server.uri()));
         let key = runtime_cache_key(&config);
         let mgr = WasmVmManager::new_for_test();
         // Dispatch IS armed, but for a different origin than the guest targets.
@@ -3244,7 +3490,7 @@ mod tests {
 
         let f = write_temp_wasm(TICK_CALLOUT_GUEST);
         let mut config = file_config(f.path());
-        config.plugin_config = Some(server.uri());
+        config.plugin_config = Some(WasmRawConfig::string(server.uri()));
         let key = runtime_cache_key(&config);
         let mgr = WasmVmManager::new_for_test();
         let grant_a = grant(vec![server.uri()], 1000);

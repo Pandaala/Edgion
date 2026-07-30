@@ -13,6 +13,7 @@ The code is a Cargo workspace (resolver 2); each plane is its own crate (the old
 single-crate `src/core/` layout is gone):
 
 ```
+edgion-wasm/         # Proxy-Wasm compatibility/profile leaf (external deps only)
 edgion-dsl/          # EdgionDSL language core (leaf, no workspace-internal deps)
 edgion-resources/    # Shared resource/config schema (depends on edgion-dsl)
 edgion-common/       # Code shared across bins (depends on edgion-resources)
@@ -27,6 +28,7 @@ test binaries such as `test_server`, `test_client`, and `cache_residue` belong t
 `edgion-tests` and must be addressed with `-p edgion-tests`.
 
 **Placement principles**:
+- Runtime-independent Proxy-Wasm binary analysis or host ABI contracts → `edgion-wasm/`
 - Serves the control plane only → `edgion-controller/`
 - Serves the data plane only → `edgion-gateway/`
 - Serves only the CLI → `edgion-cli/`
