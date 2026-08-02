@@ -50,7 +50,7 @@ fn callout_client() -> Result<&'static reqwest::Client, &'static str> {
     static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
     CLIENT
         .get_or_init(|| {
-            let egress: Arc<dyn reqwest::dns::Resolve> = Arc::new(EgressResolver::new_metric_only(
+            let egress: Arc<dyn reqwest::dns::Resolve> = Arc::new(EgressResolver::new(
                 ResolverSpec::System,
                 EgressPolicy {
                     block_private: default_block_private(),

@@ -66,6 +66,7 @@ DP_DIRS = [
     "lb/runtime_state",
     "backends/policy",
     "cache",
+    "plugins/http/common/outbound",
 ]
 DP_FILES = [
     "routes/http/match_unit.rs",

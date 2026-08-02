@@ -48,7 +48,7 @@ static DSL_HTTP_CLIENT_NO_REDIRECT: OnceLock<reqwest::Client> = OnceLock::new();
 static DSL_HTTP_CLIENT_GUARDED_NO_REDIRECT: OnceLock<reqwest::Client> = OnceLock::new();
 
 fn dsl_egress_resolver() -> Arc<dyn reqwest::dns::Resolve> {
-    Arc::new(EgressResolver::new_metric_only(
+    Arc::new(EgressResolver::new(
         ResolverSpec::System,
         EgressPolicy { block_private: true },
         egress_dns_cache_ttl(),

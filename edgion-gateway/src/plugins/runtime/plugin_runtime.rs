@@ -297,6 +297,7 @@ impl PluginRuntime {
     ) -> Self {
         let mut runtime = Self::new();
         runtime.add_from_httproute_filters_inner(filters, namespace, true, mirror_tuning);
+        runtime.seal_fail_closed();
         runtime
     }
 
@@ -310,6 +311,7 @@ impl PluginRuntime {
     ) -> Self {
         let mut runtime = Self::new();
         runtime.add_from_httproute_filters_inner(filters, namespace, false, mirror_tuning);
+        runtime.seal_fail_closed();
         runtime
     }
 
@@ -2696,7 +2698,7 @@ mod tests {
 #[cfg(test)]
 mod ext_ref_index_tests {
     use super::*;
-    use edgion_resources::resources::LocalObjectReference;
+    use edgion_resources::resources::{ForwardAuthConfig, LocalObjectReference};
 
     fn make_ext_ref_filter(name: &str) -> HTTPRouteFilter {
         make_ext_ref_filter_with_kind("EdgionPlugins", name)
@@ -2717,6 +2719,40 @@ mod ext_ref_index_tests {
                 kind: kind.into(),
                 name: name.into(),
             }),
+        }
+    }
+
+    fn make_external_auth_filter(config: ForwardAuthConfig) -> HTTPRouteFilter {
+        HTTPRouteFilter {
+            filter_type: HTTPRouteFilterType::ExternalAuth,
+            request_header_modifier: None,
+            response_header_modifier: None,
+            request_redirect: None,
+            url_rewrite: None,
+            request_mirror: None,
+            cors: None,
+            external_auth: Some(config),
+            extension_ref: None,
+        }
+    }
+
+    #[test]
+    fn invalid_external_auth_seals_rule_and_backend_runtimes() {
+        // The default ForwardAuth target is intentionally invalid: neither a URL
+        // nor a Service name is configured, so ForwardAuth::new must fail.
+        let filters = vec![make_external_auth_filter(ForwardAuthConfig::default())];
+
+        let runtimes = [
+            PluginRuntime::from_httproute_filters_for_rule(&filters, "ns1", &MirrorTuning::default()),
+            PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1", &MirrorTuning::default()),
+        ];
+
+        for runtime in runtimes {
+            assert_eq!(runtime.request_plugins_count(), 1);
+            assert_eq!(
+                runtime.request_plugins_iter().next().map(|filter| filter.name()),
+                Some("RejectInvalidConfig")
+            );
         }
     }
 

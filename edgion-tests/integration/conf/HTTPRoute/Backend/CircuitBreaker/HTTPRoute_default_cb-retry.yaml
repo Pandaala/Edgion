@@ -1,0 +1,21 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: cb-retry
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: cb-gw
+  hostnames:
+    - "cb-retry.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      retry:
+        attempts: 1
+        codes: [502]
+      backendRefs:
+        - name: cb-retry
+          port: 30001

@@ -15,10 +15,9 @@ pub async fn fail_to_proxy(
     // response_filter. Do not write an error page or pollute upstream.err.
     // NOTE (filter-04c): can_reuse_downstream is reported true to express intent,
     // but the post-proxy abort path (the sentinel Err returned by response_filter)
-    // does not consult this field and tears the downstream connection down anyway.
-    // So in practice the connection is CLOSED after the complete, correct reply.
-    // Known perf-only divergence from Envoy, which keeps the downstream reusable
-    // for a clean local reply. See
+    // does not consult this field and tears the H1 downstream connection down.
+    // This is a known perf-only divergence from Envoy, which keeps the H1
+    // downstream reusable after a clean local reply. See
     // tasks/todo/filter-04c-local-reply-header-carryover.md (#3).
     if ctx.local_reply_written {
         return FailToProxy {

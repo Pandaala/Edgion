@@ -186,7 +186,7 @@ impl OpenidConnect {
                 status: 502,
                 message: format!("Failed to encode OIDC state cookie: {}", e),
             })?;
-        let cookie_suffix = self.build_cookie_attr_suffix(session, 300, &self.callback_path());
+        let cookie_suffix = self.build_cookie_attr_suffix(session, 300, self.callback_path());
         let cookie = format!("{}={}{}", Self::state_cookie_name(), cookie_value, cookie_suffix);
 
         Ok((auth_url.to_string(), cookie))
@@ -348,7 +348,7 @@ impl OpenidConnect {
             "{}={}{}",
             Self::state_cookie_name(),
             "",
-            self.build_cookie_attr_suffix(session, 0, &self.callback_path())
+            self.build_cookie_attr_suffix(session, 0, self.callback_path())
         );
         let redirect_target = Self::sanitize_redirect_target(&state_cookie.original_url);
         let cookies = vec![session_cookie, clear_state_cookie];

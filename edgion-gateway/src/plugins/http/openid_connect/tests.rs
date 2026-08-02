@@ -22,6 +22,31 @@ fn base_config() -> OpenidConnectConfig {
 }
 
 #[test]
+fn path_redirect_uris_ignore_x_forwarded_host() {
+    let mut cfg = base_config();
+    cfg.redirect_uri = Some("/oidc/callback".to_string());
+    cfg.post_logout_redirect_uri = Some("/after-logout".to_string());
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let mut session = MockPluginSession::new();
+
+    session.expect_header_value().returning(|name| match name {
+        "host" => Some("api.example.com".to_string()),
+        "x-forwarded-host" => Some("attacker.example".to_string()),
+        "x-forwarded-proto" => Some("https".to_string()),
+        _ => None,
+    });
+
+    assert_eq!(
+        plugin.resolve_redirect_uri(&session).expect("resolve redirect URI"),
+        "https://api.example.com/oidc/callback"
+    );
+    assert_eq!(
+        plugin.resolve_post_logout_redirect_uri_for_idp(&session),
+        Some("https://api.example.com/after-logout".to_string())
+    );
+}
+
+#[test]
 fn test_introspection_cache_entry_has_no_expires_at() {
     // Compile-time check: IntrospectionCacheEntry must not have expires_at
     let _entry = IntrospectionCacheEntry {
@@ -1266,7 +1291,7 @@ fn callback_path_normalized_for_path_only_redirect_uri() {
         ..Default::default()
     };
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
-    // callback_path() normalizes on the fly — double-slashes must be collapsed.
+    // Double-slashes must be collapsed when the callback path is cached.
     assert_eq!(plugin.callback_path(), "/auth/oidc/callback");
 }
 
@@ -1281,7 +1306,7 @@ fn callback_path_normalized_for_absolute_url_redirect_uri() {
         ..Default::default()
     };
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
-    // The URL parser extracts the path; normalize_config_path then collapses it.
+    // Construction extracts the URL path and then normalizes it.
     assert_eq!(plugin.callback_path(), "/auth/callback");
 }
 

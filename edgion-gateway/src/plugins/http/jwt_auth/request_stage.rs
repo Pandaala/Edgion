@@ -3,7 +3,7 @@
 
 use super::{JwtAuth, JwtAuthResult};
 use crate::plugins::http::common::auth_common::{
-    send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers,
+    send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers, strip_cookie, strip_query_param,
 };
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{PluginLog, PluginSession};
@@ -101,17 +101,7 @@ impl JwtAuth {
     }
 
     /// Hide credentials based on token source.
-    ///
-    /// Only header-based tokens can be fully hidden. Query parameter and cookie tokens
-    /// cannot be removed from the upstream request due to HTTP protocol limitations
-    /// (would require URI/Cookie header rewriting). In those cases a short PluginLog
-    /// tag surfaces the limitation via access log.
-    pub(super) fn hide_credentials_if_needed(
-        &self,
-        session: &mut dyn PluginSession,
-        source: TokenSource,
-        plugin_log: &mut PluginLog,
-    ) {
+    pub(super) fn hide_credentials_if_needed(&self, session: &mut dyn PluginSession, source: TokenSource) {
         if !self.config.hide_credentials {
             return;
         }
@@ -120,10 +110,10 @@ impl JwtAuth {
                 let _ = session.remove_request_header(&self.config.header);
             }
             TokenSource::Query => {
-                plugin_log.push("Skip hide query");
+                strip_query_param(session, &self.config.query);
             }
             TokenSource::Cookie => {
-                plugin_log.push("Skip hide cookie");
+                strip_cookie(session, &self.config.cookie);
             }
         }
     }

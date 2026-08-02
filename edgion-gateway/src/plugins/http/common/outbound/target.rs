@@ -1,7 +1,7 @@
 //! Resolved runtime target for outbound HTTP calls.
 //!
-//! [`ResolvedTarget`] is the canonical location; the webhook engine re-exports
-//! it as `WebhookResolvedTarget` for backward compatibility.
+//! [`ResolvedTarget`] is the canonical target representation for the shared
+//! outbound-call engine.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 

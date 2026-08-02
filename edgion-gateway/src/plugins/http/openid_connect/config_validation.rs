@@ -16,12 +16,6 @@ impl OpenidConnect {
     }
 
     pub(super) fn request_host(session: &dyn PluginSession) -> Option<String> {
-        if let Some(v) = session.header_value("x-forwarded-host") {
-            let host = Self::trim_forwarded_header(&v);
-            if !host.is_empty() {
-                return Some(host.to_string());
-            }
-        }
         if let Some(v) = session.header_value("host") {
             let host = Self::trim_forwarded_header(&v);
             if !host.is_empty() {
@@ -31,24 +25,8 @@ impl OpenidConnect {
         None
     }
 
-    pub(super) fn callback_path(&self) -> String {
-        let configured = self
-            .config
-            .redirect_uri
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .unwrap_or("/.edgion/oidc/callback");
-        let raw_path = if configured.starts_with('/') {
-            configured.to_string()
-        } else if let Ok(url) = Url::parse(configured) {
-            url.path().to_string()
-        } else {
-            "/.edgion/oidc/callback".to_string()
-        };
-        // Normalize the path so config-side and request-side inhabit the same
-        // normalized space. See §3.5 of the URI normalization spec.
-        let path_cfg = edgion_resources::path_normalization::get_path_normalization_config();
-        normalize_config_path(&raw_path, path_cfg)
+    pub(super) fn callback_path(&self) -> &str {
+        &self.callback_path
     }
 
     pub(super) fn resolve_redirect_uri(&self, session: &dyn PluginSession) -> VerifyResult<String> {

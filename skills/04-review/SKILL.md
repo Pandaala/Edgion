@@ -18,7 +18,7 @@ Supports auto-detection of the issue directory, issue ID lookup, or explicit pat
 | Topic | Sub-directory / file |
 |-------|----------------------|
 | **Security iron rules** (timing, weak passwords, cache keys — cross-feature) | [security/iron-rules.md](security/iron-rules.md) |
-| **Authentication** (basic / key / jwt / hmac / ldap / oidc / cert / forward / webhook) | [auth-timing/](auth-timing/), [basic-auth/](basic-auth/), [key-auth/](key-auth/), [jwt-auth/](jwt-auth/), [hmac-auth/](hmac-auth/), [ldap-auth/](ldap-auth/), [oidc/](oidc/), [header-cert-auth/](header-cert-auth/), [forward-auth/](forward-auth/), [webhook-key/](webhook-key/), [admin-cors/](admin-cors/), [cors/](cors/), [gateway-admin-auth/](gateway-admin-auth/) |
+| **Authentication** (basic / key / jwt / JWE / hmac / ldap / oidc / cert / forward / webhook) | [auth-timing/](auth-timing/), [basic-auth/](basic-auth/), [key-auth/](key-auth/), [jwt-auth/](jwt-auth/), [jwe-decrypt/](jwe-decrypt/), [hmac-auth/](hmac-auth/), [ldap-auth/](ldap-auth/), [oidc/](oidc/), [header-cert-auth/](header-cert-auth/), [forward-auth/](forward-auth/), [webhook-key/](webhook-key/), [admin-cors/](admin-cors/), [cors/](cors/), [gateway-admin-auth/](gateway-admin-auth/) |
 | **CSRF** (token cookie attributes) | [csrf/](csrf/) |
 | **Network access control** | [ip-restriction/](ip-restriction/), [real-ip/](real-ip/), [ssrf/](ssrf/) |
 | **TLS** (downstream / upstream / EdgionTls) | [edgion-tls/](edgion-tls/), [ssl/](ssl/) |

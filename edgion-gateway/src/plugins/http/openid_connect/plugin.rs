@@ -229,13 +229,13 @@ struct IntrospectionCacheEntry {
 #[derive(Debug, Clone)]
 struct AccessTokenCacheEntry {
     token: String,
-    _expires_at: Option<u64>,
 }
 
 /// OpenID Connect request filter plugin.
 pub struct OpenidConnect {
     name: String,
     config: OpenidConnectConfig,
+    callback_path: String,
     #[allow(dead_code)]
     plugin_namespace: String,
     /// Per-instance outbound HTTP client. Built at construction with the plugin's
@@ -274,6 +274,19 @@ impl OpenidConnect {
             );
             config.logout_path = normalized_logout_path;
         }
+        let configured_callback = config
+            .redirect_uri
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .unwrap_or("/.edgion/oidc/callback");
+        let raw_callback_path = if configured_callback.starts_with('/') {
+            configured_callback.to_string()
+        } else if let Ok(url) = Url::parse(configured_callback) {
+            url.path().to_string()
+        } else {
+            "/.edgion/oidc/callback".to_string()
+        };
+        let callback_path = normalize_config_path(&raw_callback_path, path_cfg);
 
         // Extract cache parameters before config is moved into Self.
         let introspection_capacity = if config.introspection.lru_cache.capacity == 0 {
@@ -428,6 +441,7 @@ impl OpenidConnect {
         Self {
             name: "OpenidConnect".to_string(),
             config,
+            callback_path,
             plugin_namespace,
             client: outbound_client,
             jwks_provider,

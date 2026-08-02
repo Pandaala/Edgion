@@ -174,6 +174,9 @@ Includes `certificate_callback` / `handshake_complete_callback`.
   fetch on a cold cache, so both are request-path reachable. Its only cold caller is
   `spawn_discovery_prewarm` in `openid_connect/plugin.rs`, which is where any cold-path log line for
   this provider must live
+- `plugins/http/common/outbound/` — shared ForwardAuth/Webhook outbound-call and DNS-guard helpers;
+  request-time resolution and execution are data-plane, while constructors and config assembly may
+  remain cold-path
 - `runtime/server/error_response.rs` (response generated when `fail_to_proxy` / `request_filter` reject)
 
 #### Explicitly **not** data plane (even under `gateway/`)

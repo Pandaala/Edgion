@@ -621,6 +621,7 @@ fn set_x_real_ip(session: &mut Session, ctx: &EdgionHttpContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_resources::resources::LocalObjectReference;
     use pingora_http::RequestHeader;
 
     #[test]
@@ -681,6 +682,45 @@ mod tests {
         assert_eq!(status, None);
         assert_eq!(ctx.request_path(), "/admin//../secret");
         assert_eq!(ctx.path(), "/secret");
+    }
+
+    #[test]
+    fn cors_extension_ref_scan_skips_missing_ref_and_finds_later_config() {
+        let filters = Some(vec![
+            HTTPRouteFilter {
+                filter_type: HTTPRouteFilterType::ExtensionRef,
+                request_header_modifier: None,
+                response_header_modifier: None,
+                request_redirect: None,
+                url_rewrite: None,
+                request_mirror: None,
+                cors: None,
+                external_auth: None,
+                extension_ref: None,
+            },
+            HTTPRouteFilter {
+                filter_type: HTTPRouteFilterType::ExtensionRef,
+                request_header_modifier: None,
+                response_header_modifier: None,
+                request_redirect: None,
+                url_rewrite: None,
+                request_mirror: None,
+                cors: None,
+                external_auth: None,
+                extension_ref: Some(LocalObjectReference {
+                    group: "edgion.io".to_string(),
+                    kind: "EdgionPlugins".to_string(),
+                    name: "cors".to_string(),
+                }),
+            },
+        ]);
+        let expected = Arc::new(CorsConfig::default());
+
+        let actual = extract_cors_config_from_route_filters_with(&filters, "default", |key| {
+            (key == "default/cors").then(|| Arc::clone(&expected))
+        });
+
+        assert!(actual.is_some_and(|config| Arc::ptr_eq(&config, &expected)));
     }
 }
 
@@ -834,6 +874,17 @@ fn extract_cors_config_from_route_filters(
     filters: &Option<Vec<HTTPRouteFilter>>,
     namespace: &str,
 ) -> Option<Arc<CorsConfig>> {
+    let store = get_global_plugin_store();
+    extract_cors_config_from_route_filters_with(filters, namespace, |key| {
+        store.with_plugin(key, |c| c.plugin_runtime.cors_config_arc()).flatten()
+    })
+}
+
+fn extract_cors_config_from_route_filters_with(
+    filters: &Option<Vec<HTTPRouteFilter>>,
+    namespace: &str,
+    lookup: impl Fn(&str) -> Option<Arc<CorsConfig>>,
+) -> Option<Arc<CorsConfig>> {
     let filters = filters.as_ref()?;
 
     for filter in filters {
@@ -841,7 +892,9 @@ fn extract_cors_config_from_route_filters(
             continue;
         }
 
-        let ext_ref = filter.extension_ref.as_ref()?;
+        let Some(ext_ref) = filter.extension_ref.as_ref() else {
+            continue;
+        };
 
         // Check if it's EdgionPlugins
         if ext_ref.kind != "EdgionPlugins" || (!ext_ref.group.is_empty() && ext_ref.group != "edgion.io") {
@@ -849,9 +902,7 @@ fn extract_cors_config_from_route_filters(
         }
 
         let key = format!("{}/{}", namespace, ext_ref.name);
-        let cors = get_global_plugin_store()
-            .with_plugin(&key, |c| c.plugin_runtime.cors_config_arc())
-            .flatten();
+        let cors = lookup(&key);
         if cors.is_some() {
             return cors;
         }

@@ -6,6 +6,11 @@ use pingora_core::{Error, ErrorSource, ErrorType};
 use pingora_proxy::Session;
 
 #[inline]
+fn should_record_local_origin_failure(retry_on_status: bool, error_type: &ErrorType) -> bool {
+    !retry_on_status && !matches!(error_type, ErrorType::HTTPStatus(_))
+}
+
+#[inline]
 pub fn error_while_proxy(
     edgion_http: &EdgionHttpProxy,
     peer: &HttpPeer,
@@ -26,8 +31,11 @@ pub fn error_while_proxy(
     }
     let mut e = e.more_context(format!("Peer: {}", peer));
 
-    // Record outlier detection failure (for non-status-retry errors only)
-    if !ctx.retry_on_status {
+    // Record only transport/proxy failures as local-origin. HTTPStatus errors
+    // are control flow for an already-observed upstream response (status retry
+    // or retry-budget denial), or a locally generated response status; the
+    // response filter has already classified any real upstream status.
+    if should_record_local_origin_failure(ctx.retry_on_status, e.etype()) {
         if let Some(upstream) = ctx.get_current_upstream() {
             if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
                 // Mid-proxy read/write error or transport reset — local-origin failure.
@@ -142,4 +150,17 @@ pub fn error_while_proxy(
     }
 
     e
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_record_local_origin_failure;
+    use pingora_core::ErrorType;
+
+    #[test]
+    fn local_origin_recording_excludes_status_control_flow() {
+        assert!(!should_record_local_origin_failure(false, &ErrorType::HTTPStatus(503)));
+        assert!(!should_record_local_origin_failure(true, &ErrorType::ReadError));
+        assert!(should_record_local_origin_failure(false, &ErrorType::ReadError));
+    }
 }

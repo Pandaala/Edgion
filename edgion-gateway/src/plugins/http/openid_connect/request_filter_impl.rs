@@ -36,7 +36,7 @@ impl RequestFilter for OpenidConnect {
                 "{}={}{}",
                 Self::state_cookie_name(),
                 "",
-                self.build_cookie_attr_suffix(session, 0, &self.callback_path())
+                self.build_cookie_attr_suffix(session, 0, self.callback_path())
             );
             let cookies = vec![clear_session_cookie, clear_state_cookie];
             let _ = self

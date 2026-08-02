@@ -20,6 +20,7 @@ impl TestSuite for CircuitBreakerTestSuite {
             Self::test_recovery_after_cooldown(),
             Self::test_gateway_and_app_counters_independent(),
             Self::test_second_policy_still_ejects(),
+            Self::test_status_retry_counts_each_attempt(),
         ]
     }
 }
@@ -366,6 +367,87 @@ impl CircuitBreakerTestSuite {
                         )
                     } else {
                         TestResult::failed(start.elapsed(), "cb-alias policy did not eject".to_string())
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_status_retry_counts_each_attempt() -> TestCase {
+        TestCase::new(
+            "status_retry_counts_each_attempt",
+            "Each retried 502 contributes an outlier-detection failure",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = std::time::Instant::now();
+                    let host = "cb-retry.example.com";
+                    let test_id = format!("cb-retry-{}", uuid::Uuid::new_v4());
+
+                    let _ = ctx
+                        .http_client
+                        .get(format!("{}/retry-sequence-reset", ctx.http_url()))
+                        .header("Host", host)
+                        .send()
+                        .await;
+
+                    // attempts=1 means this request reaches the backend twice.
+                    // Both 502 responses must count, reaching the configured
+                    // consecutiveGatewayErrors threshold of 2.
+                    let url = format!("{}/retry-sequence/{}/502,502,200", ctx.http_url(), test_id);
+                    let first = match ctx.http_client.get(&url).header("Host", host).send().await {
+                        Ok(resp) => resp,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Retried request failed: {}", e)),
+                    };
+                    if first.status().as_u16() != 502 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected terminal 502, got {}", first.status()),
+                        );
+                    }
+                    let first_attempt = first
+                        .headers()
+                        .get("x-attempt-number")
+                        .and_then(|value| value.to_str().ok());
+                    let first_history = first
+                        .headers()
+                        .get("x-attempt-history")
+                        .and_then(|value| value.to_str().ok());
+                    if first_attempt != Some("2") || first_history != Some("502,502") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected two real upstream 502 attempts, got attempt={:?}, history={:?}",
+                                first_attempt, first_history
+                            ),
+                        );
+                    }
+
+                    // If only the terminal attempt were counted, this request
+                    // would reach the sequence's 200. An ejected backend instead
+                    // leaves the gateway with no available upstream.
+                    let second = match ctx.http_client.get(&url).header("Host", host).send().await {
+                        Ok(resp) => resp,
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Post-ejection request failed: {}", e))
+                        }
+                    };
+                    let status = second.status().as_u16();
+                    let has_upstream_attempt = second.headers().contains_key("x-attempt-number")
+                        || second.headers().contains_key("x-attempt-history");
+                    if (status == 502 || status == 503) && !has_upstream_attempt {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Two 502 attempts ejected the backend after one client request".to_string(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected local post-ejection 502/503 without upstream attempt headers, got status={}, headers={:?}",
+                                status,
+                                second.headers()
+                            ),
+                        )
                     }
                 })
             },

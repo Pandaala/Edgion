@@ -17,8 +17,6 @@
 //! receives an `Option<&ResolvedSecrets>` map (keyed by `"ns/name:key"`) and
 //! passes it through to `resolve_var`, which performs the lookup.
 
-use std::collections::HashMap;
-
 use edgion_resources::resources::common::external_http::ResolvedSecrets;
 use edgion_resources::resources::common::outbound_request::{
     BodySpec, CustomSource, ListFields, OutboundRequestSpec, PresencePolicy,
@@ -304,16 +302,7 @@ impl CompiledRequest {
         // request are forwarded, and explicit origin/custom entries are applied
         // on top (possibly overriding). When forward_all=false only the
         // explicit origin/custom entries are sent.
-        let header_map = self.collect_headers(session, resolved)?;
-        for (k, v) in header_map {
-            if let (Ok(name), Ok(val)) = (
-                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
-                reqwest::header::HeaderValue::from_str(&v),
-            ) {
-                req.headers_mut().insert(name, val);
-            }
-            // Silently skip headers with invalid names or values (data-plane rule).
-        }
+        *req.headers_mut() = self.collect_headers(session, resolved)?;
 
         // ── 8. Add cookies as a single Cookie header ──────────────────────
         let mut cookie_pairs: Vec<(String, String)> = Vec::new();
@@ -385,14 +374,14 @@ impl CompiledRequest {
     /// Explicit `origin` and `custom` fields are then applied on top, allowing
     /// operators to override or inject specific headers.
     ///
-    /// Returns `Ok` with a `HashMap` (lowercase header names as keys) on success,
-    /// or `Err` if a `Required` origin header is absent from the incoming request.
+    /// Returns `Ok` with a multi-value header map on success, or `Err` if a
+    /// `Required` origin header is absent from the incoming request.
     pub fn collect_headers(
         &self,
         session: &dyn PluginSession,
         resolved: Option<&ResolvedSecrets>,
-    ) -> Result<HashMap<String, String>, String> {
-        let mut result = HashMap::new();
+    ) -> Result<reqwest::header::HeaderMap, String> {
+        let mut result = reqwest::header::HeaderMap::new();
 
         // forward_all: add all session headers minus hop-by-hop (RFC 9110 §7.6.1).
         if self.headers.forward_all {
@@ -403,7 +392,12 @@ impl CompiledRequest {
                     && !is_body_framing_header(&name)
                     && !is_hop_owned_expectation_header(&name)
                 {
-                    result.insert(name.to_ascii_lowercase(), value);
+                    if let (Ok(name), Ok(value)) = (
+                        reqwest::header::HeaderName::from_bytes(name.as_bytes()),
+                        reqwest::header::HeaderValue::from_str(&value),
+                    ) {
+                        result.append(name, value);
+                    }
                 }
             }
         }
@@ -414,7 +408,12 @@ impl CompiledRequest {
         let mut pairs: Vec<(String, String)> = Vec::new();
         collect_list_fields(&self.headers, session, FieldKind::Header, &mut pairs, resolved)?;
         for (k, v) in pairs {
-            result.insert(k.to_ascii_lowercase(), v);
+            if let (Ok(name), Ok(value)) = (
+                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                reqwest::header::HeaderValue::from_str(&v),
+            ) {
+                result.insert(name, value);
+            }
         }
 
         Ok(result)
@@ -674,12 +673,12 @@ mod tests {
 
         // Non-hop-by-hop headers must be present.
         assert_eq!(
-            result.get("content-type").map(String::as_str),
+            result.get("content-type").and_then(|value| value.to_str().ok()),
             Some("application/json"),
             "content-type should be forwarded"
         );
         assert_eq!(
-            result.get("authorization").map(String::as_str),
+            result.get("authorization").and_then(|value| value.to_str().ok()),
             Some("Bearer token123"),
             "authorization should be forwarded"
         );
@@ -704,6 +703,65 @@ mod tests {
         assert!(
             result.get("x-custom-hop").is_none(),
             "x-custom-hop should be stripped (nominated by Connection header)"
+        );
+    }
+
+    #[test]
+    fn forward_all_preserves_duplicate_header_values() {
+        use edgion_resources::resources::common::outbound_request::{
+            CustomField, CustomSource, MethodSpec, OutboundRequestSpec, PathSpec,
+        };
+
+        let spec = OutboundRequestSpec {
+            path: Some(PathSpec {
+                template: "/verify".to_string(),
+                allow_override: false,
+            }),
+            method: Some(MethodSpec {
+                template: "GET".to_string(),
+            }),
+            headers: ListFields {
+                forward_all: true,
+                custom: vec![CustomField {
+                    name: "X-Role".to_string(),
+                    source: CustomSource::Value("configured".to_string()),
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let compiled = CompiledRequest::from_spec(&spec).unwrap();
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_header_value()
+            .withf(|name| name == "connection")
+            .return_const(None::<String>);
+        session.expect_request_headers().return_const(vec![
+            ("x-forwarded-for".to_string(), "192.0.2.1".to_string()),
+            ("X-Forwarded-For".to_string(), "198.51.100.2".to_string()),
+            ("x-role".to_string(), "incoming-first".to_string()),
+            ("X-Role".to_string(), "incoming-second".to_string()),
+        ]);
+
+        let req = compiled
+            .build_request(&session, None, "http://auth.test", None)
+            .unwrap();
+        let values = req
+            .headers()
+            .get_all("x-forwarded-for")
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(values, vec!["192.0.2.1", "198.51.100.2"]);
+        assert_eq!(
+            req.headers()
+                .get_all("x-role")
+                .iter()
+                .map(|value| value.to_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["configured"]
         );
     }
 
@@ -859,7 +917,7 @@ mod tests {
             "expect states an expectation owned by the inbound hop"
         );
         assert_eq!(
-            result.get("authorization").map(String::as_str),
+            result.get("authorization").and_then(|value| value.to_str().ok()),
             Some("Bearer token123"),
             "unrelated headers must still be forwarded"
         );
@@ -903,7 +961,7 @@ mod tests {
         let result = compiled.collect_headers(&session, None).unwrap();
 
         assert_eq!(
-            result.get("expect").map(String::as_str),
+            result.get("expect").and_then(|value| value.to_str().ok()),
             Some("100-continue-via-origin"),
             "an explicitly listed origin field overrides the forward_all skip"
         );

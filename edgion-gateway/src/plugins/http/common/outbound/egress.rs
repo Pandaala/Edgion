@@ -86,7 +86,6 @@ struct Inner {
     spec: ResolverSpec,
     policy: EgressPolicy,
     ttl: Duration,
-    trace_rejections: bool,
     cache: RwLock<HashMap<String, CacheEntry>>,
 }
 
@@ -97,39 +96,19 @@ pub struct EgressResolver {
 
 impl EgressResolver {
     pub fn new(spec: ResolverSpec, policy: EgressPolicy, ttl: Duration) -> Self {
-        Self::new_with_rejection_tracing(spec, policy, ttl, true)
-    }
-
-    /// Build a resolver that records blocked-address metrics without emitting
-    /// one WARN per rejected address.
-    ///
-    /// Use this for request-derived destinations, where an untrusted caller
-    /// could otherwise amplify gateway logs by repeatedly resolving blocked
-    /// addresses.
-    pub fn new_metric_only(spec: ResolverSpec, policy: EgressPolicy, ttl: Duration) -> Self {
-        Self::new_with_rejection_tracing(spec, policy, ttl, false)
-    }
-
-    fn new_with_rejection_tracing(
-        spec: ResolverSpec,
-        policy: EgressPolicy,
-        ttl: Duration,
-        trace_rejections: bool,
-    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 spec,
                 policy,
                 ttl,
-                trace_rejections,
                 cache: RwLock::new(HashMap::new()),
             }),
         }
     }
 
     #[cfg(test)]
-    fn filter_addrs(&self, host: &str, addrs: Vec<IpAddr>) -> Vec<IpAddr> {
-        self.inner.filter_addrs(host, addrs)
+    fn filter_addrs(&self, addrs: Vec<IpAddr>) -> Vec<IpAddr> {
+        self.inner.filter_addrs(addrs)
     }
 
     #[cfg(test)]
@@ -173,7 +152,7 @@ impl Inner {
     }
 
     /// Drop every address the policy rejects and record a metric per drop.
-    fn filter_addrs(&self, host: &str, addrs: Vec<IpAddr>) -> Vec<IpAddr> {
+    fn filter_addrs(&self, addrs: Vec<IpAddr>) -> Vec<IpAddr> {
         addrs
             .into_iter()
             .filter(|ip| {
@@ -193,15 +172,6 @@ impl Inner {
                     IpClass::Private | IpClass::UniqueLocal | IpClass::Global => return true,
                 };
                 record_egress_blocked(reason);
-                if self.trace_rejections {
-                    tracing::warn!(
-                        host = %host,
-                        addr = %ip,
-                        reason,
-                        block_private = self.policy.block_private,
-                        "Outbound address rejected by egress policy"
-                    );
-                }
                 false
             })
             .collect()
@@ -224,7 +194,7 @@ impl Resolve for EgressResolver {
                     let raw = dns_resolve(&inner.spec, &host)
                         .await
                         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-                    let allowed = inner.filter_addrs(&host, raw);
+                    let allowed = inner.filter_addrs(raw);
                     inner.store(&host, allowed.clone(), Instant::now());
                     allowed
                 }
@@ -274,22 +244,11 @@ mod tests {
         )
     }
 
-    #[test]
-    fn metric_only_resolver_disables_per_address_tracing() {
-        let resolver = EgressResolver::new_metric_only(
-            ResolverSpec::System,
-            EgressPolicy { block_private: true },
-            Duration::from_secs(5),
-        );
-
-        assert!(!resolver.inner.trace_rejections);
-    }
-
     /// Link-local (including the cloud-metadata address) is always dropped.
     #[test]
     fn filter_always_drops_link_local_and_metadata() {
         let r = resolver(false);
-        let out = r.filter_addrs("evil.example.com", vec![ip("169.254.169.254"), ip("93.184.216.34")]);
+        let out = r.filter_addrs(vec![ip("169.254.169.254"), ip("93.184.216.34")]);
         assert_eq!(out, vec![ip("93.184.216.34")]);
     }
 
@@ -298,10 +257,10 @@ mod tests {
     fn filter_honors_block_private() {
         let addrs = vec![ip("10.1.2.3"), ip("192.168.1.1"), ip("fd00::1"), ip("93.184.216.34")];
 
-        let permissive = resolver(false).filter_addrs("host", addrs.clone());
+        let permissive = resolver(false).filter_addrs(addrs.clone());
         assert_eq!(permissive.len(), 4, "private must pass by default");
 
-        let strict = resolver(true).filter_addrs("host", addrs);
+        let strict = resolver(true).filter_addrs(addrs);
         assert_eq!(strict, vec![ip("93.184.216.34")]);
     }
 
@@ -309,7 +268,7 @@ mod tests {
     #[test]
     fn filter_can_return_empty() {
         let r = resolver(true);
-        let out = r.filter_addrs("host", vec![ip("10.0.0.1"), ip("169.254.169.254")]);
+        let out = r.filter_addrs(vec![ip("10.0.0.1"), ip("169.254.169.254")]);
         assert!(out.is_empty());
     }
 
@@ -319,7 +278,7 @@ mod tests {
     #[test]
     fn filter_always_drops_unspecified_regardless_of_block_private() {
         let r = resolver(false);
-        let out = r.filter_addrs("host", vec![ip("0.0.0.0"), ip("::"), ip("93.184.216.34")]);
+        let out = r.filter_addrs(vec![ip("0.0.0.0"), ip("::"), ip("93.184.216.34")]);
         assert_eq!(out, vec![ip("93.184.216.34")]);
     }
 
