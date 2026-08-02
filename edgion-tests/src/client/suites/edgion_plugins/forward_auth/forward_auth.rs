@@ -1168,6 +1168,75 @@ impl ForwardAuthTestSuite {
         )
     }
 
+    /// Test: forwardAll withholds the end-to-end `Expect` header (FA-BODY-002).
+    ///
+    /// Config: forward-auth-basic (forwardAll: true)
+    ///   decision.upstreamHeaders includes X-Saw-Expect
+    ///
+    /// `Expect` is NOT hop-by-hop, so RFC 9110 §7.6.1 filtering keeps it. It is
+    /// withheld separately: the auth request carries no body of its own, so the
+    /// expectation can never be satisfied there, and a server that enforces it
+    /// answers 417 — which ForwardAuth would read as a denied request.
+    ///
+    /// Expected:
+    ///   - 200 (auth passes via Bearer valid-token)
+    ///   - x-saw-expect: "no" → the auth server did NOT receive Expect
+    fn test_forward_all_strips_expect_continue() -> TestCase {
+        TestCase::new(
+            "forward_all_strips_expect_continue",
+            "forwardAll: true withholds the end-to-end Expect header from the auth request",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = &ctx.http_client;
+                    let url = format!("{}/headers", ctx.http_url());
+
+                    let response = match client
+                        .get(&url)
+                        .header("host", BASIC_HOST)
+                        .header("Authorization", "Bearer valid-token")
+                        .header("Expect", "100-continue")
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let status = response.status().as_u16();
+                    if status != 200 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 200 (valid token should pass auth), got {}", status),
+                        );
+                    }
+
+                    let body = response.text().await.unwrap_or_default();
+                    let body_lower = body.to_lowercase();
+
+                    let expect_withheld = body_lower.contains("x-saw-expect")
+                        && (body_lower.contains("\"x-saw-expect\":\"no\"")
+                            || body_lower.contains("\"x-saw-expect\": \"no\""));
+
+                    if expect_withheld {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "forwardAll withheld Expect from the auth request (FA-BODY-002)".to_string(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expect was relayed to the auth server: expected x-saw-expect=no. Body: {}",
+                                &body[..body.len().min(600)]
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
     /// Test: request with the Required origin header present passes auth and reaches upstream.
     ///
     /// Config: forward-auth-required-origin (same as above)
@@ -1501,6 +1570,7 @@ impl TestSuite for ForwardAuthTestSuite {
             Self::test_required_origin_present_passes(),
             // RFC 9110 §7.6.1: dynamic hop-by-hop stripping under forwardAll
             Self::test_forward_all_strips_dynamic_hop_by_hop_header(),
+            Self::test_forward_all_strips_expect_continue(),
             // success.statusCodes: custom list classification
             Self::test_success_accepts_custom_204(),
             Self::test_success_excludes_200_treats_as_failure(),

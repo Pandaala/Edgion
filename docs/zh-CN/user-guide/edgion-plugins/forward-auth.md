@@ -149,6 +149,10 @@ spec:
 
 `Content-Length` 和 `Transfer-Encoding` 只描述当前这一跳的 HTTP 消息，因此不会从客户端请求继承，也不能在 `origin`/`custom` 中配置。网关根据鉴权请求的实际 body 生成分帧信息：无 body 时不声明这两个请求头；配置或转发的缓冲 body 则使用其实际字节数作为 `Content-Length`。
 
+`forwardAll` 同样不会转发 `Expect`。它不属于 hop-by-hop 头，但它描述的是客户端请求的期望，网关在缓冲 body 时已自行处理该期望。鉴权请求自身通常不带 body，把 `Expect` 中继过去等于让鉴权服务等待永远不会到达的内容；严格实现该期望的服务会返回 `417 Expectation Failed`，而 forward_auth 会将其判定为鉴权拒绝。与两个分帧头不同的是，在 `origin` 中显式列出 `Expect` 仍然允许，并会照常转发。
+
+但在 `forwardBody: true` 时请勿把该显式列举与 `presence: required` 组合使用：缓冲 body 的过程会消费掉该期望并移除请求头，导致 required 查找落空、鉴权调用按 `statusOnError` fail-close。
+
 ### Secret 注入
 
 通过 `template` 源类型 + `${secretRef:namespace/name:key}` 变量将 Kubernetes Secret 值注入为自定义请求头：

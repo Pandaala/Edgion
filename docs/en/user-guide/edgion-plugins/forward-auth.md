@@ -153,6 +153,17 @@ from the client request or accepted in `origin`/`custom`. The gateway derives fr
 actual auth-request body: a bodyless request declares neither header, while a buffered configured
 or forwarded body receives its exact `Content-Length`.
 
+`Expect` is likewise withheld under `forwardAll`. It is not hop-by-hop, but it states an
+expectation about the client's request, which the gateway settles itself when it buffers the
+body. Relaying it onto an auth request that sends no body of its own asks the auth service to
+wait for content that never arrives; a service that enforces the expectation replies
+`417 Expectation Failed`, which ForwardAuth treats as a denied request. Unlike the framing
+headers, naming `Expect` explicitly in `origin` is still allowed and forwards it.
+
+Avoid combining that explicit listing with `presence: required` when `forwardBody: true`:
+buffering the body consumes the expectation and removes the header, so the required lookup
+finds nothing and the auth call fails closed with `statusOnError`.
+
 ### Secret Injection
 
 To inject a Kubernetes Secret value as a custom header, use the `template` source with a `${secretRef:namespace/name:key}` variable:

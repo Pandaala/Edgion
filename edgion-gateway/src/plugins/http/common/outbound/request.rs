@@ -33,6 +33,19 @@ fn is_body_framing_header(name: &str) -> bool {
     name.eq_ignore_ascii_case("content-length") || name.eq_ignore_ascii_case("transfer-encoding")
 }
 
+/// Whether `name` states an expectation the inbound hop already owns.
+///
+/// `Expect` is end-to-end rather than hop-by-hop, so hop-by-hop filtering does
+/// not remove it. Relaying it is still wrong here: the outbound request carries
+/// its own body (usually none), so the expectation describes an exchange that
+/// will never happen on this connection, and a strict server answers
+/// `417 Expectation Failed` — which ForwardAuth reads as a denied request.
+/// The inbound expectation is settled separately by the body-capture path,
+/// which writes the `100 Continue` response itself and then strips the header.
+fn is_hop_owned_expectation_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("expect")
+}
+
 /// Rebuild framing for the body owned by this outbound HTTP hop.
 ///
 /// Incoming framing is never reusable here: the configured method and body can
@@ -365,7 +378,9 @@ impl CompiledRequest {
     ///
     /// When `self.headers.forward_all` is true, all incoming request headers
     /// are forwarded after stripping hop-by-hop headers (RFC 9110 §7.6.1),
-    /// proxy-owned body framing, and names nominated by `Connection`.
+    /// proxy-owned body framing, `Expect`, and names nominated by `Connection`.
+    /// Body framing and `Expect` are end-to-end headers withheld deliberately:
+    /// they describe the inbound message, not the one being built here.
     ///
     /// Explicit `origin` and `custom` fields are then applied on top, allowing
     /// operators to override or inject specific headers.
@@ -384,7 +399,10 @@ impl CompiledRequest {
             let conn_val = session.header_value("connection").unwrap_or_default();
             let dynamic = connection_listed_hop_by_hop(&conn_val);
             for (name, value) in session.request_headers() {
-                if !is_hop_by_hop_or_listed(&name, &dynamic) && !is_body_framing_header(&name) {
+                if !is_hop_by_hop_or_listed(&name, &dynamic)
+                    && !is_body_framing_header(&name)
+                    && !is_hop_owned_expectation_header(&name)
+                {
                     result.insert(name.to_ascii_lowercase(), value);
                 }
             }
@@ -804,6 +822,90 @@ mod tests {
         assert!(
             msg.contains("Required") || msg.contains("required"),
             "Error message should mention Required; got: {msg}"
+        );
+    }
+
+    /// `Expect` is end-to-end, so hop-by-hop filtering keeps it. `forward_all`
+    /// must still withhold it: the outbound auth call sends no body of its own,
+    /// and a server enforcing the expectation answers `417 Expectation Failed`,
+    /// which ForwardAuth would read as a denied request.
+    #[test]
+    fn forward_all_strips_expect_continue() {
+        use edgion_resources::resources::common::outbound_request::OutboundRequestSpec;
+
+        let spec = OutboundRequestSpec {
+            headers: ListFields {
+                forward_all: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let compiled = CompiledRequest::from_spec(&spec).unwrap();
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_header_value()
+            .withf(|name| name == "connection")
+            .return_const(None::<String>);
+        session.expect_request_headers().return_const(vec![
+            ("expect".to_string(), "100-continue".to_string()),
+            ("authorization".to_string(), "Bearer token123".to_string()),
+        ]);
+
+        let result = compiled.collect_headers(&session, None).unwrap();
+
+        assert!(
+            !result.contains_key("expect"),
+            "expect states an expectation owned by the inbound hop"
+        );
+        assert_eq!(
+            result.get("authorization").map(String::as_str),
+            Some("Bearer token123"),
+            "unrelated headers must still be forwarded"
+        );
+    }
+
+    /// The automatic skip covers `forward_all` only. Naming `Expect` in `origin`
+    /// is a deliberate operator act and keeps working, matching how the other
+    /// non-hop-by-hop skips treat an explicit listing.
+    #[test]
+    fn explicitly_listed_origin_expect_is_still_forwarded() {
+        use edgion_resources::resources::common::outbound_request::{OriginField, OutboundRequestSpec, PresencePolicy};
+
+        let spec = OutboundRequestSpec {
+            headers: ListFields {
+                forward_all: true,
+                origin: vec![OriginField {
+                    name: "Expect".to_string(),
+                    presence: PresencePolicy::SkipIfMissing,
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let compiled = CompiledRequest::from_spec(&spec).unwrap();
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_header_value()
+            .withf(|name| name == "connection")
+            .return_const(None::<String>);
+        // Distinct values per lookup path so the assertion identifies which branch
+        // produced the entry: the origin lookup, not the forward_all sweep.
+        session
+            .expect_header_value()
+            .withf(|name| name == "Expect")
+            .return_const(Some("100-continue-via-origin".to_string()));
+        session
+            .expect_request_headers()
+            .return_const(vec![("expect".to_string(), "100-continue".to_string())]);
+
+        let result = compiled.collect_headers(&session, None).unwrap();
+
+        assert_eq!(
+            result.get("expect").map(String::as_str),
+            Some("100-continue-via-origin"),
+            "an explicitly listed origin field overrides the forward_all skip"
         );
     }
 

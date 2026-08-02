@@ -2313,6 +2313,10 @@ async fn auth_verify_handler(req: AxumRequest<Body>) -> impl IntoResponse {
             } else {
                 "no"
             };
+            // `Expect` is end-to-end, so hop-by-hop filtering keeps it. forwardAll
+            // withholds it anyway: this auth request sends no body of its own, so
+            // the expectation could never be satisfied here (FA-BODY-002).
+            let saw_expect = if headers.contains_key("expect") { "yes" } else { "no" };
             (
                 StatusCode::OK,
                 [
@@ -2321,6 +2325,7 @@ async fn auth_verify_handler(req: AxumRequest<Body>) -> impl IntoResponse {
                     ("X-User-Email", "test@example.com"),
                     ("X-Saw-Custom-Hop", saw_custom_hop),
                     ("X-Saw-Visible-Header", saw_visible_header),
+                    ("X-Saw-Expect", saw_expect),
                 ],
                 Json(body),
             )
