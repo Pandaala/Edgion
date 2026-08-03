@@ -1113,11 +1113,39 @@ pub struct EdgionHttpContext {
     /// reads these numeric values.
     pub request_body_config: crate::request_body::ResolvedRequestBodyConfig,
 
-    /// Full request-body cache and mutation framing state. The facade exists in
-    /// every Gateway flavor; only the Edgion Pingora backend can populate it.
-    /// Its read-only view stays available through the final upstream-response
-    /// header plugin chain and is then released before streaming the response.
+    /// Full request-body cache and mutation framing state. Its read-only view
+    /// stays available through the final upstream-response header plugin chain
+    /// and is then released before streaming the response.
     pub request_body: RequestBodyState,
+
+    /// Streamed request-body handlers installed by request-stage plugins
+    /// (e.g. ExtProc `STREAMED`). Driven per transport body event by
+    /// `request_body_filter_action`. Empty for the overwhelming majority of
+    /// requests — the emptiness test is the per-chunk fast-path gate.
+    ///
+    /// `SyncWrapper` grants only `&mut` access, which makes the `!Sync`
+    /// handler internals (a live gRPC stream) safe inside the Sync-required
+    /// context; all driving is `&mut` anyway.
+    ///
+    /// NOT the monotonic source of truth: the hook temporarily `take`s this
+    /// vector across `.await` points, and the downstream future can be
+    /// dropped mid-hook (the proxy's upstream-error `select!` arm), losing
+    /// the taken handlers. Retry/disposition predicates key on
+    /// [`Self::request_body_stream_active`] instead. Accepted cost of that
+    /// drop: the lost handlers' pending access-log entries die with them, so
+    /// a request killed by an upstream error mid-chunk has no
+    /// `request_body_filters` stage in its access log.
+    pub request_body_stream:
+        Vec<sync_wrapper::SyncWrapper<Box<dyn crate::plugins::runtime::traits::RequestBodyStreamHandler>>>,
+
+    /// Monotonic latch: set when the first streamed body handler is installed
+    /// and NEVER cleared, surviving even a downstream future dropped mid-hook
+    /// (which can empty `request_body_stream`). `request_retry_allowed`,
+    /// `upstream_request_body_disposition`, and the retry `buffer_ok` gates
+    /// derive from this latch — the contract requires the retry predicate to
+    /// be monotonic, and a lost handler must fail the request rather than
+    /// re-arm retries that would forward the remaining body uninspected.
+    pub request_body_stream_active: bool,
 
     /// First-write-wins request-chain guard for JSON Schema validation.
     ///
@@ -1303,6 +1331,8 @@ impl EdgionHttpContext {
             allow_loopback_upstream: false,
             request_body_config: crate::request_body::ResolvedRequestBodyConfig::default(),
             request_body: RequestBodyState::default(),
+            request_body_stream: Vec::new(),
+            request_body_stream_active: false,
             json_schema_validation_claimed: false,
             resolved_global_plugins: None,
             resolved_gateway_plugins: None,
@@ -1893,7 +1923,7 @@ mod sensitive_tests {
     }
 }
 
-#[cfg(all(test, feature = "body-buffering"))]
+#[cfg(test)]
 mod request_body_cap_tests {
     use super::*;
     use crate::plugins::runtime::traits::session::BodyReadError;

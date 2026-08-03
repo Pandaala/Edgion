@@ -35,20 +35,9 @@ jobs:
       - name: Run cargo check
         run: cargo check --locked --workspace --all-targets
 
-  gateway-flavors:
-    name: Gateway Flavor (${{ matrix.flavor }})
+  gateway-build:
+    name: Gateway Build
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - flavor: body
-            binary: edgion-gateway
-            expected_body: enabled
-            expected_mode: edgion-fork
-          - flavor: stock
-            binary: edgion-gateway-stock
-            expected_body: disabled
-            expected_mode: stock
     steps:
       - uses: actions/checkout@v6
 
@@ -58,47 +47,26 @@ jobs:
           toolchain: "1.96.1"
           install-deps: "true"
           cache-enabled: "true"
-          cache-key-prefix: "cargo-gateway-${{ matrix.flavor }}"
+          cache-key-prefix: "cargo-gateway"
 
-      - name: Build body Gateway
-        if: matrix.flavor == 'body'
+      - name: Build Gateway
         run: |
           cargo build --locked -p edgion-gateway --bin edgion-gateway
           cargo tree --locked -p edgion-gateway --edges normal > /tmp/gateway-tree.txt
 
-      - name: Build stock Gateway
-        if: matrix.flavor == 'stock'
-        run: |
-          cargo build --locked -p edgion-gateway \
-            --bin edgion-gateway-stock \
-            --no-default-features \
-            --features allocator-jemalloc,boringssl,upstream-pingora
-          cargo tree --locked -p edgion-gateway \
-            --edges normal \
-            --no-default-features \
-            --features allocator-jemalloc,boringssl,upstream-pingora \
-            > /tmp/gateway-tree.txt
-
       - name: Verify compiled capability
         run: |
-          capabilities="$(target/debug/${{ matrix.binary }} --print-build-capabilities)"
+          capabilities="$(target/debug/edgion-gateway --print-build-capabilities)"
           grep -qx 'format=edgion-build-capabilities/v1' <<<"$capabilities"
-          grep -qx 'body-buffering=${{ matrix.expected_body }}' <<<"$capabilities"
-          grep -qx 'pingora-mode=${{ matrix.expected_mode }}' <<<"$capabilities"
+          grep -qx 'body-buffering=enabled' <<<"$capabilities"
+          grep -qx 'pingora-mode=edgion-fork' <<<"$capabilities"
 
       - name: Verify Pingora source isolation
         run: |
           pingora_nodes="$(grep -E 'pingora-[^ ]+ v' /tmp/gateway-tree.txt)"
-          if [[ '${{ matrix.flavor }}' == 'body' ]]; then
-            if grep -v 'github.com/Pandaala/pingora' <<<"$pingora_nodes"; then
-              echo "Body Gateway contains a non-fork Pingora package"
-              exit 1
-            fi
-          else
-            if grep -q 'github.com/Pandaala/pingora' <<<"$pingora_nodes"; then
-              echo "Stock Gateway contains a fork Pingora package"
-              exit 1
-            fi
+          if grep -v 'github.com/Pandaala/pingora' <<<"$pingora_nodes"; then
+            echo "Gateway contains a non-fork Pingora package"
+            exit 1
           fi
 
   fmt:
@@ -168,14 +136,14 @@ jobs:
   # Summary job for branch protection
   ci-success:
     name: CI Success
-    needs: [check, gateway-flavors, fmt, agent-docs, clippy, test]
+    needs: [check, gateway-build, fmt, agent-docs, clippy, test]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check all jobs passed
         run: |
           if [[ "${{ needs.check.result }}" != "success" ]] || \
-             [[ "${{ needs.gateway-flavors.result }}" != "success" ]] || \
+             [[ "${{ needs.gateway-build.result }}" != "success" ]] || \
              [[ "${{ needs.fmt.result }}" != "success" ]] || \
              [[ "${{ needs.agent-docs.result }}" != "success" ]] || \
              [[ "${{ needs.clippy.result }}" != "success" ]] || \

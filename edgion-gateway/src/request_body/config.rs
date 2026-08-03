@@ -36,7 +36,7 @@ impl ResolvedRequestBodyConfig {
             .unwrap_or(default_body);
 
         Self {
-            enabled: config.enabled && crate::body_buffering_compiled(),
+            enabled: config.enabled,
             memory_buffer_bytes: memory_buffer_bytes.min(usize::try_from(max_body_size_bytes).unwrap_or(usize::MAX)),
             max_body_size_bytes,
         }
@@ -46,7 +46,7 @@ impl ResolvedRequestBodyConfig {
 impl Default for ResolvedRequestBodyConfig {
     fn default() -> Self {
         Self {
-            enabled: crate::body_buffering_compiled(),
+            enabled: true,
             memory_buffer_bytes: DEFAULT_MEMORY_BUFFER_BYTES,
             max_body_size_bytes: DEFAULT_MAX_BODY_SIZE_BYTES,
         }

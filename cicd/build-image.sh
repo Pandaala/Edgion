@@ -28,12 +28,11 @@ set -eo pipefail
 # Fallback version used when HEAD has no git tag.
 # Normal release flow: git tag v0.x.y  →  script auto-detects via `git describe --tags --exact-match`
 # or pass --from-tag / --version explicitly.
-DEFAULT_VERSION="0.3.5"
+DEFAULT_VERSION="0.3.6"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
 RUST_VERSION="${RUST_VERSION:-1.96.1}"
 FEATURES="${FEATURES:-default}"
-GATEWAY_FLAVOR="body"
 BINARIES="gateway controller"
 # Test harness binaries. These are [[bin]] targets of the edgion-tests crate
 # (formerly under examples/, now moved into edgion-tests). Built only via the
@@ -55,59 +54,17 @@ GATEWAY_BINARY="edgion-gateway"
 GATEWAY_FEATURES="default"
 GATEWAY_NO_DEFAULT_FEATURES=false
 
-feature_list_contains() {
-    local list=$1
-    local feature=$2
-    case ",${list}," in
-        *",${feature},"*) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
-configure_gateway_flavor() {
-    case "${GATEWAY_FLAVOR}" in
-        body)
-            GATEWAY_BINARY="edgion-gateway"
-            BINARIES="gateway controller"
-            CONTROLLER_GATEWAY_IMAGE="edgion-controller-gateway"
-            if [[ "${FEATURES}" == "default" ]]; then
-                GATEWAY_FEATURES="default"
-                GATEWAY_NO_DEFAULT_FEATURES=false
-            else
-                if feature_list_contains "${FEATURES}" "upstream-pingora"; then
-                    log_error "Gateway flavor body cannot enable upstream-pingora"
-                    exit 1
-                fi
-                GATEWAY_FEATURES="${FEATURES}"
-                if ! feature_list_contains "${GATEWAY_FEATURES}" "body-buffering"; then
-                    GATEWAY_FEATURES="${GATEWAY_FEATURES},body-buffering"
-                fi
-                GATEWAY_NO_DEFAULT_FEATURES=true
-            fi
-            ;;
-        stock)
-            GATEWAY_BINARY="edgion-gateway-stock"
-            BINARIES="gateway-stock controller"
-            CONTROLLER_GATEWAY_IMAGE="edgion-controller-gateway-stock"
-            GATEWAY_NO_DEFAULT_FEATURES=true
-            if [[ "${FEATURES}" == "default" ]]; then
-                GATEWAY_FEATURES="allocator-jemalloc,boringssl,upstream-pingora"
-            else
-                if feature_list_contains "${FEATURES}" "body-buffering"; then
-                    log_error "Gateway flavor stock cannot enable body-buffering"
-                    exit 1
-                fi
-                GATEWAY_FEATURES="${FEATURES}"
-                if ! feature_list_contains "${GATEWAY_FEATURES}" "upstream-pingora"; then
-                    GATEWAY_FEATURES="${GATEWAY_FEATURES},upstream-pingora"
-                fi
-            fi
-            ;;
-        *)
-            log_error "Unknown gateway flavor: ${GATEWAY_FLAVOR} (expected body or stock)"
-            exit 1
-            ;;
-    esac
+configure_gateway_features() {
+    GATEWAY_BINARY="edgion-gateway"
+    BINARIES="gateway controller"
+    CONTROLLER_GATEWAY_IMAGE="edgion-controller-gateway"
+    if [[ "${FEATURES}" == "default" ]]; then
+        GATEWAY_FEATURES="default"
+        GATEWAY_NO_DEFAULT_FEATURES=false
+    else
+        GATEWAY_FEATURES="${FEATURES}"
+        GATEWAY_NO_DEFAULT_FEATURES=true
+    fi
 }
 
 # Ensure Docker Buildx builder exists and is selected
@@ -196,10 +153,8 @@ Options:
     --test-images                Build ONLY the test harness images
                                  (test_server + test_client); skips standard images
     --controller-gateway         Build standalone bundle image: controller + gateway
-                                 Image: edgion-controller-gateway[-stock]
+                                 Image: edgion-controller-gateway
                                  (skips standard images)
-    --stock                      Build against stock Pingora instead of the
-                                 default body-enabled Edgion fork
     -h, --help                   Show this help message
 
 Test-Images Notes:
@@ -247,9 +202,6 @@ Examples:
 
     # Build controller-gateway bundle: controller + gateway
     $0 --controller-gateway
-
-    # Build the diagnostic Gateway against stock Pingora
-    $0 --stock
 
 Build Flow:
     Stage 1: Build Docker builder image (one-time)
@@ -959,10 +911,6 @@ main() {
                 controller_gateway=true
                 shift
                 ;;
-            --stock)
-                GATEWAY_FLAVOR="stock"
-                shift
-                ;;
             -h|--help)
                 show_usage
                 exit 0
@@ -982,7 +930,7 @@ main() {
     fi
 
     if [[ "${test_images}" != "true" ]]; then
-        configure_gateway_flavor
+        configure_gateway_features
     fi
 
     # --from-tag: resolve version from current git tag
@@ -1052,7 +1000,6 @@ main() {
     log_info "Push: ${push}"
     if [[ "${controller_gateway}" == "true" ]]; then
         log_info "Mode: Controller-Gateway (standalone bundle image)"
-        log_info "Gateway flavor: ${GATEWAY_FLAVOR}"
         log_info "Gateway binary: ${GATEWAY_BINARY}"
         log_info "Gateway features: ${GATEWAY_FEATURES}"
         log_info "  → ${CONTROLLER_GATEWAY_IMAGE} (controller + gateway)"
@@ -1061,7 +1008,6 @@ main() {
         log_info "  → edgion-test-server, edgion-test-client"
     else
         log_info "Mode: Standard"
-        log_info "Gateway flavor: ${GATEWAY_FLAVOR}"
         log_info "Gateway binary: ${GATEWAY_BINARY}"
         log_info "Gateway features: ${GATEWAY_FEATURES}"
         log_info "  → edgion-${BINARIES// /, edgion-}"

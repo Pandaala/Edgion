@@ -109,24 +109,17 @@ instant-acme = "0.8.4"
 boring = "4"
 boring-sys = "4"
 
-# Pingora source families. The Gateway selects exactly one complete family so
-# public types never cross a registry/Git source boundary. Development follows
-# the fork's `edgion` branch; the committed Cargo.lock pins the exact commit,
-# and CI/release builds use `--locked`. Release milestones may temporarily use
-# a protected immutable tag when a manifest-level source identity is required.
-pingora-core-upstream = { package = "pingora-core", version = "=0.8.1", features = ["connection_filter"] }
-pingora-http-upstream = { package = "pingora-http", version = "=0.8.1" }
-pingora-proxy-upstream = { package = "pingora-proxy", version = "=0.8.1" }
-pingora-limits-upstream = { package = "pingora-limits", version = "=0.8.1" }
-pingora-load-balancing-upstream = { package = "pingora-load-balancing", version = "=0.8.1" }
-pingora-ketama-upstream = { package = "pingora-ketama", version = "=0.8.1" }
-
-pingora-core-edgion = { package = "pingora-core", git = "https://github.com/Pandaala/pingora.git", branch = "edgion", features = ["connection_filter"] }
-pingora-http-edgion = { package = "pingora-http", git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
-pingora-proxy-edgion = { package = "pingora-proxy", git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
-pingora-limits-edgion = { package = "pingora-limits", git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
-pingora-load-balancing-edgion = { package = "pingora-load-balancing", git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
-pingora-ketama-edgion = { package = "pingora-ketama", git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
+# Pingora — the Gateway builds exclusively against the Edgion fork family so
+# public types never cross a source boundary. Development follows the fork's
+# `edgion` branch; the committed Cargo.lock pins the exact commit, and
+# CI/release builds use `--locked`. Release milestones may temporarily use a
+# protected immutable tag when a manifest-level source identity is required.
+pingora-core = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion", features = ["connection_filter"] }
+pingora-http = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
+pingora-proxy = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
+pingora-limits = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
+pingora-load-balancing = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
+pingora-ketama = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
 
 # HTTP server / client
 axum = { version = "0.8.8", features = ["macros", "ws"] }
@@ -170,6 +163,9 @@ hmac = "0.12"
 aes-gcm = "0.10"
 crc32fast = "1.4"
 subtle = "2"
+# &mut-only cell that is Sync regardless of its payload; used for per-request
+# streamed body handlers stored in the (Sync-required) request context.
+sync_wrapper = "1"
 tar = "0.4"
 jsonwebtoken = "9"
 zeroize = { version = "1", features = ["derive"] }

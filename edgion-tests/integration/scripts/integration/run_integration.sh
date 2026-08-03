@@ -279,7 +279,7 @@ ensure_nofile_limit() {
 }
 
 # Verify the Gateway process owned by this work directory and retain the
-# single-shared-Gateway invariant across both artifact names.
+# single-shared-Gateway invariant.
 check_single_gateway_process() {
     local pid_file="${WORK_DIR}/pids/gateway.pid"
     if [ ! -f "$pid_file" ]; then
@@ -290,18 +290,6 @@ check_single_gateway_process() {
     pid=$(cat "$pid_file")
     if ! kill -0 "$pid" 2>/dev/null; then
         log_error "Gateway process from ${pid_file} is not running (pid=${pid})"
-        return 1
-    fi
-
-    local flavor_file="${WORK_DIR}/gateway-flavor"
-    if [ ! -f "$flavor_file" ]; then
-        log_error "Gateway flavor marker not found: ${flavor_file}"
-        return 1
-    fi
-    local running_flavor
-    running_flavor=$(cat "$flavor_file")
-    if [ "$running_flavor" != "$EDGION_GATEWAY_FLAVOR" ]; then
-        log_error "Running Gateway flavor is ${running_flavor}; requested ${EDGION_GATEWAY_FLAVOR}"
         return 1
     fi
 
@@ -961,7 +949,6 @@ show_help() {
     echo "  --no-start             Skip start step"
     echo "  --keep-alive           Keep services running after end (default will stop)"
     echo "  --full-test            Run all tests including slow tests (timeout, etc.)"
-    echo "  --stock                Use the stock Pingora Gateway (default: body-enabled fork)"
     echo "  --controller-grpc-port <port>  Override controller/gateway gRPC sync port (default: 12151)"
     echo "  --suites <list>        Specify test suites to load (comma separated)"
     echo "  --with-reload          Run tests twice with reload in between (verify server_id changes)"
@@ -1481,7 +1468,6 @@ main() {
     local do_start=true
     local suites=""
     local with_reload=false
-    local gateway_flavor="body"
 
     # Coverage mode notification (heavy lifting done by prepare.sh / start_all.sh)
     if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
@@ -1515,10 +1501,6 @@ main() {
                 ;;
             --full-test)
                 FULL_TEST=true
-                shift
-                ;;
-            --stock)
-                gateway_flavor="stock"
                 shift
                 ;;
             --controller-grpc-port)
@@ -1682,19 +1664,7 @@ main() {
     if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
         gateway_bin_dir="${PROJECT_ROOT}/target/llvm-cov-target/debug"
     fi
-    case "$gateway_flavor" in
-        body)
-            export EDGION_GATEWAY_BIN="${gateway_bin_dir}/edgion-gateway"
-            ;;
-        stock)
-            export EDGION_GATEWAY_BIN="${gateway_bin_dir}/edgion-gateway-stock"
-            ;;
-        *)
-            log_error "Unknown gateway flavor: ${gateway_flavor} (expected body or stock)"
-            exit 1
-            ;;
-    esac
-    export EDGION_GATEWAY_FLAVOR="$gateway_flavor"
+    export EDGION_GATEWAY_BIN="${gateway_bin_dir}/edgion-gateway"
     export EDGION_TEST_CLIENT_BIN="${gateway_bin_dir}/test_client"
     export EDGION_CAPABILITY_REGISTRY="${PROJECT_ROOT}/edgion-tests/integration/capabilities.tsv"
     if [ -n "$G_RESOURCE" ] && [ -n "$G_ITEM" ]; then
@@ -1803,17 +1773,12 @@ main() {
         log_error "Unsupported Gateway capability format"
         exit 1
     fi
-    if [ "$gateway_flavor" = "body" ]; then
-        if ! echo "$gateway_capabilities" | grep -q '^body-buffering=enabled$'; then
-            log_error "Selected body Gateway does not report body-buffering=enabled"
-            exit 1
-        fi
-    elif ! echo "$gateway_capabilities" | grep -q '^body-buffering=disabled$'; then
-        log_error "Selected stock Gateway does not report body-buffering=disabled"
+    if ! echo "$gateway_capabilities" | grep -q '^body-buffering=enabled$'; then
+        log_error "Gateway does not report body-buffering=enabled"
         exit 1
     fi
     export EDGION_TEST_GATEWAY_CAPABILITIES="$gateway_capabilities"
-    log_success "Gateway flavor verified: ${gateway_flavor}"
+    log_success "Gateway capabilities verified"
 
     if [ ! -x "$EDGION_TEST_CLIENT_BIN" ]; then
         log_error "Integration test client is missing: ${EDGION_TEST_CLIENT_BIN}"

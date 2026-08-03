@@ -25,6 +25,8 @@ const FAILOPEN_HOST: &str = "ext-proc-failopen.example.com";
 const COEXIST_HOST: &str = "ext-proc-coexist.example.com";
 const TLS_HOST: &str = "ext-proc-tls.example.com";
 const TLS_NOVERIFY_HOST: &str = "ext-proc-tls-noverify.example.com";
+const STREAMED_HOST: &str = "ext-proc-streamed.example.com";
+const STREAMED_FAILOPEN_HOST: &str = "ext-proc-streamed-failopen.example.com";
 
 pub struct ExtProcTestSuite;
 
@@ -311,6 +313,252 @@ impl ExtProcTestSuite {
         )
     }
 
+    /// STREAMED body mode: each request-body chunk is exchanged with the
+    /// processor per chunk; the fake processor replaces the chunk, so the
+    /// backend echo must show the replacement. The header phase runs on the
+    /// same stream (x-ext-proc-req applied) — proving one request-scoped
+    /// stream carried both phases.
+    fn test_streamed_body_mutation() -> TestCase {
+        TestCase::new(
+            "streamed_body_mutation",
+            "requestBodyMode STREAMED mutates body chunks in flight (upstream sees the replacement)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/echo", ctx.http_url());
+                    let response = match ctx
+                        .http_client
+                        .post(&url)
+                        .header("host", STREAMED_HOST)
+                        .body("original-client-payload")
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+                    let status = response.status().as_u16();
+                    if status != 200 {
+                        return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                    }
+                    let body = response.text().await.unwrap_or_default();
+                    if !body.contains("processed-by-ext-proc") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "backend did not receive the mutated body: {}",
+                                &body[..body.len().min(400)]
+                            ),
+                        );
+                    }
+                    if body.contains("original-client-payload") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "original chunk bytes leaked through the streamed mutation".to_string(),
+                        );
+                    }
+                    TestResult::passed_with_message(start.elapsed(), "streamed chunk mutated in flight".to_string())
+                })
+            },
+        )
+    }
+
+    /// STREAMED mid-body rejection: the processor answers the first body chunk
+    /// with an ImmediateResponse; the client must observe that status instead
+    /// of a proxied response.
+    fn test_streamed_immediate_response_mid_body() -> TestCase {
+        TestCase::new(
+            "streamed_immediate_response_mid_body",
+            "requestBodyMode STREAMED terminates mid-body on an ImmediateResponse verdict",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/echo", ctx.http_url());
+                    let response = match ctx
+                        .http_client
+                        .post(&url)
+                        .header("host", STREAMED_HOST)
+                        .header("x-ext-proc-test-mode", "body-block")
+                        .body("payload-to-block")
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+                    let status = response.status().as_u16();
+                    if status != 403 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 403 from mid-body immediate response, got {}", status),
+                        );
+                    }
+                    // The immediate response's header mutation must reach the
+                    // client on the mid-body terminate path too.
+                    let denied_header_ok = response
+                        .headers()
+                        .get("x-ext-proc-denied")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|v| v == "1")
+                        .unwrap_or(false);
+                    let body = response.text().await.unwrap_or_default();
+                    if body.contains("blocked by ext_proc") && denied_header_ok {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "mid-body 403 + custom header delivered".to_string(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("403 unexpected: denied_header_ok={} body={}", denied_header_ok, body),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    /// STREAMED multi-chunk upload: a channel-backed streaming body forces
+    /// several transport chunks; the processor replaces each one, so the
+    /// backend echo must contain only replacement markers.
+    fn test_streamed_multi_chunk_mutation() -> TestCase {
+        TestCase::new(
+            "streamed_multi_chunk_mutation",
+            "requestBodyMode STREAMED exchanges every chunk of a multi-chunk upload",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(1);
+                    let sender = tokio::spawn(async move {
+                        for index in 0u8..3 {
+                            if tx.send(Ok(bytes::Bytes::from(vec![b'a' + index; 64]))).await.is_err() {
+                                return;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                        }
+                    });
+                    let body = reqwest::Body::wrap_stream(tokio_stream::wrappers::ReceiverStream::new(rx));
+                    let url = format!("{}/echo", ctx.http_url());
+                    let response = match ctx
+                        .http_client
+                        .post(&url)
+                        .header("host", STREAMED_HOST)
+                        .body(body)
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+                    let _ = sender.await;
+                    let status = response.status().as_u16();
+                    if status != 200 {
+                        return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                    }
+                    let text = response.text().await.unwrap_or_default();
+                    let replaced = text.matches("processed-by-ext-proc").count();
+                    if replaced < 2 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "expected several replaced chunks, saw {}: {}",
+                                replaced,
+                                &text[..text.len().min(300)]
+                            ),
+                        );
+                    }
+                    if text.contains("aaaa") {
+                        return TestResult::failed(start.elapsed(), "original chunk bytes leaked".to_string());
+                    }
+                    TestResult::passed_with_message(start.elapsed(), format!("{} chunks replaced in flight", replaced))
+                })
+            },
+        )
+    }
+
+    /// STREAMED + bodyless request + a CONTINUE_AND_REPLACE headers verdict:
+    /// the degenerate header-only path must reject it per the failure policy
+    /// (fail-close 500), never silently ignore it.
+    fn test_streamed_degenerate_continue_and_replace_fail_closes() -> TestCase {
+        TestCase::new(
+            "streamed_degenerate_continue_and_replace_fail_closes",
+            "CONTINUE_AND_REPLACE on a bodyless streamed request fail-closes (500)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/headers", ctx.http_url());
+                    let response = match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", STREAMED_HOST)
+                        .header("x-ext-proc-test-mode", "continue-and-replace")
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+                    let status = response.status().as_u16();
+                    if status != 500 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 500 (CR rejected in streamed mode), got {}", status),
+                        );
+                    }
+                    let body = response.text().await.unwrap_or_default();
+                    if body.contains("ext_proc unavailable") {
+                        TestResult::passed_with_message(start.elapsed(), "CR rejected fail-close".to_string())
+                    } else {
+                        TestResult::failed(start.elapsed(), format!("500 body not from ext_proc: {}", body))
+                    }
+                })
+            },
+        )
+    }
+
+    /// STREAMED + dead processor + failureModeAllow=true: the header phase
+    /// fails open, no handler is installed, and the original body reaches the
+    /// backend unmodified.
+    fn test_streamed_fail_open_passes_original_body() -> TestCase {
+        TestCase::new(
+            "streamed_fail_open_passes_original_body",
+            "streamed mode with a dead processor fails open and forwards the original body",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/echo", ctx.http_url());
+                    let response = match ctx
+                        .http_client
+                        .post(&url)
+                        .header("host", STREAMED_FAILOPEN_HOST)
+                        .body("untouched-payload")
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+                    let status = response.status().as_u16();
+                    if status != 200 {
+                        return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                    }
+                    let body = response.text().await.unwrap_or_default();
+                    if body.contains("untouched-payload") {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "fail-open forwarded original body".to_string(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("original body missing at backend: {}", &body[..body.len().min(300)]),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
     /// Coexistence: ForwardAuth + ExtProc on the same request chain both apply.
     fn test_coexist_with_forward_auth() -> TestCase {
         TestCase::new(
@@ -377,6 +625,11 @@ impl TestSuite for ExtProcTestSuite {
             Self::test_fail_close_returns_500(),
             Self::test_fail_open_passes(),
             Self::test_bad_verdict_fail_closes(),
+            Self::test_streamed_body_mutation(),
+            Self::test_streamed_immediate_response_mid_body(),
+            Self::test_streamed_multi_chunk_mutation(),
+            Self::test_streamed_degenerate_continue_and_replace_fail_closes(),
+            Self::test_streamed_fail_open_passes_original_body(),
             Self::test_coexist_with_forward_auth(),
         ]
     }

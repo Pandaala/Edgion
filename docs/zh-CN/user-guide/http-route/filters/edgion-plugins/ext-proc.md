@@ -12,9 +12,7 @@
 - 处理服务回 `ProcessingResponse`，可以**改 header**（add / set / remove），或返回 **`ImmediateResponse`** 直接短路请求（例如返 `403`）。
 - 注意区分两个「gRPC」：**控制通道**（网关 ↔ 处理服务）固定是 gRPC；**被代理的业务流量**是普通 HTTP。ExtProc 是把 HTTP 流量的每个阶段「用 gRPC 包装」后喂给处理服务。
 
-### 本期范围
-
-本期 ExtProc **仅处理 header**：
+### 支持范围
 
 | 能力 | 支持 | 相位 |
 |---|:---:|---|
@@ -22,10 +20,11 @@
 | 请求阶段短路（`ImmediateResponse`，如 403） | ✅ | `RequestFilter` |
 | 读/改**响应** header | ✅ | 异步 `UpstreamResponse` |
 | 响应阶段短路（`ImmediateResponse`） | ✅ | 异步 `UpstreamResponse` |
-| 读/改**请求 body** | ❌ | —（无 request-body 钩子） |
-| 读/改**响应 body** | ❌ | —（response-body 钩子只读） |
+| 读/替换**请求 body**（整体缓冲） | ✅ | `requestBodyMode: BUFFERED` |
+| 逐块检查/改写**请求 body**（流式） | ✅ | `requestBodyMode: STREAMED` |
+| 读/改**响应 body** | ❌ | 代理的上游响应保持纯流式 |
 
-**不支持 body 处理**。把 body 模式配成 `NONE`/`SKIP` 以外的值会**被校验拒绝**（Controller 将资源标记为无效）——绝不会静默忽略。
+`BUFFERED_PARTIAL` 请求模式、以及 `NONE`/`SKIP` 以外的响应 body 模式会**被校验拒绝**（Controller 将资源标记为无效）——绝不会静默忽略。
 
 ## 快速开始
 
@@ -87,12 +86,12 @@ spec:
 | 参数 | 类型 | 默认 | 说明 |
 |------|------|------|------|
 | `grpcService.target` | String | —（必填） | 处理服务的 gRPC 端点，纯 `host:port`（不是 URL）。IPv6 必须加方括号：`[::1]:9000`。 |
-| `grpcService.timeoutMs` | Integer | `200` | 单消息超时（同时约束连接与等待 verdict）。范围 `1..=60000`。 |
-| `grpcService.tls` | Boolean | `false` | 是否经 TLS 连接（服务端认证，系统/webpki 根证书）。`false` = 明文 h2c（集群内默认）。 |
+| `grpcService.timeoutMs` | Integer | `200` | verdict 超时（毫秒），范围 `1..=60000`。header 相位交换（以及共用一条流的 `BUFFERED` 全部相位）按一次事务整体计时；`STREAMED` 模式下按每个 body 块交换计时，且首次交换还包含连接/TLS/h2 建立——TLS 目标建议调大。 |
+| `grpcService.tls` | Object | 未启用 | 处理服务连接的 TLS 配置：`enabled`、`verify`、`validation.caCertificateRefs`、`clientCertificateRef`（mTLS）。缺省/`enabled: false` = 明文 h2c（集群内默认）；未设置的子字段继承全局 `outboundTls` 默认。 |
 | `processingMode.requestHeaderMode` | Enum | `SEND` | `SEND` 把请求 header 发给处理服务，`SKIP` 跳过。仅 `requestPlugins` 条目读取。 |
 | `processingMode.responseHeaderMode` | Enum | `SKIP` | 响应 header 的 `SEND` / `SKIP`。仅 `upstreamResponsePlugins` 条目读取——在那里要设成 `SEND`。 |
-| `processingMode.requestBodyMode` | Enum | `NONE` | 必须为 `NONE` 或 `SKIP`。`STREAMED` / `BUFFERED` / `BUFFERED_PARTIAL` 会**被校验拒绝**（不支持 body 处理）。 |
-| `processingMode.responseBodyMode` | Enum | `NONE` | 限制同 `requestBodyMode`。 |
+| `processingMode.requestBodyMode` | Enum | `NONE` | `NONE`、`SKIP`、`BUFFERED` 或 `STREAMED`。`BUFFERED` 先缓冲完整请求 body 再送处理服务；`STREAMED` 逐块随流交换（与 header 相位共用一条请求级 `Process` 流，逐块改写、上游改用 chunked 传输、请求不可重试）。`BUFFERED_PARTIAL` 被校验拒绝。 |
+| `processingMode.responseBodyMode` | Enum | `NONE` | 必须为 `NONE` 或 `SKIP`（代理的上游响应保持纯流式）。 |
 | `failureModeAllow` | Boolean | `false` | 处理服务不可达、超时、或返回不可用 verdict 时：`false`（fail-close）以 `500` 短路请求；`true`（fail-open）跳过处理继续放行。 |
 
 ## 行为
@@ -132,13 +131,15 @@ spec:
 
 ## 限制
 
-- 本期**仅 header**（见「本期范围」）。不处理请求/响应 body。
-- **无跨阶段关联**：每个阶段各自开一条短生命周期 `Process` 流（MVP 简化），因此处理服务无法把同一事务请求阶段的状态带到响应阶段。连接池 / 单事务单流是后续优化。
+- **不支持响应 body 处理**：响应 body 模式仅 `NONE`/`SKIP`（代理的上游响应保持纯流式）。
+- **不支持 `BUFFERED_PARTIAL`**。
+- **请求与响应阶段仍是两条流**：`STREAMED`/`BUFFERED` 模式下 header 相位与请求 body 相位共用一条请求级流，但响应 header 相位另开一条短生命周期流，处理服务无法把请求阶段状态带到响应阶段。
+- **`STREAMED` 语义**：逐块改写可能改变总长度，上游请求改用 chunked 传输（移除 `Content-Length`）；选中流式插件后请求即不可重试；body 相位 verdict 中的 header mutation 被忽略（上游 header 已发出）并记入 access log；mid-body 的 `ImmediateResponse` 会应用其 header mutation（保护头拒绝），gRPC 路由映射为 `grpc-status` trailers；`CONTINUE_AND_REPLACE`（header 相位或 mid-body）一律按 bad verdict 处理；Upgrade/CONNECT 请求与 HTTP/1.1 以下客户端无法流式检查，按失败策略处理。
 - **响应阶段 `ImmediateResponse`**：自定义 header 不保留（仅状态码 + body；gRPC route 仅状态码）。
 
 ## 兼容性
 
-proto 是 `envoy.service.ext_proc.v3` 的裁剪但线协议兼容子集（字段号一致）。现成的 ext_proc 服务端（任意语言 SDK）均可互通，只要停留在本期支持的「仅 header」相位内。
+proto 是 `envoy.service.ext_proc.v3` 的裁剪但线协议兼容子集（字段号一致）。现成的 ext_proc 服务端（任意语言 SDK）均可互通，只要停留在上表支持的相位内。
 
 ## 常见问题
 

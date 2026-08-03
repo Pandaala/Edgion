@@ -59,7 +59,8 @@ Cargo workspace with crate-owned binary entry points:
 
 Example binaries (used in testing): `test_server`, `test_client`, `test_client_direct`, `resource_diff`, `config_load_validator`.
 
-The Gateway defaults to `allocator-jemalloc` + `boringssl` + `body-buffering`.
+The Gateway defaults to `allocator-jemalloc` + `boringssl` and always builds
+against the Edgion Pingora fork.
 The Controller and CLI default only to `allocator-jemalloc`. Library crates do
 not share those binary-feature defaults.
 

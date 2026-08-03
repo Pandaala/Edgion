@@ -54,7 +54,6 @@ fn body_digest_methods_require_body_receiver() {
     }
 }
 
-#[cfg(feature = "body-buffering")]
 fn run_body_json_script(
     source: &str,
     body: &[u8],
@@ -64,7 +63,6 @@ fn run_body_json_script(
     run_body_script_with_limits(source, body, memory_limit, max_body_scan_passes, VmLimits::default())
 }
 
-#[cfg(feature = "body-buffering")]
 fn run_body_script_with_limits(
     source: &str,
     body: &[u8],
@@ -109,7 +107,6 @@ fn run_body_script_with_limits(
 }
 
 #[test]
-#[cfg(feature = "body-buffering")]
 fn body_json_select_reads_multiple_paths_with_one_spilled_scan() {
     let body = br#"{"user":{"id":7,"name":"alice"},"enabled":true}"#;
     let source = r#"
@@ -131,7 +128,6 @@ fn body_json_select_reads_multiple_paths_with_one_spilled_scan() {
 }
 
 #[test]
-#[cfg(feature = "body-buffering")]
 fn repeated_body_json_get_exhausts_the_same_one_pass_budget() {
     let body = br#"{"a":1,"b":2}"#;
     let source = r#"
@@ -146,7 +142,6 @@ fn repeated_body_json_get_exhausts_the_same_one_pass_budget() {
 }
 
 #[test]
-#[cfg(feature = "body-buffering")]
 fn repeated_body_sha256_reuses_one_spilled_scan() {
     let body = b"one physical scan";
     let source = r#"
@@ -164,7 +159,6 @@ fn repeated_body_sha256_reuses_one_spilled_scan() {
 }
 
 #[test]
-#[cfg(feature = "body-buffering")]
 fn body_md5_and_hmac_sha256_match_raw_byte_vectors_in_memory_and_spill() {
     let source = r#"
         if req.body.md5() != "900150983cd24fb0d6963f7d28e17f72" {
@@ -198,7 +192,6 @@ fn body_md5_and_hmac_sha256_match_raw_byte_vectors_in_memory_and_spill() {
 }
 
 #[test]
-#[cfg(feature = "body-buffering")]
 fn body_md5_and_hmac_each_consume_uncached_scan_budget() {
     for source in [
         r#"
@@ -218,7 +211,6 @@ fn body_md5_and_hmac_each_consume_uncached_scan_budget() {
 }
 
 #[test]
-#[cfg(feature = "body-buffering")]
 fn body_digest_fixed_output_limits_fail_before_scan_without_key_leak() {
     for (source, max_string_len, expected_len) in [
         ("req.body.sha256()", 63, 64),
@@ -246,7 +238,6 @@ fn body_digest_fixed_output_limits_fail_before_scan_without_key_leak() {
 }
 
 #[test]
-#[cfg(feature = "body-buffering")]
 fn body_hmac_requires_exact_string_key_without_value_leak() {
     let error = run_body_json_script("req.body.hmac_sha256(7)", b"abc", 1, 1).unwrap_err();
     assert!(matches!(
@@ -261,7 +252,6 @@ fn body_hmac_requires_exact_string_key_without_value_leak() {
 }
 
 #[test]
-#[cfg(feature = "body-buffering")]
 fn body_hmac_scan_failure_does_not_leak_key() {
     let source = r#"
         let consume = req.body.md5()

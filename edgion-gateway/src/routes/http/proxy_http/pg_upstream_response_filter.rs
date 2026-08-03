@@ -142,7 +142,11 @@ pub fn upstream_response_filter(
                         .unwrap_or(false);
                     let deadline_exceeded = request_timeout_exceeded || ctx.grpc_deadline_exceeded();
 
-                    let buffer_ok = !session.as_ref().retry_buffer_truncated();
+                    // Streamed body handlers make the request non-replayable
+                    // while `retry_buffer_truncated()` still reports `false`
+                    // (no buffer was allocated) — include the monotonic latch
+                    // in the decision (contract §4.6).
+                    let buffer_ok = !session.as_ref().retry_buffer_truncated() && !ctx.request_body_stream_active;
                     if ctx.try_cnt <= max_retries && !deadline_exceeded && buffer_ok {
                         // Retry budget (retryConstraint): composes AFTER the
                         // maxRetries/deadline/buffer checks above (D3). This is the
@@ -359,7 +363,7 @@ mod interim_status_tests {
     }
 }
 
-#[cfg(all(test, feature = "body-buffering"))]
+#[cfg(test)]
 mod tests {
     use super::release_late_request_body_view;
     use crate::request_body::BodyStorage;

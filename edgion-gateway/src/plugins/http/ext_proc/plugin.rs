@@ -25,7 +25,7 @@ use edgion_resources::plugin_configs::{ExtProcConfig, ProcessingMode};
 
 const PLUGIN_NAME: &str = "ExtProc";
 
-fn exchange_failure_reason(status: &tonic::Status) -> &'static str {
+pub(super) fn exchange_failure_reason(status: &tonic::Status) -> &'static str {
     if status.code() == tonic::Code::FailedPrecondition {
         "bad verdict"
     } else {
@@ -148,6 +148,119 @@ impl ExtProc {
         Ok(())
     }
 
+    /// `requestBodyMode: STREAMED` request phase: open the request-scoped
+    /// stream, run the header phase on it, then install the per-chunk body
+    /// handler. Installing a handler makes the request non-replayable and
+    /// switches upstream framing to the streamed disposition.
+    async fn run_request_streamed(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        // Gate on the latched transport fact, NOT `declares_body()`: the
+        // latter infers from Content-Length, which an H2 client can
+        // contradict (declare CL:0, still send DATA frames) to smuggle body
+        // bytes past inspection. `None` = the session type cannot supply the
+        // fact (custom-connector, subrequest) — the per-chunk capability is
+        // absent there and the fail mode applies.
+        let headers_end_stream = match session.request_headers_end_stream() {
+            Some(fact) => fact,
+            None => return self.fail_mode(session, log, "streamed unsupported", None),
+        };
+
+        // Transport-guaranteed bodyless request: nothing to stream. Degenerate
+        // to the header-only exchange so retry/framing semantics stay
+        // untouched.
+        if headers_end_stream {
+            if !self.mode.request_header_mode.is_send() {
+                return PluginRunningResult::GoodNext;
+            }
+            let request = ProcessingRequest {
+                request: Some(processing_request::Request::RequestHeaders(HttpHeaders {
+                    headers: Some(mutation::collect_request_headers(session)),
+                    end_of_stream: true,
+                })),
+            };
+            let response = match self.client.exchange(request).await {
+                Ok(response) => response,
+                Err(status) => {
+                    let reason = exchange_failure_reason(&status);
+                    return self.fail_mode(session, log, reason, Some(status.code().description()));
+                }
+            };
+            return match response.response {
+                Some(processing_response::Response::RequestHeaders(hr)) => {
+                    // Same rejection as the non-degenerate streamed branch:
+                    // CONTINUE_AND_REPLACE has no buffered body to replace in
+                    // streamed mode — never silently ignore it.
+                    if hr.response.as_ref().is_some_and(|common| {
+                        ResponseStatus::try_from(common.status).ok() == Some(ResponseStatus::ContinueAndReplace)
+                    }) {
+                        return self.fail_mode(session, log, "bad verdict", Some("replace unsupported in streamed"));
+                    }
+                    match self
+                        .apply_request_common_response(session, log, hr.response, false)
+                        .await
+                    {
+                        Ok(()) => PluginRunningResult::GoodNext,
+                        Err(result) => result,
+                    }
+                }
+                Some(processing_response::Response::ImmediateResponse(imm)) => immediate_reply(session, log, imm),
+                _ => self.fail_mode(session, log, "bad verdict", None),
+            };
+        }
+
+        // Lazy open: no network work yet — a connect/handshake failure
+        // surfaces from the first exchange below and takes the fail mode.
+        let mut stream = self.client.open_stream();
+
+        if self.mode.request_header_mode.is_send() {
+            let request = ProcessingRequest {
+                request: Some(processing_request::Request::RequestHeaders(HttpHeaders {
+                    headers: Some(mutation::collect_request_headers(session)),
+                    end_of_stream: false,
+                })),
+            };
+            let response = match stream.exchange(request, false).await {
+                Ok(response) => response,
+                Err(status) => {
+                    let reason = exchange_failure_reason(&status);
+                    return self.fail_mode(session, log, reason, Some(status.code().description()));
+                }
+            };
+            match response.response {
+                Some(processing_response::Response::RequestHeaders(hr)) => {
+                    // CONTINUE_AND_REPLACE cannot apply in streamed mode: there
+                    // is no cached body to replace and the chunk stream has not
+                    // started yet.
+                    if hr.response.as_ref().is_some_and(|common| {
+                        ResponseStatus::try_from(common.status).ok() == Some(ResponseStatus::ContinueAndReplace)
+                    }) {
+                        return self.fail_mode(session, log, "bad verdict", Some("replace unsupported in streamed"));
+                    }
+                    if let Err(result) = self
+                        .apply_request_common_response(session, log, hr.response, false)
+                        .await
+                    {
+                        return result;
+                    }
+                }
+                Some(processing_response::Response::ImmediateResponse(imm)) => {
+                    return immediate_reply(session, log, imm);
+                }
+                _ => return self.fail_mode(session, log, "bad verdict", None),
+            }
+        }
+
+        let handler = super::streamed::ExtProcStreamedBodyHandler::new(
+            Box::new(stream),
+            self.failure_mode_allow,
+            session.current_dye_plan(),
+        );
+        if !session.install_request_body_stream_handler(Box::new(handler)) {
+            return self.fail_mode(session, log, "streamed unsupported", None);
+        }
+        log.push("ext_proc body streamed");
+        PluginRunningResult::GoodNext
+    }
+
     fn apply_response_headers_response(
         &self,
         session: &mut dyn PluginSession,
@@ -174,7 +287,7 @@ impl ExtProc {
 
 /// Clamp a processor-supplied status code into a valid final-response range.
 /// 1xx is not a valid final reply, so out-of-range codes map to 500.
-fn sanitize_status(code: i32) -> u16 {
+pub(super) fn sanitize_status(code: i32) -> u16 {
     if (200..=599).contains(&code) {
         code as u16
     } else {
@@ -220,6 +333,9 @@ impl RequestFilter for ExtProc {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        if self.mode.request_body_mode.is_streamed() {
+            return self.run_request_streamed(session, log).await;
+        }
         let send_headers = self.mode.request_header_mode.is_send();
         let send_body = self.mode.request_body_mode.is_buffered();
         if !send_headers && !send_body {
@@ -338,6 +454,73 @@ mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use edgion_resources::plugin_configs::GrpcServiceConfig;
+
+    fn streamed_config(failure_mode_allow: bool, header_send: bool) -> ExtProcConfig {
+        use edgion_resources::plugin_configs::{BodySendMode, HeaderSendMode};
+        let mut config = test_config(failure_mode_allow);
+        config.processing_mode.request_body_mode = BodySendMode::Streamed;
+        if !header_send {
+            config.processing_mode.request_header_mode = HeaderSendMode::Skip;
+        }
+        config
+    }
+
+    /// STREAMED on a session that cannot supply the transport fact
+    /// (custom-connector, subrequest, mocks) must fail per policy, before any
+    /// network work.
+    #[tokio::test]
+    async fn streamed_without_transport_fact_fails_per_policy() {
+        let ext_proc = ExtProc::build(&streamed_config(false, true)).expect("build must not dial");
+        let mut session = MockPluginSession::new();
+        session.expect_request_headers_end_stream().return_const(None);
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "streamed-unsupported")
+            .times(1)
+            .return_const(());
+        let mut log = PluginLog::new("ExtProc");
+        let result = ext_proc.run_request(&mut session, &mut log).await;
+        assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
+    }
+
+    /// SKIP headers + a body-bearing request: the handler installs without any
+    /// network exchange, and the request-stage verdict is GoodNext.
+    #[tokio::test]
+    async fn streamed_skip_headers_installs_handler_without_network() {
+        let ext_proc = ExtProc::build(&streamed_config(false, false)).expect("build must not dial");
+        let mut session = MockPluginSession::new();
+        session.expect_request_headers_end_stream().return_const(Some(false));
+        session.expect_current_dye_plan().return_const(None);
+        session
+            .expect_install_request_body_stream_handler()
+            .times(1)
+            .return_const(true);
+        let mut log = PluginLog::new("ExtProc");
+        let result = ext_proc.run_request(&mut session, &mut log).await;
+        assert!(matches!(result, PluginRunningResult::GoodNext));
+    }
+
+    /// The install itself can refuse (capability re-check); the plugin must
+    /// then apply its failure policy rather than continue silently.
+    #[tokio::test]
+    async fn streamed_install_refusal_fails_per_policy() {
+        let ext_proc = ExtProc::build(&streamed_config(true, false)).expect("build must not dial");
+        let mut session = MockPluginSession::new();
+        session.expect_request_headers_end_stream().return_const(Some(false));
+        session.expect_current_dye_plan().return_const(None);
+        session
+            .expect_install_request_body_stream_handler()
+            .times(1)
+            .return_const(false);
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailOpen) && value == "streamed-unsupported")
+            .times(1)
+            .return_const(());
+        let mut log = PluginLog::new("ExtProc");
+        let result = ext_proc.run_request(&mut session, &mut log).await;
+        assert!(matches!(result, PluginRunningResult::GoodNext));
+    }
 
     /// A structurally valid config (routable authority, never actually
     /// dialed by these tests — `fail_mode` is exercised directly).

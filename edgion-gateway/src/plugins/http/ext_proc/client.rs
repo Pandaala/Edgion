@@ -252,6 +252,89 @@ impl ExtProcClient {
             Err(_) => Err(tonic::Status::deadline_exceeded("ext_proc verdict timed out")),
         }
     }
+
+    /// Open one long-lived `Process` stream for a whole-request transaction
+    /// (streamed body mode): the request-header verdict and every body-chunk
+    /// verdict travel on the same stream, so the processor keeps its state
+    /// across phases.
+    ///
+    /// The open is LAZY: no network work happens here and no response headers
+    /// are awaited. The first `exchange` sends its message and only then
+    /// awaits the call — a processor whose stack defers response headers
+    /// until it has received (or sent) a message (grpc-go's default) would
+    /// otherwise deadlock against an eager open until the timeout.
+    pub fn open_stream(&self) -> ExtProcStream {
+        let mut client = self.client.clone();
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
+        ExtProcStream {
+            sender: Some(tx),
+            inbound: InboundState::Opening(Box::pin(async move { client.process(outbound).await })),
+            timeout: self.timeout,
+        }
+    }
+}
+
+/// Inbound side of a request-scoped stream: the un-awaited `process` call
+/// until the first exchange resolves it, the live response stream afterwards.
+enum InboundState {
+    Opening(
+        futures::future::BoxFuture<
+            'static,
+            Result<tonic::Response<tonic::Streaming<ProcessingResponse>>, tonic::Status>,
+        >,
+    ),
+    Open(tonic::Streaming<ProcessingResponse>),
+}
+
+/// A request-scoped bidirectional ext_proc stream (see
+/// [`ExtProcClient::open_stream`]). Dropping it closes the outbound direction;
+/// the processor observes the half-close and ends its side.
+pub struct ExtProcStream {
+    sender: Option<tokio::sync::mpsc::Sender<ProcessingRequest>>,
+    inbound: InboundState,
+    timeout: Duration,
+}
+
+impl ExtProcStream {
+    /// Send one message and await its phase-matched verdict under the
+    /// per-message timeout (the first call also resolves the lazy stream open
+    /// within the same bound). `last` half-closes the outbound direction
+    /// after sending (the final body chunk). `ImmediateResponse` is always
+    /// accepted; any other cross-phase verdict is a `failed_precondition`.
+    pub async fn exchange(
+        &mut self,
+        request: ProcessingRequest,
+        last: bool,
+    ) -> Result<ProcessingResponse, tonic::Status> {
+        let phase = ProcessingPhase::from_request(&request)?;
+        send_phase(&mut self.sender, request, last).await?;
+        let receive = async {
+            if let InboundState::Opening(open) = &mut self.inbound {
+                self.inbound = InboundState::Open(open.await?.into_inner());
+            }
+            match &mut self.inbound {
+                InboundState::Open(streaming) => streaming.message().await,
+                InboundState::Opening(_) => unreachable!("resolved above"),
+            }
+        };
+        let response = match tokio::time::timeout(self.timeout, receive).await {
+            Ok(Ok(Some(response))) => response,
+            Ok(Ok(None)) => return Err(tonic::Status::aborted("ext_proc processor closed the stream")),
+            Ok(Err(status)) => return Err(status),
+            Err(_) => return Err(tonic::Status::deadline_exceeded("ext_proc verdict timed out")),
+        };
+        let terminal = matches!(
+            response.response,
+            Some(processing_response::Response::ImmediateResponse(_))
+        );
+        if !terminal && !phase.accepts(&response) {
+            return Err(tonic::Status::failed_precondition(
+                "ext_proc processor returned a verdict for the wrong phase",
+            ));
+        }
+        Ok(response)
+    }
 }
 
 /// Build a rustls [`ClientConfig`] for the ext_proc dial from the resolved
@@ -488,6 +571,128 @@ mod tests {
             immediate.response,
             Some(processing_response::Response::ImmediateResponse(_))
         ));
+    }
+
+    /// Minimal in-process ext_proc service: echoes a per-phase verdict, so the
+    /// long-lived stream can be exercised end to end without external infra.
+    mod live_stream {
+        use super::*;
+        use edgion_common::ext_proc::proto::external_processor_server::{ExternalProcessor, ExternalProcessorServer};
+        use edgion_common::ext_proc::proto::{processing_request, BodyResponse, HeadersResponse, HttpHeaders};
+        use tokio_stream::wrappers::ReceiverStream;
+        use tokio_stream::StreamExt;
+
+        struct EchoProcessor;
+
+        #[tonic::async_trait]
+        impl ExternalProcessor for EchoProcessor {
+            type ProcessStream = ReceiverStream<Result<ProcessingResponse, tonic::Status>>;
+
+            async fn process(
+                &self,
+                request: tonic::Request<tonic::Streaming<ProcessingRequest>>,
+            ) -> Result<tonic::Response<Self::ProcessStream>, tonic::Status> {
+                let mut inbound = request.into_inner();
+                let (tx, rx) = tokio::sync::mpsc::channel(4);
+                tokio::spawn(async move {
+                    while let Some(Ok(message)) = inbound.next().await {
+                        let response = match message.request {
+                            Some(processing_request::Request::RequestHeaders(_)) => ProcessingResponse {
+                                response: Some(processing_response::Response::RequestHeaders(
+                                    HeadersResponse::default(),
+                                )),
+                            },
+                            Some(processing_request::Request::RequestBody(_)) => ProcessingResponse {
+                                response: Some(processing_response::Response::RequestBody(BodyResponse::default())),
+                            },
+                            _ => break,
+                        };
+                        if tx.send(Ok(response)).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                Ok(tonic::Response::new(ReceiverStream::new(rx)))
+            }
+        }
+
+        async fn spawn_echo_server() -> std::net::SocketAddr {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(
+                tonic::transport::Server::builder()
+                    .add_service(ExternalProcessorServer::new(EchoProcessor))
+                    .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
+            );
+            addr
+        }
+
+        fn cfg_for(addr: std::net::SocketAddr) -> ExtProcConfig {
+            ExtProcConfig {
+                grpc_service: GrpcServiceConfig {
+                    target: addr.to_string(),
+                    timeout_ms: 2_000,
+                    tls: TlsConfig::default(),
+                },
+                ..Default::default()
+            }
+        }
+
+        /// One stream carries the header verdict plus several body-chunk
+        /// verdicts, with the final chunk half-closing the outbound side.
+        #[tokio::test]
+        async fn stream_carries_headers_and_multiple_body_chunks() {
+            install_test_crypto_provider();
+            let addr = spawn_echo_server().await;
+            let client = ExtProcClient::new(&cfg_for(addr)).unwrap();
+            let mut stream = client.open_stream();
+
+            let headers = ProcessingRequest {
+                request: Some(processing_request::Request::RequestHeaders(HttpHeaders {
+                    headers: None,
+                    end_of_stream: false,
+                })),
+            };
+            let verdict = stream.exchange(headers, false).await.unwrap();
+            assert!(matches!(
+                verdict.response,
+                Some(processing_response::Response::RequestHeaders(_))
+            ));
+
+            for (index, last) in [(0u8, false), (1, false), (2, true)] {
+                let chunk = ProcessingRequest {
+                    request: Some(processing_request::Request::RequestBody(HttpBody {
+                        body: vec![index],
+                        end_of_stream: last,
+                    })),
+                };
+                let verdict = stream.exchange(chunk, last).await.unwrap();
+                assert!(matches!(
+                    verdict.response,
+                    Some(processing_response::Response::RequestBody(_))
+                ));
+            }
+        }
+
+        /// A message sent after the outbound half-close must fail cleanly, not
+        /// hang: the sender was consumed by `last = true`.
+        #[tokio::test]
+        async fn exchange_after_half_close_fails() {
+            install_test_crypto_provider();
+            let addr = spawn_echo_server().await;
+            let client = ExtProcClient::new(&cfg_for(addr)).unwrap();
+            let mut stream = client.open_stream();
+
+            let eos_chunk = ProcessingRequest {
+                request: Some(processing_request::Request::RequestBody(HttpBody {
+                    body: Vec::new(),
+                    end_of_stream: true,
+                })),
+            };
+            stream.exchange(eos_chunk.clone(), true).await.unwrap();
+            let err = stream.exchange(eos_chunk, true).await.unwrap_err();
+            assert_eq!(err.code(), tonic::Code::Internal);
+        }
     }
 
     #[test]

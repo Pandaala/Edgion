@@ -21,34 +21,25 @@ Other variants in `cicd/docker/` (not detailed here):
 
 - `cicd/docker/Dockerfile.controller-gateway` (+ `cicd/docker/controller-gateway-entrypoint.sh`) — packages pre-built binaries (controller + gateway + cli) into one standalone backend image (no dashboard/nginx). Driven by `build-image.sh --controller-gateway`
 
-## Gateway image flavors
+## Gateway images
 
-`cicd/build-image.sh` defaults to the body-enabled Edgion Pingora fork. Select
-the unmodified Pingora comparison build with `--stock`.
+`cicd/build-image.sh` builds the Gateway against the Edgion Pingora fork
+(the only Pingora source):
 
-| Flavor | Gateway binary | Standard image | Controller-Gateway image |
-|--------|----------------|----------------|--------------------------|
-| `body` (default) | `edgion-gateway` | `edgion-gateway` | `edgion-controller-gateway` |
-| `stock` | `edgion-gateway-stock` | `edgion-gateway-stock` | `edgion-controller-gateway-stock` |
+| Gateway binary | Standard image | Controller-Gateway image |
+|----------------|----------------|--------------------------|
+| `edgion-gateway` | `edgion-gateway` | `edgion-controller-gateway` |
 
-The Controller image remains `edgion-controller` for both flavors because the
-Controller does not link Pingora. `stock` is an external artifact/flavor name;
-the internal Cargo feature remains `upstream-pingora`.
+The Controller image is `edgion-controller` (the Controller does not link
+Pingora).
 
-All source-building image paths use Cargo's `--locked` mode. The body flavor
-therefore uses the exact Edgion Pingora commit recorded in `Cargo.lock`, even
-though the workspace manifest follows the fork's `edgion` branch. The stock
-flavor remains sourced from crates.io.
+All source-building image paths use Cargo's `--locked` mode, so images use the
+exact Edgion Pingora commit recorded in `Cargo.lock`, even though the
+workspace manifest follows the fork's `edgion` branch.
 
 ```bash
-# Default body-enabled images
+# Default images
 cicd/build-image.sh
-
-# Images compiled against stock Pingora
-cicd/build-image.sh --stock
-
-# Stock Pingora Controller-Gateway bundle
-cicd/build-image.sh --controller-gateway --stock
 ```
 
 ## The 4 stages of `cicd/docker/Dockerfile`
@@ -161,7 +152,7 @@ Key arguments:
 
 | Argument | Purpose |
 |----------|---------|
-| `BINARY` | `gateway` / `gateway-stock` / `controller` or test-harness name |
+| `BINARY` | `gateway` / `controller` or test-harness name |
 | `BUILD_TYPE` | `bin` or `example` |
 | `BINARY_PATH` | Pre-built artifact directory |
 | `RUNTIME_BASE` | Runtime base image, defaults to `debian:bookworm-slim` |

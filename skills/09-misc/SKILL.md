@@ -32,7 +32,7 @@ cargo build
 cargo build --release
 
 # Select features on an owning package
-cargo build -p edgion-gateway --release --no-default-features --features "allocator-jemalloc,rustls,body-buffering"
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-jemalloc,rustls"
 
 # Project quick pre-commit sequence
 cargo fmt --all

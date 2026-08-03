@@ -1,0 +1,21 @@
+# ExtProc streamed request-body test: requestBodyMode STREAMED drives the
+# per-chunk transport hook. The fake processor replaces each body chunk with
+# "processed-by-ext-proc"; test mode `body-block` (via x-ext-proc-test-mode)
+# answers the first chunk with an ImmediateResponse 403 instead.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-streamed
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "127.0.0.1:30041"
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+          requestBodyMode: STREAMED
+        failureModeAllow: false

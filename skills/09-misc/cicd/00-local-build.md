@@ -13,8 +13,8 @@ Use this skill to answer:
 
 ## Facts to check first
 
-- Gateway default features are `allocator-jemalloc` + `boringssl` +
-  `body-buffering`
+- Gateway default features are `allocator-jemalloc` + `boringssl`; the Gateway
+  always builds against the Edgion Pingora fork
 - The Edgion Pingora dependencies follow the `edgion` branch, while the
   committed `Cargo.lock` pins the exact commit. Use `--locked` when reproducing
   CI or release builds.
@@ -72,17 +72,13 @@ Common combinations:
 cargo build
 
 # Gateway rustls build
-cargo build -p edgion-gateway --release --no-default-features --features "allocator-jemalloc,rustls,body-buffering"
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-jemalloc,rustls"
 
 # mimalloc + boringssl
-cargo build -p edgion-gateway --release --no-default-features --features "allocator-mimalloc,boringssl,body-buffering"
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-mimalloc,boringssl"
 
 # system allocator + boringssl
-cargo build -p edgion-gateway --release --no-default-features --features "allocator-system,boringssl,body-buffering"
-
-# Stock Pingora comparison build
-cargo build -p edgion-gateway --bin edgion-gateway-stock --release \
-  --no-default-features --features "allocator-jemalloc,boringssl,upstream-pingora"
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-system,boringssl"
 ```
 
 For more detailed feature semantics:

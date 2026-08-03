@@ -175,6 +175,10 @@ impl EdgionPlugin {
                 max_body_size: Some(DEFAULT_INSTANCE_MAX_BYTES.to_string()),
                 ..BodyRequirement::fail_close()
             }),
+            // Deliberately keyed on BUFFERED only: STREAMED must have NO
+            // BodyRequirement — the streamed handler is driven per chunk by the
+            // transport pump and must never trigger a pre-read capture
+            // (pre-reading would starve the pump and break the hook contract).
             ExtProc(cfg) if cfg.processing_mode.request_body_mode.is_buffered() && stage == BodyStage::Request => {
                 Some(BodyRequirement::fail_close())
             }

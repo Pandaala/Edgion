@@ -123,7 +123,7 @@ mod authority_tests {
     }
 }
 
-#[cfg(all(test, feature = "body-buffering"))]
+#[cfg(test)]
 mod body_framing_tests {
     use super::sync_body_framing_headers;
     use crate::request_body::BodyStorage;

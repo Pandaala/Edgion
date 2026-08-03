@@ -14,10 +14,10 @@ Edgion is a Kubernetes gateway built on Rust + Pingora, using a Controller–Gat
 It supports HTTP/1.1, HTTP/2, gRPC, TCP, UDP, TLS, and WebSocket, and includes a plugin system, load balancing, and TLS/mTLS.
 
 **Three product binary roles**: Controller (handles K8s resources), Gateway
-(data-plane proxy), and edgion-cli (CLI debugging tool). Gateway also has the
-diagnostic `edgion-gateway-stock` artifact, compiled against original
-Pingora for regression comparison. The federation Center has been extracted to
-the separate EdgionCenter repository.
+(data-plane proxy), and edgion-cli (CLI debugging tool). The Gateway builds
+exclusively against the Edgion Pingora fork (`Pandaala/pingora`, branch
+`edgion`). The federation Center has been extracted to the separate
+EdgionCenter repository.
 
 **Workspace layout** (Cargo workspace, resolver 2): the code is split across crates rather than one root crate —
 - `edgion-wasm` — runtime-independent Proxy-Wasm compatibility analyzer and exact Edgion host ABI profile. Leaf crate with external dependencies only; the Gateway consumes it before Wasmtime compilation and `edgion-cli` consumes it for local Wasm inspection.
@@ -34,9 +34,7 @@ Because each binary is its own package, the precise form is
 `cargo build -p <crate> --bin <name>`. The three main binaries
 (`edgion-gateway`, `edgion-controller`, `edgion-cli`) are all in
 `default-members`, so a bare `cargo build --bin <name>` from the workspace root
-*does* resolve them. The diagnostic `edgion-gateway-stock` target requires
-the `upstream-pingora` feature and must use the explicit command in
-`skills/02-features/01-binary-and-deployment/02-feature-flags.md`. The bins
+*does* resolve them. The bins
 that do NOT resolve bare are the ones in `edgion-tests` (`test_server`,
 `test_client`), since that crate is deliberately excluded from
 `default-members` — build those with
@@ -45,7 +43,6 @@ that do NOT resolve bare are the ones in `edgion-tests` (`test_server`,
 **Feature Flags** (mutually exclusive — pay attention at build time):
 - TLS backend: `boringssl` (default) | `rustls`
 - Memory allocator: `allocator-jemalloc` (default) | `allocator-mimalloc` | `allocator-system`
-- Gateway Pingora source: `body-buffering` (default Edgion fork) | `upstream-pingora` (original Pingora 0.8.1)
 
 **BoringSSL FIPS (image-only)**: `fips` is a gateway cargo feature enabled only in release/CI
 Docker builds (requires `boringssl`; not a default, not toggled at runtime). On a FIPS build,
@@ -258,11 +255,10 @@ These are architectural boundaries, not implementation suggestions:
    (normally a 1 MiB global/configured limit), enforced while streaming the
    response. Exceeding the cap fails the call; it must never silently truncate,
    fall back to an uncapped read, or change the main upstream response policy.
-4. **Keep `body-buffering` feature branches at the transport boundary.** Plugin
-   schema/registration, body gates, context consumers, and routes are
-   flavor-agnostic. Only Pingora source selection, the request-body backend,
-   adapter capture/replay helpers, and fork-only tests may branch. Stock capture
-   returns `BodyReadError::Unimplemented`; bodyless reads remain empty.
+4. **The Gateway builds only against the Edgion Pingora fork.** The former
+   `body-buffering`/`upstream-pingora` flavor duality is gone; the request-body
+   capture seam is unconditionally compiled. Mock/plugin-session defaults still
+   return `BodyReadError::Unimplemented`; bodyless reads remain empty.
 5. **Resolve request-body policy before the request hot path.**
    `EdgionGatewayConfig.spec.requestBody` is the single runtime policy source
    for the switch, defaults, and business overrides. Parse and resolve it when

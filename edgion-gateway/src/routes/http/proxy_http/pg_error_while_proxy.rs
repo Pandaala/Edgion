@@ -48,7 +48,12 @@ pub fn error_while_proxy(
         }
     }
 
-    let buffer_ok = !session.as_ref().retry_buffer_truncated();
+    // With streamed body handlers installed no retry buffer was ever
+    // allocated, so `retry_buffer_truncated()` reports a misleading `false`
+    // ("nothing truncated") — consult the monotonic latch directly (contract
+    // §4.6). The proxy also suppresses such retries on its side; this keeps
+    // the local decision (and its logging) consistent.
+    let buffer_ok = !session.as_ref().retry_buffer_truncated() && !ctx.request_body_stream_active;
 
     // Case 1: status code triggered retry (set by upstream_response_filter)
     // Retry budget and timeout already checked in upstream_response_filter

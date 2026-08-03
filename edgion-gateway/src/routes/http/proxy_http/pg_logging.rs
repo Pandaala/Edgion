@@ -36,6 +36,11 @@ pub async fn logging(
 
     record_request_metrics(ctx, _e);
 
+    // Streamed body handlers whose pump never reached EOS (client abort,
+    // early upstream response) still carry log entries — sweep them into the
+    // stage logs before the access-log entry is assembled.
+    super::pg_request_body_filter_action::drain_leftover_stream_logs(ctx);
+
     let mut entry = AccessLogEntry::from_context(ctx);
     // Resolve operator-declared `ext` fields here rather than in a request-stage
     // filter: this is the only point every request reaches, including the ones

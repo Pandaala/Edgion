@@ -34,7 +34,6 @@ else
     BIN_DIR="${PROJECT_ROOT}/target/debug"
 fi
 GATEWAY_BIN="${EDGION_GATEWAY_BIN:-${BIN_DIR}/edgion-gateway}"
-GATEWAY_FLAVOR="${EDGION_GATEWAY_FLAVOR:-body}"
 
 # Workdirectory
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -98,24 +97,10 @@ load_gateway_capabilities() {
         log_error "Unsupported Gateway capability format from ${GATEWAY_BIN}"
         return 1
     fi
-    case "$GATEWAY_FLAVOR" in
-        body)
-            echo "$capabilities" | grep -q '^body-buffering=enabled$' || {
-                log_error "Body Gateway does not report body-buffering=enabled"
-                return 1
-            }
-            ;;
-        stock)
-            echo "$capabilities" | grep -q '^body-buffering=disabled$' || {
-                log_error "Stock Gateway does not report body-buffering=disabled"
-                return 1
-            }
-            ;;
-        *)
-            log_error "Unknown EDGION_GATEWAY_FLAVOR: ${GATEWAY_FLAVOR}"
-            return 1
-            ;;
-    esac
+    echo "$capabilities" | grep -q '^body-buffering=enabled$' || {
+        log_error "Gateway does not report body-buffering=enabled"
+        return 1
+    }
     EDGION_TEST_GATEWAY_CAPABILITIES="$capabilities"
     export EDGION_TEST_GATEWAY_CAPABILITIES
 }
@@ -914,7 +899,6 @@ save_info() {
     # currentWorkdirectorypath
     mkdir -p "${PROJECT_ROOT}/tmp/integration_testing"
     echo "$WORK_DIR" > "${PROJECT_ROOT}/tmp/integration_testing/.current"
-    printf '%s\n' "$GATEWAY_FLAVOR" > "${WORK_DIR}/gateway-flavor"
     printf '%s\n' "$GATEWAY_BIN" > "${WORK_DIR}/gateway-bin"
     printf '%s\n' "$EDGION_TEST_GATEWAY_CAPABILITIES" > "${WORK_DIR}/gateway-capabilities"
     

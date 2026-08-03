@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::Uri;
-#[cfg(feature = "body-buffering")]
 use pingora_core::protocols::http::RequestBodyBuffer;
 use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::Session;
@@ -14,7 +13,6 @@ use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use super::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader, RouteProto};
 use super::traits::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult};
 use crate::link_sys::template::evaluate_template;
-#[cfg(feature = "body-buffering")]
 use crate::request_body::BodyStorage;
 use crate::request_body::{BodyOperationError, BodyScanResult};
 use crate::runtime::server::{http_to_grpc_status, send_grpc_trailers_only_frame};
@@ -184,7 +182,6 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.ctx.plugin_running_result = PluginRunningResult::ErrTerminateRequest;
     }
 
-    #[cfg(feature = "body-buffering")]
     async fn ensure_bodyless_request_replay_owner(&mut self) -> Result<(), BodyReadError> {
         if !self.ctx.request_body_config.enabled {
             return Err(BodyReadError::Unimplemented);
@@ -222,12 +219,6 @@ impl<'a> PingoraSessionAdapter<'a> {
         Ok(())
     }
 
-    #[cfg(all(feature = "upstream-pingora", not(feature = "body-buffering")))]
-    async fn ensure_bodyless_request_replay_owner(&mut self) -> Result<(), BodyReadError> {
-        Err(BodyReadError::Unimplemented)
-    }
-
-    #[cfg(feature = "body-buffering")]
     fn reject_over_limit_request_body(&mut self, limit: u64) -> BodyReadError {
         // HTTP/1.x cannot be reused with unread request bytes. For HTTP/2 this
         // is intentionally a no-op: after the 413 response closes its send
@@ -236,7 +227,6 @@ impl<'a> PingoraSessionAdapter<'a> {
         BodyReadError::BufferLimitExceeded { limit }
     }
 
-    #[cfg(feature = "body-buffering")]
     async fn capture_request_body(&mut self, max_bytes: Option<u64>) -> Result<u64, BodyReadError> {
         if let Some(len) = self.ctx.request_body.cached_len()? {
             return Ok(len);
@@ -312,11 +302,6 @@ impl<'a> PingoraSessionAdapter<'a> {
         let len = view.len()?;
         self.ctx.request_body.install(view);
         Ok(len)
-    }
-
-    #[cfg(all(feature = "upstream-pingora", not(feature = "body-buffering")))]
-    async fn capture_request_body(&mut self, _max_bytes: Option<u64>) -> Result<u64, BodyReadError> {
-        Err(BodyReadError::Unimplemented)
     }
 
     /// Decide + stash a response-phase local reply. Returns `true` when a reply
@@ -1422,6 +1407,47 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.dye_handled_request_names = handled;
     }
 
+    fn request_headers_end_stream(&mut self) -> Option<bool> {
+        self.inner.as_downstream_mut().request_headers_end_stream()
+    }
+
+    fn current_dye_plan(&self) -> Option<Arc<CompiledDyePlan>> {
+        self.ctx.current_dye_plan.clone()
+    }
+
+    fn install_request_body_stream_handler(
+        &mut self,
+        handler: Box<dyn crate::plugins::runtime::traits::request_body_stream::RequestBodyStreamHandler>,
+    ) -> bool {
+        // The transport fact answers `None` for session types that cannot be
+        // driven per chunk (custom-connector, subrequest) — refuse so the
+        // caller applies its failure policy.
+        if self.request_headers_end_stream().is_none() {
+            return false;
+        }
+        // Preempt the proxy's disposition coercion: upgrade/CONNECT requests
+        // and pre-HTTP/1.1 downstreams get their `Streamed` disposition
+        // coerced back to `Ordinary` at the transport, while installed
+        // handlers would keep running — a length-changing chunk mutation
+        // under the preserved Content-Length desyncs the upstream, and
+        // post-101 tunnel bytes must never reach an inspection processor as
+        // pseudo body chunks. Refuse the install so the caller fails per its
+        // policy instead of silently degrading.
+        let req = self.inner.req_header();
+        if req.method == http::Method::CONNECT
+            || pingora_core::protocols::http::v1::common::is_upgrade_req(req)
+            || req.version < http::Version::HTTP_11
+        {
+            return false;
+        }
+        self.ctx
+            .request_body_stream
+            .push(sync_wrapper::SyncWrapper::new(handler));
+        // Monotonic latch for the retry/disposition predicates; never cleared.
+        self.ctx.request_body_stream_active = true;
+        true
+    }
+
     fn record_outcome(&mut self, outcome: DyeOutcome, value: &str) {
         let Some(plan) = self.ctx.current_dye_plan.clone() else {
             return;
@@ -2034,18 +2060,14 @@ mod tests {
 #[cfg(test)]
 mod record_outcome_tests {
     use super::*;
-    #[cfg(feature = "body-buffering")]
     use crate::plugins::http::RequestBodyBuffer as RequestBodyBufferPlugin;
-    #[cfg(feature = "body-buffering")]
     use crate::plugins::runtime::{BodyGatedRequestFilter, RequestFilter};
-    #[cfg(feature = "body-buffering")]
     use crate::request_body::DEFAULT_MEMORY_BUFFER_BYTES;
-    #[cfg(feature = "body-buffering")]
     use edgion_resources::resources::edgion_plugins::BodyRequirement;
     use edgion_resources::resources::edgion_plugins::{DyeOutcome, DyeSuite};
-    #[cfg(feature = "body-buffering")]
     use sha2::Digest;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
 
     /// Build a minimal real `pingora_proxy::Session` for adapter-level tests.
     ///
@@ -2191,6 +2213,44 @@ mod record_outcome_tests {
         adapter.record_outcome(DyeOutcome::Success, "app-v1");
 
         assert_single_set(&ctx, "X-O", "app-v1");
+    }
+
+    struct NoopStreamHandler;
+
+    #[async_trait::async_trait]
+    impl crate::plugins::runtime::traits::RequestBodyStreamHandler for NoopStreamHandler {
+        fn name(&self) -> &str {
+            "noop"
+        }
+        async fn on_chunk(
+            &mut self,
+            _chunk: &mut Option<Bytes>,
+            _end_of_stream: bool,
+        ) -> crate::plugins::runtime::traits::ChunkVerdict {
+            crate::plugins::runtime::traits::ChunkVerdict::Continue
+        }
+        fn take_log(&mut self) -> Option<PluginLog> {
+            None
+        }
+        fn dye_plan(&self) -> Option<Arc<CompiledDyePlan>> {
+            None
+        }
+    }
+
+    /// A real H1 downstream can answer the transport facts, so the streamed
+    /// handler seam installs into the ctx vector and sets the monotonic latch.
+    #[tokio::test]
+    async fn h1_session_installs_request_body_stream_handler() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert!(adapter.request_headers_end_stream().is_some());
+        assert!(adapter.install_request_body_stream_handler(Box::new(NoopStreamHandler)));
+        assert_eq!(ctx.request_body_stream.len(), 1);
+        assert!(
+            ctx.request_body_stream_active,
+            "install must set the monotonic retry/disposition latch"
+        );
     }
 
     #[tokio::test]
@@ -2388,24 +2448,6 @@ mod record_outcome_tests {
         );
     }
 
-    #[cfg(feature = "upstream-pingora")]
-    #[tokio::test]
-    async fn stock_gateway_reports_request_body_capture_as_unimplemented() {
-        let mut session = test_session().await;
-        let mut ctx = EdgionHttpContext::default();
-        ctx.request_info.body_declared = Some(true);
-        ctx.request_info.in_request_body_stage = true;
-
-        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
-        assert_eq!(adapter.read_request_body(None).await, Err(BodyReadError::Unimplemented));
-        assert!(matches!(
-            adapter.request_body_snapshot_reader(false).await,
-            Err(BodyReadError::Unimplemented)
-        ));
-        assert!(!ctx.request_body.has_cached_body());
-    }
-
-    #[cfg(feature = "body-buffering")]
     #[tokio::test]
     async fn runtime_disabled_capture_reports_unimplemented() {
         let mut session = test_session_with_body(b"disabled").await;
@@ -2465,7 +2507,6 @@ mod record_outcome_tests {
         assert!(!ctx.edgion_status.contains(&EdgionStatus::BodyRefusedStage));
     }
 
-    #[cfg(feature = "body-buffering")]
     #[tokio::test]
     async fn bodyless_request_body_mutations_install_replay_owner() {
         let mut session = test_session().await;
@@ -2595,7 +2636,6 @@ mod record_outcome_tests {
         );
     }
 
-    #[cfg(feature = "body-buffering")]
     #[tokio::test]
     async fn chunked_physical_cap_rejects_without_waiting_for_eof() {
         let (mut client, server) = tokio::io::duplex(4096);
@@ -2629,7 +2669,6 @@ mod record_outcome_tests {
         );
     }
 
-    #[cfg(feature = "body-buffering")]
     #[tokio::test]
     async fn ensure_request_body_hashes_disk_without_materializing() {
         let body = vec![b'x'; DEFAULT_MEMORY_BUFFER_BYTES + 1];
@@ -2668,7 +2707,6 @@ mod record_outcome_tests {
         );
     }
 
-    #[cfg(feature = "body-buffering")]
     #[tokio::test]
     async fn request_body_snapshot_reader_streams_disk_without_materializing() {
         let body = vec![b's'; DEFAULT_MEMORY_BUFFER_BYTES + 17];
@@ -2699,7 +2737,6 @@ mod record_outcome_tests {
         assert_eq!(ctx.request_body.cached_body_is_materialized(), Some(false));
     }
 
-    #[cfg(feature = "body-buffering")]
     #[tokio::test]
     async fn request_body_buffer_gate_preserves_disk_spill_without_materializing() {
         let body = vec![b'x'; DEFAULT_MEMORY_BUFFER_BYTES + 1];

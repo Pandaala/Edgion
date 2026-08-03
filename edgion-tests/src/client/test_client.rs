@@ -171,8 +171,8 @@ mod capability_tests {
             "/integration/scripts/utils/start_all_with_conf.sh"
         ));
         assert!(
-            starter.contains("stock)") && starter.contains("Stock Gateway does not report body-buffering=disabled"),
-            "the shared starter must accept the runner's stock flavor name"
+            starter.contains("body-buffering=enabled"),
+            "the shared starter must verify the Gateway capability snapshot"
         );
         for suite in ["DslBody", "BodyPlugins", "JsonSchemaValidation"] {
             assert_eq!(

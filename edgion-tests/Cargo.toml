@@ -52,12 +52,12 @@ path = "src/build_test_proto.rs"
 # config via the CLI client; `edgion-resources` provides shared schema types.
 # `edgion-gateway` is pulled in only for its stable log-token constants
 # (region_route::log_consts). Its defaults are disabled by the workspace
-# dependency, so this edge explicitly selects the normal fork/body flavor and
-# BoringSSL. The test clients still use rustls directly for their own sockets.
+# dependency, so this edge explicitly selects BoringSSL. The test clients
+# still use rustls directly for their own sockets.
 edgion-resources.workspace = true
 edgion-controller.workspace = true
 edgion-cli.workspace = true
-edgion-gateway = { workspace = true, features = ["boringssl", "body-buffering"] }
+edgion-gateway = { workspace = true, features = ["boringssl"] }
 # `edgion-common` provides the generated ext_proc proto types/server stub used by
 # the fake external-processor in the test server.
 edgion-common.workspace = true

@@ -17,14 +17,13 @@ individual binary crates, so feature-selecting commands must name a package with
 | `allocator-system` | Yes | Yes | Yes | Optional |
 | `boringssl` | Yes | No | No | Default Gateway TLS backend; mutually exclusive with `rustls` |
 | `rustls` | Yes | No | No | Alternate Gateway Pingora TLS backend |
-| `body-buffering` | Yes | No | No | Default; selects the complete Edgion Pingora fork family |
-| `upstream-pingora` | Yes | No | No | Selects the complete original Pingora 0.8.1 family; mutually exclusive with `body-buffering` |
 | `fips` | Yes | No | No | Release/image-only; implies `boringssl`, requires the precompiled FIPS module |
 | `legacy_route_tests` | Yes | No | No | Non-default legacy test surface |
 
 Allocator selection and `#[global_allocator]` live in each binary entry point,
-not in a workspace-root library. Only the Gateway selects a Pingora source and
-TLS backend. Controller and CLI have allocator features only.
+not in a workspace-root library. Only the Gateway selects a TLS backend.
+Controller and CLI have allocator features only. There is no Pingora source
+feature: the Gateway always builds against the Edgion fork family.
 
 ## Gateway TLS and FIPS
 
@@ -38,16 +37,16 @@ for release/CI image builds and requires
 documented in `../02-config/01-gateway-config.md`.
 
 All three binaries still install the rustls crypto provider at startup for libraries
-that use rustls; this does not change the selected Pingora data-plane backend.
+that use rustls; this does not change the Pingora data-plane backend.
 
-The Controller no longer links Pingora. Pingora source and TLS-backend selection
-are Gateway-local.
+The Controller no longer links Pingora. TLS-backend selection is Gateway-local.
 
 ## Pingora Fork Source Policy
 
-The six `pingora-*-edgion` workspace dependencies all track the fork's
-`edgion` branch. They must move as one source family; never pin or advance only
-one package.
+The six `pingora-*` workspace dependencies (`pingora-core`, `pingora-http`,
+`pingora-proxy`, `pingora-limits`, `pingora-load-balancing`, `pingora-ketama`)
+all track the fork's `edgion` branch (`Pandaala/pingora`). They must move as
+one source family; never pin or advance only one package.
 
 Reproducibility comes from the committed `Cargo.lock`, which records the exact
 Git commit for every fork package. CI, release workflows, and image builds use
@@ -58,8 +57,7 @@ identity is required; all six entries must change together.
 
 Run `python3 cicd/checks/check_pingora_source_policy.py` after any Pingora
 dependency edit. It verifies the six manifest entries and that the complete
-fork family resolves to one commit. The stock family remains the exact
-crates.io version `0.8.1`.
+fork family resolves to one commit.
 
 ## Build Examples
 
@@ -70,14 +68,9 @@ cargo build
 # A specific default binary
 cargo build -p edgion-gateway --bin edgion-gateway
 
-# Stock Pingora comparison Gateway
-cargo build -p edgion-gateway --bin edgion-gateway-stock \
-  --no-default-features \
-  --features allocator-jemalloc,boringssl,upstream-pingora
-
 # Gateway with mimalloc + BoringSSL
 cargo build -p edgion-gateway --bin edgion-gateway --release \
-  --no-default-features --features allocator-mimalloc,boringssl,body-buffering
+  --no-default-features --features allocator-mimalloc,boringssl
 
 # Controller with system allocator
 cargo build -p edgion-controller --bin edgion-controller \

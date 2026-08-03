@@ -412,9 +412,8 @@ pub trait PluginSession: Send + Sync {
     // returning it by value is a refcount bump, not a copy — no borrow of the
     // session is held, which keeps the method mockable and easy to compose.
     //
-    // Defaults remain `Err(BodyReadError::Unimplemented)` for mocks and
-    // capability-disabled binaries. `PingoraSessionAdapter` overrides the
-    // request methods when the body-buffering feature is enabled; response
+    // Defaults remain `Err(BodyReadError::Unimplemented)` for mocks.
+    // `PingoraSessionAdapter` overrides the request methods; response
     // buffering still requires a separate Pingora seam.
 
     /// Read the full request body, buffering it on first call so it is available
@@ -513,6 +512,41 @@ pub trait PluginSession: Send + Sync {
     }
 
     // ========== Entry-level dye suite (traffic tagging) ==========
+
+    /// Latched transport fact: whether the downstream request headers ended
+    /// the stream (`Some(true)` = the transport guarantees no body will
+    /// arrive; `Some(false)` = a body may follow). `None` when the session
+    /// type cannot supply the fact (custom-connector, subrequest, mocks) —
+    /// per-chunk streamed body handlers are unavailable there and callers
+    /// must fail per their configured failure policy.
+    ///
+    /// Prefer this over `declares_body()` for body-inspection gating: the
+    /// latter infers from `Content-Length`, which an H2 client can contradict
+    /// (declare `CL: 0`, still send DATA frames).
+    fn request_headers_end_stream(&mut self) -> Option<bool> {
+        None
+    }
+
+    /// The dye plan of the currently-running plugin entry, for capture into a
+    /// streamed body handler (body-phase outcomes are recorded against the
+    /// installing entry's plan).
+    fn current_dye_plan(&self) -> Option<Arc<CompiledDyePlan>> {
+        None
+    }
+
+    /// Install a per-chunk streamed request-body handler for this request.
+    /// Returns `false` when the capability is unavailable (the handler is
+    /// dropped, nothing was installed) — the caller must then apply its
+    /// failure policy. Installing any handler makes the request
+    /// non-replayable and switches upstream framing to the streamed
+    /// disposition for the rest of the request.
+    fn install_request_body_stream_handler(
+        &mut self,
+        handler: Box<dyn crate::plugins::runtime::traits::request_body_stream::RequestBodyStreamHandler>,
+    ) -> bool {
+        drop(handler);
+        false
+    }
 
     /// Install the dye plan of the plugin entry about to be invoked. Every
     /// call site that invokes a plugin's stage method MUST call this

@@ -5,8 +5,8 @@
 //! the processor, which may mutate headers or short-circuit with an immediate
 //! response.
 //!
-//! Request bodies support `BUFFERED`. Proxied upstream response bodies remain
-//! streaming-only, so response body modes are rejected.
+//! Request bodies support `BUFFERED` and `STREAMED`. Proxied upstream response
+//! bodies remain streaming-only, so response body modes are rejected.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -107,7 +107,7 @@ pub enum BodySendMode {
     None,
     /// Skip the body phase (equivalent to NONE for this plugin).
     Skip,
-    /// Stream body chunks — NOT supported this release.
+    /// Stream body chunks to the processor. Supported for requests only.
     Streamed,
     /// Buffer the full body. Supported for requests only.
     Buffered,
@@ -127,8 +127,15 @@ impl BodySendMode {
         matches!(self, BodySendMode::Buffered)
     }
 
+    pub fn is_streamed(&self) -> bool {
+        matches!(self, BodySendMode::Streamed)
+    }
+
     fn is_supported_request(&self) -> bool {
-        matches!(self, BodySendMode::None | BodySendMode::Skip | BodySendMode::Buffered)
+        matches!(
+            self,
+            BodySendMode::None | BodySendMode::Skip | BodySendMode::Buffered | BodySendMode::Streamed
+        )
     }
 
     fn is_supported_response(&self) -> bool {
@@ -239,7 +246,7 @@ impl PluginValidation for ExtProcConfig {
         // Reject unsupported body modes loudly so a user never configures a
         // silently ignored mode.
         if !self.processing_mode.request_body_mode.is_supported_request() {
-            return Some("processingMode.requestBodyMode supports NONE, SKIP, or BUFFERED".to_string());
+            return Some("processingMode.requestBodyMode supports NONE, SKIP, BUFFERED, or STREAMED".to_string());
         }
         if !self.processing_mode.response_body_mode.is_supported_response() {
             return Some(
@@ -342,11 +349,18 @@ mod tests {
     }
 
     #[test]
-    fn rejects_streamed_request_body() {
+    fn accepts_streamed_request_body() {
         let mut config = valid_base();
         config.processing_mode.request_body_mode = BodySendMode::Streamed;
+        assert!(config.validation_error().is_none());
+    }
+
+    #[test]
+    fn rejects_streamed_response_body() {
+        let mut config = valid_base();
+        config.processing_mode.response_body_mode = BodySendMode::Streamed;
         let err = config.validation_error().unwrap();
-        assert!(err.contains("requestBodyMode"), "got: {err}");
+        assert!(err.contains("responseBodyMode"), "got: {err}");
     }
 
     #[test]

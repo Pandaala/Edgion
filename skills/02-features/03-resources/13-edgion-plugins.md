@@ -79,7 +79,7 @@ spec:
 | `ResponseRewrite` | Response rewrite (status code/headers/body) |
 | `RealIp` | Real IP extraction |
 | `CtxSet` | Set context variables |
-| `ExtProc` | External processing over a gRPC bidirectional stream (Envoy `ext_proc` compatible): request/response header mutation, `BUFFERED` request-body processing/mutation, and immediate-response short-circuit. Response-body buffering is not supported yet. |
+| `ExtProc` | External processing over a gRPC bidirectional stream (Envoy `ext_proc` compatible): request/response header mutation, `BUFFERED`/`STREAMED` request-body processing/mutation, and immediate-response short-circuit. `STREAMED` exchanges each chunk on the request-scoped stream (chunked upstream framing, request becomes non-retryable). Response-body processing is not supported. |
 | `Wasm` | Executes a proxy-wasm ABI v0.2 guest module (WebAssembly, run via wasmtime) in-process: header mutation, local responses, HTTP callouts (`calloutAllowlist`-gated; request phase with Pause/resume, and from `on_tick` with root-context callbacks when the module's plugins agree on one allowlist), buffered `proxy_on_request_body` when the request entry declares `body:`, read-only response-body observation, shared data (per-module KV with CAS), and `on_tick` timers. No body rewrite or gRPC callouts. Source forms: `file` / `inline` / `url` / `oci` (gateway-side pull from an OCI registry, with a content-addressed disk cache). See `docs/en/user-guide/http-route/filters/edgion-plugins/wasm.md`. |
 | `TraceContext` | W3C trace-context propagation and normalization |
 

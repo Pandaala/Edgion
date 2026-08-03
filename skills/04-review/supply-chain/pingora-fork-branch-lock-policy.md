@@ -7,8 +7,12 @@ description: Use when reviewing Edgion Pingora Git dependency pins, Cargo.lock r
 
 ## Decision
 
-The six direct `pingora-*-edgion` workspace dependencies form one indivisible
-source family.
+The six direct `pingora-*` workspace dependencies (`pingora-core`,
+`pingora-http`, `pingora-proxy`, `pingora-limits`, `pingora-load-balancing`,
+`pingora-ketama`) form one indivisible source family, sourced exclusively from
+the Edgion fork (`Pandaala/pingora`). There is no stock crates.io Pingora
+family — the former `body-buffering`/`upstream-pingora` flavor duality was
+removed on 2026-08-03 (fork-only build).
 
 - Normal development selects `branch = "edgion"` for all six entries.
 - `Cargo.lock` records the exact resolved commit for the complete transitive
@@ -19,9 +23,6 @@ source family.
 - Per-package `rev` pins are not used. They make every fork advance a
   six-location manifest edit without improving a locked build's
   reproducibility.
-
-The stock comparison family remains the exact crates.io Pingora `0.8.1`
-packages and must never resolve through the fork URL.
 
 ## Why a movable branch remains reproducible
 
@@ -35,14 +36,14 @@ An intentional fork advance therefore consists of:
 
 1. refreshing the lockfile without `--locked`;
 2. reviewing that only the Pingora source family moved;
-3. running the source-policy guard and both Gateway flavor builds;
+3. running the source-policy guard and the Gateway build + test suite;
 4. committing the manifest/lockfile state together.
 
 ## Enforcement
 
 `cicd/checks/check_pingora_source_policy.py` verifies:
 
-- all six direct aliases point to the expected fork and package names;
+- all six direct dependencies point to the fork URL;
 - every entry uses the same supported selector (`edgion` branch or one release
   tag), with no `rev`;
 - every fork package in `Cargo.lock` uses that selector;
@@ -55,6 +56,6 @@ because cargo-deny cannot express “branch in development or tag for release.�
 The custom guard supplies that narrower selector rule and the single-commit
 lock invariant.
 
-The CI source-isolation tree check remains separate: it proves the body binary
-contains only fork Pingora packages and the stock binary contains only
-crates.io Pingora packages.
+The CI source-isolation tree check remains separate: it proves the Gateway
+binary contains only fork Pingora packages (no registry-sourced Pingora may
+enter the dependency graph).

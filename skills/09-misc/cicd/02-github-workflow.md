@@ -52,8 +52,8 @@ The repo currently has the following workflows under `.github/workflows/`:
 
 1. `check` -> Pingora source-policy guard, then
    `cargo check --locked --workspace --all-targets`
-2. `gateway-flavors` -> build the body and stock Gateway artifacts, probe
-   their compiled capabilities, and verify Pingora source isolation
+2. `gateway-build` -> build the Gateway artifact, probe its compiled
+   capabilities, and verify every Pingora package resolves to the Edgion fork
 3. `fmt` -> `cargo fmt --all -- --check`
 4. `agent-docs` -> `python3 cicd/checks/validate_agent_docs.py`
 5. `clippy` -> `cargo clippy --locked --workspace --all-targets`
@@ -62,15 +62,13 @@ The repo currently has the following workflows under `.github/workflows/`:
 
 Key facts:
 
-- The five Rust jobs `check`, `gateway-flavors`, `fmt`, `clippy`, and `test`
+- The five Rust jobs `check`, `gateway-build`, `fmt`, `clippy`, and `test`
   each run the local action
   [../../../.github/actions/setup-rust/action.yml](../../../.github/actions/setup-rust/action.yml)
   first
 - `agent-docs` only needs checkout + `python3 cicd/checks/validate_agent_docs.py`; it does not depend on Rust toolchain initialization
 - `fmt` does not install system dependencies and does not enable cargo cache;
-  the other build-style Rust jobs install dependencies and enable cache.
-  `gateway-flavors` uses a per-flavor cache key because the two artifacts
-  activate different Pingora source families
+  the other build-style Rust jobs install dependencies and enable cache
 - The current CI commands do not include `--all-features`; before changing this, confirm whether you really want to expand the matrix rather than casually inflate CI cost
 - Every resolving Cargo command uses `--locked`. The manifest follows the
   Edgion Pingora `edgion` branch, but CI always builds the exact commit in the

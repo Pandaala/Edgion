@@ -1,9 +1,4 @@
 //! Request-scoped body state exposed to the rest of the Gateway.
-//!
-//! The transport-specific capture/replay backend exists only with the Edgion
-//! Pingora fork. This facade remains available in every Gateway flavor so
-//! plugins, routing hooks, and context lifecycle code never branch on the
-//! selected Pingora source.
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -11,26 +6,14 @@ use bytes::Bytes;
 use super::operation::{BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, RawBodyScanner};
 use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
 
-#[cfg(feature = "body-buffering")]
 mod enabled;
-#[cfg(all(feature = "upstream-pingora", not(feature = "body-buffering")))]
-mod stock;
 
-#[cfg(feature = "body-buffering")]
 use enabled::Backend;
-#[cfg(all(feature = "upstream-pingora", not(feature = "body-buffering")))]
-use stock::Backend;
 
-#[cfg(feature = "body-buffering")]
 use super::BodyStorageView;
-#[cfg(feature = "body-buffering")]
 use std::sync::Arc;
 
 /// Request-scoped handle to a completely captured proxied request body.
-///
-/// A stock-Pingora build uses the same API with an always-empty state. The
-/// capability failure is reported by the session adapter when capture is
-/// requested; downstream consumers do not need compile-time feature branches.
 #[derive(Default)]
 pub struct RequestBodyState(Backend);
 
@@ -159,12 +142,11 @@ impl RequestBodyState {
         self.0.release_view();
     }
 
-    #[cfg(feature = "body-buffering")]
     pub(crate) fn install(&mut self, view: Arc<BodyStorageView>) {
         self.0.install(view);
     }
 
-    #[cfg(all(test, feature = "body-buffering"))]
+    #[cfg(test)]
     pub(crate) fn cached_body_is_materialized(&self) -> Option<bool> {
         self.0.cached_body_is_materialized()
     }

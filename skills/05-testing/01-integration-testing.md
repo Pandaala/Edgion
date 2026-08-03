@@ -67,25 +67,18 @@ preflights, run its `cicd/checks/*` entry point directly.
 
 # Keep the scene after the run for manual investigation
 ./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare --keep-alive -r Gateway -i StreamPlugins
-
-# Run the non-body suites against the stock Pingora packages
-./edgion-tests/integration/scripts/integration/run_integration.sh --stock
 ```
 
-### Gateway build flavors and body-suite gating
+### Gateway capability gating
 
-The default `body` flavor builds and starts `edgion-gateway` against Edgion's
-pinned Pingora fork. `--stock` builds and starts
-`edgion-gateway-stock` against the exact original Pingora 0.8.1 crates.
-The runner probes the selected binary through `--print-build-capabilities`;
-it does not infer capability support from an environment variable or filename.
+The runner builds and starts `edgion-gateway` against Edgion's pinned Pingora
+fork and probes the binary through `--print-build-capabilities`; it does not
+infer capability support from an environment variable or filename.
 
-Body-dependent suites and dynamic scenarios must be registered in
-`edgion-tests/integration/capabilities.tsv` with the `body-buffering`
-capability. Full and resource-wide stock runs report those entries as
-skipped. An exact unsupported `-r <Resource> -i <Item>` request fails instead
-of succeeding as a no-op. Keep body-only configuration in its own suite
-directory so the stock run can exclude it before configuration loading.
+Capability-dependent suites and dynamic scenarios are registered in
+`edgion-tests/integration/capabilities.tsv` (currently the `body-buffering`
+capability, which every build now reports). An exact unsupported
+`-r <Resource> -i <Item>` request fails instead of succeeding as a no-op.
 
 ### Run every integration test in one shot
 
@@ -131,7 +124,7 @@ Do not search for code or cert scripts using older test-directory conventions. C
 
 The actual responsibilities of `run_integration.sh` are:
 
-1. Call `prepare.sh` to build `edgion-controller`, the selected Gateway flavor, `edgion-cli`, `test_server`, `test_client`, `test_client_direct`, `resource_diff`, `config_load_validator`
+1. Call `prepare.sh` to build `edgion-controller`, `edgion-gateway`, `edgion-cli`, `test_server`, `test_client`, `test_client_direct`, `resource_diff`, `config_load_validator`
 2. Call `start_all_with_conf.sh` to clean the scene and create `tmp/integration_testing/testing_<timestamp>/`
 3. Generate runtime Secrets under `${WORK_DIR}/generated-secrets/` and load them once after the suite YAML
 4. Start `test_server`, controller, gateway, and wait for health checks

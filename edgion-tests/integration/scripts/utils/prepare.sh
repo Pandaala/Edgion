@@ -99,21 +99,8 @@ main() {
         exit 1
     fi
     
-    # Build the selected Gateway flavor. The body flavor is the default;
-    # stock uses the original crates.io Pingora dependency family.
-    local gateway_flavor="${EDGION_GATEWAY_FLAVOR:-body}"
-    local gateway_name="edgion-gateway"
-    local gateway_target="-p edgion-gateway --bin edgion-gateway"
-    if [ "$gateway_flavor" = "stock" ]; then
-        gateway_name="edgion-gateway-stock"
-        gateway_target="-p edgion-gateway --bin edgion-gateway-stock --no-default-features --features allocator-jemalloc,boringssl,upstream-pingora"
-    elif [ "$gateway_flavor" != "body" ]; then
-        log_error "Unknown EDGION_GATEWAY_FLAVOR: ${gateway_flavor}"
-        exit 1
-    fi
-
-    log_section "Build ${gateway_name}"
-    if ! build_binary "$gateway_name" "$gateway_target"; then
+    log_section "Build edgion-gateway"
+    if ! build_binary "edgion-gateway" "-p edgion-gateway --bin edgion-gateway"; then
         log_error "Build failed! Exiting..."
         exit 1
     fi

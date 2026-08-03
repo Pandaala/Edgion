@@ -4,7 +4,7 @@
 #
 # Build arguments:
 #   RUNTIME_BASE: Runtime base image (default: debian:bookworm-slim)
-#   BINARY: Target binary name (e.g., gateway, gateway-stock, controller, test_server)
+#   BINARY: Target binary name (e.g., gateway, controller, test_server)
 #   BUILD_TYPE: Build type - bin or example (default: bin)
 #   BINARY_PATH: Path to prebuilt binaries directory
 #   EXTRA_PACKAGES: Optional extra apt packages for runtime image

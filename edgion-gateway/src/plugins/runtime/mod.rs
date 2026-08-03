@@ -26,6 +26,6 @@ pub(crate) use plugin_runtime::InvalidUpdatePolicy;
 pub use plugin_runtime::PluginRuntime;
 pub use session_adapter::PingoraSessionAdapter;
 pub use traits::{
-    DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult, RequestFilter, UpstreamResponse,
-    UpstreamResponseBodyFilter, UpstreamResponseFilter,
+    ChunkVerdict, DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult, RequestBodyStreamHandler,
+    RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };

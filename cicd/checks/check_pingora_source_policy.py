@@ -20,14 +20,14 @@ FORK_SOURCE = re.compile(
     r"^git\+https://github\.com/Pandaala/pingora\.git"
     r"\?(branch|tag)=([^#]+)#([0-9a-f]{40})$"
 )
-DIRECT_DEPENDENCIES = {
-    "pingora-core-edgion": "pingora-core",
-    "pingora-http-edgion": "pingora-http",
-    "pingora-proxy-edgion": "pingora-proxy",
-    "pingora-limits-edgion": "pingora-limits",
-    "pingora-load-balancing-edgion": "pingora-load-balancing",
-    "pingora-ketama-edgion": "pingora-ketama",
-}
+DIRECT_DEPENDENCIES = [
+    "pingora-core",
+    "pingora-http",
+    "pingora-proxy",
+    "pingora-limits",
+    "pingora-load-balancing",
+    "pingora-ketama",
+]
 
 
 def main() -> int:
@@ -35,32 +35,30 @@ def main() -> int:
     manifest = (REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8")
     selectors = set()
 
-    for alias, package in DIRECT_DEPENDENCIES.items():
-        match = re.search(rf"^{re.escape(alias)}\s*=\s*\{{([^}}]+)\}}$", manifest, re.MULTILINE)
+    for name in DIRECT_DEPENDENCIES:
+        match = re.search(rf"^{re.escape(name)}\s*=\s*\{{([^}}]+)\}}$", manifest, re.MULTILINE)
         if match is None:
-            errors.append(f"Cargo.toml: missing inline-table dependency {alias}")
+            errors.append(f"Cargo.toml: missing inline-table dependency {name}")
             continue
         spec = match.group(1)
-        if re.search(rf'\bpackage\s*=\s*"{re.escape(package)}"', spec) is None:
-            errors.append(f"Cargo.toml: {alias} must alias package {package}")
         if re.search(rf'\bgit\s*=\s*"{re.escape(FORK_URL)}"', spec) is None:
-            errors.append(f"Cargo.toml: {alias} must use {FORK_URL}")
+            errors.append(f"Cargo.toml: {name} must use {FORK_URL}")
         branch_match = re.search(r'\bbranch\s*=\s*"([^"]+)"', spec)
         tag_match = re.search(r'\btag\s*=\s*"([^"]+)"', spec)
         if (branch_match is None) == (tag_match is None):
-            errors.append(f"Cargo.toml: {alias} must set exactly one of branch or tag")
+            errors.append(f"Cargo.toml: {name} must set exactly one of branch or tag")
         elif branch_match is not None:
             branch = branch_match.group(1)
             selectors.add(("branch", branch))
             if branch != FORK_BRANCH:
-                errors.append(f"Cargo.toml: {alias} development branch must be {FORK_BRANCH}")
+                errors.append(f"Cargo.toml: {name} development branch must be {FORK_BRANCH}")
         else:
             tag = tag_match.group(1)
             selectors.add(("tag", tag))
             if re.fullmatch(r"[A-Za-z0-9._/-]+", tag) is None:
-                errors.append(f"Cargo.toml: {alias} has an invalid release tag {tag!r}")
+                errors.append(f"Cargo.toml: {name} has an invalid release tag {tag!r}")
         if re.search(r"\brev\s*=", spec):
-            errors.append(f"Cargo.toml: {alias} must not set rev")
+            errors.append(f"Cargo.toml: {name} must not set rev")
 
     if len(selectors) != 1:
         errors.append(
@@ -106,7 +104,7 @@ def main() -> int:
         )
 
     locked_names = set(fork_packages)
-    for package in DIRECT_DEPENDENCIES.values():
+    for package in DIRECT_DEPENDENCIES:
         if package not in locked_names:
             errors.append(f"Cargo.lock: fork package {package} is missing")
 

@@ -31,6 +31,7 @@ mod pg_init_downstream_modules;
 mod pg_logging;
 mod pg_new_ctx;
 mod pg_request_body_filter;
+mod pg_request_body_filter_action;
 mod pg_request_filter;
 mod pg_response_filter;
 mod pg_upstream_peer;
@@ -119,17 +120,52 @@ impl ProxyHttp for EdgionHttpProxy {
         pg_early_request_filter::early_request_filter(self, session, ctx).await
     }
 
-    async fn request_body_filter(
+    // `request_body_filter` intentionally keeps its default: overriding
+    // `request_body_filter_action` means the proxy never calls the legacy
+    // hook. The action drives streamed body handlers first, then the mirror
+    // tee (`pg_request_body_filter`), so the mirror sees post-mutation chunks.
+    //
+    // `request_trailer_filter` also stays default: the proxy never forwards
+    // request trailers (transport drops them), so a trailer-bearing request
+    // loses nothing a streamed inspection policy could have seen — every body
+    // byte still flows through the hook.
+    async fn request_body_filter_action(
         &self,
         session: &mut Session,
         body: &mut Option<bytes::Bytes>,
         end_of_stream: bool,
         ctx: &mut Self::CTX,
-    ) -> pingora_core::Result<()>
+    ) -> pingora_core::Result<pingora_proxy::RequestBodyAction>
     where
         Self::CTX: Send + Sync,
     {
-        pg_request_body_filter::request_body_filter(self, session, body, end_of_stream, ctx).await
+        pg_request_body_filter_action::request_body_filter_action(self, session, body, end_of_stream, ctx).await
+    }
+
+    fn upstream_request_body_disposition(
+        &self,
+        _session: &Session,
+        ctx: &Self::CTX,
+    ) -> pingora_proxy::UpstreamRequestBodyDisposition {
+        // Streamed once any per-chunk handler was installed: chunk mutation
+        // may change the length, so the upstream must use chunked framing.
+        // The proxy coerces back to Ordinary where Streamed is unsafe
+        // (upgrade/CONNECT, empty-and-done body, H1.0 upstream). Keyed on the
+        // monotonic latch, not the handler vector (see the ctx field docs).
+        if ctx.request_body_stream_active {
+            pingora_proxy::UpstreamRequestBodyDisposition::Streamed
+        } else {
+            pingora_proxy::UpstreamRequestBodyDisposition::Ordinary
+        }
+    }
+
+    fn request_retry_allowed(&self, _session: &Session, ctx: &Self::CTX) -> bool {
+        // Streamed chunks are forwarded without any replay buffer, so a
+        // request stops being replayable the moment a handler is installed.
+        // The latch is monotonic by construction (set once, never cleared),
+        // as the contract requires — the handler vector is not, because the
+        // hook takes it across await points and the future may be dropped.
+        !ctx.request_body_stream_active
     }
 
     async fn upstream_request_filter(

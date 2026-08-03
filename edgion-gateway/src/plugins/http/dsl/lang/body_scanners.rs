@@ -89,7 +89,6 @@ mod digest_scanner_tests {
         assert_eq!(hmac.bytes_scanned, 0);
     }
 
-    #[cfg(feature = "body-buffering")]
     #[tokio::test]
     async fn digest_scanners_follow_the_published_mutation_snapshot() {
         use bytes::Bytes;
@@ -124,20 +123,6 @@ mod digest_scanner_tests {
         assert_eq!(
             hex::encode(mutated_hmac.value),
             "1f24ebf1762bcdba36c3dc8fcebb4b0acc409ac6531ddda81136effbdd6bb52a"
-        );
-    }
-
-    #[cfg(all(feature = "upstream-pingora", not(feature = "body-buffering")))]
-    #[tokio::test]
-    async fn stock_bodyful_digest_scanners_remain_unimplemented() {
-        let body = RequestBodyState::default();
-        assert_eq!(
-            body.scan_raw(Md5Scanner::new(), 64).await,
-            Err(BodyOperationError::Body(BodyReadError::Unimplemented))
-        );
-        assert_eq!(
-            body.scan_raw(HmacSha256Scanner::new(b"secret").unwrap(), 64).await,
-            Err(BodyOperationError::Body(BodyReadError::Unimplemented))
         );
     }
 }

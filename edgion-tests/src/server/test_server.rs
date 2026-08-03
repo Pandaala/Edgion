@@ -1782,6 +1782,9 @@ mod ext_proc_server {
                 let response = match mode.as_deref() {
                     Some("duplicate-header") | Some("wrong-order") => headers_verdict(true, "x-duplicate-phase"),
                     Some("bodyless-create") => request_body_verdict_with(b"created-by-ext-proc"),
+                    // Streamed mid-body rejection: the first body chunk draws an
+                    // ImmediateResponse instead of a body verdict.
+                    Some("body-block") => immediate_403(),
                     _ => request_body_verdict_with(b"processed-by-ext-proc"),
                 };
                 (Some(response), false)

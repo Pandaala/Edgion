@@ -179,7 +179,7 @@ pub fn apply_to_response(session: &mut dyn PluginSession, mutation: &HeaderMutat
 
 /// Log-and-skip helper: returns true if the processor must not mutate `name` —
 /// either an HTTP/2 pseudo-header or a proxy-managed hop-by-hop/framing header.
-fn reject_protected(name: &str, log: &mut PluginLog) -> bool {
+pub(super) fn reject_protected(name: &str, log: &mut PluginLog) -> bool {
     if is_pseudo_header(name) {
         log.push_err("pseudo header mutation rejected");
         true
