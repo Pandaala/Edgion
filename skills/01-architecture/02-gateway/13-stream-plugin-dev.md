@@ -190,8 +190,12 @@ The current key is:
 ```yaml
 metadata:
   annotations:
-    edgion.io/edgion-stream-plugins: "namespace/name"
+    edgion.io/edgion-stream-plugins: "policy-name"
 ```
+
+On `Gateway`, the annotation accepts only an unqualified name and resolves it in the
+Gateway namespace. TCPRoute, TLSRoute, and UDPRoute retain their separate `name` or
+`namespace/name` contract.
 
 Existing binding sites:
 
@@ -224,7 +228,20 @@ spec:
         #   - name: corp-allowlist   # namespace defaults to edgion-test
 ```
 
-### Reference it from a `TCPRoute` / `TLSRoute` / Gateway
+### Reference it from a Gateway
+
+Gateway-level attachments accept only an unqualified name and resolve it in the
+Gateway namespace:
+
+```yaml
+metadata:
+  annotations:
+    edgion.io/edgion-stream-plugins: tcp-allow-localhost
+```
+
+### Reference it from a `TCPRoute` / `TLSRoute` / `UDPRoute`
+
+Route-level attachments retain their separate `name` or `namespace/name` contract:
 
 ```yaml
 metadata:
@@ -383,7 +400,7 @@ How to write it: follow the structure of `edgion-tests/src/client/dynamic/scenar
 - Are the enum, runtime, and module exports all wired?
 - Is an existing configuration struct reused instead of copying a near-duplicate one?
 - After `ResourceMeta` preprocessing, are the runtime fields actually initialized?
-- Does annotation parsing support both `name` and `namespace/name` reference formats?
+- Does Gateway annotation parsing accept only a same-namespace `name`, while route annotation parsing still supports both `name` and `namespace/name`?
 - After updating / deleting the resource, does the Gateway store hot-reload correctly?
 
 ## Related

@@ -1,12 +1,13 @@
-# TCPRoute for the allow-all gateway (connections should pass through)
+# TCPRoute for the Gateway with an invalid qualified StreamPlugins reference.
+# The listener must reject the connection before this route can proxy it.
 apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TCPRoute
 metadata:
-  name: stream-plugins-tcp-allowed
+  name: stream-plugins-tcp-qualified
   namespace: edgion-test
 spec:
   parentRefs:
-    - name: stream-plugins-pass-gw
+    - name: stream-plugins-qualified-gw
       namespace: edgion-test
       sectionName: tcp
   rules:

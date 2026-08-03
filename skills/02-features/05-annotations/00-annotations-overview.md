@@ -19,7 +19,7 @@ description: Edgion annotations overview: a quick lookup for all edgion.io/* ann
 | `edgion.io/enable-http2` | `"true"\|"false"` | Listener-side HTTP/2 (default true): HTTP→h2c, HTTPS→ALPN h2 |
 | `edgion.io/http-to-https-redirect` | `"true"\|"false"` | HTTP→HTTPS redirect |
 | `edgion.io/https-redirect-port` | `port` | HTTPS redirect port |
-| `edgion.io/edgion-stream-plugins` | `ns/name` | StreamPlugins binding |
+| `edgion.io/edgion-stream-plugins` | `name` | Same-namespace StreamPlugins binding; slash-containing values are rejected |
 | `edgion.io/edgion-plugins` | comma/space-separated refs | Ordered global HTTP plugins; bare names use the Gateway namespace |
 | `edgion.io/require-sni-host-match` | `"true"\|"false"` | Per-Gateway override of `spec.securityProtect.requireSniHostMatch` |
 | `edgion.io/dns-resolver` | comma/space-separated `ip[:port]` | Data-plane DNS servers; mutually exclusive with `dns-resolver-ref` |
@@ -79,7 +79,7 @@ layer has no plugin chain to attach a declaration to.
 
 | Annotation | Value | Description |
 |------------|-------|-------------|
-| `edgion.io/edgion-stream-plugins` | `ns/name` | StreamPlugins binding (TCPRoute / TLSRoute / UDPRoute) |
+| `edgion.io/edgion-stream-plugins` | `name` or `namespace/name` | StreamPlugins binding (TCPRoute / TLSRoute / UDPRoute) |
 | `edgion.io/proxy-protocol` | `"v2"` | Send Proxy Protocol v2 to upstream (TLSRoute only; other values ignored) |
 | `edgion.io/max-connect-retries` | `u32` | Max upstream connect attempts (TLSRoute only; clamped to 1..=5, default 2) |
 | `edgion.io/tcp-keepalive-time` | positive integer string | Idle seconds before the first keepalive probe on the upstream L4 connection (clamped 1–7200). Presence enables keepalive; absent = disabled (TCPRoute / TLSRoute) |

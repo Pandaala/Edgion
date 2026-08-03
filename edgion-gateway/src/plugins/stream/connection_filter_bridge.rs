@@ -12,7 +12,7 @@
 //! ```yaml
 //! metadata:
 //!   annotations:
-//!     edgion.io/edgion-stream-plugins: "namespace/name"
+//!     edgion.io/edgion-stream-plugins: "policy-name"
 //! ```
 
 use async_trait::async_trait;

@@ -59,7 +59,7 @@ Bind to different levels via annotations:
 # Gateway level — all connections
 metadata:
   annotations:
-    edgion.io/edgion-stream-plugins: "default/my-stream-plugins"
+    edgion.io/edgion-stream-plugins: "my-stream-plugins"
 
 # TCPRoute level
 metadata:

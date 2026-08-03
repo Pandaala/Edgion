@@ -6,7 +6,7 @@ metadata:
   name: stream-plugins-denied-gw
   namespace: edgion-test
   annotations:
-    edgion.io/edgion-stream-plugins: "edgion-test/deny-all-ips"
+    edgion.io/edgion-stream-plugins: "deny-all-ips"
 spec:
   gatewayClassName: public-gateway
   listeners:

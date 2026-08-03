@@ -490,11 +490,9 @@ pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()>
 /// Apply connection filter to a Pingora Service if the Gateway has the
 /// `edgion.io/edgion-stream-plugins` annotation set.
 ///
-/// The annotation value may be `name` (expanded with the Gateway's namespace) or the
-/// fully-qualified `namespace/name` referencing an EdgionStreamPlugins resource. This
-/// matches the bare-name convention documented for the Gateway annotation and aligns
-/// with the TCPRoute / TLSRoute handlers, which apply the same normalization before
-/// looking up the global `StreamPluginStore` (keyed by `namespace/name`).
+/// The annotation value must be an unqualified resource name and is expanded with the
+/// Gateway's namespace. Route-level StreamPlugins references have a separate contract
+/// and may still use a qualified `namespace/name` value.
 ///
 /// The filter runs at TCP level, before TLS handshake or HTTP parsing.
 fn apply_connection_filter<A>(service: &mut Service<A>, context: &ListenerContext) {
@@ -502,18 +500,23 @@ fn apply_connection_filter<A>(service: &mut Service<A>, context: &ListenerContex
         return;
     };
 
-    let trimmed = annotation_value.trim();
-    if trimmed.is_empty() {
-        return;
-    }
-    // The store is always keyed by the fully-qualified `namespace/name`. Expand a bare
-    // name using the Gateway's own namespace so doc-sanctioned short references resolve
-    // instead of silently fail-closing the listener.
-    let store_key = if trimmed.contains('/') {
-        trimmed.to_string()
-    } else {
-        let ns = context.gateway_namespace.as_deref().unwrap_or("default");
-        format!("{}/{}", ns, trimmed)
+    // The store is keyed by `namespace/name`, but Gateway-level attachments are
+    // same-namespace only. Use an impossible store key for a qualified annotation so
+    // bypassing Controller validation still fails closed in the data plane.
+    let store_key = match resolve_gateway_stream_plugin_store_key(
+        annotation_value,
+        context.gateway_namespace.as_deref().unwrap_or("default"),
+    ) {
+        Ok(Some(store_key)) => store_key,
+        Ok(None) => return,
+        Err(()) => {
+            tracing::warn!(
+            gateway=%context.gateway_key,
+            listener=%context.listener.name,
+            "Gateway edgion-stream-plugins reference must be an unqualified resource name; connections will be rejected"
+            );
+            String::new()
+        }
     };
 
     let store = get_global_stream_plugin_store();
@@ -538,4 +541,33 @@ fn apply_connection_filter<A>(service: &mut Service<A>, context: &ListenerContex
         store_key=%store_key,
         "ConnectionFilter enabled via edgion-stream-plugins annotation"
     );
+}
+
+fn resolve_gateway_stream_plugin_store_key(value: &str, gateway_ns: &str) -> Result<Option<String>, ()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else if trimmed.contains('/') {
+        Err(())
+    } else {
+        Ok(Some(format!("{}/{}", gateway_ns, trimmed)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_gateway_stream_plugin_store_key;
+
+    #[test]
+    fn gateway_stream_plugin_store_key_uses_gateway_namespace() {
+        assert_eq!(
+            resolve_gateway_stream_plugin_store_key("  policy  ", "app").unwrap(),
+            Some("app/policy".to_string())
+        );
+    }
+
+    #[test]
+    fn gateway_stream_plugin_store_key_rejects_qualified_name() {
+        assert!(resolve_gateway_stream_plugin_store_key("shared/policy", "app").is_err());
+    }
 }

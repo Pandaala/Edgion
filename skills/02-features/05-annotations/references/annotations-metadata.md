@@ -25,7 +25,7 @@ These are read from `Gateway.metadata.annotations`, not per-listener metadata.
 | `edgion.io/https-redirect-port` | integer string | `443` | Target port used when HTTP-to-HTTPS redirect is enabled. |
 | `edgion.io/metrics-test-key` | string | none | Test-only metrics correlation key. Consumed by Gateway runtime for integration metrics scenarios. |
 | `edgion.io/metrics-test-type` | `lb` / `retry` / `latency` | none | Test-only metrics mode selector. |
-| `edgion.io/edgion-stream-plugins` | `name` or `namespace/name` | none | Enables Gateway-level connection filtering before HTTP parsing or TLS handshake. Short names are expanded with the Gateway's namespace. Current verified runtime path is in `listener_builder.rs`. |
+| `edgion.io/edgion-stream-plugins` | `name` | none | Enables Gateway-level connection filtering before HTTP parsing or TLS handshake. The resource is resolved in the Gateway's namespace; slash-containing values are rejected by the Controller and fail closed defensively in the Gateway. Current verified runtime path is in `listener_builder.rs`. |
 | `edgion.io/edgion-plugins` | comma/space-separated refs | none | Ordered HTTP plugins applied to every request on this Gateway before route plugins. Bare names use the Gateway namespace; duplicates preserve first occurrence. |
 | `edgion.io/require-sni-host-match` | `"true"` / `"false"` | inherits `EdgionGatewayConfig.spec.securityProtect.requireSniHostMatch` | Explicit true or false overrides the global value for this Gateway; absent inherits. HTTPS mismatch returns 421. |
 | `edgion.io/dns-resolver` | `ip[:port]` list (comma/space-separated) | inherits `EdgionGatewayConfig.spec.dnsResolver` | Per-Gateway inline standard-DNS resolver for `ServiceExternalName` backends. **Data-plane only** (D3a): overrides the EGC default but not control-plane resolution. Mutually exclusive with `dns-resolver-ref`. |
@@ -35,6 +35,7 @@ Important:
 
 - `metrics-test-*` keys are meant for integration testing and diagnostics, not normal production config.
 - `edgion.io/edgion-stream-plugins` is the current key used by the runtime path. Older docs used `edgion.io/stream-plugins`.
+- Gateway-level StreamPlugins attachments are intentionally same-namespace. To reuse centrally managed lists or selectors across per-namespace policies, reference a shared `EdgionConfigData` from each local `EdgionStreamPlugins`; those cross-namespace data references use the existing `ReferenceGrant` and `visibility` controls.
 
 ## Log Projection Annotations
 

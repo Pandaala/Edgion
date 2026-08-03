@@ -6,17 +6,19 @@
 // Required config files (in edgion-tests/integration/conf/Gateway/StreamPlugins/):
 // - 01_EdgionStreamPlugins.yaml           # deny-all-ips resource
 // - 02_EdgionStreamPlugins_allow.yaml     # allow-all-ips resource
-// - 03_Gateway.yaml                       # 3 Gateways: no-filter, deny, allow
+// - 03_Gateway_allowed.yaml               # no-filter control Gateway
+// - 04_Gateway_denied.yaml                # bare-name deny Gateway
+// - 05_Gateway_qualified_name_rejected.yaml # qualified reference must fail closed
 // - HTTPRoute.yaml                        # Route for no-filter gateway
 // - TCPRoute_denied.yaml                  # Route for denied gateway
-// - TCPRoute_allowed.yaml                 # Route for allowed gateway
+// - TCPRoute_qualified_name_rejected.yaml # Route for qualified-name Gateway
 // - 06_Gateway_bare_name.yaml             # bare-name allow gateway (port 31269)
 // - 07_TCPRoute_bare_name.yaml            # Route for bare-name gateway
 //
 // Port allocation (from ports.json "Gateway/StreamPlugins"):
 // - 31270: HTTP (no ConnectionFilter, control group)
 // - 31271: TCP (deny-all ConnectionFilter)
-// - 31272: TCP (allow-all ConnectionFilter, fully-qualified name)
+// - 31272: TCP (qualified Gateway reference rejected, fail-close)
 // - 31269: TCP (allow-all ConnectionFilter, bare name -> namespace normalization)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
@@ -124,55 +126,42 @@ impl StreamPluginsTestSuite {
         )
     }
 
-    /// Test: TCP connection to allow-all gateway should work normally
-    fn test_tcp_allowed() -> TestCase {
+    /// Test: a qualified Gateway-level StreamPlugins reference must fail closed.
+    fn test_tcp_qualified_name_rejected() -> TestCase {
         TestCase::new(
-            "tcp_connection_allowed_by_filter",
-            "TCP connection to allow-all gateway should pass through and echo data",
+            "tcp_connection_rejected_for_qualified_gateway_reference",
+            "Qualified Gateway stream-plugins reference should fail closed",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let addr = format!("{}:{}", ctx.target_host, ctx.tcp_filtered_port);
-                    let test_data = b"Hello StreamPlugins";
-
-                    match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
+                    match tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(&addr)).await {
                         Ok(Ok(mut stream)) => {
-                            // Send data
-                            if let Err(e) = stream.write_all(test_data).await {
-                                return TestResult::failed(start.elapsed(), format!("Write failed: {}", e));
-                            }
-
-                            // Read echo response
+                            let _ = stream.write_all(b"qualified reference").await;
                             let mut buf = vec![0u8; 1024];
-                            match tokio::time::timeout(Duration::from_secs(3), stream.read(&mut buf)).await {
-                                Ok(Ok(n)) if n > 0 => {
-                                    if &buf[..n] == test_data {
-                                        TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            "TCP echo succeeded through allow-all filter".to_string(),
-                                        )
-                                    } else {
-                                        TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            format!("TCP connection passed through filter (received {} bytes)", n),
-                                        )
-                                    }
-                                }
+                            match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await {
+                                Ok(Ok(0)) | Ok(Err(_)) => TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Qualified Gateway reference rejected by connection filter".to_string(),
+                                ),
                                 Ok(Ok(_)) => TestResult::failed(
                                     start.elapsed(),
-                                    "Connection closed immediately (0 bytes read)".to_string(),
+                                    "Qualified Gateway reference unexpectedly admitted traffic".to_string(),
                                 ),
-                                Ok(Err(e)) => TestResult::failed(start.elapsed(), format!("Read failed: {}", e)),
-                                Err(_) => TestResult::failed(start.elapsed(), "Read timed out".to_string()),
+                                Err(_) => TestResult::failed(
+                                    start.elapsed(),
+                                    "Qualified Gateway reference was not rejected before timeout".to_string(),
+                                ),
                             }
                         }
-                        Ok(Err(e)) => TestResult::failed(
+                        Ok(Err(_)) => TestResult::passed_with_message(
                             start.elapsed(),
-                            format!("Connection refused (should be allowed): {}", e),
+                            "Qualified Gateway reference rejected at connection setup".to_string(),
                         ),
-                        Err(_) => {
-                            TestResult::failed(start.elapsed(), "Connection timed out (should be allowed)".to_string())
-                        }
+                        Err(_) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Qualified Gateway reference dropped at connection setup".to_string(),
+                        ),
                     }
                 })
             },
@@ -304,7 +293,7 @@ impl TestSuite for StreamPluginsTestSuite {
         vec![
             Self::test_http_no_filter(),
             Self::test_tcp_denied(),
-            Self::test_tcp_allowed(),
+            Self::test_tcp_qualified_name_rejected(),
             Self::test_tcp_bare_name_allowed(),
             Self::test_tcp_denied_multiple(),
         ]

@@ -1,74 +1,46 @@
 ---
 name: stream-plugin-store-key-normalization
-description: Use when reviewing any consumer of the global StreamPluginStore (Gateway annotation, TCPRoute, TLSRoute, UDPRoute, or a future stream-plugin lookup site); enforces the "bare name expanded with the local namespace" normalization that the store key contract requires.
+description: Use when reviewing a consumer of the global StreamPluginStore; distinguishes the Gateway same-namespace attachment contract from the route name-or-qualified-name contract.
 ---
 
-# StreamPluginStore key normalization — all consumers must expand bare names
+# StreamPluginStore key normalization depends on the attachment owner
 
 ## Conclusion
 
-The global `StreamPluginStore` is **always** keyed by the fully-qualified
-`namespace/name` (see `metadata_conf_handler.rs:34` `format!("{}/{}", ns, name)`
-and `StreamPluginStore::get_by_ns_name`). Any consumer that translates a user-facing
-`edgion.io/edgion-stream-plugins` annotation value into a store-lookup key MUST
-expand a bare name using the enclosing resource's namespace before lookup; passing
-the raw value through silently fail-closes when an operator writes the
-documented short form.
+The global `StreamPluginStore` is keyed by fully-qualified `namespace/name` strings, but the
+operator-facing annotation contract is intentionally different at the two attachment layers:
 
-The documented value type on both Gateway and TCPRoute/TLSRoute/UDPRoute tables is
-`name` or `namespace/name` (`skills/02-features/05-annotations/references/annotations-metadata.md`).
-"Short names are expanded with the local namespace" is the explicit caveat that must
-hold at every consumer.
+| Site | Accepted annotation value | Normalization |
+|------|---------------------------|---------------|
+| `Gateway` listener connection filter | unqualified `name` only | expand with the Gateway namespace |
+| `TCPRoute` / `TLSRoute` / `UDPRoute` | `name` or `namespace/name` | expand a bare name with the route namespace; preserve a qualified value |
 
-## The two consumer sites — keep them in sync
+Gateway-level attachments are same-namespace because the previous qualified-name path loaded an
+`EdgionStreamPlugins` from another namespace without `ReferenceGrant` authorization. The Controller
+now reports a slash-containing Gateway value as unresolved and does not register the dependency.
+The Gateway independently maps such a value to an impossible store key, preserving fail-close if
+configuration bypasses Controller validation.
 
-| Site | File | Namespace source |
-|------|------|------------------|
-| L4 route resolver (shared by TCPRoute / TLSRoute / UDPRoute) | `edgion-gateway/src/routes/common.rs::resolve_stream_plugin_store_key` (takes `&ObjectMeta`) | `metadata.namespace` |
-| Gateway listener connection-filter (inline copy) | `edgion-gateway/src/runtime/server/listener_builder.rs::apply_connection_filter` | `context.gateway_namespace` |
+Route-level semantics are outside that decision and must not be tightened as a side effect. Their
+shared resolver remains `edgion-gateway/src/routes/common.rs::resolve_stream_plugin_store_key`.
 
-The Gateway listener implements the normalization inline because it receives the value
-via `ListenerContext` (a `HashMap` + a separate `Option<String>` namespace), not via an
-`ObjectMeta` — calling the shared helper would force an awkward fabricated `ObjectMeta`
-shim. The two sites are intentionally a tolerated duplicate; this rule entry exists so
-the duplication is not silently forgotten when one side evolves.
+## Reuse without sharing the executable policy
 
-Both sites implement the same shape:
+Separate same-namespace `EdgionStreamPlugins` resources may still reuse central lists and selectors
+through `EdgionConfigData`. Cross-namespace `EdgionStreamPlugins` → `EdgionConfigData` references
+already have explicit `ReferenceGrant` and target `visibility` enforcement. This separates local
+ownership of plugin composition and failure behavior from shared ownership of policy data.
 
-```rust
-let trimmed = annotation_value.trim();
-if trimmed.is_empty() { return None; }
-if trimmed.contains('/') {
-    trimmed.to_string()
-} else {
-    let ns = <local namespace>.as_deref().unwrap_or("default");
-    format!("{}/{}", ns, trimmed)
-}
-```
+## Review rules
 
-Reference fix: F-004 (`tasks/plugins/plugins-stream-F004-...`), 2026-05-26 —
-the Gateway listener path historically passed the value through verbatim, so
-bare names silently fail-closed the entire listener while logging a misleading
-"until resource is synced" warn.
+- Do not restore qualified Gateway references without a complete design that transports an explicit
+  authorization result to the Gateway and retains independent fail-close enforcement.
+- Do not apply the Gateway restriction to TCPRoute, TLSRoute, or UDPRoute.
+- A new `StreamPluginStore` consumer must document which namespace owns the attachment and normalize
+  to the store's `namespace/name` key accordingly.
 
-## What to reject in PR review
+## History
 
-- **A new StreamPluginStore consumer that uses `annotation_value.trim()` directly
-  as the lookup key.** It must apply the bare-name expansion.
-- **A "fix" that removes the expansion from either consumer site** on the
-  grounds that "operators should always write the fully-qualified form". The
-  documented contract is `name OR namespace/name`; tightening it is a behavior
-  break on doc-sanctioned configs.
-- **Reformulating the fix as a doc change** ("just tell operators to use
-  namespace/name"). The store-key contract belongs in code, not in operator
-  discipline — the three Route paths already encode it; the Gateway path must
-  match.
-
-## Re-evaluation triggers
-
-Re-open this rule only when:
-
-- The `StreamPluginStore` key convention itself changes (e.g. moves to a
-  structured `(ns, name)` tuple key instead of a `String`).
-- A new resource type starts consuming `edgion.io/edgion-stream-plugins` —
-  add a fourth row to the table above and ensure the same normalization runs.
+F-004 (2026-05-26) fixed bare-name expansion at the Gateway listener. The later
+`gateway-stream-plugins-same-namespace-reference` finding retained that expansion but removed the
+unrestricted qualified-name branch.

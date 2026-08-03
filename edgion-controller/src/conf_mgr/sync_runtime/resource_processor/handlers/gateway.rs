@@ -246,9 +246,9 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             let raw = v.trim();
             if !raw.is_empty() {
                 let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("default");
-                let (ns, name) = parse_stream_plugin_ref(raw, gateway_ns);
-                let key = format!("{}/{}", ns, name);
-                ctx.runtime().stream_plugin_ref_mgr.add_ref(key, resource_ref.clone());
+                if let Ok(key) = resolve_gateway_stream_plugin_ref(raw, gateway_ns) {
+                    ctx.runtime().stream_plugin_ref_mgr.add_ref(key, resource_ref.clone());
+                }
             }
         }
 
@@ -1658,15 +1658,15 @@ fn get_supported_kinds_for_protocol(protocol: &str) -> Vec<RouteGroupKind> {
     }
 }
 
-/// Parse `"namespace/name"` annotation value.
-/// Falls back to `gateway_ns` when the value contains no slash.
-/// Multi-slash values (e.g. `"a/b/c"`) yield `name = "b/c"`, which will never
-/// match a real resource key — callers treat this as not found.
-fn parse_stream_plugin_ref(value: &str, gateway_ns: &str) -> (String, String) {
-    if let Some((ns, name)) = value.split_once('/') {
-        (ns.to_string(), name.to_string())
+/// Resolve a Gateway-level StreamPlugins annotation to its store key.
+///
+/// Gateway attachments are same-namespace only. Route-level StreamPlugins
+/// references have a separate contract and continue to support qualified keys.
+fn resolve_gateway_stream_plugin_ref(value: &str, gateway_ns: &str) -> Result<String, String> {
+    if value.contains('/') {
+        Err("Gateway edgion-stream-plugins reference must be an unqualified resource name".to_string())
     } else {
-        (gateway_ns.to_string(), value.to_string())
+        Ok(format!("{}/{}", gateway_ns, value))
     }
 }
 
@@ -1685,8 +1685,10 @@ fn validate_gateway_stream_plugin_ref(gateway: &Gateway, runtime: &ControllerRun
         return None;
     }
     let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
-    let (ns, name) = parse_stream_plugin_ref(annotation_value, gateway_ns);
-    let key = format!("{}/{}", ns, name);
+    let key = match resolve_gateway_stream_plugin_ref(annotation_value, gateway_ns) {
+        Ok(key) => key,
+        Err(error) => return Some(error),
+    };
     let exists = runtime
         .processor_registry
         .get("EdgionStreamPlugins")
@@ -1749,7 +1751,7 @@ fn validate_gateway_dns_resolver_ref(gateway: &Gateway, runtime: &ControllerRunt
 #[cfg(test)]
 mod tests {
     use super::{
-        gateway_service_lookup_candidates, has_all_ca_refs_invalid, parse_stream_plugin_ref,
+        gateway_service_lookup_candidates, has_all_ca_refs_invalid, resolve_gateway_stream_plugin_ref,
         validate_gateway_dns_resolver_ref, validate_gateway_plugin_ref, validate_gateway_stream_plugin_ref,
         GatewayHandler, GatewayResolvedRefsError,
     };
@@ -1811,7 +1813,7 @@ mod tests {
     #[test]
     fn validate_stream_plugin_ref_missing_resource_returns_error() {
         let runtime = ControllerRuntime::default();
-        let gw = make_gateway_with_annotation("default", "default/my-stream");
+        let gw = make_gateway_with_annotation("default", "my-stream");
         let result = validate_gateway_stream_plugin_ref(&gw, &runtime);
         assert!(result.is_some());
         assert!(result.unwrap().contains("default/my-stream"));
@@ -1868,24 +1870,25 @@ mod tests {
     }
 
     #[test]
-    fn parse_stream_plugin_ref_with_slash() {
-        let (ns, name) = parse_stream_plugin_ref("other-ns/my-plugin", "default");
-        assert_eq!(ns, "other-ns");
-        assert_eq!(name, "my-plugin");
+    fn resolve_gateway_stream_plugin_ref_rejects_qualified_name() {
+        let error = resolve_gateway_stream_plugin_ref("other-ns/my-plugin", "default").unwrap_err();
+        assert!(error.contains("unqualified resource name"));
     }
 
     #[test]
-    fn parse_stream_plugin_ref_without_slash_uses_gateway_ns() {
-        let (ns, name) = parse_stream_plugin_ref("my-plugin", "default");
-        assert_eq!(ns, "default");
-        assert_eq!(name, "my-plugin");
+    fn resolve_gateway_stream_plugin_ref_uses_gateway_ns() {
+        assert_eq!(
+            resolve_gateway_stream_plugin_ref("my-plugin", "default").unwrap(),
+            "default/my-plugin"
+        );
     }
 
     #[test]
-    fn parse_stream_plugin_ref_multi_slash_name_becomes_remainder() {
-        let (ns, name) = parse_stream_plugin_ref("a/b/c", "default");
-        assert_eq!(ns, "a");
-        assert_eq!(name, "b/c");
+    fn validate_stream_plugin_ref_rejects_qualified_name() {
+        let runtime = ControllerRuntime::default();
+        let gw = make_gateway_with_annotation("default", "other-ns/my-plugin");
+        let error = validate_gateway_stream_plugin_ref(&gw, &runtime).unwrap();
+        assert!(error.contains("unqualified resource name"));
     }
 
     fn listener_with_ca_refs(refs: Vec<(&str, &str)>) -> GatewayListener {

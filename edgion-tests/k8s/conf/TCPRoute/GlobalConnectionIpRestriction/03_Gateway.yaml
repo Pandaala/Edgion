@@ -4,7 +4,7 @@ metadata:
   name: gcir-gateway
   namespace: edgion-test
   annotations:
-    edgion.io/edgion-stream-plugins: edgion-test/gcir-stream-plugins
+    edgion.io/edgion-stream-plugins: gcir-stream-plugins
 spec:
   gatewayClassName: public-gateway
   listeners:
