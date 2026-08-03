@@ -82,14 +82,15 @@ Re-open this decision only if:
 - `StreamPluginEntry` gains an alias (the scope should then use it, like the HTTP entries do).
 - A stream plugin other than `ConnectionRateLimit` starts writing to a shared external store.
 
-## Residuals NOT covered by this fix
+## Layered attachment semantics
 
-Both are namespace-independent and remain open (see `tasks/todo/`):
-
-- One resource attached at **both** listener and route level charges a single connection twice
-  against the same scope. That is an evaluation-count question, not a bucket-identity one.
-- Nothing rejects two `ConnectionRateLimit` entries in one `EdgionStreamPlugins`; they now get
-  distinct scopes (so no corruption), but the connection is still charged twice.
+Listener-level and TCPRoute attachments are cumulative policy layers; TLSRoute joins this shape only
+when its active Stage-2 runtime is empty and it uses the Stage-1 compatibility fallback. UDP has no
+Gateway-level `ConnectionFilter`. Multiple entries in one resource are independent budgets. The
+exact same resource attached at both applicable levels does evaluate the same entry scope twice, but
+this low-frequency configuration overlap is an accepted tradeoff; cross-stage hot-path
+deduplication is not justified without an operator incident. See
+[connection-rate-limit-layered-attachments.md](connection-rate-limit-layered-attachments.md).
 
 ## Reference Cases
 

@@ -30,6 +30,7 @@ use edgion_resources::ResourceMeta;
 struct EtcdControllerBackend {
     watcher: Arc<EtcdWatcher>,
     status_handler: Arc<EtcdStatusHandler>,
+    conf_prefix: Arc<str>,
 }
 
 #[async_trait]
@@ -58,8 +59,14 @@ impl LocalControllerBackend for EtcdControllerBackend {
     where
         K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
     {
-        let ctrl = EtcdResourceController::new(kind, processor, self.status_handler.clone(), event_rx)
-            .with_shutdown(shutdown_signal);
+        let ctrl = EtcdResourceController::new(
+            kind,
+            processor,
+            self.status_handler.clone(),
+            event_rx,
+            self.conf_prefix.clone(),
+        )
+        .with_shutdown(shutdown_signal);
         tokio::spawn(async move { ctrl.run().await })
     }
 }
@@ -109,6 +116,7 @@ impl EtcdController {
         let backend = EtcdControllerBackend {
             watcher: watcher.clone(),
             status_handler,
+            conf_prefix: format!("{}/conf/", self.key_prefix).into(),
         };
 
         // Spawn all resource controllers

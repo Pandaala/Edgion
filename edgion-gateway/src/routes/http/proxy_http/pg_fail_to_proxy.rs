@@ -5,6 +5,12 @@ use crate::{EdgionHttpContext, ResponseStageDenial};
 use edgion_resources::EdgionStatus;
 use pingora_core::{ConnectionClosed, Error, ErrorSource, ErrorType, HTTPStatus, ReadError, WriteError};
 use pingora_proxy::{FailToProxy, Session};
+
+#[inline]
+fn fill_missing_status(status: &mut Option<u16>, code: u16) {
+    status.get_or_insert(code);
+}
+
 #[inline]
 pub async fn fail_to_proxy(
     edgion_http: &EdgionHttpProxy,
@@ -17,9 +23,9 @@ pub async fn fail_to_proxy(
     // NOTE (filter-04c): can_reuse_downstream is reported true to express intent,
     // but the post-proxy abort path (the sentinel Err returned by response_filter)
     // does not consult this field and tears the H1 downstream connection down.
-    // This is a known perf-only divergence from Envoy, which keeps the H1
-    // downstream reusable after a clean local reply. See
-    // tasks/todo/filter-04c-local-reply-header-carryover.md (#3).
+    // This is safe because response_filter disables keepalive before writing;
+    // preserving reuse is a separate Pingora lifecycle feature. See
+    // skills/04-review/architecture/response-local-reply-h1-close-is-feature.md.
     if ctx.local_reply_written {
         return FailToProxy {
             error_code: ctx.request_info.status.unwrap_or(500),
@@ -90,12 +96,12 @@ pub async fn fail_to_proxy(
     }
 
     if code > 0 {
-        if ctx.request_info.status.is_none() {
-            ctx.request_info.status = Some(code);
-        }
+        fill_missing_status(&mut ctx.request_info.status, code);
 
         if let Some(upstream) = ctx.get_current_upstream_mut() {
-            upstream.status = Some(code);
+            // Preserve a real response status stamped by upstream_response_filter;
+            // this code is only the gateway's final outcome for the request.
+            fill_missing_status(&mut upstream.status, code);
             if code != 504 && code != 499 {
                 upstream.err.push(e.etype().as_str().to_string());
             }
@@ -131,5 +137,28 @@ pub async fn fail_to_proxy(
     FailToProxy {
         error_code: code,
         can_reuse_downstream: matches!(code, 400 | 403 | 404 | 429),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fill_missing_status;
+
+    #[test]
+    fn proxy_failure_preserves_observed_upstream_status() {
+        let mut status = Some(101);
+
+        fill_missing_status(&mut status, 403);
+
+        assert_eq!(status, Some(101));
+    }
+
+    #[test]
+    fn proxy_failure_fills_status_when_upstream_never_responded() {
+        let mut status = None;
+
+        fill_missing_status(&mut status, 502);
+
+        assert_eq!(status, Some(502));
     }
 }

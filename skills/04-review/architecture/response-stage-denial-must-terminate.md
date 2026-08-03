@@ -98,13 +98,15 @@ arrived. Both entry points share `is_interim_informational` and return early;
 | naked `terminate()` at the response stage | abort, 502 + `PluginTerminateWithoutResponse` | unit: `response_stage_naked_terminate_arms_the_abort` |
 | `grpc_error(8, ..)` at the response stage | abort, exact code 8 | unit: `response_stage_grpc_error_arms_the_abort_with_the_exact_status`; integration blocked, see `tasks/todo/integration-dslgrpcerror-item-never-runs.md` |
 
-## Known residue
+## Closed follow-up
 
-`fail_to_proxy` overwrites `upstream.status` with the abort's status, so the
-per-upstream access-log entry shows the denial rather than the backend's real
-response (a real `101` is logged as `403`). Pre-existing behavior of the
-`HTTPStatus` abort mechanism, shared with the retry-budget denial; tracked in
-`tasks/todo/fail-to-proxy-overwrites-upstream-status.md`.
+`fail_to_proxy` fills `upstream.status` only when no earlier stage recorded a
+status. A response-stage denial therefore keeps the backend's real status in
+the per-upstream entry (for example, `101`) while the request-level status
+describes the denial delivered by the gateway (for example, `403`). The same
+rule preserves the observed backend status when retry-budget denial produces a
+synthetic `503`; connect and transport failures still receive a status because
+their entry has no observed response status to preserve.
 
 Related: [[body-admission-reads-pre-plugin-snapshots]],
 [[local-reply-drops-sticky-set-cookie]],

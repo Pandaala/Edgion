@@ -188,6 +188,75 @@ mod capability_tests {
         }
     }
 
+    #[test]
+    fn every_edgion_plugins_sweep_item_with_own_fixtures_is_preloaded() {
+        let runner = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/integration/run_integration.sh"
+        ));
+        let dispatch_start = runner
+            .find(r#"case "$G_RESOURCE" in"#)
+            .expect("run_integration.sh must contain the resource dispatch block");
+        let dispatch = &runner[dispatch_start..];
+        let plugins_start = dispatch
+            .find("\n            EdgionPlugins)")
+            .expect("resource dispatch must contain EdgionPlugins");
+        let plugins = &dispatch[plugins_start..];
+        let plugins_end = plugins
+            .find("\n            EdgionTls)")
+            .expect("EdgionPlugins dispatch must be followed by EdgionTls");
+        let plugins = &plugins[..plugins_end];
+
+        let load_start = runner
+            .find("# Auto-infer suites from resource/item")
+            .expect("runner must contain automatic suite selection");
+        let load = &runner[load_start..];
+        let load_start = load
+            .find(r#"if [ "$G_RESOURCE" = "EdgionPlugins" ]; then"#)
+            .expect("automatic suite selection must contain EdgionPlugins");
+        let load = &load[load_start..];
+        let load_start = load
+            .find(r#"if [ -z "$G_ITEM" ]; then"#)
+            .expect("EdgionPlugins selection must contain a resource-wide branch");
+        let load = &load[load_start..];
+        let load_end = load
+            .find("\n            else")
+            .expect("resource-wide EdgionPlugins selection must have an item-specific branch");
+        let load = &load[..load_end];
+
+        let fixture_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("integration/conf/EdgionPlugins");
+        let mut checked = 0usize;
+        let mut missing = Vec::new();
+        for line in plugins
+            .lines()
+            .filter(|line| line.contains("run_test \"EdgionPlugins_") && line.contains("-r EdgionPlugins -i "))
+        {
+            let item = line
+                .split("-r EdgionPlugins -i ")
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .expect("static EdgionPlugins invocation must name an item")
+                .trim_end_matches('"');
+            if fixture_root.join(item).is_dir() {
+                checked += 1;
+                let suite = format!("EdgionPlugins/{item}");
+                if !load.contains(&suite) {
+                    missing.push(suite);
+                }
+            }
+        }
+        missing.sort();
+        missing.dedup();
+
+        assert!(checked > 30, "expected to check the full EdgionPlugins sweep");
+        assert!(
+            missing.is_empty(),
+            "EdgionPlugins sweep item(s) have fixture directories that the resource-wide run does \
+             not preload:\n  {missing:?}\nFix: add each directory to the full EdgionPlugins \
+             `suites` list in run_integration.sh."
+        );
+    }
+
     /// Every registered suite is actually executed by some runner path.
     ///
     /// This is the outer guard. `every_targeted_sweep_suite_also_runs_in_the_default_sweep`

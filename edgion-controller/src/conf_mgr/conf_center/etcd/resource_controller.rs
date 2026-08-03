@@ -5,12 +5,14 @@
 //! - Uses `EtcdStatusHandler` (async) for status persistence
 //! - Worker reads from `LocalRawStore` (updated by event loop) instead of re-fetching from etcd
 
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use kube::Resource;
+use parking_lot::RwLock;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::task::JoinHandle;
@@ -27,6 +29,8 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 use crate::conf_mgr::sync_runtime::ShutdownSignal;
 use edgion_resources::ResourceMeta;
 
+type PendingIdentityErrors = RwLock<HashMap<String, String>>;
+
 /// EtcdResourceController — handles events for a single resource type.
 pub struct EtcdResourceController<K>
 where
@@ -36,8 +40,10 @@ where
     processor: Arc<ResourceProcessor<K>>,
     status_handler: Arc<EtcdStatusHandler>,
     event_rx: KindEventReceiver,
+    conf_prefix: Arc<str>,
     shutdown_signal: Option<ShutdownSignal>,
     fs_raw_store: Arc<LocalRawStore<K>>,
+    pending_identity_errors: Arc<PendingIdentityErrors>,
 }
 
 impl<K> EtcdResourceController<K>
@@ -49,6 +55,7 @@ where
         processor: Arc<ResourceProcessor<K>>,
         status_handler: Arc<EtcdStatusHandler>,
         event_rx: KindEventReceiver,
+        conf_prefix: Arc<str>,
     ) -> Self {
         let fs_raw_store = Arc::new(LocalRawStore::new());
         let raw_store: Arc<dyn RawStore<K>> = fs_raw_store.clone();
@@ -59,8 +66,10 @@ where
             processor,
             status_handler,
             event_rx,
+            conf_prefix,
             shutdown_signal: None,
             fs_raw_store,
+            pending_identity_errors: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -118,7 +127,13 @@ where
                     }
                     EtcdEvent::InitApply { key, content } => match parse_resource_content::<K>(&content) {
                         Ok(obj) => {
-                            let rkey = make_resource_key(&obj);
+                            let content_key = make_resource_key(&obj);
+                            let Some(rkey) =
+                                validated_init_key(&self.status_handler, &self.conf_prefix, kind, &key, &content_key)
+                                    .await
+                            else {
+                                continue;
+                            };
                             self.fs_raw_store.upsert(rkey.clone(), Arc::new(obj.clone()));
 
                             let existing_status_json = self.status_handler.read_status_json(kind, &rkey).await;
@@ -133,7 +148,7 @@ where
                             }
                         }
                         Err(e) => {
-                            let rkey = extract_key_from_etcd_key(&key);
+                            let rkey = extract_key_from_etcd_key(&key, &self.conf_prefix, kind);
                             if let Some(rkey) = rkey {
                                 let _ = self
                                     .status_handler
@@ -169,13 +184,25 @@ where
                             self.shutdown_signal.clone(),
                             self.fs_raw_store.clone(),
                             self.status_handler.clone(),
+                            self.pending_identity_errors.clone(),
                         ));
                     }
                     EtcdEvent::Apply { key, content } => {
                         if !init_done {
                             // During init, treat as InitApply
                             if let Ok(obj) = parse_resource_content::<K>(&content) {
-                                let rkey = make_resource_key(&obj);
+                                let content_key = make_resource_key(&obj);
+                                let Some(rkey) = validated_init_key(
+                                    &self.status_handler,
+                                    &self.conf_prefix,
+                                    kind,
+                                    &key,
+                                    &content_key,
+                                )
+                                .await
+                                else {
+                                    continue;
+                                };
                                 self.fs_raw_store.upsert(rkey.clone(), Arc::new(obj.clone()));
                                 let existing_status_json = self.status_handler.read_status_json(kind, &rkey).await;
                                 let result = self.processor.on_init_apply(obj, existing_status_json).await;
@@ -189,12 +216,33 @@ where
                         } else {
                             match parse_resource_content::<K>(&content) {
                                 Ok(obj) => {
-                                    let rkey = make_resource_key(&obj);
+                                    let content_key = make_resource_key(&obj);
+                                    let rkey = match validate_etcd_identity(&key, &self.conf_prefix, kind, &content_key)
+                                    {
+                                        Ok(rkey) => rkey,
+                                        Err(EtcdIdentityError::Mismatch { key_identity }) => {
+                                            let message = identity_mismatch_message(&content_key, &key_identity);
+                                            store_pending_identity_error(
+                                                &self.pending_identity_errors,
+                                                key_identity.clone(),
+                                                message,
+                                            );
+                                            log_identity_mismatch(kind, &key, &content_key, &key_identity);
+                                            self.processor.on_event_key(key_identity).await;
+                                            continue;
+                                        }
+                                        Err(EtcdIdentityError::MalformedKey) => {
+                                            log_malformed_etcd_key(kind, &key);
+                                            continue;
+                                        }
+                                    };
+                                    clear_pending_identity_error(&self.pending_identity_errors, &rkey);
                                     self.fs_raw_store.upsert(rkey.clone(), Arc::new(obj.clone()));
                                     self.processor.on_event_key(rkey).await;
                                 }
                                 Err(e) => {
-                                    if let Some(rkey) = extract_key_from_etcd_key(&key) {
+                                    if let Some(rkey) = extract_key_from_etcd_key(&key, &self.conf_prefix, kind) {
+                                        clear_pending_identity_error(&self.pending_identity_errors, &rkey);
                                         self.fs_raw_store.remove(&rkey);
                                     }
                                     tracing::warn!(
@@ -210,9 +258,12 @@ where
                     }
                     EtcdEvent::Delete { key } => {
                         if init_done {
-                            if let Some(rkey) = extract_key_from_etcd_key(&key) {
+                            if let Some(rkey) = extract_key_from_etcd_key(&key, &self.conf_prefix, kind) {
+                                clear_pending_identity_error(&self.pending_identity_errors, &rkey);
                                 self.fs_raw_store.remove(&rkey);
                                 self.processor.on_event_key(rkey).await;
+                            } else {
+                                log_malformed_etcd_key(kind, &key);
                             }
                         }
                     }
@@ -291,6 +342,7 @@ fn spawn_worker<K>(
     shutdown_signal: Option<ShutdownSignal>,
     fs_raw_store: Arc<LocalRawStore<K>>,
     status_handler: Arc<EtcdStatusHandler>,
+    pending_identity_errors: Arc<PendingIdentityErrors>,
 ) -> JoinHandle<()>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
@@ -313,6 +365,23 @@ where
 
             match item {
                 Some(work_item) => {
+                    if let Some(message) = take_pending_identity_error(&pending_identity_errors, &work_item.key) {
+                        if let Err(e) = status_handler
+                            .write_error_status(kind, &work_item.key, "IdentityMismatch", &message)
+                            .await
+                        {
+                            tracing::warn!(
+                                component = "etcd_resource_controller",
+                                kind = kind,
+                                key = %work_item.key,
+                                error = %e,
+                                "Failed to write identity-mismatch error status"
+                            );
+                        }
+                        workqueue.done(&work_item.key);
+                        continue;
+                    }
+
                     // Get the latest object from raw_store (updated by event loop)
                     let store_obj = fs_raw_store.get(&work_item.key).map(|arc_obj| (*arc_obj).clone());
 
@@ -374,26 +443,266 @@ where
     })
 }
 
+fn store_pending_identity_error(pending: &PendingIdentityErrors, key: String, message: String) {
+    pending.write().insert(key, message);
+}
+
+fn clear_pending_identity_error(pending: &PendingIdentityErrors, key: &str) {
+    pending.write().remove(key);
+}
+
+fn take_pending_identity_error(pending: &PendingIdentityErrors, key: &str) -> Option<String> {
+    pending.write().remove(key)
+}
+
 /// Extract resource key ("namespace/name" or "name") from etcd key.
 ///
 /// Key format: `{prefix}/conf/{kind}/{namespace}/{name}`
 /// e.g. "/edgion/conf/HTTPRoute/default/my-route" → "default/my-route"
 ///      "/edgion/conf/GatewayClass/_/edgion"       → "edgion"
-fn extract_key_from_etcd_key(etcd_key: &str) -> Option<String> {
-    // Find the /conf/{kind}/ part and extract namespace/name after it
-    let conf_idx = etcd_key.find("/conf/")?;
-    let after_conf = &etcd_key[conf_idx + 6..]; // skip "/conf/"
-                                                // after_conf = "{kind}/{namespace}/{name}"
-    let first_slash = after_conf.find('/')?;
-    let ns_and_name = &after_conf[first_slash + 1..]; // "{namespace}/{name}"
-    let parts: Vec<&str> = ns_and_name.splitn(2, '/').collect();
-    if parts.len() != 2 {
+fn extract_key_from_etcd_key(etcd_key: &str, conf_prefix: &str, expected_kind: &str) -> Option<String> {
+    let relative = etcd_key.strip_prefix(conf_prefix)?;
+    let (kind, ns_and_name) = relative.split_once('/')?;
+    if kind != expected_kind {
         return None;
     }
-    let (ns, name) = (parts[0], parts[1]);
+    let (ns, name) = ns_and_name.split_once('/')?;
+    if ns.is_empty() || name.is_empty() || name.contains('/') {
+        return None;
+    }
     if ns == "_" {
         Some(name.to_string())
     } else {
         Some(format!("{}/{}", ns, name))
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum EtcdIdentityError {
+    MalformedKey,
+    Mismatch { key_identity: String },
+}
+
+/// Return the authoritative key identity only when the etcd key is strictly
+/// formed and agrees with the resource content.
+fn validate_etcd_identity(
+    etcd_key: &str,
+    conf_prefix: &str,
+    expected_kind: &str,
+    content_key: &str,
+) -> Result<String, EtcdIdentityError> {
+    let key_identity =
+        extract_key_from_etcd_key(etcd_key, conf_prefix, expected_kind).ok_or(EtcdIdentityError::MalformedKey)?;
+    if key_identity != content_key {
+        return Err(EtcdIdentityError::Mismatch { key_identity });
+    }
+    Ok(key_identity)
+}
+
+fn identity_mismatch_message(content_key: &str, key_identity: &str) -> String {
+    format!(
+        "resource content identity '{content_key}' does not match etcd key identity '{key_identity}'; \
+         in etcd mode the key is authoritative — move the value to the matching key or revert \
+         metadata.name/namespace to '{key_identity}'"
+    )
+}
+
+fn log_identity_mismatch(kind: &str, etcd_key: &str, content_key: &str, key_identity: &str) {
+    tracing::warn!(
+        component = "etcd_resource_controller",
+        kind = kind,
+        key = %etcd_key,
+        content_key = %content_key,
+        key_identity = %key_identity,
+        "Rejected resource: content identity does not match etcd key identity"
+    );
+}
+
+fn log_malformed_etcd_key(kind: &str, etcd_key: &str) {
+    tracing::warn!(
+        component = "etcd_resource_controller",
+        kind = kind,
+        key = %etcd_key,
+        "Rejected resource: malformed etcd resource key"
+    );
+}
+
+async fn validated_init_key(
+    status_handler: &EtcdStatusHandler,
+    conf_prefix: &str,
+    kind: &str,
+    etcd_key: &str,
+    content_key: &str,
+) -> Option<String> {
+    match validate_etcd_identity(etcd_key, conf_prefix, kind, content_key) {
+        Ok(key_identity) => Some(key_identity),
+        Err(EtcdIdentityError::Mismatch { key_identity }) => {
+            reject_identity_mismatch(status_handler, kind, etcd_key, content_key, &key_identity).await;
+            None
+        }
+        Err(EtcdIdentityError::MalformedKey) => {
+            log_malformed_etcd_key(kind, etcd_key);
+            None
+        }
+    }
+}
+
+/// Reject content whose metadata identity disagrees with its authoritative
+/// etcd key and persist the diagnostic under that key's identity.
+async fn reject_identity_mismatch(
+    status_handler: &EtcdStatusHandler,
+    kind: &str,
+    etcd_key: &str,
+    content_key: &str,
+    key_identity: &str,
+) {
+    let message = identity_mismatch_message(content_key, key_identity);
+    if let Err(e) = status_handler
+        .write_error_status(kind, key_identity, "IdentityMismatch", &message)
+        .await
+    {
+        tracing::warn!(
+            component = "etcd_resource_controller",
+            kind = kind,
+            key = %etcd_key,
+            error = %e,
+            "Failed to write identity-mismatch error status"
+        );
+    }
+    log_identity_mismatch(kind, etcd_key, content_key, key_identity);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        clear_pending_identity_error, store_pending_identity_error, take_pending_identity_error,
+        validate_etcd_identity, EtcdIdentityError, PendingIdentityErrors,
+    };
+
+    const CONF_PREFIX: &str = "/edgion/conf/";
+
+    #[test]
+    fn namespaced_identity_match_returns_key_identity() {
+        assert_eq!(
+            validate_etcd_identity(
+                "/edgion/conf/HTTPRoute/default/r1",
+                CONF_PREFIX,
+                "HTTPRoute",
+                "default/r1"
+            ),
+            Ok("default/r1".to_string())
+        );
+    }
+
+    #[test]
+    fn namespaced_identity_mismatch_returns_key_identity() {
+        assert_eq!(
+            validate_etcd_identity(
+                "/edgion/conf/HTTPRoute/default/r1",
+                CONF_PREFIX,
+                "HTTPRoute",
+                "other/r2"
+            ),
+            Err(EtcdIdentityError::Mismatch {
+                key_identity: "default/r1".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn cluster_scoped_identity_match_returns_key_identity() {
+        assert_eq!(
+            validate_etcd_identity("/edgion/conf/GatewayClass/_/gc1", CONF_PREFIX, "GatewayClass", "gc1"),
+            Ok("gc1".to_string())
+        );
+    }
+
+    #[test]
+    fn empty_content_name_is_rejected() {
+        assert_eq!(
+            validate_etcd_identity(
+                "/edgion/conf/HTTPRoute/default/r1",
+                CONF_PREFIX,
+                "HTTPRoute",
+                "default/"
+            ),
+            Err(EtcdIdentityError::Mismatch {
+                key_identity: "default/r1".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn missing_name_in_etcd_key_is_rejected() {
+        assert_eq!(
+            validate_etcd_identity("/edgion/conf/HTTPRoute/default", CONF_PREFIX, "HTTPRoute", "default/r1"),
+            Err(EtcdIdentityError::MalformedKey)
+        );
+    }
+
+    #[test]
+    fn empty_name_in_etcd_key_is_rejected() {
+        assert_eq!(
+            validate_etcd_identity("/edgion/conf/HTTPRoute/default/", CONF_PREFIX, "HTTPRoute", "default/"),
+            Err(EtcdIdentityError::MalformedKey)
+        );
+    }
+
+    #[test]
+    fn extra_key_segment_is_rejected() {
+        assert_eq!(
+            validate_etcd_identity(
+                "/edgion/conf/HTTPRoute/default/r1/extra",
+                CONF_PREFIX,
+                "HTTPRoute",
+                "default/r1"
+            ),
+            Err(EtcdIdentityError::MalformedKey)
+        );
+    }
+
+    #[test]
+    fn key_prefix_may_contain_conf_segment() {
+        assert_eq!(
+            validate_etcd_identity(
+                "/tenant/conf/edgion/conf/HTTPRoute/default/r1",
+                "/tenant/conf/edgion/conf/",
+                "HTTPRoute",
+                "default/r1"
+            ),
+            Ok("default/r1".to_string())
+        );
+    }
+
+    #[test]
+    fn nested_backend_marker_after_conf_prefix_is_rejected() {
+        assert_eq!(
+            validate_etcd_identity(
+                "/edgion/conf/HTTPRoute/junk/x/conf/HTTPRoute/default/r1",
+                CONF_PREFIX,
+                "HTTPRoute",
+                "default/r1"
+            ),
+            Err(EtcdIdentityError::MalformedKey)
+        );
+    }
+
+    #[test]
+    fn valid_event_clears_pending_identity_error() {
+        let pending = PendingIdentityErrors::default();
+        store_pending_identity_error(&pending, "default/r1".to_string(), "mismatch".to_string());
+        clear_pending_identity_error(&pending, "default/r1");
+        assert_eq!(take_pending_identity_error(&pending, "default/r1"), None);
+    }
+
+    #[test]
+    fn worker_takes_pending_identity_error_once() {
+        let pending = PendingIdentityErrors::default();
+        store_pending_identity_error(&pending, "default/r1".to_string(), "mismatch".to_string());
+        assert_eq!(
+            take_pending_identity_error(&pending, "default/r1"),
+            Some("mismatch".to_string())
+        );
+        assert_eq!(take_pending_identity_error(&pending, "default/r1"), None);
     }
 }
