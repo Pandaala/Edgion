@@ -16,9 +16,15 @@ use tokio_tungstenite::{
     tungstenite::{client::IntoClientRequest, Message},
 };
 
-pub struct WebSocketTestSuite;
+pub struct WebSocketTestSuite {
+    gateway: bool,
+}
 
 impl WebSocketTestSuite {
+    pub fn new(gateway: bool) -> Self {
+        Self { gateway }
+    }
+
     fn test_websocket_echo() -> TestCase {
         TestCase::new("websocket_echo", "Test WebSocket echo", |ctx: TestContext| {
             Box::pin(async move {
@@ -67,6 +73,69 @@ impl WebSocketTestSuite {
             })
         })
     }
+
+    /// A response-stage plugin denial on a REAL protocol switch must stop the
+    /// upgrade.
+    ///
+    /// This is the one denial shape that cannot be delivered by replacing the
+    /// response: the upstream already answered `101`, so
+    /// `apply_response_local_reply` refuses and the denial has to be enforced by
+    /// aborting the exchange with the plugin's status. The gateway previously
+    /// answered such a refusal by logging `deny response 403` and forwarding the
+    /// 101 anyway — the handshake completed and the plugin's decision was lost,
+    /// which is exactly the traffic a response-stage policy exists to stop.
+    ///
+    /// Asserting on "the upgrade did NOT complete" is the load-bearing part; the
+    /// 403 in the failed handshake is the secondary confirmation that the
+    /// plugin's own status reached the client.
+    fn test_websocket_response_stage_deny_blocks_upgrade() -> TestCase {
+        TestCase::new(
+            "websocket_response_stage_deny_blocks_upgrade",
+            "Response-stage deny on a real 101 aborts the exchange instead of completing the upgrade",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let ws_url = format!("ws://{}:{}/ws", ctx.target_host, ctx.websocket_port);
+                    let mut request = ws_url.into_client_request().unwrap();
+                    request
+                        .headers_mut()
+                        .insert("Host", "ws-resp-deny.example.com".parse().unwrap());
+
+                    match connect_async(request).await {
+                        Ok(_) => TestResult::failed(
+                            start.elapsed(),
+                            "Upgrade completed: the response-stage denial was dropped and the 101 forwarded"
+                                .to_string(),
+                        ),
+                        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                            let status = response.status().as_u16();
+                            if status == 403 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Upgrade refused with the plugin's own 403".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Upgrade refused, but with status {} instead of the plugin's 403",
+                                        status
+                                    ),
+                                )
+                            }
+                        }
+                        // The upgrade did not complete, which is the invariant
+                        // under test, but the client never saw the plugin's
+                        // status — report it rather than pass silently.
+                        Err(e) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Upgrade refused without an HTTP response carrying the denial: {}", e),
+                        ),
+                    }
+                })
+            },
+        )
+    }
 }
 
 #[async_trait]
@@ -76,6 +145,10 @@ impl TestSuite for WebSocketTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::test_websocket_echo()]
+        let mut cases = vec![Self::test_websocket_echo()];
+        if self.gateway {
+            cases.push(Self::test_websocket_response_stage_deny_blocks_upgrade());
+        }
+        cases
     }
 }

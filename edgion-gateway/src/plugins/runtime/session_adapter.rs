@@ -18,7 +18,7 @@ use crate::link_sys::template::evaluate_template;
 use crate::request_body::BodyStorage;
 use crate::request_body::{BodyOperationError, BodyScanResult};
 use crate::runtime::server::{http_to_grpc_status, send_grpc_trailers_only_frame};
-use crate::{EdgionHttpContext, MirrorState, PendingHeaderOp, SetJumpOutcome, UpstreamJumpTarget};
+use crate::{EdgionHttpContext, MirrorState, PendingHeaderOp, ResponseStageDenial, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::common::{KeyGet, KeySet, WebhookExtract};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::sanitize_field_value;
@@ -320,35 +320,95 @@ impl<'a> PingoraSessionAdapter<'a> {
     }
 
     /// Decide + stash a response-phase local reply. Returns `true` when a reply
-    /// was stashed (HTTP route, not an upgrade/informational response).
-    /// Refuses: gRPC route, Upgrade/CONNECT request, 1xx/101 upstream response,
-    /// or no bound response header. The actual downstream write happens later in
-    /// `response_filter`.
+    /// was stashed (HTTP route, not a switched-protocol/informational response).
+    /// Refuses: gRPC route, 1xx/101 upstream response, an established CONNECT
+    /// tunnel, or no bound response header. The actual downstream write happens
+    /// later in `response_filter`.
+    ///
+    /// Whether the exchange is still a replaceable HTTP response is decided from
+    /// the RESPONSE, not from the request's stated intent. A client may send
+    /// `Upgrade: <anything>` on an ordinary request; unless the upstream answers
+    /// `101` no protocol switch happened, the response header is still in hand
+    /// (nothing has been written downstream at either response-stage entry
+    /// point — `response_committed` is only set by the local-reply/error paths),
+    /// and a plugin's denial must be able to replace it. Keying the refusal on
+    /// the request header instead let any request carrying an unrecognized
+    /// `Upgrade` token drop a plugin's `ErrResponse` on the floor and forward the
+    /// upstream response unmodified. `CONNECT` is refused only once the tunnel is
+    /// actually established (2xx); an upstream-rejected CONNECT is an ordinary
+    /// replaceable response.
     pub fn apply_response_local_reply(&mut self, status: u16, body: Option<String>) -> bool {
-        if self.response_header.is_none() {
+        let Some(resp_status) = self.response_header.as_deref().map(|h| h.status) else {
             return false;
-        }
-        let (is_head, refuse) = {
-            let req = self.inner.req_header();
-            let upgrade = req.method == http::Method::CONNECT || req.headers.get(http::header::UPGRADE).is_some();
-            let informational = self
-                .response_header
-                .as_deref()
-                .map(|h| h.status.is_informational())
-                .unwrap_or(false);
-            (req.method == http::Method::HEAD, upgrade || informational)
         };
-        if refuse {
+        let is_head = self.inner.req_header().method == http::Method::HEAD;
+        // `is_informational()` covers 100..=199, so a real `101 Switching
+        // Protocols` is refused by this arm too.
+        let switched = resp_status.is_informational()
+            || (self.inner.req_header().method == http::Method::CONNECT && resp_status.is_success());
+        if switched {
             return false;
         }
         build_response_local_reply(self.ctx, status, body, is_head)
     }
 
-    /// Record that a response-phase `ErrResponse` could not be turned into a
-    /// local reply (gRPC route). Surfaces the otherwise-silent termination in
-    /// the access log.
+    /// Record that a response-phase `ErrResponse` on a gRPC route could not be
+    /// expressed as a response replacement.
+    ///
+    /// Not a termination marker — [`Self::set_response_denied`] is what enforces
+    /// the denial, and both are recorded together. This one narrows the access
+    /// log to what the gRPC translation cost: the plugin's body is dropped and
+    /// its status only survives as far as `http_to_grpc_status` maps it.
     pub fn note_response_local_reply_unsupported(&mut self) {
         self.ctx.add_error(EdgionStatus::PluginResponseReplaceUnsupportedGrpc);
+    }
+
+    /// Arm the response-stage abort for an `ErrResponse` that
+    /// [`Self::apply_response_local_reply`] refused to stash.
+    ///
+    /// A refusal means "this exchange cannot carry a replacement response", NOT
+    /// "let the upstream response through". The response-stage entry point reads
+    /// [`EdgionHttpContext::response_denial`] after the plugin chains and aborts,
+    /// so the denial is downstream-visible.
+    ///
+    /// The access-log status is overwritten with the plugin's status on purpose:
+    /// `upstream_response_filter` already stamped the upstream's own status, so
+    /// `fail_to_proxy`'s `status.is_none()` fill-in would never fire and the log
+    /// would attribute the request to the response the client never received.
+    pub fn set_response_denied(&mut self, status: u16) {
+        self.ctx.request_info.status = Some(status);
+        self.ctx.response_denial = Some(ResponseStageDenial::Http(status));
+        self.ctx.add_error(EdgionStatus::PluginResponseDenyAborted);
+    }
+
+    /// Arm the response-stage abort for a naked `ErrTerminateRequest`.
+    ///
+    /// Mirrors the request stage's contract for the same result
+    /// (`error_response::terminate_with_fallback`): a plugin that terminates
+    /// without writing a response is a plugin bug, answered with a 502 fallback
+    /// and [`EdgionStatus::PluginTerminateWithoutResponse`]. The response stage
+    /// had no equivalent — it returned "terminate" and the upstream response was
+    /// forwarded anyway, unconditionally, with no marker at all.
+    pub fn set_response_terminate_without_reply(&mut self) {
+        self.ctx.add_error(EdgionStatus::PluginTerminateWithoutResponse);
+        self.set_response_denied(502);
+    }
+
+    /// Arm the response-stage abort for an `ErrGrpcError`.
+    ///
+    /// The response-stage runners have no gRPC writer: the sync one cannot await
+    /// [`Self::send_grpc_error_direct`], which is why the request stage's
+    /// treatment of this result has no response-stage counterpart. Carrying the
+    /// gRPC status verbatim keeps `fail_to_proxy` from having to reconstruct it
+    /// from an HTTP status through the lossy `http_to_grpc_status` mapping.
+    ///
+    /// The wire status of a gRPC error is 200 (the error lives in the trailers),
+    /// so that — not the gRPC code — is what the access log records.
+    pub fn set_response_denied_grpc(&mut self, status: u16, message: Option<String>) {
+        self.ctx.request_info.status = Some(200);
+        self.ctx.request_info.grpc_status = Some(status);
+        self.ctx.response_denial = Some(ResponseStageDenial::Grpc { status, message });
+        self.ctx.add_error(EdgionStatus::PluginResponseDenyAborted);
     }
 
     /// Whether the in-flight request is gRPC/gRPC-Web. Used by the response
@@ -951,6 +1011,16 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             // already written.
             return;
         }
+        // No `is_http2()` gate here, unlike `shutdown_after_error_response` in
+        // runtime/server/error_response.rs. Pingora's H2 arm of
+        // `HttpSession::shutdown` only sends RST_STREAM, and only when the stream
+        // has not already ended — it never closes the TCP connection. Every caller
+        // of this method writes an END_STREAM body immediately before, so the plain
+        // HTTP/2 case is already a no-op. The one path where the reset does fire is
+        // a caller that swallowed a write error (`forward_auth`,
+        // `all_endpoint_status` use `let _ = ...`), leaving a half-written response
+        // on the wire — resetting that stream is the correct outcome, so adding an
+        // `is_http2()` gate here would be a regression, not a fix.
         self.inner.shutdown().await;
     }
 
@@ -2936,5 +3006,227 @@ mod record_outcome_tests {
             matches!(result, Err(BodyReadError::Unimplemented)),
             "a rewritten-away-from-HEAD request must not keep the bodyless short-circuit"
         );
+    }
+
+    /// Like `test_session`, but the caller supplies the whole request line +
+    /// headers. `apply_response_local_reply` keys on the request method and
+    /// (previously) on request headers, neither of which the fixed
+    /// `GET /dye-test` request can vary.
+    async fn test_session_raw(request: &str) -> Session {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(request.as_bytes())
+            .await
+            .expect("write request into duplex pair");
+        drop(client);
+        session
+            .read_request()
+            .await
+            .expect("read_request should succeed")
+            .then_some(())
+            .expect("client must not have closed before sending the request");
+        session
+    }
+
+    async fn apply_local_reply(request: &str, upstream_status: u16) -> (bool, EdgionHttpContext) {
+        let mut session = test_session_raw(request).await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut response_header = ResponseHeader::build(upstream_status, None).unwrap();
+        let applied = {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
+            adapter.apply_response_local_reply(403, Some("denied".to_string()))
+        };
+        (applied, ctx)
+    }
+
+    /// The defect this refusal predicate was rewritten for: an `Upgrade` header
+    /// carrying a token nothing recognizes is not a protocol switch. The request
+    /// proxies as ordinary HTTP (only `websocket` is detected in
+    /// `pg_request_filter::detect_request_protocol`) and the upstream answers
+    /// 200, so a response-stage plugin's denial MUST be able to replace it.
+    /// Keying the refusal on the request header let any client append
+    /// `Upgrade: foo` and have the denial silently dropped — the response-stage
+    /// runner only logs when this returns false, and nothing there consults
+    /// `ctx.plugin_running_result`.
+    #[tokio::test]
+    async fn local_reply_replaces_response_for_unrecognized_upgrade_token() {
+        let (applied, ctx) = apply_local_reply("GET /x HTTP/1.1\r\nHost: test\r\nUpgrade: foo\r\n\r\n", 200).await;
+        assert!(applied, "an unrecognized Upgrade token must not block the denial");
+        assert!(ctx.local_reply_header.is_some());
+        assert_eq!(ctx.local_reply_header.as_deref().unwrap().status.as_u16(), 403);
+    }
+
+    /// The genuine switch stays refused: the upstream answered 101, so the
+    /// exchange is no longer a replaceable HTTP response.
+    #[tokio::test]
+    async fn local_reply_refused_for_real_protocol_switch() {
+        let (applied, ctx) = apply_local_reply(
+            "GET /ws HTTP/1.1\r\nHost: test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+            101,
+        )
+        .await;
+        assert!(!applied, "a real 101 must stay unreplaceable");
+        assert!(ctx.local_reply_header.is_none());
+    }
+
+    /// Interim informational responses (100/103) are not the final response
+    /// there is nothing to replace yet.
+    #[tokio::test]
+    async fn local_reply_refused_for_interim_informational() {
+        let (applied, _ctx) = apply_local_reply("GET /x HTTP/1.1\r\nHost: test\r\n\r\n", 103).await;
+        assert!(!applied, "an interim 1xx must stay unreplaceable");
+    }
+
+    /// CONNECT is refused only once the tunnel actually exists.
+    #[tokio::test]
+    async fn local_reply_refused_for_established_connect_tunnel() {
+        let (applied, _ctx) =
+            apply_local_reply("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n", 200).await;
+        assert!(!applied, "an established CONNECT tunnel must stay unreplaceable");
+    }
+
+    /// ...and an upstream-rejected CONNECT never became a tunnel, so it is an
+    /// ordinary replaceable response.
+    #[tokio::test]
+    async fn local_reply_replaces_rejected_connect() {
+        let (applied, ctx) =
+            apply_local_reply("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n", 403).await;
+        assert!(applied, "a CONNECT the upstream refused carries no tunnel");
+        assert!(ctx.local_reply_header.is_some());
+    }
+
+    async fn terminate_for(request: &str, upstream_status: u16) -> (bool, EdgionHttpContext) {
+        use crate::plugins::runtime::plugin_runtime::check_response_stage_terminate;
+
+        let mut session = test_session_raw(request).await;
+        let mut ctx = EdgionHttpContext::default();
+        // As stamped by `upstream_response_filter` before the plugin chains run.
+        ctx.request_info.status = Some(upstream_status);
+        let mut response_header = ResponseHeader::build(upstream_status, None).unwrap();
+        let result = PluginRunningResult::ErrResponse {
+            status: 403,
+            body: Some("denied".to_string()),
+        };
+        let terminate = {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
+            let mut log = PluginLog::with_alias("dsl", None);
+            check_response_stage_terminate(&result, &mut log, &mut adapter)
+        };
+        (terminate, ctx)
+    }
+
+    /// The termination half of the same defect: a refused local reply must ARM
+    /// the abort, not just log. Before this, the runner's `set_terminate` wrote
+    /// `ctx.plugin_running_result`, whose readers are all request-stage, so the
+    /// response-stage entry point forwarded the upstream response and the denial
+    /// vanished. Driven on a real `101` — the case that stays unreplaceable even
+    /// after the refusal predicate was narrowed to response-side facts.
+    #[tokio::test]
+    async fn refused_local_reply_arms_the_response_stage_abort() {
+        let (terminate, ctx) = terminate_for(
+            "GET /ws HTTP/1.1\r\nHost: test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+            101,
+        )
+        .await;
+
+        assert!(terminate);
+        assert!(ctx.local_reply_header.is_none(), "a 101 carries no local reply");
+        assert_eq!(
+            ctx.response_denial,
+            Some(ResponseStageDenial::Http(403)),
+            "the denial must survive as an abort the entry point can act on"
+        );
+        assert!(ctx.edgion_status.contains(&EdgionStatus::PluginResponseDenyAborted));
+        assert_eq!(
+            ctx.request_info.status,
+            Some(403),
+            "the access log must show the denial, not the upstream response the client never got"
+        );
+    }
+
+    /// The ordinary path is unchanged: a replaceable response stashes the reply
+    /// and never arms the abort (which would double-handle the same denial).
+    #[tokio::test]
+    async fn accepted_local_reply_does_not_arm_the_abort() {
+        let (terminate, ctx) = terminate_for("GET /x HTTP/1.1\r\nHost: test\r\n\r\n", 200).await;
+
+        assert!(terminate);
+        assert!(ctx.local_reply_header.is_some());
+        assert_eq!(ctx.response_denial, None);
+        assert!(!ctx.edgion_status.contains(&EdgionStatus::PluginResponseDenyAborted));
+    }
+
+    /// `ErrGrpcError` has no response-stage writer at all — the sync runner
+    /// cannot await `send_grpc_error_direct` — so before this it was a pure log
+    /// line and the upstream response was forwarded. The gRPC status must be
+    /// carried verbatim: deriving it from an HTTP status later would flatten
+    /// `RESOURCE_EXHAUSTED` (8) into `INTERNAL` (13).
+    #[tokio::test]
+    async fn response_stage_grpc_error_arms_the_abort_with_the_exact_status() {
+        use crate::plugins::runtime::plugin_runtime::check_response_stage_terminate;
+
+        let mut session = test_session_raw("POST /svc/M HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.is_grpc_request = true;
+        ctx.request_info.status = Some(200);
+        let mut response_header = ResponseHeader::build(200, None).unwrap();
+        let result = PluginRunningResult::ErrGrpcError {
+            grpc_status: 8,
+            message: Some("quota exceeded".to_string()),
+        };
+
+        let terminate = {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
+            let mut log = PluginLog::with_alias("dsl", None);
+            check_response_stage_terminate(&result, &mut log, &mut adapter)
+        };
+
+        assert!(terminate);
+        assert_eq!(
+            ctx.response_denial,
+            Some(ResponseStageDenial::Grpc {
+                status: 8,
+                message: Some("quota exceeded".to_string()),
+            })
+        );
+        assert_eq!(ctx.request_info.grpc_status, Some(8));
+        assert_eq!(
+            ctx.request_info.status,
+            Some(200),
+            "a gRPC error is HTTP 200 on the wire"
+        );
+        assert!(ctx.edgion_status.contains(&EdgionStatus::PluginResponseDenyAborted));
+    }
+
+    /// The broadest leak of the three: a naked `ErrTerminateRequest` needs NO
+    /// precondition to be dropped — the arm simply returned `true`, the runner
+    /// called `set_terminate`, and the upstream response was forwarded. Now it
+    /// mirrors the request stage's fallback contract
+    /// (`error_response::terminate_with_fallback`).
+    #[tokio::test]
+    async fn response_stage_naked_terminate_arms_the_abort() {
+        use crate::plugins::runtime::plugin_runtime::check_response_stage_terminate;
+
+        let mut session = test_session_raw("GET /x HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.status = Some(200);
+        let mut response_header = ResponseHeader::build(200, None).unwrap();
+        let result = PluginRunningResult::ErrTerminateRequest;
+
+        let terminate = {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
+            let mut log = PluginLog::with_alias("dsl", None);
+            check_response_stage_terminate(&result, &mut log, &mut adapter)
+        };
+
+        assert!(terminate);
+        assert_eq!(ctx.response_denial, Some(ResponseStageDenial::Http(502)));
+        assert!(ctx
+            .edgion_status
+            .contains(&EdgionStatus::PluginTerminateWithoutResponse));
+        assert!(ctx.edgion_status.contains(&EdgionStatus::PluginResponseDenyAborted));
+        assert_eq!(ctx.request_info.status, Some(502));
     }
 }

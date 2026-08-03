@@ -46,7 +46,7 @@ spec:
 |------|------|--------|------|
 | `rate` | Integer | `100` | 限流阈值（每个 interval 允许的最大请求数） |
 | `interval` | String | `"1s"` | 时间窗口，支持 `ms`、`s`、`m`、`h`、`d` |
-| `key` | Array\<Object\> | `[{type: clientIp}]` | 限流键配置（多个键用 `_` 连接） |
+| `key` | Array\<Object\> | `[{type: clientIp}]` | 限流键配置（单个键原样使用，多个键的组合方式见下文） |
 | `scope` | Enum | `Instance` | 限流作用域。可选值：`Instance` | `Cluster` |
 | `skewTolerance` | Float | `1.2` | 流量倾斜容忍度（仅 Cluster 模式生效，范围 1.0~2.0） |
 | `onMissingKey` | Enum | `Allow` | key 无法提取时的行为。可选值：`Allow` | `Deny` |
@@ -88,7 +88,9 @@ spec:
 | `path` | 按请求路径限流 | 否 |
 | `clientIpAndPath` | 按 IP + 路径组合限流 | 否 |
 
-**多键组合**：配置多个 key 时，各 key 的值用 `_` 拼接成复合限流键。
+**空 key 列表**：不写 `key` 时套用默认值 `[{type: clientIp}]`。显式写 `key: []` 表示「单一全局桶」——所有请求组合出同一个空键，仍然会被限流；它**不**算 key 提取失败，因此 `onMissingKey` / `defaultKey` 对它不生效。
+
+**多键组合**：只配置一个 key 时，其值原样作为限流键。配置多个 key 时，每个值以 `<字节长度>:<值>` 的形式带上长度前缀，再按配置顺序用 `_` 拼接，每个配置的 key 都占一个槽位（未取到值的槽位写 `-`）。长度前缀保证复合键无歧义：若没有它，值本身含 `_`（或某个 key 时有时无）会让两个不同的客户端落进同一个限流桶。
 
 ```yaml
 # 按 IP + API Key 组合限流
@@ -96,7 +98,7 @@ key:
   - type: clientIp
   - type: header
     name: "X-API-Key"
-# 限流键示例：192.168.1.1_my-api-key-123
+# 限流键示例：11:192.168.1.1_14:my-api-key-123
 ```
 
 #### headerNames

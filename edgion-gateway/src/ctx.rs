@@ -907,6 +907,33 @@ pub enum PeerTimeoutSource {
     GrpcDeadline,
 }
 
+/// A response-phase plugin denial that the response stage could not deliver on
+/// its own, carried to the abort path.
+///
+/// A denial the response stage cannot express is NOT permission to forward the
+/// upstream response. The runners answer such a plugin result by calling
+/// `set_terminate`, which only writes `ctx.plugin_running_result` — and every
+/// reader of that field is request-stage, so on its own it is a silent ALLOW.
+/// Setting this instead makes the response-stage entry point abort the exchange,
+/// and the abort is raised as `ErrorType::HTTPStatus`, the same mechanism the
+/// retry-budget denial in `upstream_response_filter` already uses: the upstream
+/// response is never forwarded, the upstream connection is torn down rather than
+/// reused, and `fail_to_proxy` delivers the denial downstream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResponseStageDenial {
+    /// `ErrResponse` on an exchange that is no longer a replaceable HTTP
+    /// response — a real `101`, an established CONNECT tunnel, or a gRPC route
+    /// (see `apply_response_local_reply` / `build_response_local_reply`).
+    /// `fail_to_proxy`'s ordinary status handling writes it.
+    Http(u16),
+
+    /// `ErrGrpcError`, which names a gRPC status directly. The sync response
+    /// runner cannot await, so it cannot write the trailers itself, and routing
+    /// the code through an HTTP status would flatten it through a lossy mapping.
+    /// `fail_to_proxy` writes these trailers verbatim.
+    Grpc { status: u16, message: Option<String> },
+}
+
 pub struct EdgionHttpContext {
     /// Request start time for latency calculation
     pub start_time: Instant,
@@ -1159,6 +1186,10 @@ pub struct EdgionHttpContext {
     /// the sentinel abort as an intentional reply, not a proxy failure.
     pub local_reply_written: bool,
 
+    /// A response-phase plugin denial the response stage could not deliver
+    /// itself. See [`ResponseStageDenial`].
+    pub response_denial: Option<ResponseStageDenial>,
+
     /// Circuit-breaker admission permit for the chosen endpoint, acquired at
     /// `upstream_peer` (pre-connect) when the target Service carries a
     /// `circuitBreaker` concurrency cap. Holding it on the ctx ties the permit's
@@ -1279,6 +1310,7 @@ impl EdgionHttpContext {
             local_reply_body: None,
             local_reply_header: None,
             local_reply_written: false,
+            response_denial: None,
             cb_permit: None,
         }
     }

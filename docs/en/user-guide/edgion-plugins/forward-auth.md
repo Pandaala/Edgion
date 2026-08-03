@@ -11,7 +11,7 @@
 
 ## Overview
 
-The ForwardAuth plugin delegates authentication to an external service. For each incoming request it builds an outbound auth request (forwarding headers and injecting `X-Forwarded-*` metadata) and sends it to the configured backend. If the auth service's response matches the connection's `success` criteria (2xx by default, or the criteria configured in `success.statusCodes` / `success.body`), the original request is forwarded to upstream. Otherwise the auth service response is returned to the client.
+The ForwardAuth plugin delegates authentication to an external service. For each incoming request it builds an outbound auth request (forwarding headers and injecting `X-Forwarded-*` metadata) and sends it to the configured backend. If the auth service's response matches the connection's `success` criteria (2xx by default, or the criteria configured in `success.statusCodes` / `success.body`), the original request is forwarded to upstream. Otherwise the auth service's body and `Content-Type` (when present) are returned to the client together with the response headers selected by `decision.clientHeaders`. A rejected status is preserved; a response whose status passes but whose `success.body` predicate fails returns 403 instead.
 
 This is the classic external auth pattern, comparable to:
 - **Traefik**: `forwardAuth` middleware
@@ -47,7 +47,7 @@ flowchart TD
     H1 -->|Yes| H2["Remove authorization header"]
     H1 -->|No| I["Forward to upstream"]
     H2 --> I
-    F -->|No| J["Copy decision.clientHeaders +\nreturn auth service status + body"]
+    F -->|No| J["Copy decision.clientHeaders +\nrelay body and Content-Type +\nreturn rejected status or 403"]
     E -->|No| M["Return statusOnError (default 503)"]
 ```
 
@@ -365,8 +365,9 @@ spec:
 - **Success** (matches `success` criteria — status in `success.statusCodes`, default any 2xx, ANDed with any `success.body` predicates): authentication passed
   - Headers listed in `decision.upstreamHeaders` are copied to the upstream request
   - Response body is ignored
-- **Failure** (any other status): authentication denied
-  - Status code and body are returned as-is to the client
+- **Failure** (the status or a `success.body` predicate is rejected): authentication denied
+  - A rejected status is returned as-is; if only a body predicate fails, the client receives 403
+  - The body and `Content-Type` (when present) are relayed to the client
   - Headers listed in `decision.clientHeaders` are copied to the client response
 
 ### Example Auth Service (Go)

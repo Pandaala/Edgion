@@ -57,8 +57,8 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use pingora_http::ResponseHeader;
 
+use crate::plugins::http::common::auth_common::send_gateway_plain_error_response;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{RequestRestrictionConfig, RestrictionMode, RuleGroup};
@@ -127,18 +127,10 @@ impl RequestFilter for RequestRestriction {
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         if self.config_error.is_some() {
             plugin_log.push_err("restriction config invalid");
-            // invariant: 500 and 403 are compile-time-literal HTTP status codes; ResponseHeader::build cannot fail.
-            let resp = Box::new(
-                ResponseHeader::build(500, None)
-                    .unwrap_or_else(|_| ResponseHeader::build(403, None).expect("403 is valid")),
-            );
-            let _ = session.write_response_header(resp, false).await;
-            let _ = session
-                .write_response_body(
-                    Some(bytes::Bytes::from(r#"{"message":"Internal restriction policy error"}"#)),
-                    true,
-                )
-                .await;
+            let body = Bytes::from(r#"{"message":"Internal restriction policy error"}"#);
+            if let Err(_e) = send_gateway_plain_error_response(session, 500, "application/json", body).await {
+                plugin_log.push_err("write response fail");
+            }
             return PluginRunningResult::ErrTerminateRequest;
         }
 
@@ -169,23 +161,15 @@ impl RequestFilter for RequestRestriction {
                 .as_deref()
                 .unwrap_or("Access denied by restriction policy");
 
-            // invariant: 403 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
-            let mut resp = Box::new(
-                ResponseHeader::build(self.config.status, None)
-                    .unwrap_or_else(|_| ResponseHeader::build(403, None).expect("403 is valid")),
-            );
-            resp.insert_header("Content-Type", "application/json").ok();
-
+            // invariant: `check_fields` enforces 100 <= status < 600 before the plugin is
+            // built, and a failed validation short-circuits above, so the helper's
+            // `ResponseHeader::build` cannot fail on the configured status.
             let body = Bytes::from(serde_json::json!({"message": message}).to_string());
 
-            if let Err(_e) = session.write_response_header(resp, false).await {
-                plugin_log.push_err("write response header failed");
-                return PluginRunningResult::ErrTerminateRequest;
-            }
-
-            if let Err(_e) = session.write_response_body(Some(body), true).await {
-                plugin_log.push_err("write response body failed");
-                return PluginRunningResult::ErrTerminateRequest;
+            if let Err(_e) =
+                send_gateway_plain_error_response(session, self.config.status, "application/json", body).await
+            {
+                plugin_log.push_err("write response fail");
             }
 
             return PluginRunningResult::ErrTerminateRequest;
@@ -237,6 +221,7 @@ mod tests {
             .return_const(None::<String>);
         s.expect_write_response_header().returning(|_, _| Ok(()));
         s.expect_write_response_body().returning(|_, _| Ok(()));
+        s.expect_shutdown().returning(|| {});
 
         let result = plugin.run_request(&mut s, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
@@ -264,6 +249,7 @@ mod tests {
         s.expect_get_request_path().return_const("/%61dmin".to_string());
         s.expect_write_response_header().returning(|_, _| Ok(()));
         s.expect_write_response_body().returning(|_, _| Ok(()));
+        s.expect_shutdown().returning(|| {});
 
         let result = plugin.run_request(&mut s, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
@@ -322,6 +308,7 @@ mod tests {
         s.expect_get_method().return_const("POST".to_string());
         s.expect_write_response_header().returning(|_, _| Ok(()));
         s.expect_write_response_body().returning(|_, _| Ok(()));
+        s.expect_shutdown().returning(|| {});
 
         let result = plugin.run_request(&mut s, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
@@ -361,6 +348,7 @@ mod tests {
         s.expect_get_method().return_const("DELETE".to_string());
         s.expect_write_response_header().returning(|_, _| Ok(()));
         s.expect_write_response_body().returning(|_, _| Ok(()));
+        s.expect_shutdown().returning(|| {});
 
         let result = plugin.run_request(&mut s, &mut log).await;
         // Skip drops X-Opt; Method matches => considered=1, all true => group matches => deny.
@@ -422,6 +410,7 @@ mod tests {
             .return_const(None::<String>);
         s.expect_write_response_header().returning(|_, _| Ok(()));
         s.expect_write_response_body().returning(|_, _| Ok(()));
+        s.expect_shutdown().returning(|| {});
 
         let result = plugin.run_request(&mut s, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
@@ -488,6 +477,7 @@ mod tests {
         let mut log = PluginLog::new("RequestRestriction");
         s.expect_write_response_header().returning(|_, _| Ok(()));
         s.expect_write_response_body().returning(|_, _| Ok(()));
+        s.expect_shutdown().returning(|| {});
 
         let result = plugin.run_request(&mut s, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);

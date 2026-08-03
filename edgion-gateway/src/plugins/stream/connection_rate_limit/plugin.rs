@@ -30,7 +30,26 @@ const PLUGIN_NAME: &str = "ConnectionRateLimit";
 
 pub struct ConnectionRateLimitPlugin {
     algorithm: RateLimitAlgorithm,
-    key_prefix: String,
+    /// `config.key_prefix` scoped by the owning entry's identity
+    /// (`<namespace>/<name>/#<index>`; stream entries carry no alias). Resolved
+    /// once at build time.
+    ///
+    /// Every instance defaults to the same `keyPrefix`, and the limit keys carry
+    /// only the listener port, so without this two `ConnectionRateLimit` entries
+    /// active on one port — two TLSRoutes with different SNIs referencing
+    /// different EdgionStreamPlugins, a listener-level plus a route-level
+    /// attachment, or two entries in one resource — would index the same Redis
+    /// counter while each checked it against its own `rate`, and with differing
+    /// `interval` would corrupt each other's window rotation.
+    scoped_key_prefix: String,
+    /// The entry identity alone (`<namespace>/<name>/#<index>`), without the
+    /// operator's `keyPrefix`.
+    ///
+    /// The local token bucket is a Redis-free backstop, so its registry slot must
+    /// not move when a Redis-only knob changes: keying it by `scoped_key_prefix`
+    /// would reset the bucket whenever `keyPrefix` is edited — including in pure
+    /// `perListener` mode where no `redisRef` is configured at all.
+    entry_scope: String,
     redis_ref: Option<String>,
     // perListener
     pl_rate: Option<u64>,
@@ -46,7 +65,9 @@ pub struct ConnectionRateLimitPlugin {
 }
 
 impl ConnectionRateLimitPlugin {
-    pub fn new(cfg: &ConnectionRateLimitConfig) -> Self {
+    /// `entry_scope` is the owning EdgionStreamPlugins entry's identity; see
+    /// `scoped_key_prefix`.
+    pub fn new(cfg: &ConnectionRateLimitConfig, entry_scope: &str) -> Self {
         let parse_ms = |s: &str| {
             edgion_resources::duration::parse_duration(s)
                 .map(|d| d.as_millis() as u64)
@@ -73,7 +94,8 @@ impl ConnectionRateLimitPlugin {
             .max(1);
         Self {
             algorithm: cfg.algorithm.clone(),
-            key_prefix: cfg.key_prefix.clone(),
+            scoped_key_prefix: format!("{}{}:conn:", cfg.key_prefix, entry_scope),
+            entry_scope: entry_scope.to_string(),
             redis_ref: cfg.redis_ref.clone(),
             pl_rate,
             pl_interval_ms,
@@ -122,8 +144,9 @@ impl ConnectionRateLimitPlugin {
             return matches!(on_failure, OnRedisFailure::Allow);
         }
         let policies = [self.one_policy(rate, interval_ms)];
-        let prefix = format!("{}conn:", self.key_prefix);
-        let fut = self.core.check(&client, &policies, &prefix, 1, 4096, limit_key);
+        let fut = self
+            .core
+            .check(&client, &policies, &self.scoped_key_prefix, 1, 4096, limit_key);
         match tokio::time::timeout(self.redis_timeout, fut).await {
             Ok(Ok(result)) => result.allowed,
             _ => {
@@ -149,7 +172,7 @@ impl StreamPlugin for ConnectionRateLimitPlugin {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-            let gate = get_or_update_local_gate(port, rate, self.pl_interval_ms);
+            let gate = get_or_update_local_gate(&self.entry_scope, port, rate, self.pl_interval_ms);
             if !gate.try_acquire_at(now_ms) {
                 record_connection_rate_limit_reject("listener", "local");
                 return StreamPluginResult::Deny("connrate:deny:listener:local".to_string());
@@ -209,7 +232,7 @@ mod tests {
     fn redis_timeout_is_parsed_from_config() {
         let mut cfg = cfg_local_only(10);
         cfg.redis_timeout = "750ms".to_string();
-        let plugin = ConnectionRateLimitPlugin::new(&cfg);
+        let plugin = ConnectionRateLimitPlugin::new(&cfg, "default/test-esp/#0");
         assert_eq!(plugin.redis_timeout, std::time::Duration::from_millis(750));
     }
 
@@ -217,7 +240,7 @@ mod tests {
     fn redis_timeout_is_clamped_to_cap() {
         let mut cfg = cfg_local_only(10);
         cfg.redis_timeout = "30s".to_string();
-        let plugin = ConnectionRateLimitPlugin::new(&cfg);
+        let plugin = ConnectionRateLimitPlugin::new(&cfg, "default/test-esp/#0");
         assert_eq!(plugin.redis_timeout, std::time::Duration::from_millis(1000));
     }
 
@@ -225,7 +248,7 @@ mod tests {
     async fn local_gate_denies_over_rate() {
         // Use a unique port so the global registry slot is isolated from other tests.
         let port = 64111u16;
-        let plugin = ConnectionRateLimitPlugin::new(&cfg_local_only(2));
+        let plugin = ConnectionRateLimitPlugin::new(&cfg_local_only(2), "default/test-esp/#0");
         let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), port);
         let mut admitted = 0;
         for _ in 0..5 {

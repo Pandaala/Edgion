@@ -165,9 +165,13 @@ pub struct RateLimitRedisConfig {
 
     /// Key extraction sources (same KeyGet as RateLimit).
     ///
-    /// Multiple keys are combined with "_" separator.
-    /// Default: [] (empty, will use ClientIp at runtime if empty)
-    #[serde(default)]
+    /// A single key is used verbatim; multiple keys are combined into an
+    /// unambiguous composite key (`<byte-len>:<value>` per configured key,
+    /// "-" when it does not resolve, joined with "_").
+    /// Default: [{ type: clientIp }]. An explicitly empty list is a valid
+    /// configuration meaning "one global bucket": it is not a key miss, so it
+    /// still rate-limits rather than falling through to `onMissingKey`.
+    #[serde(default = "default_key_sources")]
     pub key: Vec<KeyGet>,
 
     /// Behavior when key cannot be extracted (default: Allow)
@@ -244,6 +248,14 @@ fn default_reject_status() -> u16 {
 
 fn default_true() -> bool {
     true
+}
+
+/// Default key sources: rate-limit per client IP.
+///
+/// Must match the `Default` impl and the documented default — `#[serde(default)]`
+/// would yield an empty list instead, which is a different (global-bucket) policy.
+fn default_key_sources() -> Vec<KeyGet> {
+    vec![KeyGet::ClientIp]
 }
 
 fn default_key_prefix() -> String {

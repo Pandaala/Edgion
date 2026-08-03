@@ -4,6 +4,7 @@
 //! to external services (e.g., ForwardAuth, OPA, Webhook), plus small helpers
 //! reused across closely related plugins (e.g., the rate-limit family).
 
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use crate::plugins::runtime::{PluginLog, PluginSession};
@@ -41,8 +42,8 @@ pub enum RateLimitKey {
     Deny,
 }
 
-/// Resolve the rate-limit key from `keys` via `session.key_get`, joining the
-/// resolved parts with `"_"`.
+/// Resolve the rate-limit key from `keys` via `session.key_get`, composing the
+/// resolved parts with [`compose_rate_limit_key`].
 ///
 /// Shared by the `RateLimit` and `RateLimitRedis` plugins so the key-extraction
 /// policy (separator, default-key fallback, `OnMissingKey` handling, and the
@@ -61,15 +62,17 @@ pub async fn resolve_rate_limit_key(
     on_missing: &OnMissingKey,
     plugin_log: &mut PluginLog,
 ) -> RateLimitKey {
-    let mut parts: Vec<String> = Vec::new();
+    let mut parts: Vec<Option<String>> = Vec::with_capacity(keys.len());
     for k in keys {
-        if let Some(v) = session.key_get(k).await {
-            parts.push(v);
-        }
+        parts.push(session.key_get(k).await);
     }
 
-    if !parts.is_empty() {
-        return RateLimitKey::Resolved(parts.join("_"));
+    // An empty `keys` list is not a key miss: there is no source that could have
+    // been missed, so the plugin still rate-limits, under the single empty-string
+    // bucket every request composes to. Routing it through the miss path instead
+    // would silently disable the limiter whenever `onMissingKey` is `Allow`.
+    if keys.is_empty() || parts.iter().any(|p| p.is_some()) {
+        return RateLimitKey::Resolved(compose_rate_limit_key(&parts));
     }
 
     // No keys resolved - fall back to the configured default key if present.
@@ -91,6 +94,50 @@ pub async fn resolve_rate_limit_key(
             RateLimitKey::Deny
         }
     }
+}
+
+/// Compose the rate-limit bucket key from the per-source resolution results.
+///
+/// `parts` holds one slot per configured `KeyGet`, in configuration order,
+/// `None` for a source that did not resolve. No configured source at all
+/// composes to the empty string — one global bucket for the plugin.
+///
+/// A single configured source is used verbatim, which keeps the common
+/// one-dimension configuration (and the Redis keys built from it) readable.
+///
+/// With more than one source the encoding must be injective: the key IS the
+/// bucket identity, and at least one source is typically client-controlled
+/// (header / cookie / query), so two different value tuples rendering to the
+/// same string would let a client merge its traffic into another client's
+/// bucket. A plain `"_"` join is not injective — `("t1", "u_2")` and
+/// `("t1_u", "2")` both render to `t1_u_2` — and skipping unresolved sources
+/// shifts the remaining ones, so `(None, "x")` and `("x", None)` also collide.
+/// Each present slot is therefore length-prefixed (`<byte-len>:<value>`) and
+/// every configured slot is represented (`-` when unresolved); the length
+/// prefix makes the byte span of each part unambiguous regardless of its
+/// content.
+fn compose_rate_limit_key(parts: &[Option<String>]) -> String {
+    if let [Some(only)] = parts {
+        return only.clone();
+    }
+
+    // Reserve up-front: each slot costs its value plus a short length prefix and
+    // one separator, so the common case fills the buffer without a realloc.
+    let value_bytes: usize = parts.iter().flatten().map(|v| v.len()).sum();
+    let mut out = String::with_capacity(value_bytes + parts.len() * 6);
+    for (i, part) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push('_');
+        }
+        match part {
+            // Writing into a String is infallible.
+            Some(v) => {
+                let _ = write!(out, "{}:{}", v.len(), v);
+            }
+            None => out.push('-'),
+        }
+    }
+    out
 }
 
 /// Format a duration in human-readable form (e.g., "1.5s", "500ms").
@@ -176,5 +223,75 @@ mod tests {
         assert!(matches!(out, RateLimitKey::Deny));
         // Canonical key-miss-denial tag, shared by both rate-limit plugins.
         assert!(plugin_log.contains("Deny key miss"));
+    }
+
+    /// Resolve a two-header key configuration, returning the composed bucket key.
+    async fn resolve_tenant_user_key(tenant: Option<&str>, user: Option<&str>) -> String {
+        let (tenant, user) = (tenant.map(str::to_string), user.map(str::to_string));
+        let mut session = MockPluginSession::new();
+        session.expect_key_get().returning(move |k| match k {
+            KeyGet::Header { name } if name == "X-Tenant" => tenant.clone(),
+            KeyGet::Header { name } if name == "X-User" => user.clone(),
+            _ => None,
+        });
+        let mut plugin_log = PluginLog::new("RateLimit");
+        let keys = vec![
+            KeyGet::Header {
+                name: "X-Tenant".to_string(),
+            },
+            KeyGet::Header {
+                name: "X-User".to_string(),
+            },
+        ];
+
+        match resolve_rate_limit_key(&mut session, &keys, None, &OnMissingKey::Deny, &mut plugin_log).await {
+            RateLimitKey::Resolved(k) => k,
+            _ => panic!("expected a resolved key"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_rate_limit_key_multi_source_separator_is_unambiguous() {
+        // A plain "_" join would render both tuples as "t1_u_2", merging the two
+        // clients into one bucket.
+        let a = resolve_tenant_user_key(Some("t1"), Some("u_2")).await;
+        let b = resolve_tenant_user_key(Some("t1_u"), Some("2")).await;
+        assert_ne!(a, b);
+    }
+
+    #[tokio::test]
+    async fn resolve_rate_limit_key_multi_source_unresolved_slot_keeps_position() {
+        // Skipping an unresolved source would shift the remaining one, so both
+        // tuples would render as "x".
+        let a = resolve_tenant_user_key(None, Some("x")).await;
+        let b = resolve_tenant_user_key(Some("x"), None).await;
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn compose_rate_limit_key_single_source_is_verbatim() {
+        assert_eq!(
+            compose_rate_limit_key(&[Some("192.168.1.1".to_string())]),
+            "192.168.1.1"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_rate_limit_key_empty_key_list_still_rate_limits() {
+        let mut session = MockPluginSession::new();
+        session.expect_key_get().return_const(None);
+        let mut plugin_log = PluginLog::new("RateLimit");
+
+        // No configured source is not a key miss: OnMissingKey::Allow must not
+        // turn an empty `key` list into a silent bypass of the limiter.
+        let out = resolve_rate_limit_key(&mut session, &[], None, &OnMissingKey::Allow, &mut plugin_log).await;
+
+        assert!(matches!(out, RateLimitKey::Resolved(k) if k.is_empty()));
+    }
+
+    #[test]
+    fn compose_rate_limit_key_multi_source_is_length_prefixed() {
+        let key = compose_rate_limit_key(&[Some("192.168.1.1".to_string()), Some("apikey123".to_string())]);
+        assert_eq!(key, "11:192.168.1.1_9:apikey123");
     }
 }

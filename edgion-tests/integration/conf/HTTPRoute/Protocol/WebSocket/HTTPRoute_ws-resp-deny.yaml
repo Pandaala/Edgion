@@ -1,0 +1,27 @@
+# WebSocket route guarded by a response-stage denial. Separate hostname so the
+# plain echo test on `test.example.com` keeps exercising a successful upgrade.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: websocket-resp-deny
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: websocket-test-gateway
+      namespace: edgion-test
+  hostnames:
+    - "ws-resp-deny.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /ws
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ws-resp-deny
+      backendRefs:
+        - name: test-websocket
+          port: 30005

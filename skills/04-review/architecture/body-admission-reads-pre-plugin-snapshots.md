@@ -160,20 +160,25 @@ Re-open only if:
   attempt's value after a retry). Today nothing reaches `read_response_body`
   there (the async array takes only `ExtProc`, whose `body_requirement()` is
   `None`); it goes live with the F1 gate. The unset case fails toward `Buffer`,
-  the loud direction, so it is a false-loud rather than a bypass. Tracked in
-  `tasks/todo/response-body-gate-sync-stage.md`.
+  the loud direction, so it is a false-loud rather than a bypass. Closed
+  2026-08-03: `pg_response_filter` now shares `is_interim_informational` with
+  the sync entry point and early-returns, so the async runners no longer execute
+  on an interim header at all — see [[response-stage-denial-must-terminate]].
 - A code path is added that reaches `read_response_body` without passing
   `snapshot_body_declared` — today every such path goes through
   `build_request_metadata`, whose first statement is that snapshot.
 
 ## Reference Cases
 
-- `tasks/todo/response-body-gate-sync-stage.md` Findings 3 and 5, fixed
-  2026-07-26. Findings 1 and 2 of that same cluster (the ungated sync
-  `upstreamResponseFilterPlugins` array, and
-  `check_response_stage_terminate`'s refused-reply branch not actually
-  terminating) remain OPEN and are tracked in that file — do not treat this
-  entry as closing them.
+- `response-body-gate-sync-stage` Findings 3 and 5, fixed 2026-07-26. The rest
+  of that cluster is now also closed and the task file is deleted: Finding 2
+  (`check_response_stage_terminate`'s refused-reply branch not terminating) was
+  fixed 2026-08-03 — see [[response-stage-denial-must-terminate]]. Finding 1
+  (the ungated sync `upstreamResponseFilterPlugins` array) was retired: DSL's
+  `resp.body` is rejected at configuration validation, so there is no
+  response-body consumer to gate; the residue moved to
+  `tasks/todo/llm-ai-gateway/01-body-processing-runtime.md`, which is what would
+  make `resp.body` expressible in the first place.
 - Design: `docs/superpowers/specs/2026-07-23-body-gate-admission-model-design.md`
   (R5 refusal semantics).
 - Source: `edgion-gateway/src/plugins/runtime/session_adapter.rs`

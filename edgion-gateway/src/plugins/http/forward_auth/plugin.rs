@@ -121,15 +121,16 @@ impl ForwardAuth {
 
     /// Write an error response directly to the client and return `ErrTerminateRequest`.
     ///
-    /// Sets `Content-Type: application/json` and `Connection: close`, then appends
-    /// any `extra_headers` (the `client_headers` harvested from the auth service
-    /// response on an auth-failure path).
+    /// Sets the caller-provided `Content-Type` when present and `Connection: close`,
+    /// then appends any `extra_headers` (the `client_headers` harvested from the
+    /// auth service response on an auth-failure path).
     async fn send_error_response(
         &self,
         session: &mut dyn PluginSession,
         plugin_log: &mut PluginLog,
         status: u16,
         body: &[u8],
+        content_type: Option<&str>,
         extra_headers: Option<&[(String, String)]>,
     ) -> PluginRunningResult {
         let mut resp = match ResponseHeader::build(status, None) {
@@ -137,7 +138,9 @@ impl ForwardAuth {
             Err(_) => return PluginRunningResult::ErrTerminateRequest,
         };
 
-        let _ = resp.insert_header("Content-Type", "application/json");
+        if let Some(content_type) = content_type {
+            let _ = resp.insert_header("Content-Type", content_type);
+        }
         let _ = resp.insert_header("Connection", "close");
 
         // Add extra headers (e.g., client_headers from auth service response).
@@ -232,6 +235,7 @@ impl RequestFilter for ForwardAuth {
                         plugin_log,
                         self.status_on_error,
                         b"{\"message\":\"Auth service unavailable\"}",
+                        Some("application/json"),
                         None,
                     )
                     .await;
@@ -268,9 +272,6 @@ impl RequestFilter for ForwardAuth {
                 })
                 .collect();
 
-            // The body was already size-capped by the outbound engine; pass it through.
-            let body = resp.body;
-
             // `StatusFail` is a genuine non-2xx from the auth service: relay it
             // unchanged. `BodyFail` means the auth service answered with an
             // otherwise-accepted status (e.g. 200) but the `success.body`
@@ -296,8 +297,19 @@ impl RequestFilter for ForwardAuth {
             );
             // Apply anti-brute-force delay before responding to the client.
             apply_auth_failure_delay(self.decision.auth_failure_delay_ms).await;
-            self.send_error_response(session, plugin_log, client_status, &body, Some(&extra))
-                .await
+            let content_type = resp
+                .headers
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok());
+            self.send_error_response(
+                session,
+                plugin_log,
+                client_status,
+                &resp.body,
+                content_type,
+                Some(&extra),
+            )
+            .await
         }
     }
 }
@@ -434,6 +446,7 @@ mod tests {
             .respond_with(
                 ResponseTemplate::new(401)
                     .append_header("www-authenticate", "Bearer")
+                    .insert_header("content-type", "text/plain; charset=utf-8")
                     .set_body_bytes(b"no".to_vec()),
             )
             .mount(&server)
@@ -451,7 +464,11 @@ mod tests {
         // relayed to the client UNCHANGED — never overridden to 403.
         session
             .expect_write_response_header()
-            .withf(|resp, _| resp.status.as_u16() == 401)
+            .withf(|resp, _| {
+                resp.status.as_u16() == 401
+                    && resp.headers.get("content-type").and_then(|v| v.to_str().ok())
+                        == Some("text/plain; charset=utf-8")
+            })
             .returning(|_, _| Ok(()));
         session.expect_write_response_body().returning(|_, _| Ok(()));
         session.expect_shutdown().returning(|| {});
@@ -559,6 +576,7 @@ mod tests {
             .return_const(());
         session
             .expect_write_response_header()
+            .withf(|resp, _| resp.headers.get("content-type").and_then(|v| v.to_str().ok()) == Some("application/json"))
             .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _| Ok(()));

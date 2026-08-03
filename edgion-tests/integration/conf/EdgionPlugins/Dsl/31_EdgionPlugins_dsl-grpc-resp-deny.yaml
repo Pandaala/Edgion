@@ -1,0 +1,27 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-grpc-resp-deny
+  namespace: edgion-test
+spec:
+  # Response-stage denials on a gRPC route. Neither can be delivered as a local
+  # reply (`build_response_local_reply` refuses every gRPC request), so both must
+  # be enforced by the response-stage abort and land as gRPC trailers.
+  #
+  # `x-deny-mode` selects which shape to exercise:
+  #   http -> ErrResponse, whose status fail_to_proxy maps to a gRPC code
+  #   grpc -> ErrGrpcError, whose gRPC code must survive verbatim
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "grpc-resp-deny"
+        source: |
+          let mode = req.header("x-deny-mode")
+          if mode == "http" {
+            return deny(403, "denied at response stage")
+          }
+          if mode == "grpc" {
+            return grpc_error(8, "quota exceeded")
+          }
+        errorPolicy: deny

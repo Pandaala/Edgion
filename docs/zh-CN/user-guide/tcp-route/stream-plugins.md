@@ -279,6 +279,8 @@ spec:
 | `perListener` | Object | 无 | 按监听器限流，带本地令牌桶兜底（即使 Redis 不可达也可用）。 |
 | `perSourceIp` | Object | 无 | 按源 IP 限流。需要 Redis——无本地兜底。见上文提示。 |
 
+**桶的作用域**：计数器（Redis key 与本地令牌桶都是）按拥有它的插件条目命名空间隔离，形式为 EdgionStreamPlugins 资源的 `<namespace>/<name>/#<条目下标>`。同一个监听端口上可能同时有两个 `ConnectionRateLimit` 生效（两条不同 SNI 的 TLSRoute 引用了不同资源、监听器级与路由级各挂一份、或同一资源里写了两条）；没有这层作用域，它们会共用一个计数器却各按自己的 `rate` 判断，`interval` 不同还会互相破坏窗口轮转。各 Gateway 实例从同一份资源推导出相同作用域，集群级计数不受影响，热重载也不会丢桶。调换 `plugins` 里条目的顺序会让条目切到新作用域、计数从零开始。
+
 #### `perSourceIp` / `perListener` 子字段
 
 | 字段 | 类型 | 默认值 | 说明 |

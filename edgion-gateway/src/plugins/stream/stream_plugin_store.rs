@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 use super::stream_plugin_runtime::StreamPluginRuntime;
 use super::tls_route::TlsRoutePluginRuntime;
 use edgion_common::conf_sync::traits::ConfHandler;
+use edgion_resources::resource::meta::ResourceMeta;
 use edgion_resources::resources::EdgionStreamPlugins;
 
 static GLOBAL_STREAM_PLUGIN_STORE: LazyLock<Arc<StreamPluginStore>> =
@@ -50,7 +51,7 @@ pub fn compile_stream_plugins(esp: &EdgionStreamPlugins) -> Arc<CompiledStreamPl
     let ns = esp.metadata.namespace.as_deref().unwrap_or("default");
 
     let stream_plugin_runtime = match &esp.spec.plugins {
-        Some(plugins) => Arc::new(StreamPluginRuntime::from_stream_plugins(plugins, ns)),
+        Some(plugins) => Arc::new(StreamPluginRuntime::from_stream_plugins(plugins, ns, &esp.key_name())),
         None => Arc::<StreamPluginRuntime>::default(),
     };
     let tls_route_plugin_runtime = match &esp.spec.tls_route_plugins {

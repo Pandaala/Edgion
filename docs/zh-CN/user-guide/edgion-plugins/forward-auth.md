@@ -11,7 +11,7 @@
 
 ## 概述
 
-ForwardAuth 插件将鉴权逻辑委托给外部服务。对于每个入站请求，插件构建一个出站鉴权请求（转发请求头并注入 `X-Forwarded-*` 元数据），发送到配置的后端。如果鉴权服务的响应满足连接的 `success` 判定条件（默认任意 2xx，或 `success.statusCodes` / `success.body` 中配置的条件），原始请求被转发给上游；否则，鉴权服务的响应直接返回给客户端。
+ForwardAuth 插件将鉴权逻辑委托给外部服务。对于每个入站请求，插件构建一个出站鉴权请求（转发请求头并注入 `X-Forwarded-*` 元数据），发送到配置的后端。如果鉴权服务的响应满足连接的 `success` 判定条件（默认任意 2xx，或 `success.statusCodes` / `success.body` 中配置的条件），原始请求被转发给上游；否则，鉴权服务的 body 和 `Content-Type`（如存在）会连同 `decision.clientHeaders` 选定的响应头一起返回给客户端。状态码判定失败时保留鉴权服务状态码；状态码通过但 `success.body` 断言失败时则返回 403。
 
 这是 API Gateway 的经典外部鉴权模式，对标：
 - **Traefik**: `forwardAuth` middleware
@@ -46,7 +46,7 @@ flowchart TD
     H1 -->|是| H2["移除 authorization 头"]
     H1 -->|否| I["转发给上游"]
     H2 --> I
-    F -->|否| J["复制 decision.clientHeaders +\n返回鉴权服务的状态码和 Body"]
+    F -->|否| J["复制 decision.clientHeaders +\n转发 Body 和 Content-Type +\n返回拒绝状态码或 403"]
     E -->|否| M["返回 statusOnError（默认 503）"]
 ```
 
@@ -331,8 +331,9 @@ spec:
 - **成功**（满足 `success` 判定条件——状态码在 `success.statusCodes`，默认任意 2xx，与 `success.body` 断言按与运算组合）：鉴权通过
   - `decision.upstreamHeaders` 中列举的响应头被复制到上游请求
   - 响应 Body 被忽略
-- **失败**（其他任意状态码）：鉴权拒绝
-  - 状态码和 Body 原样返回给客户端
+- **失败**（状态码或 `success.body` 断言未通过）：鉴权拒绝
+  - 状态码判定失败时原样返回该状态码；仅 body 断言失败时向客户端返回 403
+  - Body 和 `Content-Type`（如存在）被转发给客户端
   - `decision.clientHeaders` 中列举的响应头被复制到客户端响应
 
 ### 示例鉴权服务（Go）

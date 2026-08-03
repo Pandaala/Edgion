@@ -89,7 +89,7 @@ spec:
 |-----------|------|---------|-------------|
 | `redisRef` | String | — (required) | Redis LinkSys resource reference in `"namespace/name"` format. Only alphanumeric characters, `-`, and `_` are allowed |
 | `policies` | Array\<Object\> | — (required) | Rate limiting policy list. At least 1, maximum 10. See Policy Configuration below |
-| `key` | Array\<Object\> | `[{type: clientIp}]` | Rate limiting dimension list. Multiple keys are joined with `_`. See Key Configuration below |
+| `key` | Array\<Object\> | `[{type: clientIp}]` | Rate limiting dimension list. A single key is used verbatim; multiple keys are length-prefixed and joined with `_`. See Key Configuration below |
 | `onMissingKey` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` \| `Deny` |
 | `defaultKey` | String | none | Default key value when extraction fails, takes precedence over `onMissingKey` |
 | `rejectStatus` | Integer | `429` | HTTP status code on rejection (100–599) |
@@ -160,7 +160,13 @@ key:
     name: "X-API-Key"
 ```
 
-The resulting Redis key looks like: `edgion:rl:sw:192.168.1.1_apikey123`
+The resulting Redis key looks like `{keyPrefix}{pluginScope}:{algorithm}:{policyIndex}:{rateLimitKey}`, e.g. `edgion:rl:default/api-limiter/#0:sw:0:11:192.168.1.1_9:apikey123` — with multiple keys configured, each part of the rate limiting key carries its `<byte-length>:` prefix so that two different value tuples can never share a bucket. A single configured key is used verbatim (`edgion:rl:default/api-limiter/#0:sw:0:192.168.1.1`).
+
+`{pluginScope}` identifies the plugin entry that owns the bucket: `<namespace>/<name>/<alias>` for the EdgionPlugins resource this plugin is declared in, or `<namespace>/<name>/#<index>` when the entry has no `alias`. Every Gateway instance derives the same string from the same resource, so cluster-wide counting is unaffected — but two unrelated EdgionPlugins resources can no longer index the same buckets, even when their `keyPrefix` and `key` sources are identical. Without it, a client that controls one plugin's key source could craft a value matching another plugin's composed key, and — more commonly — two default-configured plugins would silently share one set of per-IP buckets. Renaming the resource or its `alias`, or reordering unaliased entries, moves the plugin to a fresh namespace and restarts its counters; set an `alias` to pin the scope across reordering. An alias must be unique within its stage array: a duplicate sets `Accepted=False` on the resource, and the Gateway additionally drops the repeated alias so that entry falls back to its `#<index>` scope — a duplicate can never merge two entries' buckets.
+
+Multiple routes referencing the **same** EdgionPlugins resource share one limiter — that is how a rate limit is shared across routes, and it matches the in-memory `RateLimit`, whose counter is likewise shared per resource. Two *different* resources can no longer share a bucket by construction: to share a quota across routes, point them at one resource rather than duplicating the configuration.
+
+Omitting `key` applies the default `[{type: clientIp}]`. An explicitly empty `key: []` means "one global bucket": every request composes to the same empty key and is still rate limited — it is not treated as a key extraction failure, so `onMissingKey` / `defaultKey` do not apply to it.
 
 ---
 

@@ -250,10 +250,27 @@ pub enum EdgionStatus {
     /// replacement status is whatever the plugin chose), so `999` family.
     PluginResponseReplaced = 999_03,
 
-    /// A response-phase plugin returned `ErrResponse` on a gRPC route. gRPC
-    /// response/body substitution is not yet supported: the response is terminated
-    /// by status only and the body is not replaced. See `tasks/todo/filter-04-response-local-reply.md`.
+    /// A response-phase plugin returned `ErrResponse` on a gRPC route, where a
+    /// response replacement cannot be expressed: a gRPC error is HTTP 200 plus
+    /// trailers, not a status-and-body response.
+    ///
+    /// The denial is still enforced — it is always accompanied by
+    /// [`Self::PluginResponseDenyAborted`], and the exchange ends as
+    /// trailers-only with a gRPC code derived from the plugin's HTTP status via
+    /// `http_to_grpc_status`. What this marker records is what was LOST in that
+    /// translation: the plugin's response body is dropped, and its exact status
+    /// survives only as far as that mapping allows. A plugin that needs a
+    /// specific gRPC code should return `ErrGrpcError` instead, which is carried
+    /// verbatim and does not raise this marker.
     PluginResponseReplaceUnsupportedGrpc = 999_04,
+
+    /// A response-phase plugin returned `ErrResponse`, but the exchange was no
+    /// longer a replaceable HTTP response (a real `101`, an established CONNECT
+    /// tunnel, or a gRPC route), so the denial was enforced by aborting the
+    /// exchange with the plugin's status instead of stashing a local reply. The
+    /// upstream response is never forwarded. No fixed HTTP status (the plugin
+    /// chose it), so `999` family.
+    PluginResponseDenyAborted = 999_10,
 
     /// Outbound TLS skip-verify was requested, but the target provider does not
     /// expose a skip-verify knob (e.g. etcd-client). Fail-closed rather than
@@ -358,6 +375,7 @@ mod tests {
             EdgionStatus::BodyCaptureStorageFailed => Some(500),
             EdgionStatus::PluginResponseReplaced => None,
             EdgionStatus::PluginResponseReplaceUnsupportedGrpc => None,
+            EdgionStatus::PluginResponseDenyAborted => None,
             EdgionStatus::OutboundTlsVerifyUnsupported => None,
             EdgionStatus::OutboundTlsCaMissing => None,
             EdgionStatus::OutboundTlsClientCertInvalid => None,
@@ -437,6 +455,7 @@ mod tests {
             EdgionStatus::BodyCaptureStorageFailed,
             EdgionStatus::PluginResponseReplaced,
             EdgionStatus::PluginResponseReplaceUnsupportedGrpc,
+            EdgionStatus::PluginResponseDenyAborted,
             EdgionStatus::OutboundTlsVerifyUnsupported,
             EdgionStatus::OutboundTlsCaMissing,
             EdgionStatus::OutboundTlsClientCertInvalid,

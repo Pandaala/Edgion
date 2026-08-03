@@ -5,6 +5,7 @@
 // - Block requests exceeding the limit with 429
 // - Shared counter across routes and rule match-items
 // - Independent counters per key
+// - Explicitly empty `key: []` still rate-limits (one global bucket, not a key miss)
 //
 // Default config: rate=5, interval=10s, key=Header(X-Rate-Key)
 
@@ -669,6 +670,98 @@ impl RateLimitTestSuite {
             },
         )
     }
+
+    // ==================== 7. Explicitly empty key still rate-limits ====================
+    //
+    // Regression pin (conf/EdgionPlugins/RateLimit/04_EdgionPlugins_rate-limit-empty-key.yaml):
+    // `RateLimitConfig.key` used to deserialize to an empty list whenever `key`
+    // was omitted, and an empty list was then treated as a key-extraction MISS
+    // — so with the default `onMissingKey: Allow` the limiter was silently
+    // bypassed for every request. This is now fixed: an omitted `key`
+    // deserializes to the documented default `[{type: clientIp}]`, and an
+    // explicitly empty `key: []` means "one global bucket" — every request
+    // composes to the same empty key and IS rate-limited; it is NOT a key
+    // miss, so `onMissingKey` / `defaultKey` never apply.
+    //
+    // The fixture pins `onMissingKey: Allow` deliberately: that is the exact
+    // setting that used to turn `key: []` into a full bypass. rate=3/interval=10s
+    // on a dedicated route (rate-limit-empty-key.example.com) whose bucket is
+    // never touched by any other case in this suite: send 3 requests (must all
+    // be 200), then a 4th (must be 429) — proving the limiter is active despite
+    // `onMissingKey: Allow`.
+    fn test_empty_key_still_rate_limits() -> TestCase {
+        TestCase::new(
+            "rate_limit_empty_key_still_rate_limits",
+            "An explicitly empty `key: []` still rate-limits as one global bucket, even with onMissingKey: Allow",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = &ctx.http_client;
+                    let url = format!("http://{}:31180/test/rate-limit-empty-key/api", ctx.target_host);
+                    const HOST: &str = "rate-limit-empty-key.example.com";
+
+                    // rate=3: the first 3 requests must all pass. No key-bearing header is
+                    // sent at all - the config's key list is empty, so there is nothing to
+                    // extract and every request must land in the same global bucket.
+                    for i in 0..3 {
+                        let response = client.get(&url).header("host", HOST).send().await;
+
+                        match response {
+                            Ok(resp) => {
+                                let status = resp.status().as_u16();
+                                let _ = resp.text().await; // drain body so the pooled conn is reusable
+                                if status != 200 {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Pre-fill request {} expected 200, got {}", i + 1, status),
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Pre-fill request {} failed: {}", i + 1, e),
+                                );
+                            }
+                        }
+                    }
+
+                    // The 4th request must be blocked. If the empty key list regressed back
+                    // to being treated as a key miss, `onMissingKey: Allow` would let this
+                    // (and every other) request through as 200.
+                    let response = client.get(&url).header("host", HOST).send().await;
+
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let body = resp.text().await.unwrap_or_default();
+                            if status == 429 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!(
+                                        "Empty key list still rate-limited: 3 requests passed, the 4th \
+                                         returned 429 despite onMissingKey: Allow (body: {})",
+                                        body
+                                    ),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Request 4 expected 429, got {}. An explicitly empty `key: []` must \
+                                         still rate-limit as one global bucket - it is NOT a key miss, so \
+                                         onMissingKey: Allow must not bypass the limiter. Body: {}",
+                                        status, body
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request 4 failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for RateLimitTestSuite {
@@ -700,6 +793,9 @@ impl TestSuite for RateLimitTestSuite {
             Self::test_missing_key_allows(),
             // Access log: stage_logs includes RateLimit entry
             Self::test_stage_logs_contain_rate_limit(),
+            // Explicitly empty key: one global bucket, not a key miss - must still
+            // rate-limit even with onMissingKey: Allow.
+            Self::test_empty_key_still_rate_limits(),
         ]
     }
 }

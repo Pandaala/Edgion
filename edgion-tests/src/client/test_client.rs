@@ -1112,14 +1112,14 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::DanglingExtensionRefTestSuite));
         }
         "HTTPRoute/Protocol" => {
-            runner.add_suite(Box::new(suites::WebSocketTestSuite));
+            runner.add_suite(Box::new(suites::WebSocketTestSuite::new(gateway)));
             runner.add_suite(Box::new(suites::H2cTestSuite));
             if gateway {
                 runner.add_suite(Box::new(suites::HttpsTestSuite));
             }
         }
         "HTTPRoute/Protocol/WebSocket" => {
-            runner.add_suite(Box::new(suites::WebSocketTestSuite));
+            runner.add_suite(Box::new(suites::WebSocketTestSuite::new(gateway)));
         }
         "HTTPRoute/Protocol/H2C" => {
             if !gateway {
@@ -2200,7 +2200,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         "all" => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
             runner.add_suite(Box::new(suites::GrpcTestSuite));
-            runner.add_suite(Box::new(suites::WebSocketTestSuite));
+            runner.add_suite(Box::new(suites::WebSocketTestSuite::new(gateway)));
             runner.add_suite(Box::new(suites::H2cTestSuite));
             runner.add_suite(Box::new(suites::TcpTestSuite));
             runner.add_suite(Box::new(suites::UdpTestSuite));

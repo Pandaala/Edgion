@@ -215,7 +215,13 @@ pub struct RateLimitConfig {
     /// Rate limiting keys (dimensions)
     ///
     /// Specifies where to extract the rate limiting key from.
-    /// Multiple keys are combined with "_" separator.
+    /// A single key is used verbatim; multiple keys are combined into an
+    /// unambiguous composite key (`<byte-len>:<value>` per configured key,
+    /// "-" when it does not resolve, joined with "_").
+    ///
+    /// Default: [{ type: clientIp }]. An explicitly empty list is a valid
+    /// configuration meaning "one global bucket": it is not a key miss, so it
+    /// still rate-limits rather than falling through to `onMissingKey`.
     ///
     /// ## YAML Examples
     ///
@@ -231,7 +237,7 @@ pub struct RateLimitConfig {
     ///     name: "X-Api-Key"
     ///   - type: path
     /// ```
-    #[serde(default)]
+    #[serde(default = "default_key_sources")]
     pub key: Vec<KeyGet>,
 
     /// Behavior when key cannot be extracted (default: Allow)
@@ -337,6 +343,14 @@ pub struct RateLimitConfig {
     #[serde(skip)]
     #[schemars(skip)]
     pub effective_slots: Option<usize>,
+}
+
+/// Default key sources: rate-limit per client IP.
+///
+/// Must match the `Default` impl and the documented default — `#[serde(default)]`
+/// would yield an empty list instead, which is a different (global-bucket) policy.
+fn default_key_sources() -> Vec<KeyGet> {
+    vec![KeyGet::ClientIp]
 }
 
 fn default_interval() -> String {
@@ -772,13 +786,28 @@ key:
     }
 
     #[test]
-    fn test_yaml_empty_key_defaults() {
-        // Test that empty key array defaults to clientIp
+    fn test_yaml_omitted_key_defaults_to_client_ip() {
+        // An omitted `key` must match the documented default and the `Default`
+        // impl. It used to deserialize to an empty list, which the gateway then
+        // treated as a key miss — with the default `onMissingKey: Allow` that
+        // silently disabled the limiter.
         let yaml = r#"
 rate: 50
 "#;
         let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
-        assert!(config.key.is_empty()); // serde default is empty vec
+        assert_eq!(config.key, vec![KeyGet::ClientIp]);
+    }
+
+    #[test]
+    fn test_yaml_explicit_empty_key_is_preserved() {
+        // An explicitly empty list is a valid "one global bucket" policy and is
+        // not rewritten to the default.
+        let yaml = r#"
+rate: 50
+key: []
+"#;
+        let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.key.is_empty());
     }
 
     // ==================== Cluster Scope Tests ====================

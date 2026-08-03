@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use crate::plugins::runtime::{InvalidUpdatePolicy, PluginRuntime};
+use edgion_resources::resource::meta::ResourceMeta;
 use edgion_resources::resources::EdgionPlugins;
 
 static GLOBAL_PLUGIN_STORE: LazyLock<Arc<PluginStore>> = LazyLock::new(|| Arc::new(PluginStore::new()));
@@ -72,6 +73,11 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     let mut spec = ep.clone();
     let mut errors = Vec::new();
     let namespace = spec.metadata.namespace.clone().unwrap_or_else(|| "default".to_string());
+    // Identity of the resource as the store keys it, so a plugin-entry scope
+    // derived from it is unique exactly when the store entry is: re-deriving
+    // `ns/name` here instead would normalize a missing namespace to "default"
+    // and alias two distinct store entries.
+    let resource_key = spec.key_name();
 
     // Compile regex conditions on all plugin entries once, before building the
     // runtime. This avoids per-request Regex::new() in the fallback path of
@@ -114,7 +120,7 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     let mut runtime = PluginRuntime::new();
 
     if let Some(request_plugins) = &spec.spec.request_plugins {
-        errors.extend(runtime.add_from_request_filters(request_plugins, &namespace));
+        errors.extend(runtime.add_from_request_filters(request_plugins, &namespace, &resource_key));
     }
     if let Some(filter_plugins) = &spec.spec.upstream_response_filter_plugins {
         errors.extend(runtime.add_from_upstream_response_filters(filter_plugins, &namespace));
@@ -908,6 +914,50 @@ mod compile_plugins_tests {
 
         let cases: Vec<(&str, EdgionPlugins)> = vec![
             ("valid_request", mk(Some(vec![RequestFilterEntry::new(rhm())]), None)),
+            (
+                // Two entries of one stage array claiming the same alias → the
+                // second is rejected. The alias is part of the entry identity
+                // that namespaces external state (RateLimitRedis buckets).
+                "duplicate_alias_in_stage",
+                mk(
+                    Some(vec![
+                        aliased(RequestFilterEntry::new(rhm()), "dup"),
+                        aliased(RequestFilterEntry::new(rhm()), "dup"),
+                    ]),
+                    None,
+                ),
+            ),
+            (
+                // A bounded-structured-body error owns the entry in BOTH layers, so
+                // the entry never claims its alias and the later duplicate is NOT
+                // reported. Pins the skip-set parity the alias accumulator depends on.
+                //
+                // The first entry must have a VALID plugin config (a config error
+                // would short-circuit both layers earlier, before the bounded-body
+                // skip, making this case vacuous): valid `{"type":"object"}` schema
+                // with a malformed `body.maxBodySize`.
+                "duplicate_alias_behind_invalid_bounded_body",
+                mk(
+                    Some(vec![
+                        aliased(json_schema_entry_with_body(Some("notasize"), false), "dup"),
+                        aliased(RequestFilterEntry::new(rhm()), "dup"),
+                    ]),
+                    None,
+                ),
+            ),
+            (
+                // The same alias in two different stage arrays is fine: the
+                // accumulator is per stage.
+                "same_alias_across_stages",
+                mk(
+                    Some(vec![aliased(RequestFilterEntry::new(rhm()), "shared")]),
+                    Some(vec![{
+                        let mut e = UpstreamResponseFilterEntry::new(respm());
+                        e.alias = Some("shared".to_string());
+                        e
+                    }]),
+                ),
+            ),
             (
                 // `body:` on a plugin that does not consume a body → rejected.
                 "body_on_non_consuming_plugin",

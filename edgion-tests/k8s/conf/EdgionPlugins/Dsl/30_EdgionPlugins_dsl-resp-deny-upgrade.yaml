@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-resp-deny-upgrade
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "resp-deny-upgrade"
+        source: |
+          if resp.status == 200 {
+            return deny(403, "denied-by-response-plugin")
+          }
+        errorPolicy: deny

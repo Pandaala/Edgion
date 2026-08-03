@@ -37,7 +37,11 @@ impl StreamPluginRuntime {
     /// `parent_namespace` is the namespace of the owning `EdgionStreamPlugins` resource,
     /// used by `GlobalConnectionIpRestrictionPlugin` to resolve `overrideRef` with no
     /// explicit namespace.
-    pub fn from_stream_plugins(entries: &[StreamPluginEntry], parent_namespace: &str) -> Self {
+    ///
+    /// `resource_key` is that resource's store key; combined with the entry index it
+    /// gives `ConnectionRateLimit` the identity it needs to namespace its Redis
+    /// buckets and its local gate (see `plugins::common::entry_scope`).
+    pub fn from_stream_plugins(entries: &[StreamPluginEntry], parent_namespace: &str, resource_key: &str) -> Self {
         let mut plugins: Vec<Arc<dyn StreamPlugin>> = Vec::new();
         // First Block-stamped reason encountered, if any. Inserted at the
         // front of `plugins` after the loop so it dominates the chain
@@ -45,7 +49,7 @@ impl StreamPluginRuntime {
         // HTTP "gate first" semantics).
         let mut policy_block_reason: Option<String> = None;
 
-        for entry in entries {
+        for (index, entry) in entries.iter().enumerate() {
             if !entry.is_enabled() {
                 continue;
             }
@@ -85,7 +89,11 @@ impl StreamPluginRuntime {
                         }
                     }
                 }
-                EdgionStreamPlugin::ConnectionRateLimit(cfg) => Arc::new(ConnectionRateLimitPlugin::new(cfg)),
+                EdgionStreamPlugin::ConnectionRateLimit(cfg) => Arc::new(ConnectionRateLimitPlugin::new(
+                    cfg,
+                    // Stream entries carry no alias, so the scope always uses the index form.
+                    &crate::plugins::common::entry_scope(resource_key, None, index),
+                )),
             };
 
             plugins.push(plugin);
@@ -167,7 +175,7 @@ mod tests {
             policy_action: Some(PluginPolicyAction::Block { status: 503 }),
             plugin: EdgionStreamPlugin::ConnectionRateLimit(cfg_local_only(10)),
         };
-        let runtime = StreamPluginRuntime::from_stream_plugins(&[blocked], "default");
+        let runtime = StreamPluginRuntime::from_stream_plugins(&[blocked], "default", "default/test-esp");
         let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8080);
         match runtime.run(&ctx).await {
             StreamPluginResult::Deny(reason) => assert!(reason.contains("plugin disabled by policy")),
@@ -179,7 +187,7 @@ mod tests {
             policy_action: Some(PluginPolicyAction::Bypass),
             plugin: EdgionStreamPlugin::ConnectionRateLimit(cfg_local_only(10)),
         };
-        let runtime = StreamPluginRuntime::from_stream_plugins(&[bypassed], "default");
+        let runtime = StreamPluginRuntime::from_stream_plugins(&[bypassed], "default", "default/test-esp");
         assert!(runtime.is_empty(), "bypassed plugin must not be instantiated");
     }
 
@@ -197,7 +205,7 @@ mod tests {
             policy_action: Some(PluginPolicyAction::Block { status: 503 }),
             plugin: EdgionStreamPlugin::ConnectionRateLimit(cfg_local_only(10)),
         };
-        let runtime = StreamPluginRuntime::from_stream_plugins(&[normal, blocked], "default");
+        let runtime = StreamPluginRuntime::from_stream_plugins(&[normal, blocked], "default", "default/test-esp");
         let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8081);
         match runtime.run(&ctx).await {
             StreamPluginResult::Deny(reason) => {
@@ -214,7 +222,7 @@ mod tests {
             policy_action: None,
             plugin: EdgionStreamPlugin::ConnectionRateLimit(cfg_local_only(1_000_000)),
         };
-        let runtime = StreamPluginRuntime::from_stream_plugins(&[entry], "default");
+        let runtime = StreamPluginRuntime::from_stream_plugins(&[entry], "default", "default/test-esp");
         assert!(!runtime.is_empty());
         let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8082);
         assert!(matches!(runtime.run(&ctx).await, StreamPluginResult::Allow));

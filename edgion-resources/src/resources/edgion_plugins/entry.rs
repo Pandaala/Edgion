@@ -17,6 +17,30 @@ pub(super) fn is_true(v: &bool) -> bool {
     *v
 }
 
+/// Record a valid alias and report it if an earlier entry in the same stage
+/// array already claimed it.
+///
+/// `seen` is the caller's per-stage-array accumulator; `alias` should already
+/// have passed [`validate_alias_str`] (an invalid alias is dropped, not
+/// deduplicated). Entries without an alias never collide.
+///
+/// Uniqueness matters beyond the access log: the alias is the discriminator in
+/// a plugin entry's runtime identity (`<namespace>/<name>/<alias or #index>`),
+/// which `RateLimitRedis` uses to namespace its Redis buckets. Two entries
+/// sharing an alias would silently share one bucket namespace — and one
+/// access-log label. Callers therefore report the duplicate AND drop it, the way
+/// an invalid alias is dropped: reporting alone would not protect the data plane,
+/// since lenient admission keeps an `Accepted=False` resource synced and serving.
+pub fn duplicate_alias_error(seen: &mut std::collections::HashSet<String>, alias: Option<&str>) -> Option<String> {
+    let alias = alias?;
+    if seen.insert(alias.to_string()) {
+        return None;
+    }
+    Some(format!(
+        "duplicate alias '{alias}': aliases must be unique within a stage"
+    ))
+}
+
 /// Validate a plugin entry alias.
 ///
 /// Rule: must match `^[a-zA-Z0-9._-]{1,32}$`. Returns the human-readable
@@ -79,9 +103,12 @@ pub struct PluginEntry {
     pub conditions: Option<PluginConditions>,
 
     /// Operator-defined label echoed verbatim into PluginLog.alias.
-    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$`.
-    /// Lets multiple entries of the same plugin type be distinguished
-    /// in the access log.
+    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$` and be unique
+    /// within its stage array. Lets multiple entries of the same plugin type be
+    /// distinguished in the access log; it is also the discriminator in the
+    /// entry's runtime identity, which namespaces state a plugin keeps outside
+    /// its own instance (RateLimitRedis buckets), so a duplicate is reported and
+    /// dropped rather than allowed to merge two entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
 
@@ -165,9 +192,12 @@ pub struct RequestFilterEntry {
     pub conditions: Option<PluginConditions>,
 
     /// Operator-defined label echoed verbatim into PluginLog.alias.
-    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$`.
-    /// Lets multiple entries of the same plugin type be distinguished
-    /// in the access log.
+    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$` and be unique
+    /// within its stage array. Lets multiple entries of the same plugin type be
+    /// distinguished in the access log; it is also the discriminator in the
+    /// entry's runtime identity, which namespaces state a plugin keeps outside
+    /// its own instance (RateLimitRedis buckets), so a duplicate is reported and
+    /// dropped rather than allowed to merge two entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
 
@@ -268,9 +298,12 @@ pub struct UpstreamResponseFilterEntry {
     pub conditions: Option<PluginConditions>,
 
     /// Operator-defined label echoed verbatim into PluginLog.alias.
-    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$`.
-    /// Lets multiple entries of the same plugin type be distinguished
-    /// in the access log.
+    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$` and be unique
+    /// within its stage array. Lets multiple entries of the same plugin type be
+    /// distinguished in the access log; it is also the discriminator in the
+    /// entry's runtime identity, which namespaces state a plugin keeps outside
+    /// its own instance (RateLimitRedis buckets), so a duplicate is reported and
+    /// dropped rather than allowed to merge two entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
 
@@ -362,9 +395,12 @@ pub struct UpstreamResponseBodyFilterEntry {
     pub conditions: Option<PluginConditions>,
 
     /// Operator-defined label echoed verbatim into PluginLog.alias.
-    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$`.
-    /// Lets multiple entries of the same plugin type be distinguished
-    /// in the access log.
+    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$` and be unique
+    /// within its stage array. Lets multiple entries of the same plugin type be
+    /// distinguished in the access log; it is also the discriminator in the
+    /// entry's runtime identity, which namespaces state a plugin keeps outside
+    /// its own instance (RateLimitRedis buckets), so a duplicate is reported and
+    /// dropped rather than allowed to merge two entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
 
@@ -456,9 +492,12 @@ pub struct UpstreamResponseEntry {
     pub conditions: Option<PluginConditions>,
 
     /// Operator-defined label echoed verbatim into PluginLog.alias.
-    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$`.
-    /// Lets multiple entries of the same plugin type be distinguished
-    /// in the access log.
+    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$` and be unique
+    /// within its stage array. Lets multiple entries of the same plugin type be
+    /// distinguished in the access log; it is also the discriminator in the
+    /// entry's runtime identity, which namespaces state a plugin keeps outside
+    /// its own instance (RateLimitRedis buckets), so a duplicate is reported and
+    /// dropped rather than allowed to merge two entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
 

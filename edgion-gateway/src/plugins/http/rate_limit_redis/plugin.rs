@@ -40,19 +40,45 @@ use edgion_resources::resources::edgion_plugins::{RateLimitAlgorithm, RateLimitP
 pub struct RateLimitRedis {
     name: String,
     config: RateLimitRedisConfig,
+    /// `config.key_prefix` scoped by the owning entry's identity
+    /// (`<namespace>/<name>/<alias or #index>`). Resolved once at build time;
+    /// the request path never recomputes it.
+    ///
+    /// The bucket namespace has to name the *limiter*, not just the key shape:
+    /// every instance defaults to the same `keyPrefix`, so without this two
+    /// unrelated EdgionPlugins resources would index the same buckets — merging
+    /// their quotas outright when their key sources match, and letting a client
+    /// that controls one plugin's key source craft a value matching another
+    /// plugin's composed key when they do not. Scoping by resource identity also
+    /// mirrors the in-memory `RateLimit`, whose `Rate` is shared exactly by the
+    /// routes that reference one resource, and keeps cluster-wide sharing intact
+    /// because every Gateway instance derives the same string from conf_sync.
+    scoped_key_prefix: String,
     core: RedisRateLimiter,
 }
 
 impl RateLimitRedis {
     /// Create a new RateLimitRedis plugin from configuration.
-    pub fn create(config: &RateLimitRedisConfig) -> Box<dyn RequestFilter> {
+    ///
+    /// `entry_scope` is the owning EdgionPlugins entry's identity; see
+    /// `scoped_key_prefix`.
+    pub fn create(config: &RateLimitRedisConfig, entry_scope: &str) -> Box<dyn RequestFilter> {
+        Box::new(Self::new(config, entry_scope))
+    }
+
+    fn new(config: &RateLimitRedisConfig, entry_scope: &str) -> RateLimitRedis {
         let mut validated = config.clone();
         let _ = validated.validate();
-        Box::new(RateLimitRedis {
+        // A valid key_prefix ends with ':' (enforced by check_fields). A config
+        // that fails validation still builds a prefix here, but never reaches
+        // Redis: run_request returns 500 on `validation_error()` first.
+        let scoped_key_prefix = format!("{}{}:", validated.key_prefix, entry_scope);
+        RateLimitRedis {
             name: "RateLimitRedis".to_string(),
             config: validated,
+            scoped_key_prefix,
             core: RedisRateLimiter::new(),
-        })
+        }
     }
 
     /// Check all policies against Redis. Returns aggregate result.
@@ -61,7 +87,7 @@ impl RateLimitRedis {
             .check(
                 client,
                 &self.config.policies,
-                &self.config.key_prefix,
+                &self.scoped_key_prefix,
                 self.config.cost,
                 self.config.max_key_len,
                 limit_key,
@@ -337,6 +363,21 @@ mod tests {
     }
 
     #[test]
+    fn scoped_key_prefix_namespaces_by_entry_identity() {
+        let config = RateLimitRedisConfig::default();
+
+        let a = RateLimitRedis::new(&config, "default/limiter-a/#0");
+        let b = RateLimitRedis::new(&config, "default/limiter-b/#0");
+        let a_second_entry = RateLimitRedis::new(&config, "default/limiter-a/#1");
+
+        // The bucket namespace names the limiter, so an identical config in two
+        // resources (or twice in one resource) never shares Redis keys.
+        assert_eq!(a.scoped_key_prefix, "edgion:rl:default/limiter-a/#0:");
+        assert_ne!(a.scoped_key_prefix, b.scoped_key_prefix);
+        assert_ne!(a.scoped_key_prefix, a_second_entry.scoped_key_prefix);
+    }
+
+    #[test]
     fn test_format_duration_milliseconds() {
         assert_eq!(format_duration(Duration::from_millis(500)), "500ms");
         assert_eq!(format_duration(Duration::from_millis(50)), "50ms");
@@ -351,7 +392,7 @@ mod tests {
             redis_ref: "invalid".to_string(),
             ..Default::default()
         };
-        let plugin = RateLimitRedis::create(&config);
+        let plugin = RateLimitRedis::create(&config, "default/test-plugins/#0");
 
         let mut mock_session = MockPluginSession::new();
         mock_session.expect_write_response_header().returning(|_, _| Ok(()));
@@ -388,7 +429,7 @@ mod tests {
         use crate::plugins::runtime::traits::session::MockPluginSession;
 
         let config = unreachable_redis_config("default/rlr-fail-open-test", OnRedisFailure::Allow);
-        let plugin = RateLimitRedis::create(&config);
+        let plugin = RateLimitRedis::create(&config, "default/test-plugins/#0");
 
         let mut mock_session = MockPluginSession::new();
         mock_session.expect_key_get().return_const(Some("1.2.3.4".to_string()));
@@ -409,7 +450,7 @@ mod tests {
         use mockall::Sequence;
 
         let config = unreachable_redis_config("default/rlr-fail-close-test", OnRedisFailure::Deny);
-        let plugin = RateLimitRedis::create(&config);
+        let plugin = RateLimitRedis::create(&config, "default/test-plugins/#0");
 
         let mut mock_session = MockPluginSession::new();
         mock_session.expect_key_get().return_const(Some("1.2.3.4".to_string()));
@@ -461,7 +502,7 @@ mod tests {
             on_missing_key: edgion_resources::resources::edgion_plugins::OnMissingKey::Deny,
             ..Default::default()
         };
-        let plugin = RateLimitRedis::create(&config);
+        let plugin = RateLimitRedis::create(&config, "default/test-plugins/#0");
 
         let mut mock_session = MockPluginSession::new();
         mock_session.expect_key_get().return_const(None::<String>);

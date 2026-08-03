@@ -1534,6 +1534,96 @@ impl DslTestSuite {
         )
     }
 
+    /// Baseline for the pair below: an ordinary request whose upstream 200 a
+    /// response-stage `deny(403, ...)` replaces. Establishes that the route,
+    /// plugin and body are what the `Upgrade`-header case compares against.
+    fn test_resp_deny_plain() -> TestCase {
+        TestCase::new(
+            "dsl_resp_deny_plain",
+            "DSL response deny: upstream 200 -> 403 replacement",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-resp-deny/api", ctx.target_host);
+                    match ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-resp-deny-upgrade.example.com")
+                        .send()
+                        .await
+                    {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let body = resp.text().await.unwrap_or_default();
+                            if status == 403 && body.contains("denied-by-response-plugin") {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 403 + denial body, got status={} body={:?}", status, body),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// The same request plus a meaningless `Upgrade` token must produce the
+    /// SAME denial.
+    ///
+    /// `Upgrade: foo` is not a protocol the gateway recognizes (only `websocket`
+    /// is detected), the upstream answers an ordinary 200, and no switch ever
+    /// happens — so the response-stage denial has to land exactly as it does
+    /// without the header. The gateway used to key its "can this response be
+    /// replaced?" decision on the mere presence of a request `Upgrade` header,
+    /// which made it refuse to build the local reply and then forward the
+    /// upstream 200 unmodified, turning any response-stage enforcement into a
+    /// no-op for any client that appended one header.
+    fn test_resp_deny_survives_unrecognized_upgrade() -> TestCase {
+        TestCase::new(
+            "dsl_resp_deny_survives_unrecognized_upgrade",
+            "DSL response deny: `Upgrade: foo` must not bypass the denial",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-resp-deny/api", ctx.target_host);
+                    match ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-resp-deny-upgrade.example.com")
+                        .header("upgrade", "foo")
+                        .send()
+                        .await
+                    {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let body = resp.text().await.unwrap_or_default();
+                            if status == 403 && body.contains("denied-by-response-plugin") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Unrecognized Upgrade token did not bypass the response-stage denial".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Denial bypassed by `Upgrade: foo`: expected 403 + denial body, \
+                                         got status={} body={:?}",
+                                        status, body
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     /// Upstream returns a body-less 502 (Content-Length: 0); the DSL
     /// response plugin must still deliver the full normalized envelope.
     fn test_resp_replace_bodyless() -> TestCase {
@@ -2397,6 +2487,10 @@ impl TestSuite for DslTestSuite {
             // Scenario 20b: resp replace body
             Self::test_resp_replace_body(),
             Self::test_resp_replace_bodyless(),
+            // Scenario 20c: a response-stage denial must be delivered, and must
+            // not be bypassable by an unrecognized `Upgrade` token.
+            Self::test_resp_deny_plain(),
+            Self::test_resp_deny_survives_unrecognized_upgrade(),
             // Scenario 21: Utility combo (hex, json_get, uuid, ip_in_cidr, join, protocol)
             Self::test_utility_combo(),
             // Scenario 22: HMAC verify

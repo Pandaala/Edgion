@@ -25,14 +25,20 @@ use pingora_proxy::Session;
 
 /// Conditionally shut down the session after sending an error response.
 ///
-/// For HTTP/2: skip shutdown. The preceding `write_response_body(_, true)` already
-/// sent END_STREAM on the H2 stream, which is the correct way to terminate an
-/// HTTP/2 stream. Calling `session.shutdown()` would trigger an abrupt TCP-level
-/// close via the Pingora framework, causing transient EOF errors for subsequent
-/// connections being accepted on the same listener port.
-///
 /// For HTTP/1.x: proceed with shutdown to close the TCP connection, since there is
-/// no stream-level termination mechanism in HTTP/1.
+/// no stream-level termination mechanism in HTTP/1. Pingora's H1 arm of
+/// `HttpSession::shutdown` resolves to `underlying_stream.shutdown()`.
+///
+/// For HTTP/2: skip. The preceding `write_response_body(_, true)` already sent
+/// END_STREAM on the H2 stream, which is the correct way to terminate it. The skip
+/// documents that intent; it is not load-bearing. Pingora's H2 arm of
+/// `HttpSession::shutdown` never touches TCP — it only sends
+/// `RST_STREAM(INTERNAL_ERROR)`, and only when the stream has not already ended —
+/// so on this path the call would be a no-op either way.
+///
+/// `PluginSession::shutdown` (`plugins/runtime/session_adapter.rs`) deliberately
+/// does NOT mirror this `is_http2()` gate; see that function for why the divergence
+/// is intentional.
 async fn shutdown_after_error_response(session: &mut Session) {
     if !session.is_http2() {
         session.shutdown().await;
@@ -118,11 +124,27 @@ pub(crate) async fn send_grpc_trailers_only(
     server_header_opts: &ServerHeaderOpts,
     http_status: u16,
 ) -> pingora_core::Result<()> {
+    let (grpc_status, grpc_message) = http_to_grpc_status(http_status);
+    send_grpc_status_trailers_only(session, ctx, server_header_opts, grpc_status, Some(grpc_message)).await
+}
+
+/// Same wire shape as [`send_grpc_trailers_only`], but the gRPC status is given
+/// directly instead of being derived from an HTTP status.
+///
+/// Used by the response-stage denial path: a plugin's `ErrGrpcError` names the
+/// gRPC code itself, and there is no HTTP status that round-trips through
+/// [`http_to_grpc_status`] back to an arbitrary code — routing it through one
+/// would silently flatten, say, `RESOURCE_EXHAUSTED` into `INTERNAL`.
+pub(crate) async fn send_grpc_status_trailers_only(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    server_header_opts: &ServerHeaderOpts,
+    grpc_status: u16,
+    grpc_message: Option<&str>,
+) -> pingora_core::Result<()> {
     if ctx.request_info.response_committed {
         return Ok(());
     }
-
-    let (grpc_status, grpc_message) = http_to_grpc_status(http_status);
 
     ctx.request_info.status = Some(200);
     ctx.request_info.grpc_status = Some(grpc_status);
@@ -132,7 +154,7 @@ pub(crate) async fn send_grpc_trailers_only(
     server_header_opts.apply_to_response(&mut resp);
     resp.insert_header("content-type", "application/grpc")
         .expect("static ASCII header literal, cannot fail");
-    send_grpc_trailers_only_frame(session, resp, grpc_status, Some(grpc_message)).await
+    send_grpc_trailers_only_frame(session, resp, grpc_status, grpc_message).await
 }
 
 /// ASCII byte set for gRPC `grpc-message` percent-encoding.

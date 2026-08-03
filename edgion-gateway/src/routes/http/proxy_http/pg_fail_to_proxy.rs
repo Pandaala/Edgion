@@ -1,6 +1,7 @@
 use super::EdgionHttpProxy;
+use crate::runtime::server::send_grpc_status_trailers_only;
 use crate::send_grpc_trailers_only;
-use crate::EdgionHttpContext;
+use crate::{EdgionHttpContext, ResponseStageDenial};
 use edgion_resources::EdgionStatus;
 use pingora_core::{ConnectionClosed, Error, ErrorSource, ErrorType, HTTPStatus, ReadError, WriteError};
 use pingora_proxy::{FailToProxy, Session};
@@ -24,6 +25,27 @@ pub async fn fail_to_proxy(
             error_code: ctx.request_info.status.unwrap_or(500),
             can_reuse_downstream: true,
         };
+    }
+
+    // A response-stage `ErrGrpcError` the stage itself could not write (the sync
+    // runner cannot await). Deliver the plugin's exact gRPC status here, ahead
+    // of the generic status handling below, which would otherwise re-derive a
+    // code from the synthetic HTTP 200 the abort carries. Marks the response
+    // committed, so that generic block then skips this request.
+    if let Some(ResponseStageDenial::Grpc { status, message }) = ctx.response_denial.take() {
+        if send_grpc_status_trailers_only(
+            session,
+            ctx,
+            &edgion_http.server_header_opts,
+            status,
+            message.as_deref(),
+        )
+        .await
+        .is_err()
+        {
+            // Delivery failed: the downstream connection is dead.
+            ctx.add_error(EdgionStatus::ClientClosed);
+        }
     }
 
     let code = match e.etype() {

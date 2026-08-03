@@ -29,8 +29,8 @@ pub use body_requirement::{BodyReadFailureMode, BodyRequirement};
 pub use dye::{sanitize_field_value, DyeOutcome, DyeRule, DyeSuite, DENIED_DYE_HEADER_NAMES};
 pub use edgion_plugin::{BodyStage, EdgionPlugin};
 pub use entry::{
-    dye_set_clobber_error, PluginEntry, RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry,
-    UpstreamResponseFilterEntry,
+    duplicate_alias_error, dye_set_clobber_error, PluginEntry, RequestFilterEntry, UpstreamResponseBodyFilterEntry,
+    UpstreamResponseEntry, UpstreamResponseFilterEntry,
 };
 pub use plugin_configs::{
     bounded_structured_body_validation_errors, parse_json_instance, profile_json_value, CompiledJsonSchema,

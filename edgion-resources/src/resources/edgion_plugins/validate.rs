@@ -216,12 +216,49 @@ impl EdgionPlugins {
         compile_body_conditions!(self.spec.request_plugins, "requestPlugins");
         compile_body_conditions!(self.spec.upstream_response_plugins, "upstreamResponsePlugins");
 
+        // Request-stage entries whose bounded-structured `body` is invalid. The
+        // gateway's `add_from_request_filters` records these in its prepass and
+        // then skips the entry entirely, so Pass 2 must skip them too — otherwise
+        // the two layers disagree on which entries reach the alias / dye / stage
+        // checks (and on which entries claim an alias for the uniqueness rule).
+        let bounded_structured_invalid: std::collections::HashSet<usize> = self
+            .spec
+            .request_plugins
+            .as_ref()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, entry)| {
+                        entry.is_enabled()
+                            && entry.policy_action.is_none()
+                            && entry.plugin.validation_error().is_none()
+                            && matches!(
+                                entry.plugin,
+                                EdgionPlugin::FormJsonTransform(_)
+                                    | EdgionPlugin::JsonSchemaValidation(_)
+                                    | EdgionPlugin::ProxyRewrite(super::plugin_configs::ProxyRewriteConfig {
+                                        json_body: Some(_),
+                                        ..
+                                    })
+                            )
+                            && entry.body.as_ref().is_some_and(|body| {
+                                !super::plugin_configs::bounded_structured_body_validation_errors(body).is_empty()
+                            })
+                    })
+                    .map(|(i, _)| i)
+                    .collect()
+            })
+            .unwrap_or_default();
+
         // Pass 2: per-entry config/alias/stage validation for active entries,
         // in stage order — mirrors the four `add_from_*` paths (minus runtime
         // construction and the DSL deep checks).
         macro_rules! validate_entries {
             ($entries:expr, $label:literal, $stage_word:literal, $stage_field:ident) => {
                 if let Some(entries) = &$entries {
+                    // Per-stage-array alias accumulator; see `duplicate_alias_error`.
+                    let mut seen_aliases = std::collections::HashSet::new();
                     for (i, entry) in entries.iter().enumerate() {
                         if !entry.is_enabled() || entry.policy_action.is_some() {
                             continue;
@@ -231,6 +268,14 @@ impl EdgionPlugins {
                         //    remaining checks (mirrors the gateway `continue`).
                         if let Some(err) = entry.plugin.validation_error() {
                             errors.push(format!("{}[{}] ({}): {}", $label, i, name, err));
+                            continue;
+                        }
+                        // 1b. Mirror the gateway's bounded-structured-body prepass
+                        //     (`add_from_request_filters`): such an error owns the entry,
+                        //     which is then skipped before its alias / dye / stage checks.
+                        //     Without this the two layers disagree on which entries claim
+                        //     an alias, and the uniqueness rule below would drift.
+                        if matches!($stage_word, "request") && bounded_structured_invalid.contains(&i) {
                             continue;
                         }
                         if !matches!($stage_word, "request") {
@@ -250,6 +295,15 @@ impl EdgionPlugins {
                         // 2. Optional alias. Recorded but does NOT skip the stage
                         //    check — the gateway only drops the invalid alias.
                         if let Some(err) = entry.validate_alias() {
+                            errors.push(format!("{}[{}] ({}): {}", $label, i, name, err));
+                        } else if let Some(err) = crate::resources::edgion_plugins::duplicate_alias_error(
+                            &mut seen_aliases,
+                            entry.alias.as_deref(),
+                        ) {
+                            // 2a. Alias uniqueness within this stage array. The alias
+                            //     is part of the entry's runtime identity, so a
+                            //     duplicate silently merges two plugins' external
+                            //     state (RateLimitRedis buckets) and their log label.
                             errors.push(format!("{}[{}] ({}): {}", $label, i, name, err));
                         }
                         // 2b. Optional entry-level dye suite. Same severity as the
@@ -456,6 +510,65 @@ mod tests {
             add: None,
             remove: None,
         }
+    }
+
+    fn aliased_request_entry(alias: &str) -> RequestFilterEntry {
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::RequestHeaderModifier(header_filter()));
+        entry.alias = Some(alias.to_string());
+        entry
+    }
+
+    #[test]
+    fn duplicate_alias_in_one_stage_is_rejected() {
+        let ep = with_request_plugins(vec![aliased_request_entry("dup"), aliased_request_entry("dup")]);
+        let errors = ep.validate_plugins();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].starts_with("requestPlugins[1] "), "{errors:?}");
+        assert!(errors[0].contains("duplicate alias 'dup'"), "{errors:?}");
+    }
+
+    #[test]
+    fn distinct_aliases_in_one_stage_are_accepted() {
+        let ep = with_request_plugins(vec![aliased_request_entry("a"), aliased_request_entry("b")]);
+        assert!(ep.validate_plugins().is_empty());
+    }
+
+    #[test]
+    fn bounded_body_invalid_entry_does_not_claim_its_alias() {
+        // Mirrors the gateway prepass: a bounded-structured-body error owns the
+        // entry, so it never reaches the alias check and a later entry reusing
+        // that alias is NOT a duplicate. Without the skip the two validation
+        // layers would disagree on this input.
+        use crate::resources::edgion_plugins::BodyRequirement;
+
+        let mut first = RequestFilterEntry::new(EdgionPlugin::JsonSchemaValidation(JsonSchemaValidationConfig {
+            schema: json!({"type": "object"}),
+        }));
+        first.alias = Some("dup".to_string());
+        first.body = Some(BodyRequirement {
+            max_body_size: Some("notasize".to_string()),
+            ..Default::default()
+        });
+
+        let errors = with_request_plugins(vec![first, aliased_request_entry("dup")]).validate_plugins();
+
+        assert!(
+            errors.iter().any(|e| e.contains("maxBodySize")),
+            "the bounded-body error must still be reported: {errors:?}"
+        );
+        assert!(
+            !errors.iter().any(|e| e.contains("duplicate alias")),
+            "a skipped entry must not claim its alias: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_alias_on_a_disabled_entry_is_ignored() {
+        // Inert entries are never built, so their alias claims nothing.
+        let mut disabled = aliased_request_entry("dup");
+        disabled.enable = false;
+        let ep = with_request_plugins(vec![disabled, aliased_request_entry("dup")]);
+        assert!(ep.validate_plugins().is_empty());
     }
 
     fn with_request_plugins(entries: Vec<RequestFilterEntry>) -> EdgionPlugins {

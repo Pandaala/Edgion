@@ -1,12 +1,59 @@
 use super::EdgionHttpProxy;
 use crate::routes::http::session_persistence;
-use crate::{EdgionHttpContext, SessionPersistenceState};
+use crate::{EdgionHttpContext, ResponseStageDenial, SessionPersistenceState};
 use edgion_resources::resources::http_route::SessionPersistenceType;
 use edgion_resources::EdgionStatus;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 use std::time::Instant;
+
+/// Whether this response header is an INTERIM one that both response-stage
+/// entry points must forward untouched.
+///
+/// 100-Continue / 102-Processing / 103-Early-Hints arrive as their own
+/// `HttpTask::Header` on h1 upstreams, and pingora's `h1_response_filter` runs
+/// every header task through both `upstream_response_filter` and
+/// `response_filter` — its own `is_informational()` check gates only the
+/// chunked-encoding upgrade, not the filter calls. A final header always
+/// follows, and it is the one that carries the response-phase bookkeeping and
+/// the plugin chains.
+///
+/// `101 Switching Protocols` is EXCLUDED: it is terminal, not interim. After a
+/// 101 the h1 client stops reading response headers, so there is no final header
+/// to defer to and everything must run on the 101 itself. This matches pingora's
+/// own `is_informational_except_101` distinction.
+#[inline]
+pub(super) fn is_interim_informational(status: http::StatusCode) -> bool {
+    status.is_informational() && status.as_u16() != 101
+}
+
+/// Whether the response-stage plugin chains have already produced a terminal
+/// outcome, so no further chain may run: either a stashed local reply, or a
+/// denial that could not be stashed and will abort the exchange.
+#[inline]
+pub(super) fn response_stage_settled(ctx: &EdgionHttpContext) -> bool {
+    ctx.local_reply_header.is_some() || ctx.response_denial.is_some()
+}
+
+/// Raise the abort for a response-stage denial the stage could not deliver.
+///
+/// `HTTPStatus` is deliberate: `error_while_proxy` leaves it non-retryable and
+/// un-attributed to the backend, and `fail_to_proxy` writes it downstream
+/// because nothing has been committed yet. A gRPC denial carries 200 — the wire
+/// status of a gRPC error — and `fail_to_proxy` writes its exact trailers from
+/// `ctx.response_denial` before the generic status handling would see it.
+#[inline]
+pub(super) fn response_denial_error(denial: &ResponseStageDenial) -> Box<pingora_core::Error> {
+    let status = match denial {
+        ResponseStageDenial::Http(status) => *status,
+        ResponseStageDenial::Grpc { .. } => 200,
+    };
+    pingora_core::Error::explain(
+        pingora_core::ErrorType::HTTPStatus(status),
+        "edgion response-stage plugin denial",
+    )
+}
 
 #[inline]
 fn release_late_request_body_view(ctx: &mut EdgionHttpContext) {
@@ -25,24 +72,13 @@ pub fn upstream_response_filter(
     upstream_response: &mut ResponseHeader,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<()> {
-    // Interim 1xx informational responses (100-Continue, 102-Processing,
-    // 103-Early-Hints) are delivered as separate HttpTask::Header on h1 upstreams
-    // (pingora's h1 client re-reads a response header for 100..=199), so each one
-    // runs through this filter. They are interim, not the final response: all
-    // response-phase bookkeeping — status/ht recording, retry-on-status,
+    // All response-phase bookkeeping — status/ht recording, retry-on-status,
     // outlier-detection success/failure, session-persistence injection, pending
-    // header-op application, and the sync response plugins — must be deferred to
-    // the final header task, otherwise the 1xx pollutes status/CB/ht and may even
-    // misfire retry-on-status. Forward the 1xx unmodified and let the final header
-    // do all of it. (h2 upstreams never surface 1xx here.)
-    //
-    // 101 Switching Protocols is deliberately EXCLUDED: it is terminal, not
-    // interim. After a 101 the h1 client stops reading response headers
-    // (`should_read_resp_header()` is false for 101), so there is no final header
-    // to defer to — the upgrade's ht/CB/ResponseHeaderModifier/plugin bookkeeping
-    // must run on the 101 itself. This matches pingora's own
-    // `is_informational_except_101` distinction.
-    if upstream_response.status.is_informational() && upstream_response.status.as_u16() != 101 {
+    // header-op application, and the sync response plugins — is deferred to the
+    // final header task, otherwise an interim 1xx pollutes status/CB/ht and may
+    // even misfire retry-on-status. Forward it unmodified; see
+    // `is_interim_informational` for why 101 is not one of these.
+    if is_interim_informational(upstream_response.status) {
         return Ok(());
     }
 
@@ -226,16 +262,28 @@ pub fn upstream_response_filter(
     // still-intact queue is re-applied by build_response_local_reply.
     ctx.apply_pending_response_header_ops(upstream_response);
 
-    // Run rule-level upstream_response edgion_plugins (sync)
-    if let Some(route_unit) = ctx.route_unit.clone() {
+    // Run rule-level upstream_response edgion_plugins (sync) for the matched
+    // route type. A GRPCRoute request stores its compiled chain separately from
+    // HTTPRoute; consulting only `route_unit` silently skips every gRPC
+    // response-stage filter while the corresponding request-stage chain runs.
+    if let Some(grpc_route_unit) = ctx.grpc_route_unit.clone() {
+        grpc_route_unit
+            .plugin_runtime
+            .run_upstream_response_plugins_sync(session, ctx, upstream_response);
+    } else if let Some(route_unit) = ctx.route_unit.clone() {
         route_unit
             .plugin_runtime
             .run_upstream_response_plugins_sync(session, ctx, upstream_response);
     }
 
-    // Run backend-level upstream_response edgion_plugins (sync)
-    if ctx.local_reply_header.is_none() {
-        if let Some(backend) = ctx.selected_backend.clone() {
+    // Run backend-level upstream_response edgion_plugins (sync) for the same
+    // matched route type.
+    if !response_stage_settled(ctx) {
+        if let Some(backend) = ctx.selected_grpc_backend.clone() {
+            backend
+                .plugin_runtime
+                .run_upstream_response_plugins_sync(session, ctx, upstream_response);
+        } else if let Some(backend) = ctx.selected_backend.clone() {
             backend
                 .plugin_runtime
                 .run_upstream_response_plugins_sync(session, ctx, upstream_response);
@@ -243,10 +291,10 @@ pub fn upstream_response_filter(
     }
 
     // Gateway-level plugins (response onion: before GatewayClass-global).
-    if ctx.local_reply_header.is_none() {
+    if !response_stage_settled(ctx) {
         if let Some(plugins) = ctx.resolved_gateway_plugins.as_ref().map(std::sync::Arc::clone) {
             for runtime in plugins.iter() {
-                if ctx.local_reply_header.is_some() {
+                if response_stage_settled(ctx) {
                     break;
                 }
                 if runtime.upstream_response_plugins_count() == 0 {
@@ -258,10 +306,10 @@ pub fn upstream_response_filter(
     }
 
     // Run global plugins last (onion: response stages go inner → outer).
-    if ctx.local_reply_header.is_none() {
+    if !response_stage_settled(ctx) {
         if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(std::sync::Arc::clone) {
             for runtime in plugins.iter() {
-                if ctx.local_reply_header.is_some() {
+                if response_stage_settled(ctx) {
                     break;
                 }
                 if runtime.upstream_response_plugins_count() == 0 {
@@ -274,7 +322,41 @@ pub fn upstream_response_filter(
 
     release_late_request_body_view(ctx);
 
+    // A denial no local reply could carry aborts here: returning Ok would hand
+    // the untouched upstream response to `response_filter` and on to the client.
+    if let Some(denial) = ctx.response_denial.as_ref() {
+        return Err(response_denial_error(denial));
+    }
+
     Ok(())
+}
+
+#[cfg(test)]
+mod interim_status_tests {
+    use super::is_interim_informational;
+    use http::StatusCode;
+
+    /// Both response-stage entry points forward these untouched and let the
+    /// final header do the work. On the async side the guard is load-bearing for
+    /// more than tidiness: a plugin denial here would arm the response-stage
+    /// abort and kill an exchange whose real response has not arrived.
+    #[test]
+    fn interim_informational_covers_100_and_103_but_not_101() {
+        assert!(is_interim_informational(StatusCode::CONTINUE));
+        assert!(is_interim_informational(StatusCode::PROCESSING));
+        assert!(is_interim_informational(StatusCode::from_u16(103).unwrap()));
+
+        // 101 is terminal: the h1 client stops reading response headers after
+        // it, so there is no final header to defer to.
+        assert!(!is_interim_informational(StatusCode::SWITCHING_PROTOCOLS));
+    }
+
+    #[test]
+    fn final_statuses_are_never_interim() {
+        for code in [200u16, 204, 304, 403, 500, 502] {
+            assert!(!is_interim_informational(StatusCode::from_u16(code).unwrap()), "{code}");
+        }
+    }
 }
 
 #[cfg(all(test, feature = "body-buffering"))]
