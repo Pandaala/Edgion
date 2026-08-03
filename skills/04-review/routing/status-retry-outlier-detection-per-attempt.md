@@ -42,6 +42,45 @@ errors there, so `error_while_proxy` excludes that error type from
 `LocalOrigin`. Real read, write, timeout, reset, and protocol errors retain the
 local-origin path.
 
+## Operator Impact
+
+Per-attempt counting is operator-visible: a rule with `retry.attempts: N` lets a
+**single client request** contribute up to `N + 1` consecutive failures instead
+of one. Each attempt re-runs *endpoint* selection (`ctx.selected_backend` is not
+cleared between attempts, so the backendRef/Service pick is not re-run), which
+spreads the samples across the endpoints actually picked — but when every
+attempt lands on the same endpoint they all accumulate there. That is the case
+for a single-endpoint Service, and for a request pinned by **strict** session
+persistence; in the default non-strict mode `take_sp_target_or_select` consumes
+`sp_target_addr` on the first attempt and the retry goes through plain LB
+(`sp_should_repin_on_strict_retry` requires `strict`).
+
+Local-origin failures have the same shape without any `retry` block:
+`pg_fail_to_connect` falls back to `EdgionGatewayConfig.spec.maxRetries`
+(default 3), so one client request can contribute up to 4 local-origin failures
+against a default `consecutiveLocalOriginFailures` of 5.
+
+`maxEjectionPercent` is not a backstop: the guard in
+`outlier_detection/store.rs` uses `max_ejectable.max(1)`, so a single-endpoint
+Service can always be ejected even at the default `maxEjectionPercent: 50`
+(`0` skips the guard entirely). The gateway then has no endpoint to select, and
+`get_peer`'s `_ =>` arm renders `end_response_503` — a 503, not a 502; 502 comes
+only from `pg_fail_to_proxy` on an attempt that was actually made. The one
+escape hatch is LB panic mode: a non-zero `loadBalancer.panicThreshold` makes
+`selector::pick` bypass the health+ejection predicate, so the ejected sole
+endpoint is still selected. Panic mode defaults to `0` (disabled); it is kept
+off the circuit-breaker user page on purpose (a per-feature page should not have
+to teach a global LB knob) and is documented in
+`docs/en/ops-guide/configuration/edgion-gateway-config.md` plus
+`skills/02-features/03-resources/20-edgion-backend-traffic-policy.md`.
+
+Tuning rule: set `consecutiveErrors` / `consecutiveGatewayErrors` above
+`attempts + 1` when one client request must not be able to trip ejection.
+Documented for operators in
+`docs/{en,zh-CN}/user-guide/http-route/backends/circuit-breaker.md`
+("Interaction with Retries") and in
+`skills/02-features/03-resources/20-edgion-backend-traffic-policy.md`.
+
 ## Fix Suggestions Not Accepted
 
 - Keep the outlier-detection hook after retry selection — accepted retries return before reaching it.

@@ -382,6 +382,27 @@ impl CircuitBreakerTestSuite {
                     let start = std::time::Instant::now();
                     let host = "cb-retry.example.com";
                     let test_id = format!("cb-retry-{}", uuid::Uuid::new_v4());
+                    let probe_url = format!("{}/cb-fail/cb-retry-probe/0", ctx.http_url());
+
+                    // A preserved integration stack may still carry the previous run's
+                    // ejection. Wait for the capped cooldown and clear failure counters
+                    // with an always-successful upstream response before starting.
+                    let mut ready = false;
+                    for _ in 0..40 {
+                        match ctx.http_client.get(&probe_url).header("Host", host).send().await {
+                            Ok(resp) if resp.status().as_u16() == 200 => {
+                                ready = true;
+                                break;
+                            }
+                            _ => tokio::time::sleep(std::time::Duration::from_millis(200)).await,
+                        }
+                    }
+                    if !ready {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "cb-retry backend did not recover before the test".to_string(),
+                        );
+                    }
 
                     let _ = ctx
                         .http_client
@@ -434,20 +455,39 @@ impl CircuitBreakerTestSuite {
                     let status = second.status().as_u16();
                     let has_upstream_attempt = second.headers().contains_key("x-attempt-number")
                         || second.headers().contains_key("x-attempt-history");
-                    if (status == 502 || status == 503) && !has_upstream_attempt {
+                    let ejection_observed = (status == 502 || status == 503) && !has_upstream_attempt;
+                    let unexpected_response = format!(
+                        "Expected local post-ejection 502/503 without upstream attempt headers, got status={}, headers={:?}",
+                        status,
+                        second.headers()
+                    );
+
+                    // Leave the shared Gateway usable for a direct test-client rerun and
+                    // for any future cb-retry cases appended to this suite.
+                    let mut recovered = false;
+                    for _ in 0..40 {
+                        match ctx.http_client.get(&probe_url).header("Host", host).send().await {
+                            Ok(resp) if resp.status().as_u16() == 200 => {
+                                recovered = true;
+                                break;
+                            }
+                            _ => tokio::time::sleep(std::time::Duration::from_millis(200)).await,
+                        }
+                    }
+                    if !recovered {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "cb-retry backend did not recover after the ejection assertion".to_string(),
+                        );
+                    }
+
+                    if ejection_observed {
                         TestResult::passed_with_message(
                             start.elapsed(),
                             "Two 502 attempts ejected the backend after one client request".to_string(),
                         )
                     } else {
-                        TestResult::failed(
-                            start.elapsed(),
-                            format!(
-                                "Expected local post-ejection 502/503 without upstream attempt headers, got status={}, headers={:?}",
-                                status,
-                                second.headers()
-                            ),
-                        )
+                        TestResult::failed(start.elapsed(), unexpected_response)
                     }
                 })
             },

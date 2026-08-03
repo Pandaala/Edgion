@@ -5,14 +5,20 @@ impl OpenidConnect {
         value.split(',').next().unwrap_or("").trim()
     }
 
+    /// Scheme used to expand a path-form `redirectUri` / `postLogoutRedirectUri`.
+    ///
+    /// Derived from the listener's real TLS state, never from `X-Forwarded-Proto`:
+    /// nothing strips or validates that header on this path, so trusting it would
+    /// let an anonymous request downgrade the callback URL advertised to the IdP.
+    /// This mirrors the `request_host` decision to ignore `X-Forwarded-Host`.
+    /// Deployments terminating TLS in front of the gateway must configure an
+    /// absolute URL instead. `https` stays the fallback when the connection state
+    /// is unavailable.
     pub(super) fn request_scheme(session: &dyn PluginSession) -> String {
-        if let Some(v) = session.header_value("x-forwarded-proto") {
-            let proto = Self::trim_forwarded_header(&v);
-            if !proto.is_empty() {
-                return proto.to_ascii_lowercase();
-            }
+        match session.downstream_is_tls() {
+            Some(false) => "http".to_string(),
+            _ => "https".to_string(),
         }
-        "https".to_string()
     }
 
     pub(super) fn request_host(session: &dyn PluginSession) -> Option<String> {

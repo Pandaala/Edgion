@@ -43,9 +43,8 @@ impl Cors {
         Self::from_arc(Arc::new(config))
     }
 
-    /// Create from a shared `Arc<CorsConfig>` without cloning the underlying
-    /// config. Used by the preflight hot path to construct an ad-hoc `Cors`
-    /// per request without re-cloning the config.
+    /// Create from a shared, already-initialized `Arc<CorsConfig>` without
+    /// cloning the underlying config.
     pub fn from_arc(config: Arc<CorsConfig>) -> Self {
         Cors {
             name: "Cors".to_string(),

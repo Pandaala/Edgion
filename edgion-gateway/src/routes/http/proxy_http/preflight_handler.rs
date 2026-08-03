@@ -6,12 +6,6 @@ use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 use std::sync::Arc;
 
-use crate::plugins::http::cors::Cors;
-use crate::plugins::runtime::log::PluginLog;
-use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
-use crate::plugins::runtime::traits::request_filter::RequestFilter;
-use crate::EdgionHttpContext;
-use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_gateway_config::{PreflightMode, PreflightPolicy};
 use edgion_resources::resources::CorsConfig;
 
@@ -52,28 +46,14 @@ impl PreflightHandler {
     pub async fn handle_preflight(
         &self,
         session: &mut Session,
-        ctx: &mut EdgionHttpContext,
         cors_config: Option<&Arc<CorsConfig>>,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        // If CORS config exists, let the CORS plugin decide whether to respond or continue.
-        if let Some(cors_config) = cors_config {
-            // Build an ad-hoc Cors plugin from the shared Arc — the route's
-            // PluginRuntime owns the canonical Arc<CorsConfig>, so this avoids
-            // a deep clone of the config per preflight request.
-            let cors_plugin = Cors::from_arc(Arc::clone(cors_config));
-            let mut plugin_log = PluginLog::new("PreflightHandler");
-
-            let mut adapter = PingoraSessionAdapter::new(session, ctx);
-
-            // Run CORS plugin logic. GoodNext/Nothing mean that the request must
-            // continue through the normal proxy pipeline; only terminal results
-            // indicate that this handler owns the response.
-            let result = cors_plugin.run_request(&mut adapter, &mut plugin_log).await;
-
-            return Ok(!matches!(
-                result,
-                PluginRunningResult::GoodNext | PluginRunningResult::Nothing
-            ));
+        // A route-level CORS plugin owns both local preflight responses and
+        // pass-through response headers. Let the normal plugin pipeline run it
+        // exactly once so queued operations such as `Vary: Origin` are not
+        // duplicated.
+        if cors_config.is_some() {
+            return Ok(false);
         }
 
         // No CORS config: return simple empty response
@@ -94,6 +74,13 @@ impl PreflightHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ctx::PendingHeaderOp;
+    use crate::plugins::http::cors::Cors;
+    use crate::plugins::runtime::log::PluginLog;
+    use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
+    use crate::plugins::runtime::traits::request_filter::RequestFilter;
+    use crate::EdgionHttpContext;
+    use edgion_resources::filters::PluginRunningResult;
     use std::sync::Arc;
     use tokio::io::AsyncWriteExt;
 
@@ -140,7 +127,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_preflight_continue_passes_through() {
+    async fn test_preflight_continue_runs_route_cors_once() {
         let handler = PreflightHandler::new(Some(PreflightPolicy {
             mode: PreflightMode::CorsStandard,
             status_code: 204,
@@ -154,12 +141,32 @@ mod tests {
 
         assert!(handler.is_preflight(&session));
         let response_sent = handler
-            .handle_preflight(&mut session, &mut ctx, Some(&cors_config))
+            .handle_preflight(&mut session, Some(&cors_config))
             .await
             .expect("preflight handling should succeed");
 
         assert!(!response_sent);
-        assert!(!ctx.request_info.response_committed);
+
+        let cors = Cors::from_arc(Arc::clone(&cors_config));
+        let result = {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            let mut plugin_log = PluginLog::new("Cors");
+            cors.run_request(&mut adapter, &mut plugin_log).await
+        };
+
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        let vary_origin_count = ctx
+            .pending_response_header_ops
+            .iter()
+            .filter(|op| {
+                matches!(
+                    op,
+                    PendingHeaderOp::Append { name, value }
+                        if name.eq_ignore_ascii_case("vary") && value.eq_ignore_ascii_case("origin")
+                )
+            })
+            .count();
+        assert_eq!(vary_origin_count, 1);
     }
 
     #[tokio::test]
@@ -169,16 +176,14 @@ mod tests {
             status_code: 204,
         }));
         let mut session = session_from_request(b"OPTIONS / HTTP/1.1\r\nHost: test\r\n\r\n").await;
-        let mut ctx = EdgionHttpContext::default();
         let cors_config = cors_config(false);
 
         assert!(handler.is_preflight(&session));
         let response_sent = handler
-            .handle_preflight(&mut session, &mut ctx, Some(&cors_config))
+            .handle_preflight(&mut session, Some(&cors_config))
             .await
             .expect("preflight handling should succeed");
 
         assert!(!response_sent);
-        assert!(!ctx.request_info.response_committed);
     }
 }

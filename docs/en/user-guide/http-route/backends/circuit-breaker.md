@@ -69,6 +69,18 @@ The three failure counters are independent — this mirrors Envoy's `splitExtern
 
 `maxEjectionPercent` prevents all endpoints from being ejected simultaneously. For example, with a setting of 50%, at most 1 out of 2 endpoints can be ejected.
 
+## Interaction with Retries
+
+Outlier detection counts **upstream attempts**, not client requests. Every completed upstream response is classified before route-level [retry](../resilience/retry.md) decides whether to retry it, so each retried attempt contributes its own success or failure sample.
+
+A rule with `retry.attempts: N` therefore issues up to `N + 1` upstream attempts for one client request, and that single request can contribute up to `N + 1` consecutive failures. Each attempt re-runs endpoint selection, so the samples land on whichever endpoints the load balancer picked; when every attempt hits the same endpoint — a single-endpoint Service, or a request pinned by [strict session persistence](../resilience/session-persistence.md) — all `N + 1` failures accumulate on that one endpoint.
+
+Tuning implications:
+
+- If one client request should not be able to trip ejection on its own, set `consecutiveErrors` / `consecutiveGatewayErrors` above `attempts + 1`.
+- `consecutiveLocalOriginFailures` needs the same treatment, and it applies even to rules with no `retry` block: connection failures are retried against `EdgionGatewayConfig.spec.maxRetries` (default `3`), so by default one client request can contribute up to 4 local-origin failures.
+- `maxEjectionPercent` does not protect a single-endpoint Service — the cap is floored at one endpoint, so the only endpoint of a Service can always be ejected, even at the default `maxEjectionPercent: 50`. While it is ejected the gateway has no endpoint left to select and returns a local `503` until the ejection expires.
+
 ## Tuning
 
 | Goal | Adjustment | Trade-off |
@@ -81,7 +93,7 @@ The three failure counters are independent — this mirrors Envoy's `splitExtern
 
 Recommended starting point for most production Services: `consecutiveErrors: 5`, `ejectionTime: 30s`, `maxEjectionPercent: 50` (the defaults). Tune from there using the metrics below.
 
-⚠️ **On very small pools** (1–2 endpoints), a low `maxEjectionPercent` can prevent ejection entirely — the cap is reached before a single endpoint is removed. Pair outlier detection with active health checks so unhealthy endpoints are still skipped during selection.
+⚠️ **On very small pools** (1–2 endpoints), `maxEjectionPercent` offers almost no protection — the cap is floored at one endpoint, so a single-endpoint Service can always be ejected no matter how low the non-zero percentage is. Keep the consecutive thresholds high enough for the rule's retry budget (see [Interaction with Retries](#interaction-with-retries)), and pair outlier detection with active health checks so unhealthy endpoints are still skipped during selection.
 
 ## Relationship with Health Checks
 

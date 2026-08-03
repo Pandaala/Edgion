@@ -275,6 +275,16 @@ pub trait PluginSession: Send + Sync {
         None
     }
 
+    /// Whether the downstream connection terminated TLS on this gateway.
+    ///
+    /// Read from the real connection state, not from a request header. `None`
+    /// means the state is unavailable; a security-relevant consumer must treat
+    /// that as "unknown" and fall back to its own safe default rather than
+    /// assuming plaintext.
+    fn downstream_is_tls(&self) -> Option<bool> {
+        None
+    }
+
     /// Get the discovered protocol type (e.g., "grpc", "grpc-web", "websocket", "http").
     /// Used by DSL `req.protocol`.
     fn discover_protocol(&self) -> String {

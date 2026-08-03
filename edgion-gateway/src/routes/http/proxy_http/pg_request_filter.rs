@@ -151,7 +151,7 @@ pub async fn request_filter(
             // Handle preflight request
             match edgion_http
                 .preflight_handler
-                .handle_preflight(session, ctx, cors_config.as_ref())
+                .handle_preflight(session, cors_config.as_ref())
                 .await
             {
                 Ok(true) => {

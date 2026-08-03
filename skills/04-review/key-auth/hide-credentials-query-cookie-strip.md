@@ -23,6 +23,12 @@ the doc over-promises" are **not accepted** — the gap was closed in
 `hide_credentials` has explicit `KeyGet::Query` / `KeyGet::Cookie` arms
 (`strip_query_param` / `strip_cookie`) before re-reporting.
 
+The two helpers now live in
+`edgion-gateway/src/plugins/http/common/auth_common.rs` and are shared with
+`jwt_auth`; their doc comments carry the decoded-vs-raw key asymmetry, the
+multi-line `Cookie` data-loss hazard, and the `set_request_header`
+replace-all-lines assumption that this entry records.
+
 ## Core Rationale
 
 **1. It was a silent failure of a declared security control.**
@@ -91,8 +97,9 @@ Re-open only if:
 ## Reference Cases
 
 - `fr-auth2-02` (2026-05-30) — Opus-confirmed P3 Security; fixed (code + doc).
-- Code: `edgion-gateway/src/plugins/http/key_auth/plugin.rs` — `hide_credentials`,
-  `strip_query_param`, `strip_cookie`; `PluginSession::set_request_query`
+- Code: `edgion-gateway/src/plugins/http/key_auth/plugin.rs` — `hide_credentials`;
+  `edgion-gateway/src/plugins/http/common/auth_common.rs` — `strip_query_param`,
+  `strip_cookie` (shared with `jwt_auth`); `PluginSession::set_request_query`
   (`runtime/traits/session.rs` + `runtime/session_adapter.rs`).
 - Docs: `docs/en/.../edgion-plugins/key-auth.md` &
   `docs/zh-CN/.../edgion-plugins/key-auth.md` "Behavior Details" now enumerate

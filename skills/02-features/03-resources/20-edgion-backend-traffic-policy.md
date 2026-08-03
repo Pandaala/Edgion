@@ -147,6 +147,17 @@ CRD YAML deliberately does **not** declare OpenAPI defaults for those three
 fields, since a naive schema default would short-circuit the cross-field
 resolution.
 
+The counting unit is the **upstream attempt**, not the client request: every
+completed upstream response is classified before route-level retry decides
+whether to retry it, so a rule with `retry.attempts: N` lets one client request
+contribute up to `N + 1` consecutive failures (all on the same endpoint when
+every attempt lands there, e.g. a single-endpoint Service). Thresholds must
+therefore be tuned above `attempts + 1` if a single request must not trip
+ejection. `maxEjectionPercent` does not backstop this on a single-endpoint
+Service — the guard floors at one ejectable endpoint
+(`outlier_detection/store.rs`, `max_ejectable.max(1)`). See
+`skills/04-review/routing/status-retry-outlier-detection-per-attempt.md`.
+
 ### retryConstraint
 
 > Design: `docs/superpowers/specs/2026-07-21-retry-budget-retryconstraint-design.md`

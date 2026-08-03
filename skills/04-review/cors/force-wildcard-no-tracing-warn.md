@@ -9,7 +9,7 @@ description: Use when reviewing CORS plugin findings that request `tracing::warn
 
 `Cors::from_arc` and `Cors::new` **must not** emit `tracing::warn!` for `allow_origins == "**"`, `allow_methods == "**"`, or `allow_headers == "**"`. The warning code was removed on 2026-05-16 because:
 
-1. `Cors::from_arc` is called per CORS preflight request from `preflight_handler.rs:62` — emitting `tracing::warn!` there violates the project-wide data-plane hot-path prohibition (`skills/03-coding/observability/`).
+1. At the time of the finding, `Cors::from_arc` was called per CORS preflight request; emitting `tracing::warn!` there violated the project-wide data-plane hot-path prohibition (`skills/03-coding/observability/`). Since `change-fix-01`, that ad-hoc preflight construction path no longer exists.
 2. `Cors::new` is called per `EdgionPlugins` preparse — moving the warn there would only downgrade per-request spam to per-reload spam without changing the underlying signal value.
 3. The `**` literal is an explicit operator choice; the CRD schema doc on `CorsConfig.allow_origins` / `allow_methods` / `allow_headers` already states the security implication, and `CorsConfig::validation_error` hard-rejects the `wildcard + allow_credentials = true` combination. Runtime tracing adds no information the operator does not already have at configuration time.
 
@@ -21,7 +21,7 @@ When a review reports patterns like:
 
 1. "`Cors::new` / `Cors::from_arc` warns on every hot reload — should be moved to `validate`/`preparse`"
 2. "Should add a `validation_warning` field to surface the `**` warning at first load only"
-3. "Per-request preflight emits `tracing::warn!` when `allow_origins = '**'`"
+3. "The CORS request path should emit `tracing::warn!` when `allow_origins = '**'`"
 
 → close as **fixed + design intent**. Verify before closing:
 

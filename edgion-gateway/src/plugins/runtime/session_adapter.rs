@@ -975,6 +975,14 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.request_info.client_cert_info.clone()
     }
 
+    fn downstream_is_tls(&self) -> Option<bool> {
+        // Same source as the session-persistence cookie `Secure` decision:
+        // the downstream digest carries an ssl_digest only for a connection
+        // that completed a TLS handshake on this listener. A missing digest is
+        // "unknown", not "plaintext".
+        self.inner.as_downstream().digest().map(|d| d.ssl_digest.is_some())
+    }
+
     fn ctx(&self) -> &EdgionHttpContext {
         self.ctx
     }

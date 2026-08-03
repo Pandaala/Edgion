@@ -92,8 +92,8 @@ pub struct PluginRuntime {
     /// Pre-resolved Arc to the first enabled `EdgionPlugin::Cors` config in
     /// `request_plugins`. Built once at preparse so the global CORS preflight
     /// handler (`pg_request_filter::extract_cors_config_from_route_filters`)
-    /// can return an Arc clone instead of deep-cloning the full `CorsConfig`
-    /// per OPTIONS preflight. Hot-reload semantics are preserved: every
+    /// can detect that the normal route plugin pipeline owns the preflight
+    /// response. Hot-reload semantics are preserved: every
     /// `EdgionPlugins` update rebuilds this runtime, producing a new Arc that
     /// the plugin store swaps in atomically.
     cors_config: Option<Arc<CorsConfig>>,
@@ -559,13 +559,12 @@ impl PluginRuntime {
                 }
 
                 // Cache the first enabled CORS config so the global preflight
-                // handler can fetch it without deep-cloning per request.
+                // handler can delegate to the normal route plugin pipeline.
                 // Initialize the `#[serde(skip)]` runtime fields (origins_cache /
                 // compiled_origins_regex / compiled_timing_regex) here: the
-                // preflight handler builds `Cors::from_arc` from this Arc and never
-                // re-initializes, so an uncompiled config would silently break
-                // regex / subdomain-wildcard / comma-separated origins on the
-                // preflight path. On failure keep the uncompiled (deny-safe) config.
+                // cached representation stays ready for any config inspection,
+                // even though the preflight handler currently uses only its
+                // presence. On failure keep the uncompiled (deny-safe) config.
                 if self.cors_config.is_none() {
                     if let EdgionPlugin::Cors(cfg) = &entry.plugin {
                         let mut cfg = cfg.clone();

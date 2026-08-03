@@ -32,9 +32,9 @@ fn path_redirect_uris_ignore_x_forwarded_host() {
     session.expect_header_value().returning(|name| match name {
         "host" => Some("api.example.com".to_string()),
         "x-forwarded-host" => Some("attacker.example".to_string()),
-        "x-forwarded-proto" => Some("https".to_string()),
         _ => None,
     });
+    session.expect_downstream_is_tls().returning(|| Some(true));
 
     assert_eq!(
         plugin.resolve_redirect_uri(&session).expect("resolve redirect URI"),
@@ -43,6 +43,75 @@ fn path_redirect_uris_ignore_x_forwarded_host() {
     assert_eq!(
         plugin.resolve_post_logout_redirect_uri_for_idp(&session),
         Some("https://api.example.com/after-logout".to_string())
+    );
+}
+
+#[test]
+fn path_redirect_uris_ignore_x_forwarded_proto() {
+    let mut cfg = base_config();
+    cfg.redirect_uri = Some("/oidc/callback".to_string());
+    cfg.post_logout_redirect_uri = Some("/after-logout".to_string());
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let mut session = MockPluginSession::new();
+
+    // Hostile downgrade attempt on a TLS listener: the scheme must come from
+    // the connection state, so the callback advertised to the IdP stays https.
+    session.expect_header_value().returning(|name| match name {
+        "host" => Some("api.example.com".to_string()),
+        "x-forwarded-proto" => Some("http".to_string()),
+        _ => None,
+    });
+    session.expect_downstream_is_tls().returning(|| Some(true));
+
+    assert_eq!(
+        plugin.resolve_redirect_uri(&session).expect("resolve redirect URI"),
+        "https://api.example.com/oidc/callback"
+    );
+    assert_eq!(
+        plugin.resolve_post_logout_redirect_uri_for_idp(&session),
+        Some("https://api.example.com/after-logout".to_string())
+    );
+}
+
+#[test]
+fn path_redirect_uris_fall_back_to_https_when_tls_state_unknown() {
+    let mut cfg = base_config();
+    cfg.redirect_uri = Some("/oidc/callback".to_string());
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let mut session = MockPluginSession::new();
+
+    session.expect_header_value().returning(|name| match name {
+        "host" => Some("api.example.com".to_string()),
+        "x-forwarded-proto" => Some("http".to_string()),
+        _ => None,
+    });
+    session.expect_downstream_is_tls().returning(|| None);
+
+    assert_eq!(
+        plugin.resolve_redirect_uri(&session).expect("resolve redirect URI"),
+        "https://api.example.com/oidc/callback"
+    );
+}
+
+#[test]
+fn path_redirect_uris_use_http_on_a_plaintext_listener() {
+    let mut cfg = base_config();
+    cfg.redirect_uri = Some("/oidc/callback".to_string());
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let mut session = MockPluginSession::new();
+
+    // A forged `X-Forwarded-Proto: https` cannot upgrade the advertised scheme
+    // either; deployments terminating TLS upstream must configure an absolute URL.
+    session.expect_header_value().returning(|name| match name {
+        "host" => Some("api.example.com".to_string()),
+        "x-forwarded-proto" => Some("https".to_string()),
+        _ => None,
+    });
+    session.expect_downstream_is_tls().returning(|| Some(false));
+
+    assert_eq!(
+        plugin.resolve_redirect_uri(&session).expect("resolve redirect URI"),
+        "http://api.example.com/oidc/callback"
     );
 }
 
@@ -125,11 +194,11 @@ async fn test_unauth_action_auth_without_token_redirects_to_idp() {
     session.expect_get_cookie().returning(|_| None);
     session.expect_header_value().returning(|name| match name {
         "authorization" => None,
-        "x-forwarded-proto" => Some("https".to_string()),
         "x-forwarded-host" => None,
         "host" => Some("api.example.com".to_string()),
         _ => None,
     });
+    session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_get_query().return_const(Some("x=1".to_string()));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
@@ -188,11 +257,11 @@ async fn test_unauth_action_auth_with_nonce_redirects_with_nonce_param() {
     session.expect_get_cookie().returning(|_| None);
     session.expect_header_value().returning(|name| match name {
         "authorization" => None,
-        "x-forwarded-proto" => Some("https".to_string()),
         "x-forwarded-host" => None,
         "host" => Some("api.example.com".to_string()),
         _ => None,
     });
+    session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_get_query().return_const(Some("x=1".to_string()));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
@@ -242,11 +311,11 @@ async fn test_authorization_params_appends_non_reserved_params() {
     session.expect_get_cookie().returning(|_| None);
     session.expect_header_value().returning(|name| match name {
         "authorization" => None,
-        "x-forwarded-proto" => Some("https".to_string()),
         "x-forwarded-host" => None,
         "host" => Some("api.example.com".to_string()),
         _ => None,
     });
+    session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_get_query().return_const(None);
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
@@ -303,10 +372,8 @@ async fn test_logout_path_clears_cookies_and_redirects() {
 
     session.expect_get_path().return_const("/auth/logout".to_string());
     session.expect_get_cookie().returning(|_| None);
-    session.expect_header_value().returning(|name| match name {
-        "x-forwarded-proto" => Some("https".to_string()),
-        _ => None,
-    });
+    session.expect_header_value().returning(|_| None);
+    session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
         let location = resp.headers.get("Location").and_then(|v| v.to_str().ok()).unwrap_or("");
@@ -355,11 +422,11 @@ async fn test_logout_prefers_end_session_endpoint_when_cached() {
     session.expect_get_path().return_const("/auth/logout".to_string());
     session.expect_get_cookie().returning(|_| None);
     session.expect_header_value().returning(|name| match name {
-        "x-forwarded-proto" => Some("https".to_string()),
         "x-forwarded-host" => None,
         "host" => Some("api.example.com".to_string()),
         _ => None,
     });
+    session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
         let location = resp.headers.get("Location").and_then(|v| v.to_str().ok()).unwrap_or("");
@@ -422,11 +489,11 @@ async fn test_logout_end_session_includes_id_token_hint_when_available() {
         }
     });
     session.expect_header_value().returning(|name| match name {
-        "x-forwarded-proto" => Some("https".to_string()),
         "x-forwarded-host" => None,
         "host" => Some("api.example.com".to_string()),
         _ => None,
     });
+    session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
         let location = resp.headers.get("Location").and_then(|v| v.to_str().ok()).unwrap_or("");
@@ -456,10 +523,8 @@ async fn test_logout_with_revoke_enabled_and_no_session_cookie_still_redirects()
 
     session.expect_get_path().return_const("/auth/logout".to_string());
     session.expect_get_cookie().returning(|_| None);
-    session.expect_header_value().returning(|name| match name {
-        "x-forwarded-proto" => Some("https".to_string()),
-        _ => None,
-    });
+    session.expect_header_value().returning(|_| None);
+    session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
         let location = resp.headers.get("Location").and_then(|v| v.to_str().ok()).unwrap_or("");

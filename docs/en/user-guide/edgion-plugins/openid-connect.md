@@ -44,11 +44,11 @@
 |-----------|------|---------|-------------|
 | `usePkce` | Boolean | `false` | Whether to enable PKCE (Proof Key for Code Exchange). **Strongly recommended `true` for production deployments** — see [Recommended Security Switches](#recommended-security-switches) |
 | `useNonce` | Boolean | `false` | Whether to include nonce in authorization requests. **Strongly recommended `true` for production deployments** — see [Recommended Security Switches](#recommended-security-switches) |
-| `redirectUri` | String | none | Custom callback URI, must be an absolute path or absolute URL. A path uses the request `Host`; `X-Forwarded-Host` is ignored. Use an absolute URL when the public origin differs |
+| `redirectUri` | String | none | Custom callback URI, must be an absolute path or absolute URL. A path uses the request `Host` plus the listener's real TLS state; `X-Forwarded-Host` and `X-Forwarded-Proto` are both ignored. Use an absolute URL when the public origin differs, including when TLS is terminated in front of the gateway |
 | `authorizationParams` | Object | none | Extra parameters appended to the authorization request (cannot contain reserved keys like `response_type`, `client_id`, etc.) |
 | `revokeTokensOnLogout` | Boolean | `false` | Whether to call the Token Revocation endpoint on logout |
 | `logoutPath` | String | `"/logout"` | Path that triggers logout, must start with `/` |
-| `postLogoutRedirectUri` | String | none | Redirect URI after logout. A path uses the request `Host`; `X-Forwarded-Host` is ignored. Use an absolute URL when the public origin differs |
+| `postLogoutRedirectUri` | String | none | Redirect URI after logout. A path uses the request `Host` plus the listener's real TLS state; `X-Forwarded-Host` and `X-Forwarded-Proto` are both ignored. Use an absolute URL when the public origin differs, including when TLS is terminated in front of the gateway |
 
 ### Session Parameters
 

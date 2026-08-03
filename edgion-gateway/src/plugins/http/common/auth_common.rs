@@ -14,10 +14,18 @@ use crate::plugins::runtime::PluginSession;
 /// Surviving pairs retain their original encoding, and only the query is
 /// rewritten so the upstream stage still controls raw-vs-normalized path
 /// forwarding.
+///
+/// The parameter name is compared against the percent-decoded key so the match
+/// mirrors how `KeyGet::Query` (`get_query_param`) extracted it. The
+/// `url_decode` call is load-bearing, not a redundant allocation: simplifying it
+/// to a raw string compare would silently stop hiding a credential sent as
+/// `api%5Fkey=...`. [`strip_cookie`] deliberately compares raw keys instead —
+/// each helper matches the extractor it undoes.
 pub fn strip_query_param(session: &mut dyn PluginSession, name: &str) {
     let Some(query) = session.get_query() else {
         return;
     };
+    let mut removed = false;
     let remaining: Vec<&str> = query
         .split('&')
         .filter(|pair| {
@@ -25,10 +33,15 @@ pub fn strip_query_param(session: &mut dyn PluginSession, name: &str) {
                 return false;
             }
             let raw_key = pair.split('=').next().unwrap_or("");
-            url_decode(raw_key) != name
+            let keep = url_decode(raw_key) != name;
+            removed |= !keep;
+            keep
         })
         .collect();
 
+    if !removed {
+        return;
+    }
     let new_query = remaining.join("&");
     let _ = session.set_request_query(&new_query);
 }
@@ -36,7 +49,19 @@ pub fn strip_query_param(session: &mut dyn PluginSession, name: &str) {
 /// Remove a named cookie from every forwarded `Cookie` header line.
 ///
 /// HTTP/2 may split cookies across multiple fields, so all lines are collected
-/// before the survivors are written back as one field.
+/// before the survivors are written back as one field — or the header is removed
+/// entirely if none survive. Re-serializing all lines into one avoids the data
+/// loss that a single-line read + replace-all write would cause when the request
+/// carries multiple `Cookie` fields.
+///
+/// Cookie-name matching is a raw key comparison on the trimmed `name=value`
+/// pair (split on the first `=`), mirroring `get_cookie`. The asymmetry with
+/// [`strip_query_param`] — decoded key there, raw key here — is deliberate:
+/// each side matches the extractor it undoes.
+///
+/// Assumes `PluginSession::set_request_header` has replace-all-lines semantics
+/// (today it does — the adapter routes it through `insert_header`). Were it to
+/// become append semantics, every surviving cookie would be duplicated.
 pub fn strip_cookie(session: &mut dyn PluginSession, name: &str) {
     let mut survivors: Vec<String> = Vec::new();
     let mut saw_cookie = false;
@@ -384,6 +409,15 @@ mod tests {
             .withf(|query| query.is_empty())
             .times(1)
             .returning(|_| Ok(()));
+
+        strip_query_param(&mut session, "api_key");
+    }
+
+    #[test]
+    fn strip_query_param_without_match_leaves_query_untouched() {
+        let mut session = MockPluginSession::new();
+        session.expect_get_query().return_const(Some("a=1&&b=2&".to_string()));
+        session.expect_set_request_query().times(0);
 
         strip_query_param(&mut session, "api_key");
     }

@@ -265,7 +265,7 @@ listener.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `mode` | `String` | `cors-standard` | `cors-standard`: intercept OPTIONS requests with `Origin` + `ACRM`; `all-options`: intercept all OPTIONS requests |
+| `mode` | `String` | `cors-standard` | `cors-standard`: select OPTIONS requests with `Origin` + `ACRM`; `all-options`: select all OPTIONS requests for global handling. A route CORS filter still decides whether to respond locally. See [Preflight Policy](../gateway/preflight-policy.md). |
 | `statusCode` | `Integer` | `204` | Preflight response status code when no CORS plugin is attached |
 
 ### spec.linkSys

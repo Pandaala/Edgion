@@ -14,6 +14,11 @@ Path-form `redirectUri` and `postLogoutRedirectUri` values are expanded with the
 
 Fix suggestions that restore unconditional `X-Forwarded-Host` precedence are **not accepted**.
 
+The scheme half of the same threat model is decided in
+[redirect-uri-scheme-from-connection-not-forwarded-proto.md](redirect-uri-scheme-from-connection-not-forwarded-proto.md):
+`request_scheme` derives `https`/`http` from the listener's real TLS state and ignores
+`X-Forwarded-Proto`. The two helpers must not diverge.
+
 ## Core Rationale
 
 **1. Forwarded host has no trust boundary**

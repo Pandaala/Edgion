@@ -237,7 +237,7 @@ parses sizes or takes a blocking lock.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `mode` | `String` | `cors-standard` | `cors-standard`: OPTIONS + Origin + ACRM; `all-options`: all OPTIONS requests |
+| `mode` | `String` | `cors-standard` | Global selection: `cors-standard` selects OPTIONS + Origin + ACRM; `all-options` selects all OPTIONS. A route CORS filter still decides local response ownership. |
 | `statusCode` | `u16` | `204` | Preflight response status code when no CORS plugin is present |
 
 ### spec.linkSys

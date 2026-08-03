@@ -44,11 +44,11 @@
 |------|------|--------|------|
 | `usePkce` | Boolean | `false` | 是否启用 PKCE（Proof Key for Code Exchange）。**生产部署强烈推荐 `true`**，详见[安全开关推荐配置](#安全开关推荐配置) |
 | `useNonce` | Boolean | `false` | 是否在认证请求中包含 nonce。**生产部署强烈推荐 `true`**，详见[安全开关推荐配置](#安全开关推荐配置) |
-| `redirectUri` | String | 无 | 自定义回调 URI，须为绝对路径或绝对 URL。路径形式使用请求的 `Host`，忽略 `X-Forwarded-Host`；当公开 origin 不同时请使用绝对 URL |
+| `redirectUri` | String | 无 | 自定义回调 URI，须为绝对路径或绝对 URL。路径形式使用请求的 `Host` 与监听器真实 TLS 状态，`X-Forwarded-Host` 与 `X-Forwarded-Proto` 均被忽略；当公开 origin 不同（含 TLS 在网关之前终止）时请使用绝对 URL |
 | `authorizationParams` | Object | 无 | 附加到授权请求的额外参数（不可包含保留键如 `response_type`、`client_id` 等） |
 | `revokeTokensOnLogout` | Boolean | `false` | 登出时是否调用 Token Revocation 端点 |
 | `logoutPath` | String | `"/logout"` | 触发登出的路径，须以 `/` 开头 |
-| `postLogoutRedirectUri` | String | 无 | 登出后重定向 URI。路径形式使用请求的 `Host`，忽略 `X-Forwarded-Host`；当公开 origin 不同时请使用绝对 URL |
+| `postLogoutRedirectUri` | String | 无 | 登出后重定向 URI。路径形式使用请求的 `Host` 与监听器真实 TLS 状态，`X-Forwarded-Host` 与 `X-Forwarded-Proto` 均被忽略；当公开 origin 不同（含 TLS 在网关之前终止）时请使用绝对 URL |
 
 ### Session 参数
 

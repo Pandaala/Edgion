@@ -67,9 +67,12 @@ bounded cold-path diagnostics and low-cardinality metrics.
 
 ## Hot-path observability and lifecycle
 
-Callout execution constructs its egress resolver in metric-only mode, avoiding
-indirect request-path warnings. URL and OCI resolution retain cold-path
-diagnostics.
+Callout execution resolves egress without emitting request-path warnings. This
+is now unconditional rather than a callsite choice: the opt-in metric-only
+constructor selected here was removed once every `EgressResolver` became
+tracing-free, reporting blocked addresses only through `record_egress_blocked` —
+see [../observability/gw-plugin-outbound-01-egress-resolver-tracing-removed.md](../observability/gw-plugin-outbound-01-egress-resolver-tracing-removed.md).
+URL and OCI module fetching retains its own cold-path diagnostics.
 
 Each Wasmtime engine owns a stoppable epoch ticker and joins it during drop.
 Failed or injected engine construction starts no ticker. Tests must retain
