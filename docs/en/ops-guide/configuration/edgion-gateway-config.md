@@ -119,7 +119,7 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `readTimeout` | `Duration` | `60s` | Timeout for reading a client request |
+| `readTimeout` | `Duration` | `60s` | Timeout for reading a client request, including each request-body chunk on both HTTP/1 and HTTP/2. The timer resets on every received chunk, so a stalled upload is released while a progressing one is never limited in overall duration. Note: this also bounds gRPC client-streaming/bidi requests — raise it if clients legitimately idle longer between messages |
 | `writeTimeout` | `Duration` | `60s` | Timeout for writing a response to the client |
 | `keepaliveTimeout` | `Duration` | `75s` | HTTP keepalive idle timeout |
 

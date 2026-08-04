@@ -114,7 +114,7 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `readTimeout` | `Duration` | `60s` | 读取客户端请求的超时时间 |
+| `readTimeout` | `Duration` | `60s` | 读取客户端请求的超时时间，覆盖 HTTP/1 与 HTTP/2 的每个请求体分块读取。计时器在每次收到分块后重置：停滞的上传会被释放，持续推进的上传不受总时长限制。注意：gRPC client-streaming/bidi 请求同样受此约束——若客户端消息间隔较长，请调大该值 |
 | `writeTimeout` | `Duration` | `60s` | 写入客户端响应的超时时间 |
 | `keepaliveTimeout` | `Duration` | `75s` | HTTP keepalive 连接空闲超时 |
 
