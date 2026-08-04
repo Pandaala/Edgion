@@ -42,7 +42,8 @@ metrics:
 
 | 信号 | 含义 |
 |------|------|
-| HTTPRoute `Accepted=False/UnsupportedValue` | AI 挂载无效、后端 kind 混用、不支持的 backend Filter，或重试次数过多 |
+| HTTPRoute `Accepted=False/UnsupportedValue` | AI 挂载无效、后端 kind 混用、不支持的 backend Filter，或重试次数过多，**且该 route 已无任何 rule 在服务**（见 [AI 规则拒绝](resilience.md#ai-规则拒绝)） |
+| HTTPRoute `PartiallyInvalid=True/RuleInvalid` | 同样的 AI 挂载错误，但该 route 仍有其他 rule 在服务；消息中会给出 `(N of M rules active)` |
 | HTTPRoute `ResolvedRefs=False` | 缺失、未授权或不支持的 backendRef |
 | EdgionAIService `Accepted=False/Invalid` | Endpoint、池、模型或默认值无效 |
 | EdgionAIService `ResolvedRefs=False` | 没有可用凭据 |

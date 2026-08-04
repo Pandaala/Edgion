@@ -45,7 +45,8 @@ Details: [Metrics](../ops-guide/observability/metrics.md) ·
 
 | Signal | Meaning |
 |--------|---------|
-| HTTPRoute `Accepted=False/UnsupportedValue` | Invalid AI attachment, mixed backend kinds, unsupported backend filters, or too many retries |
+| HTTPRoute `Accepted=False/UnsupportedValue` | Invalid AI attachment, mixed backend kinds, unsupported backend filters, or too many retries — **and no rule of the route serves any more** (see [AI rule rejection](resilience.md#ai-rule-rejection)) |
+| HTTPRoute `PartiallyInvalid=True/RuleInvalid` | The same AI attachment errors, but other rules of the route still serve; the message reports `(N of M rules active)` |
 | HTTPRoute `ResolvedRefs=False` | Missing, unauthorized, or unsupported backendRef |
 | EdgionAIService `Accepted=False/Invalid` | Invalid endpoint, pool, model, or default |
 | EdgionAIService `ResolvedRefs=False` | Zero usable credentials |

@@ -45,7 +45,7 @@ control plane:
 |-----------|---------|
 | **Accepted** | Resource is syntactically/semantically valid and accepted by the Controller |
 | **ResolvedRefs** | All references to other objects (Secrets, Services, etc.) are resolved |
-| **PartiallyInvalid** | Some rules in the route have invalid backend refs but other rules are valid (HTTPRoute/GRPCRoute only) |
+| **PartiallyInvalid** | Part of a partially-resolvable collection is invalid while the rest stays usable. Not route-exclusive: route rules with invalid backend refs, inline CIDR / IpList entries, an EdgionAIService credential pool with unresolved credentials — see [§4.2](#partiallyinvalid-on-non-route-resources) |
 | **Conflicted** | Listener or policy conflicts detected by the Controller |
 | **Programmed** | Gateway/Gateway Listener processing state derived by the Gateway handler |
 
@@ -166,6 +166,58 @@ need to know why the rule is invalid — it simply trusts the Controller's decis
 in `validate()`. They belong in `update_status()` only, via `resolved_refs_errors` and
 `find_invalid_rule_indices()`. Putting them in `validate()` would cause the entire route
 to be Accepted: False even when only some rules have bad backends.
+
+#### PartiallyInvalid on non-route resources
+
+`PartiallyInvalid` is not route-exclusive: any resource whose spec holds a collection that
+can be *partially* resolved may report it. `invalid_rule_indices` is the route-specific
+carrier, not part of the condition's contract — a non-route resource sets the condition
+without one, and reaches it through the shared
+`status_utils::partially_invalid_condition(entry_message, generation)` helper
+(`Some(msg)` → True/`RuleInvalid`, `None` → False/`AllRulesValid`).
+
+One documented reason outside that helper: `HTTPRoute::update_status` builds its
+`PartiallyInvalid` inline, and when an AI attachment/retry-cap violation already rejected
+the whole route (`Accepted=False/UnsupportedValue`) it clears a stale True to
+False/`UnsupportedValue` instead of False/`AllRulesValid` — the generic "all rules are
+valid" wording would contradict the `Accepted=False` beside it. See
+`skills/04-review/routing/ai-rule-accepted-escalates-only-when-nothing-serves.md`.
+
+Flat-status resources already using that helper: `EdgionPlugins` and `EdgionStreamPlugins`
+(bad inline IpRestriction / GlobalConnectionIpRestriction profile CIDR entries) and
+`EdgionConfigData` (bad IpList entries) — all three from `update_status()`, all with the
+shared `RuleInvalid` reason.
+
+**`EdgionAIService` differs on two axes** and is the reference case for both:
+
+1. **Resource-specific reason.** It is the first emitter to use its own reason,
+   `InvalidCredentials` (`status_utils.rs`), instead of the shared `RuleInvalid`.
+2. **Emitted from `parse()`, not `update_status()`.** Credential resolution is `async`, so
+   the `ResolvedRefs` + `PartiallyInvalid` pair is written in `parse()`; `update_status()`
+   handles only `Accepted`. This is the sole handler where that split applies — do not copy
+   it for a resource whose reference checks can run synchronously, where the
+   `update_status()` rule above still holds.
+
+It sets `PartiallyInvalid=True` when `resolved_count > 0` and at least one provider
+credential failed to resolve. The message is
+`Omitted credentials (N): <alias>(<reason>), …`, where `<alias>` is the credential name
+passed through `bounded_status_alias` — substituted with `credential[<index>]` when the name
+is empty, over `AI_CREDENTIAL_ALIAS_MAX_BYTES`, or not restricted-charset, so a malformed
+name cannot corrupt the status. That sanitizer is defense-in-depth for the lenient-admission
+path: `validate()` already rejects such names, but it is advisory — `parse()` runs on a
+resource with validation errors, so the substitution branch is reachable. Note it bounds each
+*alias*, not the *number* of entries (one per failed credential). Otherwise it falls back to
+`partially_invalid_condition(None, ..)` and the outcome is carried by `ResolvedRefs`:
+
+| Scenario | ResolvedRefs | PartiallyInvalid |
+|----------|--------------|------------------|
+| All credentials resolved | True | False (`AllRulesValid`) |
+| Some resolved, some failed | True | True (`InvalidCredentials`) |
+| None resolved | False | False (`AllRulesValid`) |
+
+New resources may follow this precedent, but they still draw from the fixed condition
+vocabulary — a partially-resolvable collection is a reason to reuse `PartiallyInvalid`, not
+to invent a new condition type.
 
 ### 4.3 Gateway (hybrid: gateway-level + per-listener)
 

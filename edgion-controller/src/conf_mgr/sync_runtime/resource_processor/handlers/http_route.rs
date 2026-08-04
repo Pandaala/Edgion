@@ -608,16 +608,25 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
 
-        let mut validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
-        for (index, rule) in route.spec.rules.iter().flatten().enumerate() {
-            if let Some(message) = ai_rule_invalid_reason(rule, route_ns, |namespace, name| {
-                enabled_ai_proxy_count(_ctx.runtime(), namespace, name)
-            }) {
-                validation_accepted_errors.push(AcceptedError::UnsupportedValue {
-                    message: format!("rules[{index}]: {message}"),
-                });
-            }
-        }
+        // AI attachment / retry-cap violations are per-rule findings, like a
+        // rewrite/redirect conflict: they drop just that rule via
+        // `invalid_rule_indices` + PartiallyInvalid. They are lifted to a
+        // route-level Accepted=False only when no rule is left to serve for this
+        // parent (`ai_rejects_route` below). Emitting both would advertise
+        // "N of M rules active" while the gateway drops the entire route.
+        let ai_invalid_rules: Vec<(usize, String)> = route
+            .spec
+            .rules
+            .iter()
+            .flatten()
+            .enumerate()
+            .filter_map(|(index, rule)| {
+                ai_rule_invalid_reason(rule, route_ns, |namespace, name| {
+                    enabled_ai_proxy_count(_ctx.runtime(), namespace, name)
+                })
+                .map(|message| (index, message))
+            })
+            .collect();
 
         let mut resolved_refs_errors = validate_http_backend_refs(route, route_ns, _ctx.runtime());
         let ref_denied_list = collect_ref_denied_list(route);
@@ -656,6 +665,25 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             Some(invalid_indices.clone())
         };
 
+        // Nothing is left to serve for this parent when no rule survives: with
+        // delegation the gateway compiles `resolved_rules` verbatim (already
+        // pre-filtered during parse), otherwise it compiles `spec.rules` minus
+        // `invalid_rule_indices`.
+        let serves_no_rule = match &route.spec.resolved_rules {
+            Some(resolved) => resolved.is_empty(),
+            None => valid_rules == 0,
+        };
+        let ai_rejects_route = !ai_invalid_rules.is_empty() && serves_no_rule;
+
+        let mut validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
+        if ai_rejects_route {
+            for (index, message) in &ai_invalid_rules {
+                validation_accepted_errors.push(AcceptedError::UnsupportedValue {
+                    message: format!("rules[{index}]: {message}"),
+                });
+            }
+        }
+
         let status = route.status.get_or_insert_with(|| HTTPRouteStatus { parents: vec![] });
         let route_hostnames = route.spec.hostnames.as_ref();
 
@@ -682,6 +710,12 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 // Per Gateway API spec, Accepted reflects whether the Gateway accepts
                 // the route at all; flipping it to False would drop the entire route
                 // from the data-plane route table.
+                //
+                // The single exception is `ai_rejects_route`: an AI violation that
+                // leaves no rule serving at all. There the whole-route drop is the
+                // intended outcome (AI-3), so Accepted=False carries the reasons and
+                // PartiallyInvalid is never set True below (an earlier True is
+                // cleared to False).
 
                 let conditions = if let Some(ps) = status.parents.iter_mut().find(|ps| {
                     ps.parent_ref.name == parent_ref.name
@@ -708,9 +742,11 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
 
                 // Set PartiallyInvalid condition (own-rule findings plus
                 // delegation drops — a dropped delegated rule never flips
-                // Accepted, matching the per-rule precedent above).
+                // Accepted, matching the per-rule precedent above). Skipped when
+                // `ai_rejects_route` already rejected the whole route: a route
+                // that serves nothing must not also claim rules are active.
                 let own_invalid = !invalid_indices.is_empty() && valid_rules > 0;
-                if own_invalid || !delegation_dropped.is_empty() {
+                if !ai_rejects_route && (own_invalid || !delegation_dropped.is_empty()) {
                     let mut reasons: Vec<String> = Vec::new();
                     if own_invalid {
                         reasons.extend(invalid_details.iter().map(|(i, r)| format!("rules[{i}]: {r}")));
@@ -730,14 +766,20 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                         ),
                     );
                 } else if conditions.iter().any(|c| c.type_ == condition_types::PARTIALLY_INVALID) {
+                    // Clear a stale True. A route rejected wholesale must not be
+                    // cleared with the generic "all rules are valid" wording —
+                    // that would contradict the Accepted=False sitting next to it.
+                    let (reason, message) = if ai_rejects_route {
+                        (
+                            condition_reasons::UNSUPPORTED_VALUE,
+                            "Route not accepted; no rule is active",
+                        )
+                    } else {
+                        (condition_reasons::ALL_RULES_VALID, "All rules are valid")
+                    };
                     update_condition(
                         conditions,
-                        condition_false(
-                            condition_types::PARTIALLY_INVALID,
-                            condition_reasons::ALL_RULES_VALID,
-                            "All rules are valid",
-                            generation,
-                        ),
+                        condition_false(condition_types::PARTIALLY_INVALID, reason, message, generation),
                     );
                 }
             }
@@ -1230,6 +1272,143 @@ spec:
 
     fn indices_only(details: Vec<(usize, String)>) -> Vec<usize> {
         details.into_iter().map(|(i, _)| i).collect()
+    }
+
+    /// Build a route whose first rule is an AI rule violating the retry cap,
+    /// optionally followed by a plain Service rule that stays valid.
+    fn route_with_bad_ai_rule(with_valid_second_rule: bool) -> HTTPRoute {
+        let second_rule = if with_valid_second_rule {
+            r#"
+    - backendRefs:
+        - name: web
+          port: 80
+"#
+        } else {
+            ""
+        };
+        let yaml = format!(
+            r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r1
+  namespace: default
+spec:
+  parentRefs:
+    - name: gw
+  rules:
+    - backendRefs:
+        - group: edgion.io
+          kind: EdgionAIService
+          name: chat
+      retry:
+        attempts: 8
+{second_rule}"#
+        );
+        serde_yaml::from_str(&yaml).expect("HTTPRoute yaml must parse")
+    }
+
+    #[test]
+    fn ai_invalid_rule_stays_partially_invalid_when_other_rules_survive() {
+        // Contract: an AI violation is a per-rule finding. While any rule still
+        // serves, it must NOT be lifted into the route-level Accepted error —
+        // otherwise the gateway drops the whole route (filter_accepted_parent_refs)
+        // while PartiallyInvalid simultaneously claims "N of M rules active".
+        let mut route = route_with_bad_ai_rule(true);
+        HttpRouteHandler::default().update_status(&mut route, &make_ctx(), &[]);
+
+        let conds = &route.status.as_ref().expect("status").parents[0].conditions;
+        // The parent Gateway 'gw' is absent from the test runtime, so Accepted is
+        // False for NoMatchingParent regardless; what matters is that the AI
+        // reason was not merged into it.
+        let accepted = conds.iter().find(|c| c.type_ == "Accepted").expect("Accepted set");
+        assert!(
+            !accepted.message.contains("retry.attempts"),
+            "a bad AI rule must not reject the whole route while other rules serve; got: {accepted:?}"
+        );
+
+        let partial = conds
+            .iter()
+            .find(|c| c.type_ == "PartiallyInvalid")
+            .expect("PartiallyInvalid set");
+        assert_eq!(partial.status, "True");
+        assert_eq!(partial.reason, "RuleInvalid");
+        assert!(
+            partial.message.contains("(1 of 2 rules active)"),
+            "PartiallyInvalid must report the surviving rule count; got: {partial:?}"
+        );
+        assert_eq!(
+            route.spec.invalid_rule_indices.as_deref(),
+            Some(&[0usize][..]),
+            "only the AI rule is dropped from the data plane"
+        );
+    }
+
+    #[test]
+    fn ai_invalid_rule_rejects_route_only_when_nothing_serves() {
+        // Contract: when the AI violation leaves no rule serving, the whole-route
+        // rejection is the intended outcome (AI-3) — Accepted=False carries the
+        // per-rule reason and PartiallyInvalid stays silent, so the two conditions
+        // never contradict each other.
+        let mut route = route_with_bad_ai_rule(false);
+        HttpRouteHandler::default().update_status(&mut route, &make_ctx(), &[]);
+
+        let conds = &route.status.as_ref().expect("status").parents[0].conditions;
+        let accepted = conds.iter().find(|c| c.type_ == "Accepted").expect("Accepted set");
+        assert_eq!(accepted.status, "False");
+        assert!(
+            accepted.message.contains("rules[0]") && accepted.message.contains("retry.attempts"),
+            "Accepted message must carry the per-rule AI reason; got: {accepted:?}"
+        );
+        assert!(
+            conds
+                .iter()
+                .find(|c| c.type_ == "PartiallyInvalid")
+                .is_none_or(|c| c.status == "False"),
+            "a route that serves nothing must not also advertise active rules; got: {conds:?}"
+        );
+    }
+
+    #[test]
+    fn ai_escalation_clears_a_stale_partially_invalid_with_an_accurate_reason() {
+        // Reconcile transition: the route starts mixed (PartiallyInvalid=True),
+        // then the operator deletes the surviving rule. The stale True must be
+        // cleared, and not with the generic "all rules are valid" wording — that
+        // would contradict the Accepted=False now sitting beside it.
+        let handler = HttpRouteHandler::default();
+        let ctx = make_ctx();
+
+        let mut route = route_with_bad_ai_rule(true);
+        handler.update_status(&mut route, &ctx, &[]);
+        assert_eq!(
+            route.status.as_ref().expect("status").parents[0]
+                .conditions
+                .iter()
+                .find(|c| c.type_ == "PartiallyInvalid")
+                .expect("PartiallyInvalid set on the mixed route")
+                .status,
+            "True",
+            "precondition: the mixed route must be PartiallyInvalid"
+        );
+
+        // Drop the surviving rule, keeping the status from the previous reconcile.
+        route.spec.rules.as_mut().expect("rules").truncate(1);
+        handler.update_status(&mut route, &ctx, &[]);
+
+        let conds = &route.status.as_ref().expect("status").parents[0].conditions;
+        let partial = conds
+            .iter()
+            .find(|c| c.type_ == "PartiallyInvalid")
+            .expect("stale PartiallyInvalid must still be present, cleared to False");
+        assert_eq!(partial.status, "False");
+        assert_eq!(partial.reason, "UnsupportedValue");
+        assert_eq!(partial.message, "Route not accepted; no rule is active");
+
+        let accepted = conds.iter().find(|c| c.type_ == "Accepted").expect("Accepted set");
+        assert!(
+            accepted.message.contains("retry.attempts"),
+            "the escalation must carry the AI reason; got: {accepted:?}"
+        );
     }
 
     fn ai_rule(backends: serde_json::Value, filters: serde_json::Value) -> HTTPRouteRule {

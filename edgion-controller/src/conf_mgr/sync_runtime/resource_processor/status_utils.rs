@@ -82,7 +82,10 @@ pub mod condition_reasons {
     pub const INVALID: &str = "Invalid";
     /// TLS listener mode is not supported (e.g. Mixed mode for TLSRoute)
     pub const UNSUPPORTED_TLS_MODE: &str = "UnsupportedTLSMode";
-    /// Listener field value is not supported by the current implementation.
+    /// A field value is not supported by the current implementation. Used on
+    /// `Accepted` (listener fields, and HTTPRoute AI attachment / retry-cap
+    /// violations that reject the whole route) and, on the same HTTPRoute path,
+    /// to clear a stale `PartiallyInvalid=True` once the route serves nothing.
     pub const UNSUPPORTED_VALUE: &str = "UnsupportedValue";
     /// HTTPS/TLS listener missing tls block or certificateRefs
     pub const INVALID_TLS_CONFIGURATION: &str = "InvalidTLSConfiguration";

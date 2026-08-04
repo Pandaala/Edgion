@@ -414,9 +414,7 @@ impl HTTPBackendRef {
     /// extension groups/kinds.
     pub fn backend_kind(&self) -> HTTPBackendRefKind {
         match (self.group.as_deref(), self.kind.as_deref()) {
-            (None | Some("") | Some("core"), kind) if is_service_family_kind(kind) => {
-                HTTPBackendRefKind::Service
-            }
+            (None | Some("") | Some("core"), kind) if is_service_family_kind(kind) => HTTPBackendRefKind::Service,
             (Some(EDGION_API_GROUP), Some("EdgionAIService")) => HTTPBackendRefKind::EdgionAIService,
             (Some(GATEWAY_API_GROUP), Some("HTTPRoute")) => HTTPBackendRefKind::RouteDelegation,
             _ => HTTPBackendRefKind::Unsupported,

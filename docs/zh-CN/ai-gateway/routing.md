@@ -28,7 +28,8 @@ AiProxy 没有 `aiServiceRef`、提供商列表、后端权重或重试次数。
 | `LowestUsage` | 选择近期计费 token 用量除以 Route 权重后最低者 |
 | `CostWeighted` | 按 Route 权重和请求估算成本的平方反比选择 |
 
-`CostWeighted` 要求每个原本符合条件的候选都有输入/输出价格与输出 token 上限。缺失值会
+`CostWeighted` 要求每个原本符合条件的候选都有输入/输出价格与输出 token 上限。该上限取自请求的
+`max_completion_tokens` 或旧字段 `max_tokens`，缺失时回退到 `defaults.maxOutputTokens`。缺失值会
 fail-close，而不是静默移除该候选。
 
 ```yaml

@@ -30,7 +30,9 @@ logical model:
 | `CostWeighted` | Chooses by route weight and inverse-square estimated request cost |
 
 `CostWeighted` requires input/output pricing and an output-token bound for every otherwise eligible
-candidate. Missing values fail closed instead of silently removing that candidate.
+candidate. The bound comes from the request — `max_completion_tokens`, or legacy `max_tokens` —
+and falls back to `defaults.maxOutputTokens`. Missing values fail closed instead of silently
+removing that candidate.
 
 ```yaml
 apiVersion: edgion.io/v1

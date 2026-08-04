@@ -768,8 +768,20 @@ impl StreamingResponseProcessor for AiAttemptResponseProcessor {
     }
 }
 
+/// Reads the client-declared output-token bound from a canonical OpenAI body.
+/// Current OpenAI clients send `max_completion_tokens`; `max_tokens` is the
+/// deprecated spelling and only serves as a fallback. Every consumer of the
+/// request-declared bound must resolve it through this helper so cost ranking
+/// and quota accounting never disagree about what the client asked for.
+fn request_output_bound(value: &Value) -> Option<u64> {
+    value
+        .get("max_completion_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| value.get("max_tokens").and_then(Value::as_u64))
+}
+
 fn request_max_tokens(body: &[u8]) -> Option<u64> {
-    serde_json::from_slice::<Value>(body).ok()?.get("max_tokens")?.as_u64()
+    request_output_bound(&serde_json::from_slice::<Value>(body).ok()?)
 }
 
 fn effective_max_output_tokens(body: &[u8], service_max: Option<u32>) -> Result<u64, AiDispatchError> {
@@ -779,8 +791,7 @@ fn effective_max_output_tokens(body: &[u8], service_max: Option<u32>) -> Result<
     if max_tokens.is_some() && max_completion_tokens.is_some() && max_tokens != max_completion_tokens {
         return Err(AiDispatchError::InvalidConfiguration);
     }
-    let request_max = max_completion_tokens.or(max_tokens);
-    Ok(match (request_max, service_max.map(u64::from)) {
+    Ok(match (request_output_bound(&value), service_max.map(u64::from)) {
         (Some(request), _) => request,
         (None, Some(service)) => service,
         (None, None) => 0,
@@ -913,6 +924,60 @@ mod tests {
         let body: Value = serde_json::from_slice(&translated.body).unwrap();
         assert_eq!(body["model"], "claude-provider");
         assert_eq!(body["max_tokens"], 256);
+    }
+
+    #[test]
+    fn request_max_tokens_prefers_max_completion_tokens() {
+        assert_eq!(request_max_tokens(br#"{"max_completion_tokens":128}"#), Some(128));
+        assert_eq!(request_max_tokens(br#"{"max_tokens":64}"#), Some(64));
+        // The deprecated spelling never wins over the current one.
+        assert_eq!(
+            request_max_tokens(br#"{"max_tokens":64,"max_completion_tokens":128}"#),
+            Some(128)
+        );
+        assert_eq!(request_max_tokens(br#"{"model":"logical"}"#), None);
+        assert_eq!(request_max_tokens(b"not json"), None);
+    }
+
+    #[test]
+    fn cost_weighted_accepts_max_completion_tokens_only_body_without_service_max() {
+        let priced = |slot: u8, output_price: u64| RouteCandidate {
+            slot,
+            order: slot,
+            weight: 1,
+            eligibility: CandidateEligibility {
+                valid_ref: true,
+                model_compatible: true,
+                runtime_available: true,
+                untried: true,
+            },
+            adaptive: crate::ai::routing::AdaptiveSnapshot::default(),
+            cost: Some(CostSnapshot {
+                input_price_micro_usd_per_million: 1_000_000,
+                output_price_micro_usd_per_million: output_price,
+                // No `defaults.maxOutputTokens`: the request bound is the only input.
+                service_max_output_tokens: None,
+            }),
+        };
+        let candidates = [priced(0, 8_000_000), priced(1, 1_000_000)];
+        let picker = |body: &[u8]| {
+            pick(
+                PickerInput {
+                    candidates: &candidates,
+                    entropy: 0,
+                    selection_sequence: 0,
+                    input_tokens: 16,
+                    request_max_output_tokens: request_max_tokens(body),
+                },
+                AiBackendSelection::CostWeighted,
+            )
+        };
+        // Before the shared parser this body produced MissingCostInput -> HTML 500.
+        assert!(picker(br#"{"model":"logical","max_completion_tokens":1024}"#).is_ok());
+        assert_eq!(
+            picker(br#"{"model":"logical"}"#),
+            Err(crate::ai::routing::PickerError::MissingCostInput)
+        );
     }
 
     #[test]

@@ -7,8 +7,31 @@ destination controls.
 ## Shared attempt ceiling
 
 `HTTPRoute.retry.attempts` means retries, so total attempts are `1 + attempts`. Edgion supports at
-most **seven retries / eight total attempts**. A route above that becomes `Accepted=False` with
-`UnsupportedValue`. Route retry, provider failover, and credential rotation share this one ceiling.
+most **seven retries / eight total attempts**. A rule above that ceiling is rejected and dropped
+from the data plane; see [AI rule rejection](#ai-rule-rejection) for which status condition
+reports it. Route retry, provider failover, and credential rotation share this one ceiling.
+
+## AI rule rejection
+
+AI attachment errors — an over-cap `retry.attempts`, mixed backend kinds, a missing or duplicate
+`AiProxy`, or an unsupported backendRef filter — are **per-rule** findings. The offending rule is
+always dropped from the data plane; the status condition depends on what is left:
+
+| Situation | Conditions on the affected `parentRef` |
+|-----------|----------------------------------------|
+| Some rules of the HTTPRoute still serve | `Accepted=True`, `PartiallyInvalid=True/RuleInvalid` with `rules[i]: <reason> (N of M rules active)` |
+| No rule of the HTTPRoute serves any more | `Accepted=False/UnsupportedValue` listing every `rules[i]: <reason>`; `PartiallyInvalid` is never `True` (an earlier `True` is cleared to `False`) |
+
+`Accepted=False` removes the whole route from the gateway route table for that parent, so it is
+reserved for the case where nothing would serve anyway. A route that mixes a bad AI rule with
+valid non-AI rules keeps serving those rules.
+
+**Delegation exception.** The escalation only considers the route's own `spec.rules`. An AI
+violation inside a *delegated child* rule is dropped during flattening and always reported as
+`PartiallyInvalid=True` — it never sets `Accepted=False`, matching the general rule that a dropped
+delegated rule does not reject its parent. If that drop leaves the parent with no rule at all, the
+parent stops serving while `Accepted` stays `True`; read the `PartiallyInvalid` message for the
+`resolvedRules[i]: <reason>` entries.
 
 ## Credential-first rounds
 

@@ -6,8 +6,27 @@ AI 弹性由 HTTPRoute 重试许可、每个 EdgionAIService 内的凭据优先�
 ## 共享尝试上限
 
 `HTTPRoute.retry.attempts` 表示重试次数，因此总尝试次数为 `1 + attempts`。Edgion 最多支持
-**7 次重试 / 8 次总尝试**。超过该上限的 Route 会变为 `Accepted=False`，原因为
-`UnsupportedValue`。Route 重试、提供商故障切换与凭据轮转共用这一上限。
+**7 次重试 / 8 次总尝试**。超过该上限的 rule 会被拒绝并从数据面丢弃；具体上报哪个状态条件见
+[AI 规则拒绝](#ai-规则拒绝)。Route 重试、提供商故障切换与凭据轮转共用这一上限。
+
+## AI 规则拒绝
+
+AI 挂载错误——`retry.attempts` 超限、后端 kind 混用、`AiProxy` 缺失或重复、不支持的 backendRef
+Filter——都是**规则级**（per-rule）问题。出问题的 rule 一定会从数据面丢弃；上报哪个状态条件取决于
+还剩下什么：
+
+| 情形 | 受影响 `parentRef` 上的条件 |
+|------|------------------------------|
+| HTTPRoute 仍有 rule 在服务 | `Accepted=True`，`PartiallyInvalid=True/RuleInvalid`，消息为 `rules[i]: <原因> (N of M rules active)` |
+| HTTPRoute 已没有任何 rule 在服务 | `Accepted=False/UnsupportedValue`，列出每条 `rules[i]: <原因>`；`PartiallyInvalid` 不会为 `True`（之前的 `True` 会被清成 `False`） |
+
+`Accepted=False` 会把整条 route 从该 parent 的网关路由表中移除，因此它只用于「反正也没有任何 rule
+会服务」的情况。一条同时包含坏 AI rule 和正常非 AI rule 的 route，那些正常 rule 会继续服务。
+
+**委派例外**：升级判断只看 route 自身的 `spec.rules`。位于**被委派子路由**规则中的 AI 违规会在
+展平阶段被丢弃，并且始终以 `PartiallyInvalid=True` 上报，不会触发 `Accepted=False`——这与「被丢弃的
+委派规则不拒绝其父路由」的通用规则一致。若该丢弃导致父路由一条 rule 都不剩，父路由会停止服务而
+`Accepted` 仍为 `True`；此时请读 `PartiallyInvalid` 消息中的 `resolvedRules[i]: <原因>` 条目。
 
 ## 凭据优先轮次
 
