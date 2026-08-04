@@ -1,7 +1,9 @@
 use super::config::OutlierDetectionResolved;
+#[cfg(test)]
+use super::state::ejection_duration;
+use super::state::{FailureClass, FailureTransition, PassiveEjectionState};
 use dashmap::DashMap;
 use std::sync::{Arc, LazyLock};
-use std::time::Instant;
 
 static OD_STORE: LazyLock<Arc<OutlierDetectionStore>> = LazyLock::new(|| Arc::new(OutlierDetectionStore::new()));
 
@@ -9,68 +11,9 @@ pub fn get_outlier_detection_store() -> Arc<OutlierDetectionStore> {
     OD_STORE.clone()
 }
 
-/// Classification of a recorded backend failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FailureClass {
-    /// Upstream-origin gateway failure: the backend was reachable and returned an
-    /// HTTP 502/503/504. The node is online but is itself signalling unavailability.
-    Gateway,
-    /// Application 5xx (any >=500 that is not 502/503/504). The request failed,
-    /// not necessarily the node.
-    Application,
-    /// Local-origin (data-plane side) failure: connect failure / connect timeout,
-    /// TLS handshake timeout, transport reset, or a mid-proxy read/write error. The
-    /// gateway never got a usable HTTP response — almost always the node cannot serve.
-    LocalOrigin,
-}
-
-impl FailureClass {
-    /// Classify an HTTP upstream status. Returns `None` for a non-failure (<500),
-    /// which the caller records as a success. Note this path only ever yields
-    /// `Gateway` or `Application` — `LocalOrigin` failures never carry an HTTP
-    /// status and are recorded directly by the connect/proxy-error call sites.
-    #[inline]
-    pub fn from_http_status(status: u16) -> Option<FailureClass> {
-        if status < 500 {
-            return None;
-        }
-        Some(match status {
-            502..=504 => FailureClass::Gateway,
-            _ => FailureClass::Application,
-        })
-    }
-
-    /// Stable, low-cardinality label for the `class` dimension of the ejection
-    /// metric. Bounded to three values so it cannot explode metric cardinality.
-    #[inline]
-    pub fn metric_label(self) -> &'static str {
-        match self {
-            FailureClass::Gateway => "gateway",
-            FailureClass::Application => "application",
-            FailureClass::LocalOrigin => "local_origin",
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-struct EndpointState {
-    /// Consecutive application-5xx since the last success.
-    app_failures: u32,
-    /// Consecutive upstream-origin gateway failures (502/503/504) since the last success.
-    gateway_failures: u32,
-    /// Consecutive local-origin failures (connect/TLS/transport/proxy errors) since
-    /// the last success.
-    local_origin_failures: u32,
-    /// Set while the endpoint is ejected; the instant ejection began.
-    ejected_at: Option<Instant>,
-    /// Number of times this endpoint has been ejected. Drives backoff. Persists
-    /// across recovery/success; cleared only when the entry is removed.
-    num_ejections: u32,
-}
-
 struct ServiceCbState {
     config: OutlierDetectionResolved,
-    endpoints: DashMap<u64, EndpointState>,
+    endpoints: DashMap<u64, Arc<PassiveEjectionState>>,
     /// Serializes the percent-check + ejection steps in `record_failure` to prevent
     /// concurrent calls for distinct backends from both passing the max-ejection-percent
     /// guard simultaneously and over-ejecting beyond the configured limit.
@@ -153,51 +96,21 @@ impl OutlierDetectionStore {
             None => return false,
         };
 
-        // Read snapshot of the ejection state.
-        let (ejected_at, num_ejections) = {
-            let Some(ep) = svc.endpoints.get(&backend_hash) else {
-                return false;
-            };
-            let Some(at) = ep.ejected_at else {
-                return false;
-            };
-            (at, ep.num_ejections)
+        let Some(endpoint) = svc.endpoints.get(&backend_hash).map(|entry| Arc::clone(entry.value())) else {
+            return false;
         };
-
-        let duration = Self::ejection_duration(&svc.config, num_ejections);
-        if Instant::now().saturating_duration_since(ejected_at) < duration {
-            return true;
+        let (ejected, recovered) = endpoint.legacy_ejection_status();
+        if recovered {
+            crate::observe::metrics::record_cb_recovery(service_key);
         }
-
-        // Cooldown elapsed -> recover. Reset counters and clear ejected_at but
-        // RETAIN num_ejections (so the next ejection backs off further). Do NOT
-        // remove the entry. Re-check under the write lock to avoid a double
-        // recovery-gauge decrement when two selections race here.
-        if let Some(mut ep) = svc.endpoints.get_mut(&backend_hash) {
-            if let Some(at) = ep.ejected_at {
-                let dur = Self::ejection_duration(&svc.config, ep.num_ejections);
-                if Instant::now().saturating_duration_since(at) >= dur {
-                    ep.app_failures = 0;
-                    ep.gateway_failures = 0;
-                    ep.local_origin_failures = 0;
-                    ep.ejected_at = None;
-                    drop(ep);
-                    crate::observe::metrics::record_cb_recovery(service_key);
-                    return false;
-                }
-            }
-        }
-        false
+        ejected
     }
 
     /// Backoff-scaled ejection duration: `min(ejection_seconds * num_ejections, max)`.
+    #[cfg(test)]
     #[inline]
     fn ejection_duration(config: &OutlierDetectionResolved, num_ejections: u32) -> std::time::Duration {
-        let secs = config
-            .ejection_seconds
-            .saturating_mul(num_ejections as u64)
-            .min(config.max_ejection_seconds);
-        std::time::Duration::from_secs(secs)
+        ejection_duration(config, num_ejections)
     }
 
     pub fn record_failure(&self, service_key: &str, backend_hash: u64, total_endpoints: usize, class: FailureClass) {
@@ -206,62 +119,33 @@ impl OutlierDetectionStore {
             None => return,
         };
 
-        // Step 1: increment the per-class counter (short-lived lock).
-        let should_eject = {
-            let mut ep = svc.endpoints.entry(backend_hash).or_default();
-            if ep.ejected_at.is_some() {
-                return;
-            }
-            match class {
-                FailureClass::Application => ep.app_failures = ep.app_failures.saturating_add(1),
-                FailureClass::Gateway => ep.gateway_failures = ep.gateway_failures.saturating_add(1),
-                FailureClass::LocalOrigin => ep.local_origin_failures = ep.local_origin_failures.saturating_add(1),
-            }
-            ep.app_failures >= svc.config.consecutive_errors
-                || ep.gateway_failures >= svc.config.consecutive_gateway_errors
-                || ep.local_origin_failures >= svc.config.consecutive_local_origin_failures
-        };
-
-        if !should_eject {
-            return;
-        }
+        let endpoint = Arc::clone(
+            svc.endpoints
+                .entry(backend_hash)
+                .or_insert_with(|| PassiveEjectionState::new(Some(svc.config.clone())))
+                .value(),
+        );
 
         // Steps 2+3 under eject_lock so concurrent failures for distinct backends
         // cannot both pass the percent check and exceed max_ejection_percent.
         let _eject_guard = svc.eject_lock.lock().unwrap_or_else(|e| e.into_inner());
 
-        // Step 2: max_ejection_percent guard (unchanged logic).
-        if svc.config.max_ejection_percent > 0 {
+        let allow_ejection = if svc.config.max_ejection_percent > 0 {
             let effective_total = if total_endpoints > 0 {
                 total_endpoints
             } else {
                 svc.endpoints.len().max(1)
             };
-            let currently_ejected = svc.endpoints.iter().filter(|e| e.value().ejected_at.is_some()).count();
+            let currently_ejected = svc.endpoints.iter().filter(|entry| entry.value().is_open()).count();
             let max_ejectable = (effective_total as u64 * svc.config.max_ejection_percent as u64 / 100) as usize;
-            if currently_ejected >= max_ejectable.max(1) {
-                return;
-            }
-        }
-
-        // Step 3: eject. Increment num_ejections atomically with setting ejected_at,
-        // AFTER the percent guard, so a guard-blocked trip never inflates backoff.
-        // Re-check ejected_at under the write lock: two concurrent failures on the
-        // same backend can both pass step 1 (ejected_at == None) and serialize here
-        // on eject_lock; without this guard the second one would overwrite ejected_at,
-        // double-count num_ejections (breaking the first-ejection == base property),
-        // and fire a second record_cb_ejection that recovery never balances.
-        if let Some(mut ep) = svc.endpoints.get_mut(&backend_hash) {
-            if ep.ejected_at.is_none() {
-                ep.ejected_at = Some(Instant::now());
-                ep.num_ejections = ep.num_ejections.saturating_add(1);
-                // `class` is the triggering reason: each record_failure bumps exactly one
-                // counter, and once a counter crosses its threshold ejected_at is set so
-                // later failures early-return — so the counter that newly tripped is the
-                // one matching this call's `class`.
-                crate::observe::metrics::record_cb_ejection(service_key, class.metric_label());
-            }
+            currently_ejected < max_ejectable.max(1)
+        } else {
+            true
         };
+
+        if endpoint.record_failure(class, allow_ejection) == FailureTransition::Opened {
+            crate::observe::metrics::record_cb_ejection(service_key, class.metric_label());
+        }
     }
 
     pub fn record_success(&self, service_key: &str, backend_hash: u64) {
@@ -277,14 +161,8 @@ impl OutlierDetectionStore {
         // Trailing `;` keeps the Option<RefMut> temporary's drop before `svc` is
         // released — without it the if-let is the function's trailing expression and
         // the borrow of `svc.endpoints` outlives `svc`.
-        if let Some(mut ep) = svc.endpoints.get_mut(&backend_hash) {
-            let was_ejected = ep.ejected_at.is_some();
-            ep.app_failures = 0;
-            ep.gateway_failures = 0;
-            ep.local_origin_failures = 0;
-            ep.ejected_at = None;
-            drop(ep);
-            if was_ejected {
+        if let Some(endpoint) = svc.endpoints.get(&backend_hash) {
+            if endpoint.record_success() {
                 crate::observe::metrics::record_cb_recovery(service_key);
             }
         };
@@ -297,7 +175,7 @@ impl OutlierDetectionStore {
 
     /// Decrement gauge for any currently-ejected endpoints in a service state.
     fn drain_ejected_gauge(service_key: &str, svc: &ServiceCbState) {
-        let ejected = svc.endpoints.iter().filter(|e| e.value().ejected_at.is_some()).count();
+        let ejected = svc.endpoints.iter().filter(|entry| entry.value().is_open()).count();
         for _ in 0..ejected {
             crate::observe::metrics::record_cb_recovery(service_key);
         }
@@ -320,8 +198,8 @@ impl OutlierDetectionStore {
             ext: Default::default(),
         };
         let hash = crate::backends::health::check::backend_hash(&backend);
-        if let Some((_, ep)) = svc.endpoints.remove(&hash) {
-            if ep.ejected_at.is_some() {
+        if let Some((_, endpoint)) = svc.endpoints.remove(&hash) {
+            if endpoint.is_open() {
                 crate::observe::metrics::record_cb_recovery(service_key);
             }
         }
@@ -809,7 +687,11 @@ mod tests {
         // would inflate num_ejections and leak the ejected-endpoints gauge).
         let svc = store.services.get("default/svc").unwrap();
         let ep = svc.endpoints.get(&1).unwrap();
-        assert_eq!(ep.num_ejections, 1, "concurrent same-backend ejection must count once");
+        assert_eq!(
+            ep.num_ejections(),
+            1,
+            "concurrent same-backend ejection must count once"
+        );
     }
 }
 

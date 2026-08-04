@@ -5,6 +5,7 @@ use crate::dynamic::scenario::Scenario;
 /// All registered dynamic scenarios.
 pub fn all() -> Vec<&'static Scenario> {
     vec![
+        crate::dynamic::scenarios::ai_service_secret_rotation::SCENARIO,
         crate::dynamic::scenarios::gateway_dynamic::SCENARIO,
         crate::dynamic::scenarios::dsl_dynamic::SCENARIO,
         crate::dynamic::scenarios::body_dynamic::SCENARIO,

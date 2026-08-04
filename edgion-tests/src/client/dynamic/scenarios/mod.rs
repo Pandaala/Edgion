@@ -1,5 +1,6 @@
 // Scenario implementations. Each scenario lives in its own file.
 
+pub mod ai_service_secret_rotation;
 pub mod basic_auth_dynamic;
 pub mod body_dynamic;
 pub mod btlsp_ref_flap;

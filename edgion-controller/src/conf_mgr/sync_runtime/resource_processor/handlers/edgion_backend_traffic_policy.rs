@@ -2,27 +2,24 @@
 //!
 //! Handles `EdgionBackendTrafficPolicy` resources — a per-destination traffic
 //! policy (LB algorithm / active health check / outlier detection / panic
-//! threshold) attached to Services via `targetRefs`. Design:
-//! docs/superpowers/specs/2026-07-10-edgion-backend-traffic-policy-design.md
+//! threshold) attached to homogeneous core Service or EdgionAIService targets.
 //!
 //! Status is GEP-2648 per-ancestor (`status.ancestors[]`): the ancestor of this
-//! direct policy is the Gateway whose routes reach a target Service. One entry
-//! is produced per ancestor Gateway (via `resolve_policy_ancestor_gateways`),
+//! direct policy is the Gateway whose routes reach a target. One entry is
+//! produced per ancestor Gateway (via the typed ancestor resolver),
 //! stamped with this controller's name, so the same policy can be Accepted on
 //! one Gateway and Conflicted on another. `status.ancestors` is empty when no
-//! route references any target Service (matching the BackendTLSPolicy handler's
+//! route references any target (matching the BackendTLSPolicy handler's
 //! precedent) — lenient admission still applies (an invalid or unresolved policy
 //! still syncs to the data plane, which skips invalid specs itself):
 //! - `Accepted`     — priority Invalid > Conflicted > Accepted:
 //!   - `False`/`Invalid` when `validation_errors` (spec-local + cross-object) is
 //!     non-empty.
 //!   - else `False`/`Conflicted` when another policy in the same namespace won
-//!     oldest-wins arbitration over a target Service reaching this ancestor.
+//!     oldest-wins arbitration over a target reaching this ancestor.
 //!   - else `True`/`Accepted`.
-//! - `ResolvedRefs` — `False`/`ServiceNotFound` when a target Service reaching
-//!   this ancestor is absent from the Service cache; the policy still syncs and
-//!   takes effect once the Service appears (a Service change requeues the
-//!   policy — see `parse`).
+//! - `ResolvedRefs` — `False`/`TargetNotFound` when a target reaching this
+//!   ancestor is absent from its typed cache. Target changes requeue the policy.
 //!
 //! GEP-2648 folds conflict into `Accepted=False/Conflicted`; there is no
 //! separate `Conflicted` condition type (unlike the flat-status precedent this
@@ -35,18 +32,16 @@
 //!
 //! Requeue edges (this handler is a sink in the requeue DAG — it never
 //! requeues routes, gateways, or Services; it only requeues its own siblings):
-//! - Service appear/disappear -> `ServiceHandler` requeues every ref registered
-//!   under that Service key in `service_ref_mgr` (`parse` registers this policy
-//!   there regardless of validity).
+//! - Service or EdgionAIService appear/disappear requeues every policy ref
+//!   registered under the corresponding typed dependency key.
 //! - Route change -> `requeue_backend_policies_for_route` /
 //!   `requeue_backend_policies_for_services` (in `handlers/mod.rs`) requeue
 //!   policies bound to the route's backend Services, so ancestor Gateways
 //!   re-resolve.
-//! - Sibling policy change (same target Service) -> `parse`'s
+//! - Sibling policy change (same typed target) -> `parse`'s
 //!   `should_requeue_siblings` gate.
 
-use crate::conf_mgr::sync_runtime::resource_processor::backend_tls_policy_ref::make_target_conflict_key;
-use crate::conf_mgr::sync_runtime::resource_processor::handlers::resolve_policy_ancestor_gateways;
+use crate::conf_mgr::sync_runtime::resource_processor::handlers::resolve_policy_ancestor_gateways_for_targets;
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::route_utils::service_exists;
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, condition_types, update_condition,
@@ -55,7 +50,9 @@ use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessR
 use chrono::{DateTime, Utc};
 use edgion_resources::prelude_resources::EdgionBackendTrafficPolicy;
 use edgion_resources::resources::common::{ParentReference, PolicyAncestorStatus};
-use edgion_resources::resources::edgion_backend_traffic_policy::EdgionBackendTrafficPolicyStatus;
+use edgion_resources::resources::edgion_backend_traffic_policy::{
+    EdgionBackendTrafficPolicyStatus, PolicyTargetKey, PolicyTargetKind,
+};
 use edgion_resources::resources::upstream_authority::host_matches_pattern;
 use edgion_resources::ResourceKind;
 use std::collections::BTreeSet;
@@ -63,14 +60,26 @@ use std::collections::BTreeSet;
 /// EdgionBackendTrafficPolicy-specific condition reasons.
 ///
 /// This is an Edgion extension, not a Gateway API upstream reason.
-/// `ServiceNotFound` is the ResolvedRefs failure reason (analogous to the
-/// Gateway-API `BackendNotFound` but scoped to a policy targetRef).
+/// `TargetNotFound` is the ResolvedRefs failure reason for either supported
+/// policy target kind.
 mod ebtp_reasons {
-    /// The referenced target Service does not exist (or is not yet cached).
-    pub const SERVICE_NOT_FOUND: &str = "ServiceNotFound";
+    /// The referenced target does not exist (or is not yet cached).
+    pub const TARGET_NOT_FOUND: &str = "TargetNotFound";
 }
 
-/// Decide whether sibling policies (those targeting the same Service) must be
+fn target_exists(target: &PolicyTargetKey, ctx: &HandlerContext) -> bool {
+    match target.target_kind {
+        PolicyTargetKind::Service => service_exists(&target.namespace, &target.name, ctx.runtime()),
+        PolicyTargetKind::EdgionAIService => {
+            let Some(processor) = ctx.runtime().processor_registry.get("EdgionAIService") else {
+                return true;
+            };
+            processor.contains_key(&format!("{}/{}", target.namespace, target.name))
+        }
+    }
+}
+
+/// Decide whether sibling policies (those targeting the same typed target) must be
 /// requeued after this policy was processed.
 ///
 /// Mirrors the `BackendTLSPolicy` handler: requeue only when a precedence-relevant
@@ -209,6 +218,9 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
             let ns = p.metadata.namespace.as_deref().unwrap_or("default");
             let records = load_backend_tls_policies(ctx);
             for tr in &p.spec.target_refs {
+                if tr.target_kind() != Ok(PolicyTargetKind::Service) {
+                    continue;
+                }
                 for (key, hostname) in backend_tls_hostnames_for_service(ns, &tr.name, &records) {
                     if !host_matches_pattern(hostname, &ua.pattern) {
                         errors.push(format!(
@@ -246,18 +258,18 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
         // Clear old registrations, then re-register with the current targetRefs.
         // Two managers are updated:
         //   * `target_mgr` — conflict/precedence index (siblings, is_winner).
-        //   * `service_ref_mgr` — drives Service-change requeue: the ServiceHandler
-        //     requeues every ref registered under a Service key, so ResolvedRefs
-        //     re-evaluates when a target Service appears/disappears.
+        //   * typed Service/AI ref manager — drives target-change requeue so
+        //     ResolvedRefs re-evaluates when a target appears/disappears.
         state.target_mgr().clear_resource_refs(&resource_ref);
         ctx.runtime().service_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().ai_service_ref_mgr.clear_resource_refs(&resource_ref);
 
         // A policy with validation errors is a no-op in the data plane: the
         // gateway store's `reapply_service` skips invalid specs BEFORE oldest-wins
         // arbitration. To keep controller arbitration in lock-step, an invalid
         // policy must NOT participate in the conflict index — it neither wins nor
-        // marks a sibling `Conflicted`. We still track it in `service_ref_mgr` so a
-        // Service appear/disappear re-evaluates its ResolvedRefs status.
+        // marks a sibling `Conflicted`. Recognized targets remain tracked so an
+        // appear/disappear event re-evaluates ResolvedRefs.
         //
         // Because an invalid policy registers zero conflict keys, its
         // `old_target_keys`/`new_target_keys` snapshots diverge on any validity
@@ -268,12 +280,22 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
         let policy_ns = p.metadata.namespace.as_deref().unwrap_or("default");
         let mut new_target_keys = Vec::with_capacity(p.spec.target_refs.len());
         for target_ref in &p.spec.target_refs {
-            // v1 targets are same-namespace core Services; there is no sectionName.
-            let target_key = make_target_conflict_key(policy_ns, &target_ref.name, None);
-            // Service-change requeue tracking applies to every policy, valid or not.
-            ctx.runtime()
-                .service_ref_mgr
-                .add_ref(target_key.clone(), resource_ref.clone());
+            let Ok(target) = target_ref.canonical_key(policy_ns) else {
+                continue;
+            };
+            let target_key = target.to_string();
+            // Target-change requeue tracking applies to every structurally
+            // recognized policy, valid or not.
+            match target.target_kind {
+                PolicyTargetKind::Service => ctx
+                    .runtime()
+                    .service_ref_mgr
+                    .add_ref(format!("{}/{}", target.namespace, target.name), resource_ref.clone()),
+                PolicyTargetKind::EdgionAIService => ctx
+                    .runtime()
+                    .ai_service_ref_mgr
+                    .add_ref(target_key.clone(), resource_ref.clone()),
+            }
             // Conflict-index participation is gated on validity to mirror the gateway.
             if spec_valid {
                 state.target_mgr().add_ref(target_key.clone(), resource_ref.clone());
@@ -315,6 +337,7 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
         state.target_mgr().clear_resource_refs(&resource_ref);
         state.remove_timestamp(&resource_ref.resource_key());
         ctx.runtime().service_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().ai_service_ref_mgr.clear_resource_refs(&resource_ref);
 
         tracing::debug!(
             policy = %resource_ref.key(),
@@ -336,11 +359,15 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
         // GEP-2648: one status entry per ancestor Gateway. The resolver also
         // reports WHICH target Services reach each gateway, so Conflicted /
         // ResolvedRefs are scoped to the ancestors actually affected.
-        let target_names: Vec<&str> = p.spec.target_refs.iter().map(|tr| tr.name.as_str()).collect();
-        let ancestors_map = resolve_policy_ancestor_gateways(&policy_ns, &target_names, &policy_key, ctx);
+        let targets: Vec<PolicyTargetKey> = p
+            .spec
+            .target_refs
+            .iter()
+            .filter_map(|target| target.canonical_key(&policy_ns).ok())
+            .collect();
+        let ancestors_map = resolve_policy_ancestor_gateways_for_targets(&targets, &policy_key, ctx);
 
-        // Per-Service signals, computed once. Keys match the resolver's
-        // service keys ("ns/svc" — make_target_conflict_key with no section).
+        // Per-target signals, computed once from typed canonical identities.
         //
         // Conflict participation is gated on the SPEC-LOCAL error set,
         // matching `parse`'s gating of `target_mgr()` registration — NOT on
@@ -348,28 +375,25 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
         // hostname errors. A locally-valid policy that fails the cross-object
         // rule DOES win/lose arbitration and must still report Conflicted.
         let spec_locally_valid = p.spec.get_validation_errors().is_empty();
-        let lost_services: BTreeSet<String> = if spec_locally_valid {
-            p.spec
-                .target_refs
+        let lost_targets: BTreeSet<PolicyTargetKey> = if spec_locally_valid {
+            targets
                 .iter()
-                .filter_map(|tr| {
-                    let target_key = make_target_conflict_key(&policy_ns, &tr.name, None);
+                .filter_map(|target| {
+                    let target_key = target.to_string();
                     (!ctx
                         .runtime()
                         .edgion_backend_traffic_policy
                         .is_winner(&policy_key, &target_key))
-                    .then_some(target_key)
+                    .then_some(target.clone())
                 })
                 .collect()
         } else {
             BTreeSet::new()
         };
-        let missing_services: BTreeSet<String> = p
-            .spec
-            .target_refs
+        let missing_targets: BTreeSet<PolicyTargetKey> = targets
             .iter()
-            .filter(|tr| !service_exists(&policy_ns, &tr.name, ctx.runtime()))
-            .map(|tr| format!("{}/{}", policy_ns, tr.name))
+            .filter(|target| !target_exists(target, ctx))
+            .cloned()
             .collect();
 
         let status = p.status.get_or_insert_with(EdgionBackendTrafficPolicyStatus::default);
@@ -380,19 +404,19 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
         // BackendTLSPolicy handler post-ffe29c28).
         let old_ancestors = std::mem::take(&mut status.ancestors);
 
-        for (gw_key, services) in &ancestors_map {
+        for (gw_key, targets) in &ancestors_map {
             let Some((gw_ns, gw_name)) = gw_key.split_once('/') else {
                 continue;
             };
-            let conflicted_here: Vec<&str> = services
+            let conflicted_here: Vec<String> = targets
                 .iter()
-                .filter(|s| lost_services.contains(*s))
-                .map(String::as_str)
+                .filter(|target| lost_targets.contains(*target))
+                .map(ToString::to_string)
                 .collect();
-            let missing_here: Vec<&str> = services
+            let missing_here: Vec<String> = targets
                 .iter()
-                .filter(|s| missing_services.contains(*s))
-                .map(String::as_str)
+                .filter(|target| missing_targets.contains(*target))
+                .map(ToString::to_string)
                 .collect();
 
             // Match on controller_name + kind as well: in K8s mode the watched
@@ -441,20 +465,20 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
             };
             update_condition(&mut conditions, accepted);
 
-            // ResolvedRefs — existence of the target Services reaching THIS
+            // ResolvedRefs — existence of the targets reaching THIS
             // ancestor (a route may reference a Service that does not exist).
             let resolved = if missing_here.is_empty() {
                 condition_true(
                     condition_types::RESOLVED_REFS,
                     condition_reasons::RESOLVED_REFS,
-                    "All target Services resolved",
+                    "All targets resolved",
                     generation,
                 )
             } else {
                 condition_false(
                     condition_types::RESOLVED_REFS,
-                    ebtp_reasons::SERVICE_NOT_FOUND,
-                    format!("target Service(s) not found: {}", missing_here.join(", ")),
+                    ebtp_reasons::TARGET_NOT_FOUND,
+                    format!("target(s) not found: {}", missing_here.join(", ")),
                     generation,
                 )
             };
@@ -522,6 +546,31 @@ mod tests {
         );
     }
 
+    fn wire_ai_service_to_gateway(rt: &ControllerRuntime, ns: &str, ai: &str, route: &str, gw: &str) {
+        let target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionAIService,
+            namespace: ns.to_string(),
+            name: ai.to_string(),
+        };
+        rt.ai_service_ref_mgr.add_ref(
+            target.to_string(),
+            ResourceRef::new(ResourceKind::HTTPRoute, Some(ns.to_string()), route.to_string()),
+        );
+        rt.gateway_route_index.update_route(
+            ResourceKind::HTTPRoute,
+            &format!("{ns}/{route}"),
+            &[ParentReference {
+                group: Some("gateway.networking.k8s.io".to_string()),
+                kind: Some("Gateway".to_string()),
+                namespace: Some(ns.to_string()),
+                name: gw.to_string(),
+                section_name: None,
+                port: None,
+            }],
+            ns,
+        );
+    }
+
     /// Condition of type `type_` on the ancestor whose gateway name is `gw`.
     fn ancestor_condition<'a>(
         p: &'a EdgionBackendTrafficPolicy,
@@ -555,6 +604,95 @@ mod tests {
             },
         }))
         .expect("valid EdgionBackendTrafficPolicy JSON")
+    }
+
+    fn make_ai_policy(name: &str, target: &str, creation_ts: &str) -> EdgionBackendTrafficPolicy {
+        serde_json::from_value(json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "EdgionBackendTrafficPolicy",
+            "metadata": {
+                "name": name,
+                "namespace": "ns",
+                "creationTimestamp": creation_ts,
+            },
+            "spec": {
+                "targetRefs": [
+                    { "group": "edgion.io", "kind": "EdgionAIService", "name": target }
+                ],
+                "connection": { "connectTimeout": "2s" },
+                "retryConstraint": {},
+                "circuitBreaker": { "maxParallelRequests": 20 },
+                "outlierDetection": { "consecutiveErrors": 5 }
+            },
+        }))
+        .expect("valid AI-target EdgionBackendTrafficPolicy JSON")
+    }
+
+    #[tokio::test]
+    async fn same_named_service_and_ai_service_do_not_conflict() {
+        let (ctx, rt) = make_ctx();
+        let handler = make_handler();
+        wire_service_to_gateway(&rt, "ns", "shared", "service-route", "gw");
+        wire_ai_service_to_gateway(&rt, "ns", "shared", "ai-route", "gw");
+
+        let service_policy = make_policy("service-policy", "shared", "2026-01-01T00:00:00Z");
+        let ai_policy = make_ai_policy("ai-policy", "shared", "2026-06-01T00:00:00Z");
+        let _ = handler.parse(service_policy.clone(), &ctx).await;
+        let _ = handler.parse(ai_policy.clone(), &ctx).await;
+
+        for mut policy in [service_policy, ai_policy] {
+            handler.update_status(&mut policy, &ctx, &[]);
+            let accepted = ancestor_condition(&policy, "gw", condition_types::ACCEPTED);
+            assert_eq!(accepted.status, "True");
+            assert_eq!(accepted.reason, condition_reasons::ACCEPTED);
+        }
+    }
+
+    #[tokio::test]
+    async fn ai_service_policies_conflict_and_resolve_ancestors_by_typed_key() {
+        let (ctx, rt) = make_ctx();
+        let handler = make_handler();
+        wire_ai_service_to_gateway(&rt, "ns", "provider", "ai-route", "gw-ai");
+
+        let older = make_ai_policy("older", "provider", "2026-01-01T00:00:00Z");
+        let younger = make_ai_policy("younger", "provider", "2026-06-01T00:00:00Z");
+        let _ = handler.parse(older, &ctx).await;
+        let _ = handler.parse(younger.clone(), &ctx).await;
+
+        let mut younger = younger;
+        handler.update_status(&mut younger, &ctx, &[]);
+        let accepted = ancestor_condition(&younger, "gw-ai", condition_types::ACCEPTED);
+        assert_eq!(accepted.status, "False");
+        assert_eq!(accepted.reason, condition_reasons::POLICY_CONFLICTED);
+        assert!(accepted.message.contains("edgion.io/EdgionAIService/ns/provider"));
+    }
+
+    #[tokio::test]
+    async fn missing_ai_service_sets_target_not_found() {
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionAIServiceHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
+        use edgion_resources::prelude_resources::EdgionAIService;
+
+        let (ctx, rt) = make_ctx();
+        let handler = make_handler();
+        wire_ai_service_to_gateway(&rt, "ns", "missing", "ai-route", "gw-ai");
+        let processor = Arc::new(ResourceProcessor::<EdgionAIService>::new(
+            "EdgionAIService",
+            128,
+            Arc::new(EdgionAIServiceHandler::new()),
+            rt.clone(),
+        ));
+        rt.processor_registry.register(processor);
+
+        let policy = make_ai_policy("policy", "missing", "2026-01-01T00:00:00Z");
+        let _ = handler.parse(policy.clone(), &ctx).await;
+        let mut policy = policy;
+        handler.update_status(&mut policy, &ctx, &[]);
+
+        let resolved = ancestor_condition(&policy, "gw-ai", condition_types::RESOLVED_REFS);
+        assert_eq!(resolved.status, "False");
+        assert_eq!(resolved.reason, ebtp_reasons::TARGET_NOT_FOUND);
+        assert!(resolved.message.contains("edgion.io/EdgionAIService/ns/missing"));
     }
 
     /// `validate()` returns the spec's validation errors verbatim.
@@ -747,7 +885,7 @@ mod tests {
         assert_eq!(accepted.reason, condition_reasons::POLICY_CONFLICTED);
     }
 
-    /// ResolvedRefs is `False`/`ServiceNotFound` when the target Service is not in
+    /// ResolvedRefs is `False`/`TargetNotFound` when the target Service is not in
     /// the cache (no Service processor registered in the test runtime → `service_exists`
     /// returns `true`, so we assert the resolved branch here) — the policy still syncs.
     #[tokio::test]
@@ -765,7 +903,7 @@ mod tests {
     }
 
     /// With a Service processor registered but its cache EMPTY, `service_exists`
-    /// genuinely returns `false`, so ResolvedRefs is `False`/`ServiceNotFound`.
+    /// genuinely returns `false`, so ResolvedRefs is `False`/`TargetNotFound`.
     /// Adding the target Service to the cache and re-running flips it to `True`.
     #[tokio::test]
     async fn resolved_refs_false_then_true_when_service_appears() {
@@ -792,12 +930,12 @@ mod tests {
         let p = make_policy("p", "payments", "2026-01-01T00:00:00Z");
         let _ = handler.parse(p.clone(), &ctx).await;
 
-        // Target Service not in cache -> ResolvedRefs=False/ServiceNotFound.
+        // Target Service not in cache -> ResolvedRefs=False/TargetNotFound.
         let mut p_missing = p.clone();
         handler.update_status(&mut p_missing, &ctx, &[]);
         let resolved = ancestor_condition(&p_missing, "gw-1", condition_types::RESOLVED_REFS);
         assert_eq!(resolved.status, "False", "absent Service => ResolvedRefs False");
-        assert_eq!(resolved.reason, ebtp_reasons::SERVICE_NOT_FOUND);
+        assert_eq!(resolved.reason, ebtp_reasons::TARGET_NOT_FOUND);
 
         // Add the Service to the cache (key = "ns/payments") and re-run: flips True.
         let svc = Service {
@@ -902,6 +1040,16 @@ mod tests {
         // error so an operator with several BackendTLSPolicies on one Service can tell
         // which object to fix.
         assert!(errors[0].contains("ns/tls"), "got: {}", errors[0]);
+
+        // The cross-object hostname rule is Service-only. An AI-target policy
+        // already rejects upstreamAuthority through its field matrix, but must
+        // not additionally inspect a same-named Service's BackendTLSPolicy.
+        let mut ai_policy = make_ai_policy("ai", "sandbox-gw", "2026-01-01T00:00:00Z");
+        ai_policy.spec.upstream_authority = p.spec.upstream_authority.clone();
+        let ai_errors = handler.validate(&ai_policy, &ctx);
+        assert_eq!(ai_errors.len(), 1, "got: {ai_errors:?}");
+        assert!(ai_errors[0].contains("not supported for EdgionAIService"));
+        assert!(!ai_errors[0].contains("stale.other.com"));
 
         // An in-pattern hostname is accepted.
         let btls_ok: BackendTLSPolicy = serde_json::from_value(json!({

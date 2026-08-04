@@ -229,6 +229,10 @@ impl KubernetesStorage {
                 Scope::Namespaced,
             ),
             "LinkSys" => (api_resource("edgion.io", "v1", "LinkSys", "linksys"), Scope::Namespaced),
+            "EdgionAIService" => (
+                api_resource("edgion.io", "v1", "EdgionAIService", "edgionaiservices"),
+                Scope::Namespaced,
+            ),
             // EdgionAcme: the conventional plural ("edgionacmes") matches the CRD,
             // so `from_gvk` resolves correctly without a plural override.
             "EdgionAcme" => (
@@ -663,6 +667,7 @@ impl CenterApi for KubernetesStorage {
             "LinkSys",
             "EdgionAcme",
             "EdgionBackendTrafficPolicy",
+            "EdgionAIService",
         ];
 
         let mut all_items = Vec::new();

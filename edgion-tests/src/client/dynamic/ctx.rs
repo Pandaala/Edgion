@@ -75,6 +75,9 @@ impl ScenarioCtx {
         let suite = (ps.factory)();
 
         let mut runner = TestRunner::new(self.test_ctx.clone());
+        if let Ok(port_config) = crate::port_config::PortConfig::load() {
+            runner.set_port_resolver(Box::new(move |key| port_config.get_ports(key).http));
+        }
         runner.add_suite(suite);
         let results = runner.run().await;
         if !results.has_failures() {

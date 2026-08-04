@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 
 use crate::backends::get_roundrobin_store;
-use edgion_resources::HTTPBackendRef;
+use edgion_resources::{HTTPBackendRef, HTTPBackendRefKind};
 
 /// Validate that a given IP is a valid EndpointSlice address for one of the route's backend_refs.
 ///
@@ -18,6 +18,9 @@ pub fn validate_endpoint_in_route(
     route_namespace: &str,
 ) -> Result<(usize, u16), String> {
     for (idx, br) in route_backend_refs.iter().enumerate() {
+        if br.backend_kind() != HTTPBackendRefKind::Service {
+            continue;
+        }
         let ns = br.namespace.as_deref().unwrap_or(route_namespace);
         let service_key = format!("{}/{}", ns, br.name);
         let br_port = br.port.map(|p| p as u16);

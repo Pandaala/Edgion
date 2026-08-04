@@ -6,14 +6,14 @@ use serde::{Deserialize, Serialize};
 
 use super::dye::DyeOutcome;
 use super::plugin_configs::{
-    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CanaryConfig, CorsConfig, CsrfConfig, CtxSetConfig,
-    DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig, DynamicExternalUpstreamConfig,
-    DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig, FormJsonTransformConfig, ForwardAuthConfig,
-    GlobalAccessControlConfig, HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig,
-    JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig,
-    ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig, RegionRouteConfig,
-    RequestBodyBufferConfig, RequestMirrorPluginConfig, RequestRestrictionConfig, ResponseRewriteConfig,
-    TraceContextConfig, WasmConfig, DEFAULT_INSTANCE_MAX_BYTES,
+    AiProxyConfig, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CanaryConfig, CorsConfig,
+    CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig,
+    DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig,
+    FormJsonTransformConfig, ForwardAuthConfig, GlobalAccessControlConfig, HeaderCertAuthConfig, HmacAuthConfig,
+    IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig,
+    MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig,
+    RegionRouteConfig, RequestBodyBufferConfig, RequestMirrorPluginConfig, RequestRestrictionConfig,
+    ResponseRewriteConfig, TraceContextConfig, WasmConfig, DEFAULT_INSTANCE_MAX_BYTES,
 };
 use crate::resources::http_route::{HTTPHeaderFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter};
 
@@ -47,6 +47,8 @@ pub enum EdgionPlugin {
     // ========== Custom Edgion plugins ==========
     /// Basic Authentication filter
     BasicAuth(BasicAuthConfig),
+    /// Route OpenAI-compatible requests to an EdgionAIService.
+    AiProxy(AiProxyConfig),
     /// CORS (Cross-Origin Resource Sharing) filter
     Cors(CorsConfig),
     /// CSRF (Cross-Site Request Forgery) protection filter
@@ -175,6 +177,7 @@ impl EdgionPlugin {
                 max_body_size: Some(DEFAULT_INSTANCE_MAX_BYTES.to_string()),
                 ..BodyRequirement::fail_close()
             }),
+            AiProxy(_) if stage == BodyStage::Request => Some(BodyRequirement::fail_close()),
             // Deliberately keyed on BUFFERED only: STREAMED must have NO
             // BodyRequirement — the streamed handler is driven per chunk by the
             // transport pump and must never trigger a pre-read capture
@@ -204,6 +207,7 @@ impl EdgionPlugin {
             // body-consuming plugin MUST add itself above, or this fails to
             // compile — it can never silently default to "no body".
             HmacAuth(_)
+            | AiProxy(_)
             | RequestHeaderModifier(_)
             | ResponseHeaderModifier(_)
             | RequestRedirect(_)
@@ -270,6 +274,7 @@ impl EdgionPlugin {
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
             EdgionPlugin::BasicAuth(_) => "BasicAuth",
+            EdgionPlugin::AiProxy(_) => "AiProxy",
             EdgionPlugin::Cors(_) => "Cors",
             EdgionPlugin::Csrf(_) => "Csrf",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
@@ -342,6 +347,7 @@ impl EdgionPlugin {
             | EdgionPlugin::UrlRewrite(_)
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::AiProxy(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
             | EdgionPlugin::IpRestriction(_)
@@ -394,6 +400,7 @@ impl EdgionPlugin {
             | EdgionPlugin::UrlRewrite(_)
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::AiProxy(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
             | EdgionPlugin::IpRestriction(_)
@@ -472,6 +479,7 @@ impl EdgionPlugin {
             | EdgionPlugin::UrlRewrite(_)
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::AiProxy(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
             | EdgionPlugin::IpRestriction(_)
@@ -515,6 +523,7 @@ impl EdgionPlugin {
         use crate::resources::edgion_plugins::PluginValidation;
         match self {
             EdgionPlugin::CtxSet(c) => c.validation_error(),
+            EdgionPlugin::AiProxy(c) => c.validation_error(),
             EdgionPlugin::DirectEndpoint(c) => c.validation_error(),
             EdgionPlugin::RegionRoute(c) => c.validation_error(),
             EdgionPlugin::DynamicInternalUpstream(c) => c.validation_error(),
@@ -558,6 +567,61 @@ impl EdgionPlugin {
             | EdgionPlugin::UrlRewrite(_)
             | EdgionPlugin::RequestMirror(_) => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod ai_proxy_variant_tests {
+    use super::*;
+    use crate::resources::edgion_plugins::{
+        applicable_stages_by_name, AiBackendSelection, AiBackendSelectionConfig, BodyReadFailureMode, OnUnknownModel,
+        PluginValidation,
+    };
+
+    fn config(name: &str) -> AiProxyConfig {
+        AiProxyConfig {
+            backend_selection: AiBackendSelectionConfig {
+                selection_type: if name.is_empty() {
+                    AiBackendSelection::LowestLatency
+                } else {
+                    AiBackendSelection::Weighted
+                },
+            },
+            inject_usage_tracking: true,
+            on_unknown_model: if name.is_empty() {
+                OnUnknownModel::Passthrough
+            } else {
+                OnUnknownModel::Reject
+            },
+            token_quota: None,
+        }
+    }
+
+    #[test]
+    fn ai_proxy_variant_is_stateless_request_only_and_fail_close_body_gated() {
+        let invalid = EdgionPlugin::AiProxy(config(""));
+        assert!(invalid.validation_error().is_some());
+        assert!(
+            invalid.validation_error().is_some(),
+            "validation must not depend on a prior call"
+        );
+
+        let plugin = EdgionPlugin::AiProxy(config("openai-prod"));
+        assert_eq!(plugin.type_name(), "AiProxy");
+        assert!(plugin.validation_error().is_none());
+        assert!(config("openai-prod").validation_error().is_none());
+
+        let stages = applicable_stages_by_name(plugin.type_name());
+        assert!(stages.request);
+        assert!(!stages.upstream_response_filter);
+        assert!(!stages.upstream_response_body_filter);
+        assert!(!stages.upstream_response);
+
+        let requirement = plugin
+            .body_requirement(BodyStage::Request)
+            .expect("AiProxy intrinsically consumes the request body");
+        assert_eq!(requirement.on_read_failure, BodyReadFailureMode::FailClose);
+        assert!(plugin.body_requirement(BodyStage::Response).is_none());
     }
 }
 

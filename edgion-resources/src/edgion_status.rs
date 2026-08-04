@@ -15,6 +15,14 @@ pub enum EdgionStatus {
     /// Practically unreachable — the entry struct contains only primitives.
     AccessLogSerializeFailed = 999_02,
 
+    /// An AI provider response could not be translated into the client-visible
+    /// OpenAI schema. Provider body detail is intentionally not retained.
+    AiResponseTranslationFailed = 999_06,
+
+    /// Final AI quota reconciliation did not complete. Usage and estimated
+    /// cost remain durable in the access log for external replay.
+    AiQuotaReconciliationFailed = 999_11,
+
     /// ACME HTTP-01 challenge served locally by the gateway (HTTP 200)
     AcmeChallengeServed = 200_01,
 
@@ -320,6 +328,8 @@ mod tests {
             EdgionStatus::Unknown => None,
             EdgionStatus::UnknownGRPCERR => None,
             EdgionStatus::AccessLogSerializeFailed => None,
+            EdgionStatus::AiResponseTranslationFailed => None,
+            EdgionStatus::AiQuotaReconciliationFailed => None,
             EdgionStatus::AcmeChallengeServed => Some(200),
             EdgionStatus::HostMissing => Some(400),
             EdgionStatus::XffHeaderTooLong => Some(400),
@@ -400,6 +410,8 @@ mod tests {
             EdgionStatus::Unknown,
             EdgionStatus::UnknownGRPCERR,
             EdgionStatus::AccessLogSerializeFailed,
+            EdgionStatus::AiResponseTranslationFailed,
+            EdgionStatus::AiQuotaReconciliationFailed,
             EdgionStatus::AcmeChallengeServed,
             EdgionStatus::HostMissing,
             EdgionStatus::XffHeaderTooLong,

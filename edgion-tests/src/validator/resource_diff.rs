@@ -329,6 +329,11 @@ const RESOURCE_TYPES: &[(&str, &str, &str)] = &[
         "/configclient/edgionplugins/list",
     ),
     (
+        "EdgionAIService",
+        "/api/v1/namespaced/EdgionAIService",
+        "/configclient/edgionaiservice/list",
+    ),
+    (
         "EdgionStreamPlugins",
         "/api/v1/namespaced/EdgionStreamPlugins",
         "/configclient/edgionstreamplugins/list",

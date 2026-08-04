@@ -49,6 +49,7 @@ axum.workspace = true
 # Utilities
 base64.workspace = true
 chrono.workspace = true
+httpdate.workspace = true
 parking_lot.workspace = true
 regex.workspace = true
 rand.workspace = true

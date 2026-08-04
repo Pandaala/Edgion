@@ -1,5 +1,6 @@
 // Test suite module
 
+pub mod edgion_ai_service;
 pub mod edgion_backend_traffic_policy;
 pub mod edgion_plugins;
 pub mod edgion_tls;
@@ -25,11 +26,17 @@ pub use http_route::{
     LBRoundRobinTestSuite, MultiPortTestSuite, PanicThresholdTestSuite, PartiallyInvalidTestSuite,
     PerTryTimeoutTestSuite, PercentMirrorTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite,
     SpChangeFinalTestSuite, SpChangeInitialTestSuite, SpWeightedFinalTestSuite, SpWeightedInitialTestSuite,
-    SpWeightedZeroWeightTestSuite, TimeoutTestSuite, TransportTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
+    SpWeightedZeroWeightTestSuite, SseStreamingTestSuite, TimeoutTestSuite, TransportTestSuite, WebSocketTestSuite,
+    WeightedBackendTestSuite,
 };
 
 pub use edgion_backend_traffic_policy::{
     ConnectTimeoutTestSuite, EdgionBackendTrafficPolicyTestSuite, RetryBudgetTestSuite, UpstreamAuthorityTestSuite,
+};
+
+pub use edgion_ai_service::{
+    AiServiceSecretRotationInitialTestSuite, AiServiceSecretRotationUpdatedTestSuite, AnthropicProviderTestSuite,
+    CredentialExhaustionTestSuite, ResilienceTestSuite, SingleProviderTestSuite,
 };
 
 pub use grpc_route::{

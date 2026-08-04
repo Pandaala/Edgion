@@ -49,6 +49,12 @@ pub async fn upstream_request_filter(
 
     sync_body_framing_headers(upstream_request, ctx)?;
 
+    // All fallible local header/framing preparation has succeeded. Crossing
+    // the boundary here keeps a local preparation failure pre-dispatch.
+    crate::ai::dispatch::mark_ai_dispatch_started(ctx).map_err(|_| {
+        pingora_core::Error::explain(pingora_core::ErrorType::InternalError, "AI dispatch state is invalid")
+    })?;
+
     // Body proxying is about to begin: both backendRef-scoped request-plugin
     // call sites have already run by this point (a prerequisite for reaching
     // a successful connect and this hook), so `read_request_body` must be

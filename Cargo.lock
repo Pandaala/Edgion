@@ -1567,6 +1567,7 @@ dependencies = [
  "etcd-client",
  "hickory-resolver",
  "http",
+ "httpdate",
  "k8s-openapi",
  "kube",
  "metrics",

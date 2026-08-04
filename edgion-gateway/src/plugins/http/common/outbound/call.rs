@@ -486,14 +486,8 @@ pub(crate) fn replace_url_host(base: &str, authority: &str) -> String {
 /// is absent or unparseable.
 fn parse_retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     let raw = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?.trim();
-    if let Ok(secs) = raw.parse::<u64>() {
-        return Some(secs.saturating_mul(1000));
-    }
-    let when = httpdate::parse_http_date(raw).ok()?;
-    match when.duration_since(std::time::SystemTime::now()) {
-        Ok(d) => Some(d.as_millis().min(u64::MAX as u128) as u64),
-        Err(_) => Some(0), // date in the past
-    }
+    let duration = edgion_common::time::parse_retry_after(raw, std::time::SystemTime::now())?;
+    Some(duration.as_millis().min(u64::MAX as u128) as u64)
 }
 
 /// Build a [`WebhookRetry`](edgion_resources::resources::common::external_http::WebhookRetry)

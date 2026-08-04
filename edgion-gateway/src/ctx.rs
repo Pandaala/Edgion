@@ -1,6 +1,8 @@
+use crate::ai::{AiAttemptPlan, AiRequestContext, GenAiSummary};
 use crate::backends::EdgionService;
 use crate::lb::edgion_backend::EdgionBackend;
 use crate::observe::logs::LogBuffer;
+use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
 use crate::plugins::runtime::PluginRuntime;
 use crate::plugins::{EdgionPluginsLog, StageLogs};
 use crate::request_body::RequestBodyState;
@@ -674,6 +676,8 @@ pub enum BackendSource {
     DirectEndpoint,
     /// ExternalJump bypass (plugin-staged external domain, DNS-resolved at runtime).
     ExternalJump,
+    /// Typed EdgionAIService selected by an AiProxy attempt plan.
+    AiService,
 }
 
 /// Backend context containing service info and upstream attempt history.
@@ -773,6 +777,12 @@ pub struct ExternalJumpPreset {
     /// Default `false`: a future plugin that forgets to set this explicitly
     /// will not silently degrade to raw-forwarding behavior.
     pub preserve_raw_path: bool,
+    /// Optional per-read upstream timeout supplied by the jump owner.
+    ///
+    /// When present, this replaces the normal route/global backendRequest
+    /// bound before request and gRPC deadline clamping. `None` preserves the
+    /// legacy external-jump timeout behavior.
+    pub upstream_read_timeout_override: Option<Duration>,
 }
 
 /// Stored direct endpoint info (lightweight, survives retries via Clone)
@@ -932,6 +942,20 @@ pub enum ResponseStageDenial {
     /// the code through an HTTP status would flatten it through a lossy mapping.
     /// `fail_to_proxy` writes these trailers verbatim.
     Grpc { status: u16, message: Option<String> },
+}
+
+/// Classification of the upstream response as a streaming protocol. Set once
+/// per upstream attempt in `pg_upstream_response_filter` from the normalized
+/// Content-Type; reassigned on retry (a later attempt may answer with a
+/// different media type). Explicit media types only — absence of
+/// Content-Length or chunked framing never implies streaming.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ResponseStreamKind {
+    /// Not a recognized streaming media type (the default).
+    #[default]
+    None,
+    /// `text/event-stream` (Server-Sent Events).
+    Sse,
 }
 
 pub struct EdgionHttpContext {
@@ -1196,6 +1220,37 @@ pub struct EdgionHttpContext {
     /// via `PluginSession::resolved_route_ext_ref(index)`.
     pub resolved_route_ext_refs: Option<Arc<Vec<Option<Arc<PluginRuntime>>>>>,
 
+    /// Bounded AI request metadata and shared atomic usage counters. Set once
+    /// by the first effective AiProxy entry; contains no prompt or credential.
+    pub ai: Option<AiRequestContext>,
+
+    /// Immutable canonical request and candidate snapshot for AI forwarding.
+    /// The canonical body is never rendered by Debug or access logging.
+    pub ai_attempt_plan: Option<AiAttemptPlan>,
+
+    /// Bounded active-attempt and pending Redis settlement state. Async work is
+    /// drained only at the next-attempt and universal logging seams.
+    pub ai_attempt_runtime: crate::ai::attempt_runtime::AiAttemptRuntimeState,
+
+    /// Request-captured typed destination policy for the selected AI service.
+    pub ai_effective_policy: Option<Arc<crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy>>,
+
+    /// Pristine post-rule request used to rebuild later AI attempts.
+    pub ai_request_baseline: Option<pingora_http::RequestHeader>,
+
+    /// Replaceable provider-aware response processor for the active AI attempt.
+    pub ai_stream_processor: Option<Box<dyn StreamingResponseProcessor>>,
+
+    /// Immutable GenAI usage summary committed once during final logging.
+    /// `Some` is also the idempotence sentinel for metric emission.
+    pub genai_summary: Option<GenAiSummary>,
+
+    /// Streaming-response processors installed for this request by request-stage
+    /// plugins (e.g. AiProxy's usage extractor). Run in installation order from
+    /// `pg_upstream_response_body_filter`, before the read-only body-filter
+    /// chains. Not operator-facing; not a plugin stage.
+    pub stream_processors: Vec<Box<dyn StreamingResponseProcessor>>,
+
     /// Response-phase local-reply body, set by a response-phase plugin that
     /// returned `ErrResponse { status, body }` (Phase 6 sync or Phase 7 async)
     /// and consumed by `upstream_response_body_filter` (Phase 8). `Some` until
@@ -1217,6 +1272,10 @@ pub struct EdgionHttpContext {
     /// A response-phase plugin denial the response stage could not deliver
     /// itself. See [`ResponseStageDenial`].
     pub response_denial: Option<ResponseStageDenial>,
+
+    /// See [`ResponseStreamKind`]. Consumed by the compression exemption and by
+    /// streaming processors/plugins that must know how to interpret chunks.
+    pub response_stream_kind: ResponseStreamKind,
 
     /// Circuit-breaker admission permit for the chosen endpoint, acquired at
     /// `upstream_peer` (pre-connect) when the target Service carries a
@@ -1258,6 +1317,38 @@ impl EdgionHttpContext {
             false
         } else {
             self.json_schema_validation_claimed = true;
+            true
+        }
+    }
+
+    pub(crate) fn try_set_ai_request_context(&mut self, context: AiRequestContext) -> bool {
+        if self.ai.is_some() {
+            false
+        } else {
+            self.ai = Some(context);
+            true
+        }
+    }
+
+    /// Replace attempt-local provider/usage state while retaining the one
+    /// request-wide quota handle across AI failover attempts.
+    pub(crate) fn replace_ai_attempt_context(&mut self, mut context: AiRequestContext) {
+        if let Some(mut previous) = self.ai.take() {
+            if context.quota.is_none() {
+                context.quota = previous.quota.take();
+            }
+            if context.quota_status.is_none() {
+                context.quota_status = previous.quota_status;
+            }
+        }
+        self.ai = Some(context);
+    }
+
+    pub(crate) fn try_set_ai_attempt_plan(&mut self, plan: AiAttemptPlan) -> bool {
+        if self.ai_attempt_plan.is_some() {
+            false
+        } else {
+            self.ai_attempt_plan = Some(plan);
             true
         }
     }
@@ -1337,10 +1428,19 @@ impl EdgionHttpContext {
             resolved_global_plugins: None,
             resolved_gateway_plugins: None,
             resolved_route_ext_refs: None,
+            ai: None,
+            ai_attempt_plan: None,
+            ai_attempt_runtime: crate::ai::attempt_runtime::AiAttemptRuntimeState::default(),
+            ai_effective_policy: None,
+            ai_request_baseline: None,
+            ai_stream_processor: None,
+            genai_summary: None,
+            stream_processors: Vec::new(),
             local_reply_body: None,
             local_reply_header: None,
             local_reply_written: false,
             response_denial: None,
+            response_stream_kind: ResponseStreamKind::None,
             cb_permit: None,
         }
     }
@@ -1648,13 +1748,16 @@ impl EdgionHttpContext {
         if self.jump.is_some() {
             return SetJumpOutcome::Rejected;
         }
-        if let UpstreamJumpTarget::Direct { backend_ref, .. } = &target {
+        if let UpstreamJumpTarget::Direct { preset, backend_ref } = &target {
             // Plugin-injected direct endpoint: no backend-level plugin chain
             // (matches today, where the synthetic backend's runtime is empty).
-            self.selected_backend = Some(CompiledBackend {
-                schema: backend_ref.as_ref().clone(),
-                plugin_runtime: Arc::new(PluginRuntime::new()),
-            });
+            let route_namespace = backend_ref.namespace.as_deref().unwrap_or_default();
+            self.selected_backend = Some(CompiledBackend::compile(
+                backend_ref.as_ref().clone(),
+                route_namespace,
+                preset.backend_ref_idx,
+                Arc::new(PluginRuntime::new()),
+            ));
         }
         self.jump = Some(target);
         SetJumpOutcome::Set
@@ -2044,6 +2147,7 @@ mod jump_tests {
             use_tls: true,
             sni: "api.example.com".to_string(),
             preserve_raw_path: false,
+            upstream_read_timeout_override: None,
         }
     }
 
@@ -2198,6 +2302,45 @@ mod json_schema_validation_claim_tests {
         let mut ctx = EdgionHttpContext::new();
         assert!(ctx.claim_json_schema_validation());
         assert!(!ctx.claim_json_schema_validation());
+    }
+}
+
+#[cfg(test)]
+mod ai_context_claim_tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::ai::{AiAttemptPlan, AiPlanError, AiProviderLabel, AiRequestContext, AiUsageShared};
+
+    fn context(model: &str) -> AiRequestContext {
+        AiRequestContext {
+            provider: AiProviderLabel::OpenAi,
+            model: model.to_string(),
+            pricing: None,
+            requested_streaming: false,
+            usage: Arc::new(AiUsageShared::default()),
+            quota: None,
+            quota_status: None,
+        }
+    }
+
+    #[test]
+    fn first_ai_context_writer_wins() {
+        let mut ctx = EdgionHttpContext::new();
+        assert!(ctx.try_set_ai_request_context(context("model-a")));
+        assert!(!ctx.try_set_ai_request_context(context("model-b")));
+        assert_eq!(ctx.ai.as_ref().map(|ai| ai.model.as_str()), Some("model-a"));
+    }
+
+    #[test]
+    fn first_ai_attempt_plan_writer_wins() {
+        let mut ctx = EdgionHttpContext::new();
+        assert!(ctx.try_set_ai_attempt_plan(AiAttemptPlan::Rejected(AiPlanError::InvalidBackend)));
+        assert!(!ctx.try_set_ai_attempt_plan(AiAttemptPlan::Rejected(AiPlanError::InvalidRouteConfiguration,)));
+        assert!(matches!(
+            ctx.ai_attempt_plan,
+            Some(AiAttemptPlan::Rejected(AiPlanError::InvalidBackend))
+        ));
     }
 }
 

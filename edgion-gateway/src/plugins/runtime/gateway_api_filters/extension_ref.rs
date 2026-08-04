@@ -460,6 +460,7 @@ mod tests {
                 group: "".into(),
                 kind: "EdgionPlugins".into(),
                 name: "p1".into(),
+                resolved_namespace: None,
             },
         );
         let mut log = PluginLog::new("test");
@@ -497,6 +498,7 @@ mod tests {
                 group: "".into(),
                 kind: "EdgionPlugins".into(),
                 name: "p1".into(),
+                resolved_namespace: None,
             },
         );
         filter.set_index(0);
@@ -527,6 +529,7 @@ mod tests {
                 group: "".into(),
                 kind: "EdgionPlugins".into(),
                 name: "p1".into(),
+                resolved_namespace: None,
             },
         );
         filter.set_index(7);
@@ -570,6 +573,7 @@ mod tests {
                 group: "edgion.io".into(),
                 kind: "NotAPlugin".into(),
                 name: "x".into(),
+                resolved_namespace: None,
             },
         );
         let mut log = PluginLog::with_alias("ExtensionRef", None);

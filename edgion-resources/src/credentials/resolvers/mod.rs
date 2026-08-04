@@ -2,6 +2,7 @@
 //! implementations keyed by auth type.
 
 pub mod acme;
+pub mod ai_api_key;
 pub mod basic;
 pub mod bearer;
 pub mod dns_credential;
@@ -11,6 +12,7 @@ pub mod tls;
 pub mod webhook_api_key;
 
 pub use acme::{AcmeAccountResolver, ACME_ACCOUNT_KEY};
+pub use ai_api_key::AiApiKeyResolver;
 pub use basic::BasicAuthResolver;
 pub use bearer::BearerResolver;
 pub use dns_credential::{DnsCredentialMaterial, DnsCredentialResolver};

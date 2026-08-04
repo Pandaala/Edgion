@@ -100,6 +100,38 @@ metrics:
 
 ⚠️ `test_key` / `test_data` 标签**仅**在 `--integration-testing-mode` 模式下且 Gateway 注解显式开启时出现。`test_data` 每请求变化，基数无界。**永远不要在生产中启用集成测试模式。**
 
+### 可选的 GenAI Token 计数器
+
+`edgion_gateway_genai_tokens_total` 默认禁用。需要用 Prometheus 聚合 Token
+速率或趋势时，可在 Gateway 进程配置中启用：
+
+```yaml
+metrics:
+  genai_tokens:
+    enabled: true
+```
+
+这是启动期配置；修改后必须重启 Gateway。禁用时不会注册该指标族。计数器只有三个
+固定枚举标签：
+
+- `direction`：`input` 或 `output`
+- `provider`：`openai`、`openai_compatible` 或 `anthropic`
+- `usage_source`：`reported` 或 `estimated`
+
+三者的笛卡尔积使每个 Gateway 进程最多产生十二条序列。指标刻意不包含 `model`
+标签，因此模型名称不会扩大 Prometheus 基数。应使用
+`rate(edgion_gateway_genai_tokens_total[5m])` 观察速率，不要把原始计数器视为持久状态：
+Gateway 进程每次重启都会重置计数器。
+
+启用后，该计数器会聚合每一次已派发尝试（含随后重试）的上报或有界估算用量；派发前失败不计入。
+它不导出资源、模型、凭据或请求身份标签。
+
+该指标**不是**持久化用量或计费账本。独立于指标开关，access log 会记录最终请求汇总以及有界的
+`genai.attempts` 账本（含每次尝试的用量来源、token、成本、状态/失败、Retry-After 与 TTFT）。
+歧义结果可能为保护限流而保留完整的「输入 + 最大输出」Redis 预留，但其持久日志只记录观测到或
+有界估算的用量；保留的预留不等于已声明消耗。需要持久核算时，应投递并保留 access log；
+不要把 Prometheus 计数器值作为权威计费记录。
+
 ### 启用延迟 Histogram
 
 `edgion_gateway_request_duration_ms` 默认关闭。在 `metrics.request_duration` 段启用：

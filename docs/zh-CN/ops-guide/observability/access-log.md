@@ -162,6 +162,7 @@ Authorization: Bearer <admin-token>
   },
   "match_info": { },
   "backend_context": { },
+  "genai": { },
   "stage_logs": [ ],
   "info": [ ],
   "errors": [ ]
@@ -180,6 +181,7 @@ Authorization: Bearer <admin-token>
 | `request_info` | Object | 请求作用域字段——见下方[请求字段](#请求字段) |
 | `match_info` | Object | 匹配的路由标识（无路由匹配时省略） |
 | `backend_context` | Object | 后端标识和上游时序（无后端时省略/`null`） |
+| `genai` | Object | 最终 GenAI 用量与有界 per-attempt 核算（非 AI 请求省略） |
 | `stage_logs` | Array\<Object\> | 按阶段分组的每插件执行日志（为空时省略） |
 | `info` | Array\<String\> | 网关内部信息事件（为空时省略） |
 | `errors` | Array\<String\> | 处理过程中捕获的错误原因（为空时省略） |
@@ -240,6 +242,32 @@ Authorization: Bearer <admin-token>
 | `err` | Array\<String\> | — | 本次尝试的错误信息（为空时省略） |
 
 无后端使用时（路由未匹配，或请求被插件短路），`backend_context` 为 `null` 或省略。
+
+### `genai` 字段
+
+最终请求汇总包含 `provider`、`model`、`input_tokens`、`output_tokens`、可选的 cache token 计数与
+`estimated_cost_usd`、`streaming`、`usage_estimated`、可选的 `quota_status` 与 `ttft_ms`，以及下方的
+per-attempt 字段。`attempts` 最多包含八次已派发尝试，其序列化段上限为 8 KiB。当为遵守上述任一边界而
+省略后续汇总时，会出现 `attempts_truncated: true`。
+
+| `attempts[]` 字段 | 类型 | 说明 |
+|--------------------|------|------|
+| `number` | Integer | 从 1 起的已派发尝试序号 |
+| `service` | String | 有界的带 Namespace 的 EdgionAIService 键（`namespace/name`） |
+| `provider` | String | 固定提供商枚举 |
+| `credential` | String | 非敏感配置凭据别名；绝不是提供商凭据或 Secret 数据 |
+| `status` | Integer | 收到时的提供商 HTTP 状态 |
+| `failure` | String | 固定类别：`retryable_status`、`ambiguous_transport`、`backend_request_timeout` 或 `incomplete_response` |
+| `retry_after_seconds` | Integer | 接受的有界 Retry-After 冷却，单位秒 |
+| `ttft_ms` | Integer | 最终成功尝试到达首个非空响应体分片的时间 |
+| `usage_source` | String | `reported` 或 `estimated` |
+| `input_tokens` | Integer | 该次尝试的上报或有界估算输入 token |
+| `output_tokens` | Integer | 该次尝试的上报或有界估算输出 token |
+| `estimated_cost_usd` | String | 配置定价时的估算尝试成本 |
+
+账本从不存储提供商 URL、解析后的地址、Secret 值、请求/响应体、提供商错误文本、prompt、completion
+或工具参数。对派发后的歧义结果，Redis 可能保守地保留完整的「输入 + 最大输出」预留直至窗口过期。
+该预留用于保护限流；它与此处记录的持久观测/有界估算用量不同，也不表示已消耗全部预留 token。
 
 ### `stage_logs` 字段
 

@@ -23,6 +23,9 @@ impl ConfHandler<EdgionPlugins> for PluginStore {
         tracing::info!(component = "plugin_store", cnt = data.len(), "full set");
         let compiled = data.iter().map(|(k, v)| (k.clone(), compile_plugins(v))).collect();
         self.replace_all(compiled);
+        if std::ptr::eq(self, super::global_plugin_store()) {
+            crate::ai::reconcile_global_adaptive_telemetry();
+        }
     }
 
     fn partial_update(
@@ -43,6 +46,9 @@ impl ConfHandler<EdgionPlugins> for PluginStore {
         add_or_update.extend(compile_map(update));
 
         self.update(add_or_update, &remove);
+        if std::ptr::eq(self, super::global_plugin_store()) {
+            crate::ai::reconcile_global_adaptive_telemetry();
+        }
     }
 }
 

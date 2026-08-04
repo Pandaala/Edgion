@@ -1,6 +1,6 @@
 ---
 name: resource-edgion-backend-traffic-policy
-description: EdgionBackendTrafficPolicy Controller processing, Service dependency/conflict tracking, status, and Gateway arbitration.
+description: EdgionBackendTrafficPolicy typed Service/EdgionAIService dependencies, conflict status, and Gateway arbitration.
 ---
 
 # EdgionBackendTrafficPolicy resource
@@ -8,45 +8,68 @@ description: EdgionBackendTrafficPolicy Controller processing, Service dependenc
 > Common flow: [00-resource-flow.md](00-resource-flow.md)
 > External schema: [../../02-features/03-resources/20-edgion-backend-traffic-policy.md](../../02-features/03-resources/20-edgion-backend-traffic-policy.md)
 
-The policy attaches load balancing, active health check, outlier detection, and panic-threshold
-configuration to same-namespace Services through `targetRefs`.
+EdgionBackendTrafficPolicy (EBTP) is a direct backend policy. It attaches to homogeneous,
+same-namespace `targetRefs` of either core `Service` or `edgion.io/EdgionAIService`. It never
+targets HTTPRoute and never supplies forwarding destinations. Route-scoped AI selection belongs to
+rule-level `AiProxy.backendSelection`; its candidate list, order, and weights come only from
+`HTTPRoute.backendRefs`.
+
+## Canonical target identity
+
+Controller and Gateway share the resource-layer parser and typed identity:
+
+```text
+(group, kind, namespace, name)
+```
+
+Accepted pairs are core-group `Service` and `edgion.io/EdgionAIService`. A plain
+`namespace/name` key is insufficient because both kinds may have the same name. One policy accepts
+1–16 unique targets, and every target must have the same kind.
+
+The field matrix is atomic:
+
+| Target kind | Valid sections |
+|-------------|----------------|
+| `Service` | All existing sections |
+| `EdgionAIService` | `connection`, `retryConstraint`, `circuitBreaker`, `outlierDetection` |
+
+For AI targets, `loadBalancer`, `healthCheck`, and `upstreamAuthority` reject the whole policy.
+Cross-service choice belongs to AiProxy; an AI service has one provider endpoint, and Edgion does
+not invent an unauthenticated public-provider health-probe contract.
 
 ## Controller
 
-- `validate` calls `spec.get_validation_errors()`.
-- `parse` registers every Service target in `runtime.service_ref_mgr` so Service appearance/removal
-  requeues the policy.
-- Valid policies also register in the runtime conflict index. Invalid policies remain no-ops and do
-  not participate in precedence.
-- Policies that target the same Service use oldest creation timestamp, then name, as precedence.
-  A target/timestamp/validity change requeues affected siblings without unconditional ping-pong.
-- `on_delete` clears Service/conflict registrations and requeues surviving siblings.
+- Validation calls the canonical target parser plus `spec.get_validation_errors()`.
+- Parse clears old dependencies, registers every typed target, and resolves object existence per
+  target.
+- Service targets use `service_ref_mgr`; AI targets use `ai_service_ref_mgr`.
+- Valid and resolved targets enter conflict arbitration independently. An unresolved sibling is
+  omitted while its dependency remains registered for self-healing.
+- Policies sharing a typed target use oldest creation timestamp, then policy name, as precedence.
+  A multi-target policy may win some targets and lose others.
+- Apply/delete requeues only affected sibling policies through the EBTP workqueue. EBTP changes do
+  not rebuild HTTPRoutes.
 
-Status conditions:
-
-| Condition | Meaning |
-|-----------|---------|
-| `Accepted` | Spec validation result |
-| `ResolvedRefs` | All target Services currently exist |
-| `Conflicted` | A valid older sibling wins at least one shared Service target |
+Status uses per-Gateway ancestors. `Accepted` reports schema and field-matrix validity,
+`ResolvedRefs` reports target existence, and `Conflicted` reports targets won by an older sibling.
 
 ## Gateway
 
-`BackendTrafficPolicyStore` caches policies and recomputes only Service keys affected by a full or
-partial update. It skips invalid specs, applies the same oldest-wins arbitration, and is the sole
-writer of effective per-Service:
+`BackendTrafficPolicyStore` is the sole writer and publishes one ArcSwap snapshot keyed by typed
+backend identity. It applies the same per-target oldest-wins arbitration and exposes stable handles
+for connection timeout, retry budget, circuit breaker, outlier detection, and half-open state.
 
-- active health-check configuration;
-- circuit-breaker/outlier configuration;
-- panic-threshold override;
-- parsed LB policy.
+Service-only side effects—load-balancer selector compilation, endpoint active health checks,
+dynamic authority, and panic threshold—remain isolated to Service keys. For AI targets, the
+service-level circuit breaker is the aggregate concurrency guard; passive outlier state is keyed by
+typed AI service plus credential alias so one failing credential does not eject its siblings.
 
-The request path resolves the effective algorithm from this store; selector cells build an
-algorithm-specific compiled selector lazily.
+`HTTPRoute.retry` authorizes a retry. EBTP `retryConstraint` only limits aggregate retry volume;
+both must pass. No AI-specific retry policy or route-targeted EBTP is introduced.
 
 ## Key sources
 
+- `edgion-resources/src/resources/edgion_backend_traffic_policy.rs`
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_backend_traffic_policy.rs`
 - `edgion-gateway/src/backends/policy/backend_traffic/store.rs`
 - `edgion-gateway/src/backends/policy/backend_traffic/conf_handler_impl.rs`
-- `edgion-resources/src/resources/edgion_backend_traffic_policy.rs`

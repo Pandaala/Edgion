@@ -10,6 +10,7 @@ pub(crate) mod config_data_ref_mark;
 mod configmap;
 pub(crate) mod dns_resolver_guard;
 mod edgion_acme;
+mod edgion_ai_service;
 mod edgion_backend_traffic_policy;
 mod edgion_config_data;
 mod edgion_gateway_config;
@@ -38,6 +39,7 @@ mod udp_route;
 pub use backend_tls_policy::{BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler};
 pub use configmap::ConfigMapHandler;
 pub use edgion_acme::EdgionAcmeHandler;
+pub use edgion_ai_service::EdgionAIServiceHandler;
 pub use edgion_backend_traffic_policy::EdgionBackendTrafficPolicyHandler;
 pub use edgion_config_data::EdgionConfigDataHandler;
 pub use edgion_gateway_config::EdgionGatewayConfigHandler;
@@ -60,6 +62,7 @@ pub use udp_route::UdpRouteHandler;
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef, SecretRefManager};
 use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::resources::common::ParentReference;
+use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::ResourceKind;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -158,11 +161,60 @@ fn btp_refs_for_service(target_manager: &SecretRefManager, service_key: &str) ->
 /// Filtering by kind is load-bearing: routes register under the same keys,
 /// and requeuing a route from its own change path would loop forever.
 fn ebtp_refs_for_service(service_ref_mgr: &SecretRefManager, service_key: &str) -> Vec<ResourceRef> {
-    service_ref_mgr
-        .get_refs(service_key)
+    ebtp_refs_for_target(service_ref_mgr, service_key)
+}
+
+/// EdgionBackendTrafficPolicy refs registered under any canonical target key.
+fn ebtp_refs_for_target(target_ref_mgr: &SecretRefManager, target_key: &str) -> Vec<ResourceRef> {
+    target_ref_mgr
+        .get_refs(target_key)
         .into_iter()
         .filter(|r| r.kind == ResourceKind::EdgionBackendTrafficPolicy)
         .collect()
+}
+
+/// Resolve the ancestor Gateways for typed EBTP targets.
+///
+/// Service targets walk the existing Service reference manager. AI targets
+/// walk the distinct AI-service manager, which prevents same-named Service and
+/// EdgionAIService resources from sharing dependency or ancestor edges.
+pub(crate) fn resolve_policy_ancestor_gateways_for_targets(
+    targets: &[PolicyTargetKey],
+    policy_key: &str,
+    ctx: &HandlerContext,
+) -> BTreeMap<String, BTreeSet<PolicyTargetKey>> {
+    const MAX_POLICY_ANCESTORS: usize = 16;
+
+    let route_index = &ctx.runtime().gateway_route_index;
+    let mut map: BTreeMap<String, BTreeSet<PolicyTargetKey>> = BTreeMap::new();
+    for target in targets {
+        let refs = match target.target_kind {
+            PolicyTargetKind::Service => ctx
+                .runtime()
+                .service_ref_mgr
+                .get_refs(&format!("{}/{}", target.namespace, target.name)),
+            PolicyTargetKind::EdgionAIService => ctx.runtime().ai_service_ref_mgr.get_refs(&target.to_string()),
+        };
+        for route_ref in refs {
+            for gateway_key in route_index.get_gateways_for_route(route_ref.kind, &route_ref.resource_key()) {
+                map.entry(gateway_key).or_default().insert(target.clone());
+            }
+        }
+    }
+
+    if map.len() > MAX_POLICY_ANCESTORS {
+        tracing::warn!(
+            policy = %policy_key,
+            total = map.len(),
+            "policy ancestors truncated to {} per Gateway API limit",
+            MAX_POLICY_ANCESTORS,
+        );
+        let overflow: Vec<String> = map.keys().skip(MAX_POLICY_ANCESTORS).cloned().collect();
+        for key in overflow {
+            map.remove(&key);
+        }
+    }
+    map
 }
 
 /// Resolve the ancestor Gateways for a Service-targeting policy, per
@@ -189,37 +241,24 @@ pub(crate) fn resolve_policy_ancestor_gateways(
     policy_key: &str,
     ctx: &HandlerContext,
 ) -> BTreeMap<String, BTreeSet<String>> {
-    // Gateway API PolicyAncestorStatus maxItems=16.
-    const MAX_POLICY_ANCESTORS: usize = 16;
-
-    let service_ref_manager = &ctx.runtime().service_ref_mgr;
-    let route_index = &ctx.runtime().gateway_route_index;
-
-    let mut map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for name in target_service_names {
-        // Per Gateway API, targetRef only references same-namespace resources.
-        let service_key = format!("{policy_ns}/{name}");
-        for route_ref in service_ref_manager.get_refs(&service_key) {
-            let gw_keys = route_index.get_gateways_for_route(route_ref.kind, &route_ref.resource_key());
-            for gw_key in gw_keys {
-                map.entry(gw_key).or_default().insert(service_key.clone());
-            }
-        }
-    }
-
-    if map.len() > MAX_POLICY_ANCESTORS {
-        tracing::warn!(
-            policy = %policy_key,
-            total = map.len(),
-            "policy ancestors truncated to {} per Gateway API limit",
-            MAX_POLICY_ANCESTORS,
-        );
-        let overflow: Vec<String> = map.keys().skip(MAX_POLICY_ANCESTORS).cloned().collect();
-        for k in overflow {
-            map.remove(&k);
-        }
-    }
-    map
+    let targets: Vec<PolicyTargetKey> = target_service_names
+        .iter()
+        .map(|name| PolicyTargetKey {
+            target_kind: PolicyTargetKind::Service,
+            namespace: policy_ns.to_string(),
+            name: (*name).to_string(),
+        })
+        .collect();
+    resolve_policy_ancestor_gateways_for_targets(&targets, policy_key, ctx)
+        .into_iter()
+        .map(|(gateway, targets)| {
+            let service_keys = targets
+                .into_iter()
+                .map(|target| format!("{}/{}", target.namespace, target.name))
+                .collect();
+            (gateway, service_keys)
+        })
+        .collect()
 }
 
 /// Requeue backend policies (BackendTLSPolicy + EdgionBackendTrafficPolicy)
@@ -238,10 +277,6 @@ pub(crate) async fn requeue_backend_policies_for_route(
 ) {
     let route_ref = ResourceRef::new(route_kind, Some(route_ns.to_string()), route_name.to_string());
     let service_keys = ctx.runtime().service_ref_mgr.get_dependencies(&route_ref.key());
-
-    if service_keys.is_empty() {
-        return;
-    }
 
     let target_manager = ctx.runtime().backend_tls_policy.target_mgr();
     for service_key in &service_keys {
@@ -264,6 +299,26 @@ pub(crate) async fn requeue_backend_policies_for_route(
                 "Requeuing EdgionBackendTrafficPolicy due to route change"
             );
             ctx.requeue(ebtp_ref.kind_str(), ebtp_ref.resource_key()).await;
+        }
+    }
+
+    let ai_target_keys = ctx.runtime().ai_service_ref_mgr.get_dependencies(&route_ref.key());
+    requeue_backend_policies_for_ai_targets(&ai_target_keys, ctx).await;
+}
+
+/// Requeue EBTPs bound to typed EdgionAIService targets.
+///
+/// Callers pass the union of old/new route target keys so parentRef,
+/// delegation, and backend replacement all refresh affected ancestors.
+pub(crate) async fn requeue_backend_policies_for_ai_targets(ai_target_keys: &[String], ctx: &HandlerContext) {
+    for target_key in ai_target_keys {
+        for policy_ref in ebtp_refs_for_target(&ctx.runtime().ai_service_ref_mgr, target_key) {
+            tracing::debug!(
+                policy = %policy_ref.resource_key(),
+                ai_service = %target_key,
+                "Requeuing EdgionBackendTrafficPolicy due to AI route target change"
+            );
+            ctx.requeue(policy_ref.kind_str(), policy_ref.resource_key()).await;
         }
     }
 }
@@ -419,6 +474,71 @@ mod tests {
         // A target Service nobody routes to contributes no ancestor.
         let map = resolve_policy_ancestor_gateways("ns", &["svc-unrouted"], "ns/p", &ctx);
         assert!(map.is_empty());
+    }
+
+    #[test]
+    fn typed_ancestor_resolver_separates_same_named_service_and_ai_service() {
+        use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
+        use crate::conf_mgr::ControllerRuntime;
+        use edgion_resources::resources::common::ParentReference;
+        use std::sync::Arc;
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = crate::conf_mgr::sync_runtime::resource_processor::HandlerContext::new(
+            None,
+            None,
+            TriggerChain::default(),
+            5,
+            20,
+            runtime.clone(),
+        );
+        let service_route = ResourceRef::new(ResourceKind::HTTPRoute, Some("ns".to_string()), "service".to_string());
+        let ai_route = ResourceRef::new(ResourceKind::HTTPRoute, Some("ns".to_string()), "ai".to_string());
+        let service_target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::Service,
+            namespace: "ns".to_string(),
+            name: "shared".to_string(),
+        };
+        let ai_target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionAIService,
+            namespace: "ns".to_string(),
+            name: "shared".to_string(),
+        };
+        runtime
+            .service_ref_mgr
+            .add_ref("ns/shared".to_string(), service_route.clone());
+        runtime
+            .ai_service_ref_mgr
+            .add_ref(ai_target.to_string(), ai_route.clone());
+
+        let parent = |name: &str| ParentReference {
+            group: Some("gateway.networking.k8s.io".to_string()),
+            kind: Some("Gateway".to_string()),
+            namespace: Some("ns".to_string()),
+            name: name.to_string(),
+            section_name: None,
+            port: None,
+        };
+        runtime.gateway_route_index.update_route(
+            ResourceKind::HTTPRoute,
+            &service_route.resource_key(),
+            &[parent("service-gw")],
+            "ns",
+        );
+        runtime.gateway_route_index.update_route(
+            ResourceKind::HTTPRoute,
+            &ai_route.resource_key(),
+            &[parent("ai-gw")],
+            "ns",
+        );
+
+        let map = resolve_policy_ancestor_gateways_for_targets(
+            &[service_target.clone(), ai_target.clone()],
+            "ns/policy",
+            &ctx,
+        );
+        assert_eq!(map["ns/service-gw"], BTreeSet::from([service_target]));
+        assert_eq!(map["ns/ai-gw"], BTreeSet::from([ai_target]));
     }
 
     /// `ebtp_refs_for_service` returns only EdgionBackendTrafficPolicy refs

@@ -66,6 +66,30 @@ Suitable for:
 - failure fallback
 - specific status-code assertions
 
+### Streaming responses
+
+- `/sse?events=N&interval_ms=T` streams paced `text/event-stream` events with
+  sequence numbers and server-side epoch-millisecond timestamps. Defaults are
+  five events at 200 ms intervals.
+- `/stream-stall/{test_id}` sends one body chunk and then stalls.
+- `/stream-trickle/{test_id}/{chunks}/{interval_ms}` sends paced body chunks and
+  then completes normally.
+
+Use `/sse` for event-delivery and streaming-compression assertions. The other
+two endpoints model per-try timeout behavior for generic HTTP response bodies.
+
+### OpenAI-compatible provider fixture
+
+- `/ai/{*path}` accepts GET and POST requests on the shared HTTP server.
+- `mock_mode` selects deterministic `paced`, `split`, `missing_usage`,
+  `oversized`, or `abort` streaming behavior.
+- `fixture_query=preserved` supports exact query-preservation checks.
+
+The response exposes only fixed fixture identifiers and booleans for model,
+path, Host, usage-option, and credential checks. It never echoes an incoming or
+provider Authorization value. Use this endpoint for `EdgionAIService` tests;
+do not start a separate mock-provider process.
+
 ### Mirror test endpoints
 
 - `/mirror/capture`

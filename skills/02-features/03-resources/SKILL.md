@@ -30,6 +30,7 @@ description: Feature and configuration schema reference for all Kubernetes resou
 | 17 | EdgionAcme | `05-resources/17-edgion-acme.md` | [17-acme.md](17-acme.md) |
 | 18 | LinkSys | `05-resources/18-link-sys.md` | [18-link-sys.md](18-link-sys.md) |
 | 20 | EdgionBackendTrafficPolicy | `05-resources/20-edgion-backend-traffic-policy.md` | [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) |
+| 22 | EdgionAIService | `05-resources/22-edgion-ai-service.md` | [22-edgion-ai-service.md](22-edgion-ai-service.md) |
 
 > The feature documentation for #03 (EdgionGatewayConfig) lives under `02-config/` because it is essentially a configuration-layer resource.
 > #10 (Secret), #11 (ReferenceGrant), and #15 (EdgionConfigData) currently have no standalone feature documentation; see the architecture documentation.
@@ -76,8 +77,13 @@ description: Feature and configuration schema reference for all Kubernetes resou
 | Resource | Description |
 |----------|-------------|
 | [16-service-backends.md](16-service-backends.md) | Service discovery |
-| [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) | Per-destination load balancing, active health checks, outlier detection (attached to a Service via targetRefs) |
+| [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) | Direct-backend policy for Service or EdgionAIService; target kind controls valid sections |
 | [18-link-sys.md](18-link-sys.md) | Redis/Etcd/ES/Webhook/Kafka/HttpDns connector configuration |
+### AI Gateway
+
+| Resource | Description |
+|----------|-------------|
+| [22-edgion-ai-service.md](22-edgion-ai-service.md) | Provider endpoint, partial-good credential pool, model catalog, HTTPRoute backend binding, and AiProxy selection |
 
 ## Quick Lookup
 
@@ -94,3 +100,4 @@ description: Feature and configuration schema reference for all Kubernetes resou
 | Configure health checks/circuit breaking/load balancing | [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) |
 | Integrate with external systems | [18-link-sys.md](18-link-sys.md) |
 | Configure upstream TLS | [12-backend-tls-policy.md](12-backend-tls-policy.md) |
+| Configure an OpenAI-compatible provider | [22-edgion-ai-service.md](22-edgion-ai-service.md) |

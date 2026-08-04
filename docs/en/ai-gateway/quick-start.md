@@ -1,0 +1,157 @@
+# AI Gateway Quick Start
+
+Create a Secret, one or more `EdgionAIService` resources, a rule-level `AiProxy` plugin, and an
+HTTPRoute. Then point an OpenAI SDK at the route hostname.
+
+## Minimal path
+
+1. Store the provider key in a Secret at key `api-key`.
+2. Create an `EdgionAIService` that references the Secret and declares at least one model (and
+   optional client-facing aliases).
+3. Create an `EdgionPlugins` resource with exactly one enabled `AiProxy`.
+4. Attach that plugin to an HTTPRoute rule through `ExtensionRef`, and list only
+   `edgion.io/EdgionAIService` backends on that rule.
+5. Call `/v1/chat/completions` with any OpenAI-compatible client.
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://ai.example.com/v1",
+    api_key="sdk-placeholder",
+)
+
+completion = client.chat.completions.create(
+    model="chat",
+    messages=[{"role": "user", "content": "Summarize this request."}],
+    stream=True,
+)
+
+for chunk in completion:
+    print(chunk.choices[0].delta.content or "", end="", flush=True)
+```
+
+`api_key` is only a non-secret SDK compatibility placeholder. Edgion removes client provider
+authentication headers and installs the selected Secret-backed credential per attempt. Never put
+the real provider key in application configuration.
+
+## Complete example
+
+Replace both Secret values and ensure `main-gateway` exists.
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: primary-key
+  namespace: production
+type: Opaque
+stringData:
+  api-key: replace-with-primary-provider-key
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fallback-key
+  namespace: production
+type: Opaque
+stringData:
+  api-key: replace-with-fallback-provider-key
+---
+apiVersion: edgion.io/v1
+kind: EdgionAIService
+metadata:
+  name: primary-provider
+  namespace: production
+spec:
+  provider: OpenAI
+  credentialPool:
+    credentials:
+      - name: primary-account
+        secretRef:
+          name: primary-key
+  models:
+    - name: provider-chat-v2
+      aliases: [chat]
+  defaults:
+    streaming: true
+    maxOutputTokens: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionAIService
+metadata:
+  name: fallback-provider
+  namespace: production
+spec:
+  provider: Anthropic
+  credentialPool:
+    credentials:
+      - name: fallback-account
+        secretRef:
+          name: fallback-key
+  models:
+    - name: claude-example
+      aliases: [chat]
+  defaults:
+    streaming: true
+    maxOutputTokens: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ai-proxy
+  namespace: production
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Priority
+        injectUsageTracking: true
+        onUnknownModel: reject
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-chat-route
+  namespace: production
+spec:
+  parentRefs:
+    - name: main-gateway
+  hostnames:
+    - ai.example.com
+  rules:
+    - name: chat
+      matches:
+        - path:
+            type: PathPrefix
+            value: /v1/chat/completions
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-proxy
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionAIService
+          name: primary-provider
+          weight: 80
+        - group: edgion.io
+          kind: EdgionAIService
+          name: fallback-provider
+          weight: 20
+      timeouts:
+        backendRequest: 30s
+        request: 90s
+      retry:
+        attempts: 2
+        backoff: 10ms
+        codes: [429, 502, 503, 504]
+```
+
+## Next steps
+
+- [Concepts](./concepts.md) — who owns candidates, credentials, selection, and resilience
+- [Routing and Selection](./routing.md) — choose a `backendSelection` algorithm
+- [Resilience and Failover](./resilience.md) — retries, SSE commitment, outlier detection

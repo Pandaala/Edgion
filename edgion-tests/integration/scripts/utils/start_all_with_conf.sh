@@ -1016,6 +1016,14 @@ main() {
     cp "${PROJECT_ROOT}/config/edgion-gateway.yaml" "${CONFIG_DIR}/edgion-gateway.yaml"
     CONTROLLER_CONFIG="${CONFIG_DIR}/edgion-controller.yaml"
     GATEWAY_CONFIG="${CONFIG_DIR}/edgion-gateway.yaml"
+    if [ "${EDGION_TEST_ENABLE_GENAI_METRICS:-0}" = "1" ]; then
+        if grep -Eq '^[[:space:]]*metrics:' "${GATEWAY_CONFIG}"; then
+            log_error "Integration GenAI metric override requires a Gateway config without an existing metrics section"
+            exit 1
+        fi
+        printf '\nmetrics:\n  genai_tokens:\n    enabled: true\n' >> "${GATEWAY_CONFIG}"
+        log_info "Enabled GenAI token metrics in the integration workdir config"
+    fi
     if [ "${EDGION_CONF_SYNC_PLAINTEXT:-0}" = "1" ]; then
         conf_sync_replace_with_skip_tls "${CONTROLLER_CONFIG}" "${GATEWAY_CONFIG}"
         CONF_SYNC_SCHEME="http"

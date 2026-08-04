@@ -130,6 +130,7 @@ pub mod condition_reasons {
 
     // PartiallyInvalid reasons
     pub const RULE_INVALID: &str = "RuleInvalid";
+    pub const INVALID_CREDENTIALS: &str = "InvalidCredentials";
     pub const ALL_RULES_VALID: &str = "AllRulesValid";
 
     /// Reason for PluginPolicyRestricted=True.
@@ -158,6 +159,8 @@ pub enum AcceptedError {
     ParentNotFound { parent_name: String },
     /// Resource failed validation or preparse (generic validation error)
     Invalid { message: String },
+    /// A supported extension was attached with an unsupported value/shape.
+    UnsupportedValue { message: String },
 }
 
 impl AcceptedError {
@@ -169,6 +172,7 @@ impl AcceptedError {
             Self::NoMatchingParent { .. } => condition_reasons::NO_MATCHING_PARENT,
             Self::ParentNotFound { .. } => condition_reasons::NO_MATCHING_PARENT,
             Self::Invalid { .. } => condition_reasons::INVALID,
+            Self::UnsupportedValue { .. } => condition_reasons::UNSUPPORTED_VALUE,
         }
     }
 
@@ -190,6 +194,7 @@ impl AcceptedError {
                 format!("Parent Gateway '{}' not found", parent_name)
             }
             Self::Invalid { message } => message.clone(),
+            Self::UnsupportedValue { message } => message.clone(),
         }
     }
 
@@ -208,6 +213,8 @@ pub enum ResolvedRefsError {
     InvalidKind { kind: String, name: String },
     /// Backend Service not found
     BackendNotFound { namespace: String, name: String },
+    /// Referenced EdgionAIService not found.
+    EdgionAIServiceNotFound { namespace: String, name: String },
     /// Referenced Secret not found
     SecretNotFound { namespace: String, name: String },
     /// Cross-namespace reference denied by ReferenceGrant policy.
@@ -267,6 +274,7 @@ impl ResolvedRefsError {
         match self {
             Self::InvalidKind { .. } => condition_reasons::INVALID_KIND,
             Self::BackendNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
+            Self::EdgionAIServiceNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
             Self::SecretNotFound { .. } => condition_reasons::SECRET_NOT_FOUND,
             Self::RefNotPermitted { .. } => condition_reasons::REF_NOT_PERMITTED,
             Self::EdgionConfigDataNotFound { .. } => condition_reasons::INVALID_EDGION_CONFIG_DATA_REF,
@@ -285,6 +293,9 @@ impl ResolvedRefsError {
             }
             Self::BackendNotFound { namespace, name } => {
                 format!("Service '{}/{}' not found", namespace, name)
+            }
+            Self::EdgionAIServiceNotFound { namespace, name } => {
+                format!("EdgionAIService '{}/{}' not found", namespace, name)
             }
             Self::SecretNotFound { namespace, name } => {
                 format!("Secret '{}/{}' not found", namespace, name)
@@ -499,6 +510,7 @@ pub(crate) fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'stati
             ResolvedRefsError::InvalidSecretType { .. } => 3,
             ResolvedRefsError::EdgionConfigDataNotFound { .. } => 4,
             ResolvedRefsError::BackendNotFound { .. } => 5,
+            ResolvedRefsError::EdgionAIServiceNotFound { .. } => 5,
             // Delegation child missing is the same severity class as a missing
             // Service backend (both surface as BACKEND_NOT_FOUND).
             ResolvedRefsError::DelegationChildNotFound { .. } => 5,

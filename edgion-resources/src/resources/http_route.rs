@@ -89,6 +89,8 @@ pub enum DelegationIssue {
 
 /// API group of the Gateway API resources (used for delegation ref detection).
 pub const GATEWAY_API_GROUP: &str = "gateway.networking.k8s.io";
+/// API group of Edgion custom resources.
+pub const EDGION_API_GROUP: &str = "edgion.io";
 
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -124,6 +126,20 @@ pub struct HTTPRouteRule {
     /// Support: Extended (Experimental)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_persistence: Option<SessionPersistence>,
+
+    /// Controller-resolved identity of the terminal HTTPRoute that owns this
+    /// effective rule. Kubernetes resources use `metadata.uid`; UID-less
+    /// config-center resources use the stable typed route key instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_terminal_route_uid: Option<String>,
+
+    /// Controller-resolved identity of the terminal rule within its owning
+    /// route. Named rules use `name:<value>` and unnamed rules use
+    /// `index:<zero-based index>` so the two domains cannot collide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_terminal_rule_identity: Option<String>,
 
     /// Pre-parsed route-level timeout configurations (not serialized)
     /// Parsed once when route is loaded, used at runtime
@@ -185,6 +201,8 @@ impl Clone for HTTPRouteRule {
             timeouts: self.timeouts.clone(),
             retry: self.retry.clone(),
             session_persistence: self.session_persistence.clone(),
+            resolved_terminal_route_uid: self.resolved_terminal_route_uid.clone(),
+            resolved_terminal_rule_identity: self.resolved_terminal_rule_identity.clone(),
             parsed_timeouts: self.parsed_timeouts.clone(),
             parsed_retry: self.parsed_retry.clone(),
             parsed_forward_raw_path: self.parsed_forward_raw_path,
@@ -204,6 +222,8 @@ impl fmt::Debug for HTTPRouteRule {
             .field("timeouts", &self.timeouts)
             .field("retry", &self.retry)
             .field("session_persistence", &self.session_persistence)
+            .field("resolved_terminal_route_uid", &self.resolved_terminal_route_uid)
+            .field("resolved_terminal_rule_identity", &self.resolved_terminal_rule_identity)
             .field("parsed_forward_raw_path", &self.parsed_forward_raw_path)
             .field(
                 "parsed_allow_non_idempotent_retry",
@@ -357,12 +377,57 @@ pub struct HTTPBackendRef {
     pub ref_denied: Option<RefDenied>,
 }
 
+/// Canonical classification of an HTTPRoute backendRef.
+///
+/// Keep this classification in the shared resource layer so the Controller
+/// and Gateway cannot disagree about which downstream subsystem owns a ref.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HTTPBackendRefKind {
+    /// A Kubernetes Service backend (Gateway API default or an Edgion Service-family
+    /// kind such as `ServiceExternalName` / `ServiceClusterIp`). Peer selection still
+    /// uses the concrete `kind` string via `EdgionService::from_kind`.
+    Service,
+    /// An Edgion AI provider-service resource.
+    EdgionAIService,
+    /// A child HTTPRoute expanded by Controller-side route delegation.
+    RouteDelegation,
+    /// Any other group/kind combination.
+    Unsupported,
+}
+
+/// True when `kind` is the Gateway API Service default or an Edgion Service-family
+/// extension that still resolves through the Service store / peer path.
+fn is_service_family_kind(kind: Option<&str>) -> bool {
+    matches!(
+        kind,
+        None | Some("")
+            | Some("Service")
+            | Some("ServiceClusterIp")
+            | Some("ServiceExternalName")
+            | Some("ServiceEndpointSlice")
+            | Some("EndpointSlice")
+    )
+}
+
 impl HTTPBackendRef {
+    /// Classify this backendRef using Gateway API defaults and Edgion's exact
+    /// extension groups/kinds.
+    pub fn backend_kind(&self) -> HTTPBackendRefKind {
+        match (self.group.as_deref(), self.kind.as_deref()) {
+            (None | Some("") | Some("core"), kind) if is_service_family_kind(kind) => {
+                HTTPBackendRefKind::Service
+            }
+            (Some(EDGION_API_GROUP), Some("EdgionAIService")) => HTTPBackendRefKind::EdgionAIService,
+            (Some(GATEWAY_API_GROUP), Some("HTTPRoute")) => HTTPBackendRefKind::RouteDelegation,
+            _ => HTTPBackendRefKind::Unsupported,
+        }
+    }
+
     /// True if this backendRef delegates to a child HTTPRoute
     /// (`group: gateway.networking.k8s.io, kind: HTTPRoute`) instead of
     /// referencing a Service backend.
     pub fn is_route_delegation_ref(&self) -> bool {
-        self.group.as_deref() == Some(GATEWAY_API_GROUP) && self.kind.as_deref() == Some("HTTPRoute")
+        self.backend_kind() == HTTPBackendRefKind::RouteDelegation
     }
 }
 
@@ -833,6 +898,17 @@ pub struct LocalObjectReference {
 
     /// Name is the name of the referent
     pub name: String,
+
+    /// Controller-resolved namespace of a delegated rule's ExtensionRef.
+    ///
+    /// LocalObjectReference is operator-local and therefore has no namespace
+    /// field. Once a child rule is flattened into a parent HTTPRoute, the
+    /// child's local namespace must travel with the derived rule so Controller
+    /// dependency tracking and Gateway plugin lookup do not reinterpret it as
+    /// parent-local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_namespace: Option<String>,
 }
 
 /// HTTPRouteTimeouts defines timeouts that can be configured for an HTTPRoute
@@ -1231,6 +1307,49 @@ mod tests {
     }
 
     #[test]
+    fn backend_ref_classification_is_canonical() {
+        for (group, kind) in [
+            (None, None),
+            (None, Some("Service")),
+            (Some(""), Some("Service")),
+            (Some("core"), Some("Service")),
+            // Edgion Service-family kinds still own the Service peer path.
+            (None, Some("ServiceExternalName")),
+            (None, Some("ServiceClusterIp")),
+            (None, Some("ServiceEndpointSlice")),
+            (None, Some("EndpointSlice")),
+            (Some("core"), Some("ServiceExternalName")),
+            (Some(""), Some("ServiceClusterIp")),
+        ] {
+            assert_eq!(backend_ref(group, kind).backend_kind(), HTTPBackendRefKind::Service);
+        }
+
+        assert_eq!(
+            backend_ref(Some(EDGION_API_GROUP), Some("EdgionAIService")).backend_kind(),
+            HTTPBackendRefKind::EdgionAIService
+        );
+        assert_eq!(
+            backend_ref(Some(GATEWAY_API_GROUP), Some("HTTPRoute")).backend_kind(),
+            HTTPBackendRefKind::RouteDelegation
+        );
+
+        for (group, kind) in [
+            (Some(EDGION_API_GROUP), None),
+            (None, Some("EdgionAIService")),
+            (Some("core"), Some("EdgionAIService")),
+            (Some(GATEWAY_API_GROUP), Some("Service")),
+            (Some(EDGION_API_GROUP), Some("HTTPRoute")),
+            (Some("example.io"), Some("Widget")),
+            (None, Some("ServiceImport")),
+            // Service-family kinds under a non-core group stay Unsupported.
+            (Some(EDGION_API_GROUP), Some("ServiceExternalName")),
+            (Some(GATEWAY_API_GROUP), Some("ServiceClusterIp")),
+        ] {
+            assert_eq!(backend_ref(group, kind).backend_kind(), HTTPBackendRefKind::Unsupported);
+        }
+    }
+
+    #[test]
     fn gep2257_basic_units() {
         assert_eq!(parse_gep2257_duration_secs("1h"), Some(3600));
         assert_eq!(parse_gep2257_duration_secs("5m"), Some(300));
@@ -1394,6 +1513,30 @@ mod tests {
         // delegation_issues is controller-internal and must never serialize
         assert!(json["spec"].get("delegationIssues").is_none());
         assert!(json["spec"].get("delegation_issues").is_none());
+    }
+
+    #[test]
+    fn terminal_rule_identity_is_transport_only() {
+        let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
+            "name": "primary",
+            "resolvedTerminalRouteUid": "route-uid",
+            "resolvedTerminalRuleIdentity": "name:primary"
+        }))
+        .expect("rule with resolved terminal identity should deserialize");
+        assert_eq!(rule.resolved_terminal_route_uid.as_deref(), Some("route-uid"));
+        assert_eq!(rule.resolved_terminal_rule_identity.as_deref(), Some("name:primary"));
+
+        let transported = serde_json::to_value(&rule).expect("resolved terminal identity should serialize");
+        assert_eq!(transported["resolvedTerminalRouteUid"], "route-uid");
+        assert_eq!(transported["resolvedTerminalRuleIdentity"], "name:primary");
+
+        let schema = schemars::schema_for!(HTTPRouteRule);
+        let schema_json = serde_json::to_value(schema).expect("HTTPRouteRule schema should serialize");
+        let properties = schema_json["properties"]
+            .as_object()
+            .expect("HTTPRouteRule schema should have properties");
+        assert!(!properties.contains_key("resolvedTerminalRouteUid"));
+        assert!(!properties.contains_key("resolvedTerminalRuleIdentity"));
     }
 
     #[test]

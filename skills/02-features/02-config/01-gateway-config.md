@@ -155,6 +155,8 @@ path_normalization:
 
 metrics:
   listen: "0.0.0.0:12090"
+  genai_tokens:
+    enabled: false                       # Optional bounded token rate/trend counter
   request_duration:
     enabled: false
     buckets: [1, 5, 10, 25, 50, 100, 200, 500, 1000, 2500, 5000, 10000]
@@ -342,6 +344,16 @@ no CLI token flag. See [03-auth-bootstrap.md](03-auth-bootstrap.md#gateway-provi
 - `metrics.listen` controls the dedicated Prometheus listener. The request-duration
   histogram is disabled by default; enabling labels increases cardinality.
 - `metrics.backend_requests.labels` controls labels on the always-on backend counter.
+- `metrics.genai_tokens.enabled` controls the optional
+  `edgion_gateway_genai_tokens_total` counter and defaults to `false`. The setting is
+  captured once at Gateway startup, so changing it requires a restart. When disabled,
+  the metric family is not registered. Its fixed labels produce at most twelve series:
+  `direction` (`input` / `output`) × `provider` (`openai` /
+  `openai_compatible` / `anthropic`) × `usage_source` (`reported` / `estimated`). It deliberately
+  has no `model` label. This restart-reset counter is for Prometheus rate and trend
+  aggregation, not persistent metering or billing. Per-request GenAI token usage is
+  always written to the access log independently of this switch; configure the log
+  backend to retain that ledger.
 - `lru_cache` supplies process-wide plugin cache defaults.
 - `all_endpoint_status` sets security ceilings for that plugin.
 - `path_normalization` is process-local and restart-bound. It is not an

@@ -99,6 +99,7 @@
 | edgion_gateway_request_duration_ms | Histogram | gateway | configurable (see request_duration.labels); disabled by default | business | End-to-end request latency — the only histogram on the data plane | `histogram_quantile(0.99, sum(rate(edgion_gateway_request_duration_ms_bucket[5m])) by (le))` |
 | edgion_gateway_request_bytes_total | Counter | gateway | none | business | Total gateway request bytes proxied (downstream → upstream) | - |
 | edgion_gateway_response_bytes_total | Counter | gateway | none | business | Total gateway response bytes proxied (upstream → downstream) | - |
+| edgion_gateway_genai_tokens_total | Counter | gateway | direction (input/output), provider (openai/openai_compatible/anthropic), usage_source (reported/estimated) | business | Optional default-off, process-local GenAI token rate/trend counter; aggregates every dispatched attempt with fixed labels, resets on restart, and never replaces the durable per-attempt access-log ledger | - |
 | edgion_mirror_requests_total | Counter | gateway | status (ok/channel_full/connect_err/connect_timeout/write_err/timeout) | business | Request-mirror outcome counter (fire-and-forget; no latency histogram — the mirror access log's `et` field carries per-request timing) | - |
 | edgion_conn_ip_restriction_events_total | Counter | gateway | result (overlay_missing/overlay_disabled/overlay_type_mismatch/overlay_invalid/fail_closed_profile_missing/denied) | business | `GlobalConnectionIpRestriction` stream-plugin decision events | - |
 | edgion_ip_deny_entries_skipped_total | Counter | gateway | scope (http/stream_l4/tls_route) | business | Inline `deny` CIDR entries skipped by partial-good compilation — a hole in a blacklist (under-block / fail-open direction) | - |
@@ -122,6 +123,7 @@ Known high-cardinality levers, their defaults, and worst-case series counts.
 | `backend_requests.labels.route` | off | `15 x N_route` | high |
 | `backend_requests.labels.backend` | off | `15 x N_backend` | high |
 | `request_duration.enabled` + labels | off | `buckets x label-product` | high |
+| `metrics.genai_tokens.enabled` | off | 12 | bounded |
 | `resource_abnormal` (controller) | cap 1000 | <= cap | bounded |
 | `idle_timeout` cold eviction | 0 (no-op today) | grows if enabled without guard | medium |
 | any `ns`/`name`/`module` label | opt-in | scales with deployment | high |

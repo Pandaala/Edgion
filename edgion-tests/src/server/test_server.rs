@@ -3,8 +3,8 @@
 
 use anyhow::{Context, Result};
 use axum::{
-    body::Body,
-    extract::{ConnectInfo, Extension, Path, Request as AxumRequest},
+    body::{Body, Bytes},
+    extract::{ConnectInfo, Extension, Path, Query, Request as AxumRequest},
     http::Version,
     response::IntoResponse,
     routing::get,
@@ -64,6 +64,44 @@ static CB_COUNTER: std::sync::LazyLock<Mutex<std::collections::HashMap<String, u
 /// resolution should NOT re-hit the endpoint within its TTL).
 static DNS_RESOLVE_COUNTER: std::sync::LazyLock<Mutex<std::collections::HashMap<String, u32>>> =
     std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// Total requests that reached the native Anthropic fixture. The integration
+/// client samples this around a locally rejected request to prove the provider
+/// was not contacted; no request data is retained.
+static ANTHROPIC_REQUEST_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Per-scenario, fixed-label state for AI resilience integration tests. Only
+/// an opaque fixture ID, bounded server-owned modes, and counters are kept.
+static AI_RESILIENCE_STATE: std::sync::LazyLock<Mutex<std::collections::HashMap<String, AiResilienceFixtureState>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+#[derive(Clone, Copy, Debug, Default)]
+enum AiResiliencePrimaryMode {
+    #[default]
+    Healthy,
+    Fail,
+    ProbeSuccess,
+}
+
+#[derive(Debug, Default)]
+struct AiResilienceFixtureState {
+    counts: [u64; 6],
+    half_open_primary_mode: AiResiliencePrimaryMode,
+    half_open_probe_release: std::sync::Arc<tokio::sync::Notify>,
+}
+
+/// Per-trace provider observations for the credential-exhaustion scenario.
+/// Only fixture-owned service labels and non-secret credential generations are
+/// retained; request bodies and authorization values never enter this store.
+static AI_CREDENTIAL_EXHAUSTION_OBSERVATIONS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<String, Vec<AiCredentialExhaustionObservation>>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+#[derive(Debug, serde::Serialize)]
+struct AiCredentialExhaustionObservation {
+    service: &'static str,
+    credential_generation: &'static str,
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "test-server")]
@@ -479,6 +517,30 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/status/{code}", get(status_handler))
         .route("/status-empty/{code}", get(status_empty_handler))
         .route("/delay/{seconds}", get(delay_handler))
+        // GET /sse?events=N&interval_ms=T: paced SSE stream for streaming tests.
+        .route("/sse", get(sse_handler))
+        // OpenAI-compatible deterministic provider used by the AI Gateway
+        // integration suite. It reports only booleans and fixed fixture IDs;
+        // credentials and arbitrary request values are never echoed.
+        .route("/ai/{*path}", get(ai_provider_handler).post(ai_provider_handler))
+        .route("/ai-resilience/count/{trace_id}", get(ai_resilience_count_handler))
+        .route("/ai-resilience/counts/{fixture_id}", get(ai_resilience_counts_handler))
+        .route(
+            "/ai-resilience/mode/{fixture_id}/{backend}/{mode}",
+            axum::routing::post(ai_resilience_mode_handler),
+        )
+        .route(
+            "/ai-resilience/release/{fixture_id}/half-open-primary",
+            axum::routing::post(ai_resilience_release_handler),
+        )
+        .route(
+            "/ai-credential-exhaustion/observations/{trace_id}",
+            get(ai_credential_exhaustion_observations_handler),
+        )
+        // Native Anthropic Messages fixture. Its observation endpoint exposes
+        // only a monotonically increasing count, never headers or bodies.
+        .route("/anthropic/{*path}", axum::routing::post(anthropic_provider_handler))
+        .route("/anthropic-fixture/count", get(anthropic_request_count_handler))
         // --- Mirror endpoints (for RequestMirror plugin integration tests) ---
         // POST/GET to /mirror/capture: gateway mirrors requests here; stored by x-trace-id
         .route(
@@ -1089,6 +1151,791 @@ async fn stream_trickle_handler(Path((test_id, chunks, interval_ms)): Path<(Stri
         .header("x-stream-mode", "trickle")
         .body(body)
         .unwrap()
+}
+
+#[derive(serde::Deserialize)]
+struct SseQuery {
+    events: Option<u32>,
+    interval_ms: Option<u64>,
+}
+
+/// `/sse?events=N&interval_ms=T`
+///
+/// Sends one SSE event immediately, then sends the remaining events at the
+/// requested interval. Each channel item is yielded independently to Hyper,
+/// which makes the event observable downstream without waiting for the stream
+/// to finish. Bounds keep malformed test input from creating a long-lived or
+/// unbounded test-server task.
+async fn sse_handler(Query(query): Query<SseQuery>) -> impl IntoResponse {
+    use axum::body::{Body, Bytes};
+    use axum::http::StatusCode;
+    use axum::response::Response;
+
+    let events = query.events.unwrap_or(5).clamp(1, 50);
+    let interval_ms = query.interval_ms.unwrap_or(200).min(5_000);
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
+    tokio::spawn(async move {
+        for seq in 0..events {
+            let ts_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let event = format!("data: {{\"seq\":{seq},\"ts_ms\":{ts_ms}}}\n\n");
+            if tx.send(Ok(Bytes::from(event))).await.is_err() {
+                break;
+            }
+            if seq + 1 < events && interval_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(interval_ms)).await;
+            }
+        }
+    });
+
+    let body = Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "text/event-stream")
+        .body(body)
+        .unwrap()
+}
+
+const AI_PROVIDER_KEY_A: &str = "ai-provider-test-key";
+const AI_PROVIDER_KEY_B: &str = "ai-provider-rotated-test-key";
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct AiProviderQuery {
+    mock_mode: Option<String>,
+    fixture_query: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct AiProviderObservation {
+    fixture_id: &'static str,
+    auth_is_provider_key: bool,
+    credential_generation: &'static str,
+    auth_is_client_key: bool,
+    host_is_expected: bool,
+    path_has_prefix: bool,
+    path_is_models: bool,
+    query_is_preserved: bool,
+    model_is_canonical: bool,
+    model_is_economy: bool,
+    model_is_unknown: bool,
+    stream_requested: bool,
+    include_usage: bool,
+}
+
+fn ai_provider_observation(
+    path: &str,
+    query: &AiProviderQuery,
+    headers: &axum::http::HeaderMap,
+    body: &[u8],
+) -> AiProviderObservation {
+    let json: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+    let auth = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let model = json.get("model").and_then(serde_json::Value::as_str);
+    let credential_generation = if auth == format!("Bearer {AI_PROVIDER_KEY_A}") {
+        "a"
+    } else if auth == format!("Bearer {AI_PROVIDER_KEY_B}") {
+        "b"
+    } else {
+        "unknown"
+    };
+    AiProviderObservation {
+        fixture_id: "openai-compatible-v1",
+        auth_is_provider_key: credential_generation != "unknown",
+        credential_generation,
+        auth_is_client_key: auth == "Bearer client-key-must-be-stripped",
+        host_is_expected: headers
+            .get(axum::http::header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|host| host == "127.0.0.1:30001"),
+        path_has_prefix: matches!(path, "prefix/v1/chat/completions" | "prefix/v1/models"),
+        path_is_models: path == "prefix/v1/models",
+        query_is_preserved: query.fixture_query.as_deref() == Some("preserved"),
+        model_is_canonical: model == Some("fixture-model"),
+        model_is_economy: model == Some("economy-model"),
+        model_is_unknown: model == Some("unknown-fixture-model"),
+        stream_requested: json.get("stream").and_then(serde_json::Value::as_bool) == Some(true),
+        include_usage: json
+            .pointer("/stream_options/include_usage")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct AiStreamPlan {
+    chunks: Vec<Bytes>,
+    interval: Duration,
+    abort_after_chunks: bool,
+}
+
+fn ai_stream_plan(mode: &str, observation: &str) -> AiStreamPlan {
+    let first = format!(
+        "data: {{\"id\":\"stream-fixture\",\"choices\":[{{\"delta\":{{\"content\":\"fixed \"}}}}],\"mock\":{observation}}}\n\n"
+    );
+    let middle = "data: {\"id\":\"stream-fixture\",\"choices\":[{\"delta\":{\"content\":\"completion\"}}]}\n\n";
+    let usage = "data: {\"id\":\"stream-fixture\",\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7,\"total_tokens\":18}}\n\n";
+    let done = "data: [DONE]\n\n";
+
+    match mode {
+        "split" => AiStreamPlan {
+            chunks: format!("{first}{usage}{done}")
+                .as_bytes()
+                .chunks(7)
+                .map(Bytes::copy_from_slice)
+                .collect(),
+            interval: Duration::ZERO,
+            abort_after_chunks: false,
+        },
+        "missing_usage" => AiStreamPlan {
+            chunks: vec![Bytes::from(first), Bytes::from_static(done.as_bytes())],
+            interval: Duration::ZERO,
+            abort_after_chunks: false,
+        },
+        // One event remains incomplete until the delimiter after 70 KiB,
+        // deliberately crossing the decoder's bounded inspection limit.
+        "oversized" => AiStreamPlan {
+            chunks: vec![
+                Bytes::from(format!(
+                    "data: {{\"id\":\"oversized-fixture\",\"choices\":[{{\"delta\":{{\"content\":\"{}\"}}}}]}}\n\n",
+                    "x".repeat(70 * 1024)
+                )),
+                Bytes::from_static(usage.as_bytes()),
+                Bytes::from_static(done.as_bytes()),
+            ],
+            interval: Duration::ZERO,
+            abort_after_chunks: false,
+        },
+        "abort" => AiStreamPlan {
+            chunks: vec![Bytes::from(first)],
+            interval: Duration::ZERO,
+            abort_after_chunks: true,
+        },
+        "resilience_abort" => AiStreamPlan {
+            chunks: vec![
+                Bytes::from(first),
+                Bytes::from_static(middle.as_bytes()),
+                Bytes::from_static(
+                    b"data: {\"id\":\"stream-fixture\",\"choices\":[{\"delta\":{\"content\":\" before-abort\"}}]}\n\n",
+                ),
+            ],
+            interval: Duration::from_millis(50),
+            abort_after_chunks: true,
+        },
+        // Long enough for Task 9 to drop the downstream client before the
+        // provider reaches its final usage event.
+        "long" => {
+            let mut chunks = vec![Bytes::from(first)];
+            chunks.extend((0..100).map(|_| {
+                Bytes::from_static(
+                    b"data: {\"id\":\"long-fixture\",\"choices\":[{\"delta\":{\"content\":\"tick\"}}]}\n\n",
+                )
+            }));
+            chunks.push(Bytes::from_static(usage.as_bytes()));
+            chunks.push(Bytes::from_static(done.as_bytes()));
+            AiStreamPlan {
+                chunks,
+                interval: Duration::from_millis(100),
+                abort_after_chunks: false,
+            }
+        }
+        _ => AiStreamPlan {
+            chunks: vec![
+                Bytes::from(first),
+                Bytes::from_static(middle.as_bytes()),
+                Bytes::from_static(usage.as_bytes()),
+                Bytes::from_static(done.as_bytes()),
+            ],
+            interval: Duration::from_millis(250),
+            abort_after_chunks: false,
+        },
+    }
+}
+
+async fn ai_provider_handler(
+    Path(path): Path<String>,
+    Query(query): Query<AiProviderQuery>,
+    request: AxumRequest<Body>,
+) -> axum::response::Response {
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+    use axum::response::Response;
+
+    let (parts, body) = request.into_parts();
+    let Ok(body) = to_bytes(body, 1024 * 1024).await else {
+        return Response::builder()
+            .status(StatusCode::PAYLOAD_TOO_LARGE)
+            .body(Body::empty())
+            .unwrap();
+    };
+    let observation = ai_provider_observation(&path, &query, &parts.headers, &body);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    let streaming = json.get("stream").and_then(serde_json::Value::as_bool) == Some(true);
+
+    if let Some(trace_id) = parts.headers.get("x-trace-id").and_then(|value| value.to_str().ok()) {
+        let exhaustion_service = if path.starts_with("credential-exhaustion-primary/") {
+            Some("primary")
+        } else if path.starts_with("credential-exhaustion-secondary/") {
+            Some("secondary")
+        } else {
+            None
+        };
+        if let Some(service) = exhaustion_service {
+            AI_CREDENTIAL_EXHAUSTION_OBSERVATIONS
+                .lock()
+                .entry(trace_id.to_string())
+                .or_default()
+                .push(AiCredentialExhaustionObservation {
+                    service,
+                    credential_generation: observation.credential_generation,
+                });
+        }
+        let slot = if path.starts_with("resilience-429/") {
+            Some(0)
+        } else if path.starts_with("resilience-stream/") {
+            Some(2)
+        } else if path.starts_with("resilience-stream-fallback/") {
+            Some(3)
+        } else if path.starts_with("resilience-half-open-primary/") {
+            Some(4)
+        } else if path.starts_with("resilience-half-open-fallback/") {
+            Some(5)
+        } else {
+            None
+        };
+        if let Some(slot) = slot {
+            let fixture_id = parts
+                .headers
+                .get("x-resilience-fixture-id")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or(trace_id);
+            AI_RESILIENCE_STATE
+                .lock()
+                .entry(fixture_id.to_string())
+                .or_default()
+                .counts[slot] += 1;
+        }
+    }
+
+    if path.starts_with("resilience-429/") {
+        return Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .header("content-type", "application/json")
+            .header("x-ratelimit-reset-requests", "1500ms")
+            .body(Body::from(
+                r#"{"error":{"message":"private resilience fixture detail"}}"#,
+            ))
+            .unwrap();
+    }
+
+    if path.starts_with("resilience-half-open-primary/") {
+        let fixture_id = parts
+            .headers
+            .get("x-resilience-fixture-id")
+            .and_then(|value| value.to_str().ok())
+            .or_else(|| parts.headers.get("x-trace-id").and_then(|value| value.to_str().ok()));
+        let state = fixture_id
+            .and_then(|fixture_id| {
+                AI_RESILIENCE_STATE.lock().get(fixture_id).map(|state| {
+                    (
+                        state.half_open_primary_mode,
+                        std::sync::Arc::clone(&state.half_open_probe_release),
+                    )
+                })
+            })
+            .unwrap_or_else(|| {
+                (
+                    AiResiliencePrimaryMode::default(),
+                    std::sync::Arc::new(tokio::sync::Notify::new()),
+                )
+            });
+        let (mode, probe_release) = state;
+        match mode {
+            AiResiliencePrimaryMode::Fail => {
+                return Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"error":{"message":"private half-open fixture detail"}}"#,
+                    ))
+                    .unwrap();
+            }
+            AiResiliencePrimaryMode::ProbeSuccess => {
+                let _ = tokio::time::timeout(Duration::from_secs(10), probe_release.notified()).await;
+            }
+            AiResiliencePrimaryMode::Healthy => {}
+        }
+    }
+
+    if path.starts_with("fail-503/") {
+        return Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"error":{"message":"fixed retryable provider failure"}}"#,
+            ))
+            .unwrap();
+    }
+
+    if path.starts_with("credential-exhaustion-") {
+        return Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"error":{"message":"fixed retryable provider failure"}}"#,
+            ))
+            .unwrap();
+    }
+
+    if !streaming {
+        if path == "prefix/v1/models" {
+            let response = serde_json::json!({
+                "object": "list",
+                "data": [{"id": "model-fixture", "object": "model"}],
+                "mock": observation,
+            });
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "application/json")
+                .body(Body::from(response.to_string()))
+                .unwrap();
+        }
+        let response = serde_json::json!({
+            "id": "completion-fixture",
+            "object": "chat.completion",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "fixed completion"}}],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+            "mock": observation,
+        });
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(Body::from(response.to_string()))
+            .unwrap();
+    }
+
+    let observation = serde_json::to_string(&observation).unwrap();
+    let mode = if path.starts_with("resilience-stream/") {
+        "resilience_abort"
+    } else {
+        query.mock_mode.as_deref().unwrap_or("paced")
+    };
+    let plan = ai_stream_plan(mode, &observation);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
+    tokio::spawn(async move {
+        for chunk in plan.chunks {
+            if tx.send(Ok(chunk)).await.is_err() {
+                return;
+            }
+            if !plan.interval.is_zero() {
+                tokio::time::sleep(plan.interval).await;
+            }
+        }
+        if plan.abort_after_chunks {
+            let _ = tx
+                .send(Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionAborted,
+                    "intentional AI provider fixture abort",
+                )))
+                .await;
+        }
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "text/event-stream")
+        .header("cache-control", "no-cache")
+        .body(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        .unwrap()
+}
+
+async fn ai_resilience_count_handler(Path(trace_id): Path<String>) -> impl IntoResponse {
+    let counts = AI_RESILIENCE_STATE
+        .lock()
+        .remove(&trace_id)
+        .map(|state| state.counts)
+        .unwrap_or_default();
+    axum::Json(ai_resilience_counts_json(counts))
+}
+
+async fn ai_resilience_counts_handler(Path(fixture_id): Path<String>) -> impl IntoResponse {
+    let counts = AI_RESILIENCE_STATE
+        .lock()
+        .get(&fixture_id)
+        .map(|state| state.counts)
+        .unwrap_or_default();
+    axum::Json(ai_resilience_counts_json(counts))
+}
+
+fn ai_resilience_counts_json(counts: [u64; 6]) -> serde_json::Value {
+    serde_json::json!({
+        "rate_limited": counts[0],
+        "healthy": counts[1],
+        "stream_primary": counts[2],
+        "stream_fallback": counts[3],
+        "half_open_primary": counts[4],
+        "half_open_fallback": counts[5],
+    })
+}
+
+async fn ai_resilience_mode_handler(
+    Path((fixture_id, backend, mode)): Path<(String, String, String)>,
+) -> axum::http::StatusCode {
+    if fixture_id.len() > 128 || backend != "half-open-primary" {
+        return axum::http::StatusCode::BAD_REQUEST;
+    }
+    let mode = match mode.as_str() {
+        "healthy" => AiResiliencePrimaryMode::Healthy,
+        "fail" => AiResiliencePrimaryMode::Fail,
+        "probe-success" => AiResiliencePrimaryMode::ProbeSuccess,
+        _ => return axum::http::StatusCode::BAD_REQUEST,
+    };
+    let mut fixtures = AI_RESILIENCE_STATE.lock();
+    let state = fixtures.entry(fixture_id).or_default();
+    state.half_open_primary_mode = mode;
+    if matches!(mode, AiResiliencePrimaryMode::ProbeSuccess) {
+        state.half_open_probe_release = std::sync::Arc::new(tokio::sync::Notify::new());
+    }
+    axum::http::StatusCode::NO_CONTENT
+}
+
+async fn ai_resilience_release_handler(Path(fixture_id): Path<String>) -> axum::http::StatusCode {
+    let Some(release) = AI_RESILIENCE_STATE
+        .lock()
+        .get(&fixture_id)
+        .map(|state| std::sync::Arc::clone(&state.half_open_probe_release))
+    else {
+        return axum::http::StatusCode::NOT_FOUND;
+    };
+    release.notify_one();
+    axum::http::StatusCode::NO_CONTENT
+}
+
+async fn ai_credential_exhaustion_observations_handler(Path(trace_id): Path<String>) -> impl IntoResponse {
+    let observations = AI_CREDENTIAL_EXHAUSTION_OBSERVATIONS
+        .lock()
+        .remove(&trace_id)
+        .unwrap_or_default();
+    axum::Json(serde_json::json!({ "observations": observations }))
+}
+
+const ANTHROPIC_PROVIDER_KEY: &str = "anthropic-provider-test-key";
+
+#[derive(Debug, serde::Serialize)]
+struct AnthropicProviderObservation {
+    fixture_id: &'static str,
+    credential_valid: bool,
+    authorization_absent: bool,
+    version_valid: bool,
+    beta_absent: bool,
+    accept_encoding_absent: bool,
+    host_valid: bool,
+    path_valid: bool,
+    query_absent: bool,
+    model_canonical: bool,
+    max_tokens_valid: bool,
+    messages_valid: bool,
+    system_valid: bool,
+    openai_fields_absent: bool,
+}
+
+fn anthropic_provider_observation(
+    path: &str,
+    uri: &axum::http::Uri,
+    headers: &axum::http::HeaderMap,
+    body: &serde_json::Value,
+) -> AnthropicProviderObservation {
+    let messages_valid = body
+        .get("messages")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|messages| {
+            !messages.is_empty()
+                && messages.iter().all(|message| {
+                    message
+                        .get("role")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|role| matches!(role, "user" | "assistant"))
+                })
+        });
+    AnthropicProviderObservation {
+        fixture_id: "anthropic-native-v1",
+        credential_valid: headers.get("x-api-key").and_then(|value| value.to_str().ok())
+            == Some(ANTHROPIC_PROVIDER_KEY),
+        authorization_absent: !headers.contains_key(axum::http::header::AUTHORIZATION),
+        version_valid: headers.get("anthropic-version").and_then(|value| value.to_str().ok()) == Some("2023-06-01"),
+        beta_absent: !headers.contains_key("anthropic-beta"),
+        accept_encoding_absent: !headers.contains_key(axum::http::header::ACCEPT_ENCODING),
+        host_valid: headers
+            .get(axum::http::header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|host| host == "127.0.0.1:30001"),
+        path_valid: path == "prefix/v1/messages",
+        query_absent: uri.query().is_none(),
+        model_canonical: body.get("model").and_then(serde_json::Value::as_str) == Some("claude-fixture"),
+        max_tokens_valid: body.get("max_tokens").and_then(serde_json::Value::as_u64) == Some(64),
+        messages_valid,
+        system_valid: body
+            .get("system")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|blocks| {
+                !blocks.is_empty()
+                    && blocks.iter().all(|block| {
+                        block.get("type").and_then(serde_json::Value::as_str) == Some("text")
+                            && block.get("text").and_then(serde_json::Value::as_str).is_some()
+                    })
+            }),
+        openai_fields_absent: !body.as_object().is_some_and(|object| {
+            object.contains_key("max_completion_tokens") || object.contains_key("stream_options")
+        }),
+    }
+}
+
+fn anthropic_message_response(content: serde_json::Value, stop_reason: &str) -> axum::response::Response {
+    let response = serde_json::json!({
+        "id": "msg_fixture",
+        "type": "message",
+        "role": "assistant",
+        "content": content,
+        "model": "claude-provider-alias",
+        "stop_reason": stop_reason,
+        "stop_sequence": null,
+        "usage": {
+            "input_tokens": 5,
+            "cache_creation_input_tokens": 3,
+            "cache_read_input_tokens": 2,
+            "output_tokens": 7
+        }
+    });
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("content-type", "application/json")
+        .header("request-id", "provider-request-id-must-be-stripped")
+        .body(Body::from(response.to_string()))
+        .unwrap()
+}
+
+fn anthropic_event(name: &str, value: serde_json::Value) -> Bytes {
+    Bytes::from(format!("event: {name}\ndata: {}\n\n", value))
+}
+
+fn anthropic_stream_plan(mode: &str, observation: &AnthropicProviderObservation) -> AiStreamPlan {
+    if mode == "malformed" {
+        return AiStreamPlan {
+            chunks: vec![Bytes::from_static(b"event: message_start\ndata: {not-json}\n\n")],
+            interval: Duration::ZERO,
+            abort_after_chunks: false,
+        };
+    }
+    if mode == "oversized" {
+        return AiStreamPlan {
+            chunks: vec![Bytes::from(format!(
+                "event: future_event\ndata: {{\"type\":\"future_event\",\"payload\":\"{}\"}}\n\n",
+                "x".repeat(70 * 1024)
+            ))],
+            interval: Duration::ZERO,
+            abort_after_chunks: false,
+        };
+    }
+
+    let start = anthropic_event(
+        "message_start",
+        serde_json::json!({
+            "type":"message_start",
+            "message":{
+                "id":"msg_stream_fixture",
+                "type":"message",
+                "role":"assistant",
+                "content":[],
+                "model":"claude-provider-alias",
+                "stop_reason":null,
+                "stop_sequence":null,
+                "usage":{
+                    "input_tokens":5,
+                    "cache_creation_input_tokens":3,
+                    "cache_read_input_tokens":2,
+                    "output_tokens":0
+                }
+            }
+        }),
+    );
+    let (block_start, deltas, stop_reason) = if mode == "stream_tool" {
+        (
+            anthropic_event(
+                "content_block_start",
+                serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_fixture","name":"weather","input":{}}}),
+            ),
+            vec![
+                anthropic_event(
+                    "content_block_delta",
+                    serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":"}}),
+                ),
+                anthropic_event(
+                    "content_block_delta",
+                    serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"Paris\"}"}}),
+                ),
+            ],
+            "tool_use",
+        )
+    } else {
+        let observation = serde_json::to_string(observation).unwrap_or_else(|_| "{}".to_string());
+        (
+            anthropic_event(
+                "content_block_start",
+                serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+            ),
+            vec![anthropic_event(
+                "content_block_delta",
+                serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":observation}}),
+            )],
+            "end_turn",
+        )
+    };
+    let mut chunks = vec![start, block_start];
+    chunks.extend(deltas);
+    chunks.extend([
+        anthropic_event(
+            "content_block_stop",
+            serde_json::json!({"type":"content_block_stop","index":0}),
+        ),
+        anthropic_event(
+            "message_delta",
+            serde_json::json!({
+                "type":"message_delta",
+                "delta":{"stop_reason":stop_reason,"stop_sequence":null},
+                "usage":{"output_tokens":7}
+            }),
+        ),
+        anthropic_event("message_stop", serde_json::json!({"type":"message_stop"})),
+    ]);
+    AiStreamPlan {
+        chunks,
+        interval: if mode == "paced" {
+            Duration::from_millis(175)
+        } else {
+            Duration::ZERO
+        },
+        abort_after_chunks: false,
+    }
+}
+
+async fn anthropic_provider_handler(Path(path): Path<String>, request: AxumRequest<Body>) -> axum::response::Response {
+    ANTHROPIC_REQUEST_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let (parts, body) = request.into_parts();
+    if parts
+        .headers
+        .get("x-resilience-case")
+        .and_then(|value| value.to_str().ok())
+        == Some("cross-provider")
+    {
+        if let Some(trace_id) = parts.headers.get("x-trace-id").and_then(|value| value.to_str().ok()) {
+            let fixture_id = parts
+                .headers
+                .get("x-resilience-fixture-id")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or(trace_id);
+            AI_RESILIENCE_STATE
+                .lock()
+                .entry(fixture_id.to_string())
+                .or_default()
+                .counts[1] += 1;
+        }
+    }
+    let mode = parts
+        .headers
+        .get("x-anthropic-fixture-mode")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("default")
+        .to_string();
+    let Ok(body) = axum::body::to_bytes(body, 1024 * 1024).await else {
+        return axum::response::Response::builder()
+            .status(axum::http::StatusCode::PAYLOAD_TOO_LARGE)
+            .body(Body::empty())
+            .unwrap();
+    };
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    let observation = anthropic_provider_observation(&path, &parts.uri, &parts.headers, &json);
+
+    let fixed_status = match mode.as_str() {
+        "status_400" => Some(axum::http::StatusCode::BAD_REQUEST),
+        "status_401" => Some(axum::http::StatusCode::UNAUTHORIZED),
+        "status_429" => Some(axum::http::StatusCode::TOO_MANY_REQUESTS),
+        _ => None,
+    };
+    if let Some(status) = fixed_status {
+        return axum::response::Response::builder()
+            .status(status)
+            .header("content-type", "application/json")
+            .header("request-id", "provider-request-id-must-be-stripped")
+            .header("location", "http://provider.internal/private")
+            .header("set-cookie", "provider_session=must-not-pass")
+            .header("retry-after", "3")
+            .body(Body::from(
+                r#"{"type":"error","error":{"type":"provider_private","message":"provider private detail"}}"#,
+            ))
+            .unwrap();
+    }
+
+    if mode == "nonstream_tool" {
+        let tools_valid = json
+            .get("tools")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|tools| {
+                tools.len() == 2
+                    && tools.iter().all(|tool| {
+                        tool.get("name").and_then(serde_json::Value::as_str).is_some()
+                            && tool.get("input_schema").is_some_and(serde_json::Value::is_object)
+                    })
+            });
+        if !tools_valid {
+            return axum::response::Response::builder()
+                .status(axum::http::StatusCode::BAD_REQUEST)
+                .body(Body::empty())
+                .unwrap();
+        }
+        return anthropic_message_response(
+            serde_json::json!([
+                {"type":"tool_use","id":"toolu_one","name":"weather","input":{"city":"Paris"}},
+                {"type":"tool_use","id":"toolu_two","name":"clock","input":{"zone":"UTC"}}
+            ]),
+            "tool_use",
+        );
+    }
+
+    let streaming = json.get("stream").and_then(serde_json::Value::as_bool) == Some(true);
+    if !streaming {
+        let observation = serde_json::to_string(&observation).unwrap_or_else(|_| "{}".to_string());
+        return anthropic_message_response(serde_json::json!([{"type":"text","text":observation}]), "end_turn");
+    }
+
+    let plan = anthropic_stream_plan(&mode, &observation);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
+    tokio::spawn(async move {
+        for chunk in plan.chunks {
+            if tx.send(Ok(chunk)).await.is_err() {
+                return;
+            }
+            if !plan.interval.is_zero() {
+                tokio::time::sleep(plan.interval).await;
+            }
+        }
+    });
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("content-type", "text/event-stream")
+        .header("request-id", "provider-request-id-must-be-stripped")
+        .body(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        .unwrap()
+}
+
+async fn anthropic_request_count_handler() -> impl IntoResponse {
+    axum::Json(serde_json::json!({
+        "count": ANTHROPIC_REQUEST_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+    }))
 }
 
 /// /cb-fail/{test_id}/{fail_count}
@@ -2784,5 +3631,81 @@ mod tests {
         let (host, ips) = parse_dns_query("");
         assert_eq!(host, "");
         assert_eq!(ips, vec!["127.0.0.1".to_string()]);
+    }
+
+    #[test]
+    fn ai_provider_observation_never_contains_credential_material() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer ai-provider-test-key".parse().unwrap(),
+        );
+        headers.insert(axum::http::header::HOST, "127.0.0.1:30001".parse().unwrap());
+        let query = AiProviderQuery {
+            mock_mode: None,
+            fixture_query: Some("preserved".to_string()),
+        };
+        let body = br#"{"model":"fixture-model","stream":true,"stream_options":{"include_usage":true}}"#;
+        let observation = ai_provider_observation("prefix/v1/chat/completions", &query, &headers, body);
+        let encoded = serde_json::to_string(&observation).unwrap();
+
+        assert!(observation.auth_is_provider_key);
+        assert!(observation.model_is_canonical);
+        assert!(observation.include_usage);
+        assert_eq!(observation.credential_generation, "a");
+        assert!(!encoded.contains(AI_PROVIDER_KEY_A));
+        assert!(!encoded.contains(AI_PROVIDER_KEY_B));
+        assert!(!encoded.contains("authorization"));
+
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {AI_PROVIDER_KEY_B}").parse().unwrap(),
+        );
+        let rotated = ai_provider_observation("prefix/v1/chat/completions", &query, &headers, body);
+        let rotated_encoded = serde_json::to_string(&rotated).unwrap();
+        assert!(rotated.auth_is_provider_key);
+        assert_eq!(rotated.credential_generation, "b");
+        assert!(!rotated_encoded.contains(AI_PROVIDER_KEY_A));
+        assert!(!rotated_encoded.contains(AI_PROVIDER_KEY_B));
+    }
+
+    #[test]
+    fn ai_stream_modes_have_deterministic_bounded_contracts() {
+        let observation = "{\"fixture_id\":\"test\"}";
+
+        let paced = ai_stream_plan("paced", observation);
+        assert_eq!(paced.chunks.len(), 4);
+        assert_eq!(paced.interval, Duration::from_millis(250));
+        assert!(paced.chunks[2].windows(7).any(|window| window == b"\"usage\""));
+        assert_eq!(paced.chunks[3], Bytes::from_static(b"data: [DONE]\n\n"));
+
+        let split = ai_stream_plan("split", observation);
+        assert!(split.chunks.len() > 4);
+        assert!(split.chunks.iter().all(|chunk| chunk.len() <= 7));
+        let split_joined = split.chunks.concat();
+        assert!(split_joined.windows(7).any(|window| window == b"\"usage\""));
+        assert!(split_joined.ends_with(b"data: [DONE]\n\n"));
+
+        let missing = ai_stream_plan("missing_usage", observation).chunks.concat();
+        assert!(!missing.windows(7).any(|window| window == b"\"usage\""));
+        assert!(missing.ends_with(b"data: [DONE]\n\n"));
+
+        let oversized = ai_stream_plan("oversized", observation);
+        assert!(oversized.chunks[0].len() > 64 * 1024);
+        assert!(oversized.chunks[0].ends_with(b"\n\n"));
+        assert_eq!(oversized.chunks.len(), 3);
+
+        let abort = ai_stream_plan("abort", observation);
+        assert_eq!(abort.chunks.len(), 1);
+        assert!(abort.abort_after_chunks);
+
+        let resilience_abort = ai_stream_plan("resilience_abort", observation);
+        assert_eq!(resilience_abort.chunks.len(), 3);
+        assert!(resilience_abort.abort_after_chunks);
+
+        let long = ai_stream_plan("long", observation);
+        assert!(long.chunks.len() > 100);
+        assert!(long.interval >= Duration::from_millis(100));
+        assert_eq!(long.chunks.last().unwrap(), &Bytes::from_static(b"data: [DONE]\n\n"));
     }
 }

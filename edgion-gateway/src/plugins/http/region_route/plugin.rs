@@ -272,6 +272,7 @@ impl RegionRoute {
             sni,
             // Cross-region hop: the peer gateway handles its own path normalization.
             preserve_raw_path: true,
+            upstream_read_timeout_override: None,
         })) {
             SetJumpOutcome::Set => {
                 session.record_outcome(DyeOutcome::Success, &region.name);
@@ -800,7 +801,13 @@ mod tests {
 
         let mut session = MockPluginSession::new();
         session.expect_header_value().returning(|_| None);
-        session.expect_set_upstream_jump().return_const(SetJumpOutcome::Set);
+        session
+            .expect_set_upstream_jump()
+            .withf(|target| match target {
+                UpstreamJumpTarget::External(jump) => jump.upstream_read_timeout_override.is_none(),
+                _ => false,
+            })
+            .return_const(SetJumpOutcome::Set);
         session
             .expect_record_outcome()
             .withf(|o, v| *o == DyeOutcome::Success && v == "us-east")

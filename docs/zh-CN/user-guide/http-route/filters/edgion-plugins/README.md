@@ -6,6 +6,7 @@ Edgion 提供的 HTTP Route 级别插件，通过 `EdgionPlugins` CRD 配置。
 
 | 文档 | 说明 |
 |------|------|
+| [ai-proxy.md](ai-proxy.md) | Rule 级 AiProxy 入口；完整文档见 [AI Gateway](../../../../ai-gateway/) |
 | [bandwidth-limit.md](bandwidth-limit.md) | 带宽限制 |
 | [basic-auth.md](basic-auth.md) | HTTP Basic 认证 |
 | [canary.md](canary.md) | 全量切换、可远程切换的金丝雀流量插件 |

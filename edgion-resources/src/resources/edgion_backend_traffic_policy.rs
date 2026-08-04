@@ -1,6 +1,6 @@
 //! EdgionBackendTrafficPolicy — per-destination traffic policy (LB algorithm,
 //! active health check, outlier detection, panic threshold) attached to
-//! Services via targetRefs. Design:
+//! Services or EdgionAIService resources via targetRefs. Design:
 //! docs/superpowers/specs/2026-07-10-edgion-backend-traffic-policy-design.md
 
 use super::circuit_breaker::CircuitBreakerConfig;
@@ -13,6 +13,8 @@ use kube::core::ObjectMeta;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::fmt;
 
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
@@ -26,30 +28,32 @@ use serde::{Deserialize, Serialize};
 )]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionBackendTrafficPolicySpec {
-    /// Services this policy attaches to (same namespace as the policy).
+    /// Homogeneous Service or EdgionAIService targets in the policy namespace.
+    #[schemars(length(min = 1, max = 16))]
     pub target_refs: Vec<PolicyTargetRef>,
-    /// Load-balancing algorithm and panic threshold.
+    /// Load-balancing algorithm and panic threshold. Service targets only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load_balancer: Option<LoadBalancerConfig>,
-    /// Active health check (probe) configuration.
+    /// Active health check (probe) configuration. Service targets only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health_check: Option<ServiceHealthCheck>,
-    /// Outlier detection (passive ejection) configuration.
+    /// Outlier detection (passive ejection) configuration for a Service
+    /// endpoint or AI credential target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outlier_detection: Option<OutlierDetectionConfig>,
     /// Dynamic upstream authority (Host + SNI) within a wildcard pattern the
-    /// backend declares. Absent = today's behaviour, unchanged.
+    /// Service backend declares. Service targets only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_authority: Option<UpstreamAuthorityConfig>,
     /// Retry budget: cap retry volume as a percentage of request volume to the
     /// target backend over a sliding window. Absent = today's behaviour.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_constraint: Option<RetryConstraintConfig>,
-    /// Circuit breaker: per-endpoint hard cap on concurrent in-flight requests.
-    /// Absent = no concurrency cap (today's behaviour).
+    /// Circuit breaker: hard cap on concurrent in-flight requests per Service
+    /// endpoint or per EdgionAIService. Absent = no concurrency cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub circuit_breaker: Option<CircuitBreakerConfig>,
-    /// Per-backend connection tuning override. Currently only connectTimeout.
+    /// Per-target connection tuning override. Currently only connectTimeout.
     /// Absent = use the global defaults. HTTP upstream only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionOverride>,
@@ -139,10 +143,80 @@ pub struct PolicyTargetRef {
     /// Group of the referent. Empty string (default) = core API group.
     #[serde(default)]
     pub group: String,
-    /// Kind of the referent. v1 supports only "Service".
+    /// Kind of the referent: "Service" or "EdgionAIService".
     pub kind: String,
-    /// Name of the referent Service (same namespace as the policy).
+    /// Name of the referent (same namespace as the policy).
     pub name: String,
+}
+
+/// Canonical kind of an EdgionBackendTrafficPolicy target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PolicyTargetKind {
+    Service,
+    EdgionAIService,
+}
+
+impl PolicyTargetKind {
+    pub const fn group(self) -> &'static str {
+        match self {
+            Self::Service => "",
+            Self::EdgionAIService => "edgion.io",
+        }
+    }
+
+    pub const fn kind(self) -> &'static str {
+        match self {
+            Self::Service => "Service",
+            Self::EdgionAIService => "EdgionAIService",
+        }
+    }
+}
+
+/// Typed, canonical identity used for policy arbitration and dependency keys.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PolicyTargetKey {
+    pub target_kind: PolicyTargetKind,
+    pub namespace: String,
+    pub name: String,
+}
+
+impl PolicyTargetKey {
+    pub fn group(&self) -> &'static str {
+        self.target_kind.group()
+    }
+
+    pub fn kind(&self) -> &'static str {
+        self.target_kind.kind()
+    }
+}
+
+impl fmt::Display for PolicyTargetKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}/{}/{}", self.group(), self.kind(), self.namespace, self.name)
+    }
+}
+
+impl PolicyTargetRef {
+    /// Parse the accepted group/kind pairs into their canonical typed kind.
+    pub fn target_kind(&self) -> Result<PolicyTargetKind, String> {
+        match (self.group.as_str(), self.kind.as_str()) {
+            ("" | "core", "Service") => Ok(PolicyTargetKind::Service),
+            ("edgion.io", "EdgionAIService") => Ok(PolicyTargetKind::EdgionAIService),
+            _ => Err(format!(
+                "targetRef {}/{} {}: supported targets are core-group Service or edgion.io/EdgionAIService",
+                self.group, self.kind, self.name
+            )),
+        }
+    }
+
+    /// Resolve this same-namespace ref into its typed canonical identity.
+    pub fn canonical_key(&self, namespace: &str) -> Result<PolicyTargetKey, String> {
+        Ok(PolicyTargetKey {
+            target_kind: self.target_kind()?,
+            namespace: namespace.to_string(),
+            name: self.name.clone(),
+        })
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
@@ -190,14 +264,14 @@ pub enum HashOn {
 }
 
 /// GEP-2648 per-ancestor policy status. The ancestor of this direct policy
-/// is the Gateway whose routes reach a target Service; the same policy can
+/// is the Gateway whose routes reach a target; the same policy can
 /// be Accepted on one Gateway and Conflicted on another, which a flat
 /// condition list cannot express.
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionBackendTrafficPolicyStatus {
     /// One entry per ancestor Gateway, stamped with this controller's name.
-    /// Empty when no route references any target Service. Capped at 16.
+    /// Empty when no route references any target. Capped at 16.
     ///
     /// Always serialized, even when empty: K8s status persistence uses JSON
     /// Merge Patch, and merge-patching an empty status object `{}` cannot
@@ -208,20 +282,58 @@ pub struct EdgionBackendTrafficPolicyStatus {
 }
 
 impl EdgionBackendTrafficPolicySpec {
+    /// Return canonical typed identities for every target in the policy
+    /// namespace. Callers should use this only after validation succeeds.
+    pub fn canonical_target_keys(&self, namespace: &str) -> Result<Vec<PolicyTargetKey>, String> {
+        self.target_refs
+            .iter()
+            .map(|target| target.canonical_key(namespace))
+            .collect()
+    }
+
     pub fn get_validation_errors(&self) -> Vec<String> {
         let mut errors = Vec::new();
         if self.target_refs.is_empty() {
             errors.push("targetRefs must not be empty".to_string());
+        } else if self.target_refs.len() > 16 {
+            errors.push("targetRefs must contain at most 16 entries".to_string());
         }
+
+        let mut target_kinds = HashSet::new();
+        let mut targets = HashSet::new();
         for tr in &self.target_refs {
-            if !(tr.group.is_empty() || tr.group == "core") || tr.kind != "Service" {
-                errors.push(format!(
-                    "targetRef {}/{} {}: only core-group Service targets are supported",
-                    tr.group, tr.kind, tr.name
-                ));
+            match tr.target_kind() {
+                Ok(target_kind) => {
+                    target_kinds.insert(target_kind);
+                    if !targets.insert((target_kind, tr.name.as_str())) {
+                        errors.push(format!(
+                            "targetRefs must not contain duplicate target {}/{} {}",
+                            target_kind.group(),
+                            target_kind.kind(),
+                            tr.name
+                        ));
+                    }
+                }
+                Err(error) => errors.push(error),
             }
             if tr.name.is_empty() {
                 errors.push("targetRef name must not be empty".to_string());
+            }
+        }
+        if target_kinds.len() > 1 {
+            errors.push("targetRefs must all have the same target kind".to_string());
+        }
+
+        let targets_ai_service = target_kinds.len() == 1 && target_kinds.contains(&PolicyTargetKind::EdgionAIService);
+        if targets_ai_service {
+            if self.load_balancer.is_some() {
+                errors.push("loadBalancer is not supported for EdgionAIService targets".to_string());
+            }
+            if self.health_check.is_some() {
+                errors.push("healthCheck is not supported for EdgionAIService targets".to_string());
+            }
+            if self.upstream_authority.is_some() {
+                errors.push("upstreamAuthority is not supported for EdgionAIService targets".to_string());
             }
         }
         if let Some(lb) = &self.load_balancer {
@@ -417,6 +529,94 @@ outlierDetection:
         assert_eq!(ch.key.as_deref(), Some("x-user-id"));
         assert_eq!(lb.panic_threshold, Some(30));
         assert!(spec.get_validation_errors().is_empty());
+    }
+
+    #[test]
+    fn canonical_target_keys_preserve_target_type() {
+        let service = PolicyTargetRef {
+            group: "core".to_string(),
+            kind: "Service".to_string(),
+            name: "shared".to_string(),
+        }
+        .canonical_key("app")
+        .expect("core Service target");
+        let ai_service = PolicyTargetRef {
+            group: "edgion.io".to_string(),
+            kind: "EdgionAIService".to_string(),
+            name: "shared".to_string(),
+        }
+        .canonical_key("app")
+        .expect("EdgionAIService target");
+
+        assert_eq!(service.target_kind, PolicyTargetKind::Service);
+        assert_eq!(service.to_string(), "/Service/app/shared");
+        assert_eq!(ai_service.target_kind, PolicyTargetKind::EdgionAIService);
+        assert_eq!(ai_service.to_string(), "edgion.io/EdgionAIService/app/shared");
+        assert_ne!(service, ai_service);
+    }
+
+    #[test]
+    fn target_refs_reject_bounds_duplicates_and_mixed_kinds() {
+        let empty: EdgionBackendTrafficPolicySpec = serde_yaml::from_str("targetRefs: []").unwrap();
+        assert!(empty
+            .get_validation_errors()
+            .iter()
+            .any(|error| error.contains("must not be empty")));
+
+        let too_many_refs = (0..17).map(|index| format!("  - kind: Service\n    name: svc-{index}"));
+        let too_many: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(&format!(
+            "targetRefs:\n{}",
+            too_many_refs.collect::<Vec<_>>().join("\n")
+        ))
+        .unwrap();
+        assert!(too_many
+            .get_validation_errors()
+            .iter()
+            .any(|error| error.contains("at most 16")));
+
+        let duplicate: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+            "targetRefs:\n  - group: core\n    kind: Service\n    name: shared\n  - group: \"\"\n    kind: Service\n    name: shared",
+        )
+        .unwrap();
+        assert!(duplicate
+            .get_validation_errors()
+            .iter()
+            .any(|error| error.contains("duplicate target")));
+
+        let mixed: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+            "targetRefs:\n  - kind: Service\n    name: backend\n  - group: edgion.io\n    kind: EdgionAIService\n    name: provider",
+        )
+        .unwrap();
+        assert!(mixed
+            .get_validation_errors()
+            .iter()
+            .any(|error| error.contains("same target kind")));
+    }
+
+    #[test]
+    fn ai_targets_enforce_policy_field_matrix() {
+        let allowed: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+            "targetRefs:\n  - group: edgion.io\n    kind: EdgionAIService\n    name: provider\nconnection:\n  connectTimeout: 2s\nretryConstraint: {}\ncircuitBreaker:\n  maxParallelRequests: 20\noutlierDetection:\n  consecutiveErrors: 5",
+        )
+        .unwrap();
+        assert!(allowed.get_validation_errors().is_empty());
+
+        for forbidden in [
+            "loadBalancer:\n  type: RoundRobin",
+            "healthCheck:\n  active: {}",
+            "upstreamAuthority:\n  pattern: '*.example.com'\n  template: '${ctx:tenant}.example.com'",
+        ] {
+            let yaml = format!(
+                "targetRefs:\n  - group: edgion.io\n    kind: EdgionAIService\n    name: provider\n{forbidden}"
+            );
+            let spec: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(&yaml).unwrap();
+            assert!(
+                spec.get_validation_errors()
+                    .iter()
+                    .any(|error| error.contains("not supported for EdgionAIService targets")),
+                "field must be rejected: {forbidden}"
+            );
+        }
     }
 
     #[test]

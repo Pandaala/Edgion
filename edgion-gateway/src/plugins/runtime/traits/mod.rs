@@ -3,6 +3,7 @@
 pub mod request_body_stream;
 pub mod request_filter;
 pub mod session;
+pub mod streaming_response_processor;
 #[cfg(test)]
 pub mod test_helpers;
 pub mod upstream_response;
@@ -12,6 +13,7 @@ pub mod upstream_response_filter;
 pub use request_body_stream::{ChunkVerdict, RequestBodyStreamHandler};
 pub use request_filter::RequestFilter;
 pub use session::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult};
+pub use streaming_response_processor::StreamingResponseProcessor;
 pub use upstream_response::UpstreamResponse;
 pub use upstream_response_body_filter::UpstreamResponseBodyFilter;
 pub use upstream_response_filter::UpstreamResponseFilter;

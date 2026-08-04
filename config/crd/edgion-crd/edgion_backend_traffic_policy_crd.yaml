@@ -14,13 +14,15 @@ spec:
           properties:
             spec:
               type: object
-              description: "Per-destination traffic policy (load-balancing algorithm, active health check, outlier detection, panic threshold) attached to Services via targetRefs"
+              description: "Per-destination traffic policy attached to homogeneous Service or EdgionAIService targets"
               required:
                 - targetRefs
               properties:
                 targetRefs:
                   type: array
-                  description: "Services this policy attaches to (same namespace as the policy)"
+                  minItems: 1
+                  maxItems: 16
+                  description: "Homogeneous Service or EdgionAIService targets in the policy namespace"
                   items:
                     type: object
                     required:
@@ -29,16 +31,18 @@ spec:
                     properties:
                       group:
                         type: string
-                        description: "Group of the referent. Empty string (default) = core API group"
+                        description: "Group of the referent: empty/core for Service, edgion.io for EdgionAIService"
+                        enum: ["", "core", "edgion.io"]
                       kind:
                         type: string
-                        description: "Kind of the referent. v1 supports only \"Service\""
+                        description: "Kind of the referent"
+                        enum: ["Service", "EdgionAIService"]
                       name:
                         type: string
-                        description: "Name of the referent Service (same namespace as the policy)"
+                        description: "Name of the referent in the policy namespace"
                 loadBalancer:
                   type: object
-                  description: "Load-balancing algorithm and panic threshold"
+                  description: "Load-balancing algorithm and panic threshold. Service targets only"
                   required:
                     - type
                   properties:
@@ -65,7 +69,7 @@ spec:
                       maximum: 100
                 healthCheck:
                   type: object
-                  description: "Active health check (probe) configuration"
+                  description: "Active health check (probe) configuration. Service targets only"
                   properties:
                     active:
                       type: object
@@ -123,7 +127,7 @@ spec:
                             overall server health. Only used when type is "grpc".
                 outlierDetection:
                   type: object
-                  description: "Outlier detection (passive ejection) configuration"
+                  description: "Outlier detection (passive ejection) for Service endpoints or AI credential targets"
                   properties:
                     consecutiveErrors:
                       type: integer
@@ -165,8 +169,8 @@ spec:
                   type: object
                   description: >-
                     Dynamic upstream authority (Host + SNI) within a wildcard pattern this
-                    backend declares. The connection stays pinned to the Service's endpoints;
-                    only the authority varies.
+                    Service backend declares. The connection stays pinned to the Service's
+                    endpoints; only the authority varies. Service targets only.
                   required:
                     - pattern
                     - template
@@ -231,7 +235,7 @@ spec:
                           pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                 circuitBreaker:
                   type: object
-                  description: "Circuit breaker: per-endpoint hard cap on concurrent in-flight requests. Absent = no concurrency cap"
+                  description: "Circuit breaker: hard cap on concurrent in-flight requests per Service endpoint or per EdgionAIService. Absent = no concurrency cap"
                   required:
                     - maxParallelRequests
                   properties:
@@ -239,15 +243,15 @@ spec:
                       type: integer
                       format: int32
                       description: >-
-                        Max concurrent in-flight requests to a single backend ENDPOINT (one pod).
-                        Excess requests are shed with a non-retrying 503 rather than queued. This
-                        is a PER-ENDPOINT cap: a service with N ready endpoints admits up to
-                        N * maxParallelRequests concurrently. Must be >= 1.
+                        Max concurrent in-flight requests to one Service endpoint (one pod), or
+                        to one EdgionAIService in aggregate. Excess requests are shed with a
+                        non-retrying 503 rather than queued. A Service with N ready endpoints
+                        admits up to N * maxParallelRequests concurrently. Must be >= 1.
                       minimum: 1
                 connection:
                   type: object
                   description: >-
-                    Per-backend connection tuning override. HTTP upstream connections only:
+                    Per-target connection tuning override. HTTP upstream connections only:
                     stream (TCPRoute/TLSRoute) backends use tcpTimeout.connectTimeout and
                     ignore this block.
                   properties:
@@ -257,7 +261,7 @@ spec:
                         Per-backend gateway->backend connection-establishment deadline
                         (GEP-2257 duration), overriding
                         EdgionGatewayConfig.spec.httpTimeout.backend.defaultConnectTimeout
-                        for the targeted Services. Must be in (0s, 1h].
+                        for the targeted Service or EdgionAIService resources. Must be in (0s, 1h].
                       pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
             status:
               type: object
@@ -267,7 +271,7 @@ spec:
                   maxItems: 16
                   description: >-
                     GEP-2648 per-ancestor policy status. One entry per ancestor
-                    Gateway whose routes reach a target Service, stamped with the
+                    Gateway whose routes reach a target, stamped with the
                     writing controller's name.
                   items:
                     type: object
@@ -321,7 +325,7 @@ spec:
         - name: TargetRef
           type: string
           jsonPath: .spec.targetRefs[0].name
-          description: First target Service name
+          description: First target name
         - name: LBType
           type: string
           jsonPath: .spec.loadBalancer.type

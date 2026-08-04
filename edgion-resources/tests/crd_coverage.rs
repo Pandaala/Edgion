@@ -1,15 +1,19 @@
-//! Struct↔CRD field-coverage guard for the two fully-structural CRDs
-//! (EdgionGatewayConfig, EdgionTls). See
+//! Struct↔CRD field-coverage guard for the four fully-structural CRDs
+//! (EdgionGatewayConfig, EdgionTls, EdgionBackendTrafficPolicy, and
+//! EdgionAIService). See
 //! docs/superpowers/specs/2026-06-15-crd-struct-coverage-guard-design.md.
 //!
 //! The walk is a lockstep node comparison: it descends EXPECTED (schemars) and
 //! ACTUAL (CRD) together, comparing property NAME sets at each node, and reports
 //! a difference at its highest absent ancestor. It is correct ONLY for resources
-//! with no tagged enums / `#[serde(flatten)]` / preserve-unknown nodes — which is
-//! exactly why its scope is gateway_config + tls (see the spec's Precondition).
+//! with no tagged enums or preserve-unknown nodes. EdgionAIService credentials
+//! flatten statically shaped `SecretSlot` values; schemars emits each
+//! operator-facing `secretRef` as an ordinary property, so the nested pool
+//! remains safe for this lockstep comparison.
 
 use schemars::schema_for;
 use serde_json::{Map, Value};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 /// Follow a single `#/$defs/Name` `$ref` into `defs`; non-ref nodes pass through.
@@ -26,7 +30,7 @@ fn resolve<'a>(node: &'a Value, defs: &'a Map<String, Value>) -> &'a Value {
 // NOTE: follows exactly one hop. If a $defs entry is itself a $ref (a chain
 // A->B->C), the intermediate node is returned and treated as a leaf. Schemars
 // 1.2.1 never emits such chains for plain structs, so this is fine for the
-// current scope (gateway_config + tls); revisit if the schema generator changes.
+// current four-resource scope; revisit if the schema generator changes.
 
 /// `Option<T>` becomes `{"anyOf":[<T>, {"type":"null"}]}` in schemars 1.2.1.
 /// Return the non-null branch.
@@ -187,6 +191,80 @@ fn backend_traffic_policy_spec_has_no_uncovered_fields() {
         "EdgionBackendTrafficPolicy CRD drift:\n  missing from CRD (Direction-1): {d1:?}\n  stale in CRD (Direction-2): {d2:?}\n\
          Fix: add the missing field(s) to edgion_backend_traffic_policy_crd.yaml, or add an intentional omission to the allowlist with a reason."
     );
+}
+
+#[test]
+fn backend_traffic_policy_target_ref_contract_matches_crd() {
+    let actual = crd_section("edgion_backend_traffic_policy_crd.yaml", "spec");
+    let target_refs = &actual["properties"]["targetRefs"];
+    assert_eq!(target_refs["minItems"], 1);
+    assert_eq!(target_refs["maxItems"], 16);
+
+    let groups = string_enum_values(&target_refs["items"]["properties"]["group"]);
+    assert_eq!(
+        groups,
+        BTreeSet::from(["".to_string(), "core".to_string(), "edgion.io".to_string()])
+    );
+
+    let kinds = string_enum_values(&target_refs["items"]["properties"]["kind"]);
+    assert_eq!(
+        kinds,
+        BTreeSet::from(["EdgionAIService".to_string(), "Service".to_string()])
+    );
+}
+
+#[test]
+fn ai_service_spec_has_no_uncovered_fields() {
+    let expected = serde_json::to_value(schema_for!(edgion_resources::EdgionAIServiceSpec)).unwrap();
+    let actual = crd_section("edgion_ai_service_crd.yaml", "spec");
+    let (d1, d2) = compare_spec(&expected, &actual, &[]);
+    assert!(
+        d1.is_empty() && d2.is_empty(),
+        "EdgionAIService CRD drift:\n  missing from CRD (Direction-1): {d1:?}\n  stale in CRD (Direction-2): {d2:?}\n\
+         Fix: add the missing field(s) to edgion_ai_service_crd.yaml, or add an intentional omission to the allowlist with a reason."
+    );
+    assert!(
+        actual["properties"]["credentialPool"]["properties"]["credentials"]["items"]["properties"]
+            .get("secret")
+            .is_none(),
+        "EdgionAIService CRD must not expose the controller-resolved Secret"
+    );
+    assert!(
+        actual["properties"]["defaults"]["properties"].get("timeout").is_none(),
+        "EdgionAIService CRD must not retain the removed defaults.timeout field"
+    );
+}
+
+#[test]
+fn ai_service_provider_enum_matches_crd_bidirectionally() {
+    let expected_schema =
+        serde_json::to_value(schema_for!(edgion_resources::resources::edgion_ai_service::AiProvider)).unwrap();
+    let expected = string_enum_values(&expected_schema);
+
+    let actual_schema = crd_section("edgion_ai_service_crd.yaml", "spec");
+    let actual_provider = actual_schema["properties"]["provider"].clone();
+    let actual = string_enum_values(&actual_provider);
+
+    let missing_from_crd: Vec<_> = expected.difference(&actual).cloned().collect();
+    let stale_in_crd: Vec<_> = actual.difference(&expected).cloned().collect();
+    assert!(
+        missing_from_crd.is_empty() && stale_in_crd.is_empty(),
+        "EdgionAIService provider enum drift:\n  missing from CRD (Direction-1): {missing_from_crd:?}\n  stale in CRD (Direction-2): {stale_in_crd:?}"
+    );
+}
+
+fn string_enum_values(schema: &Value) -> BTreeSet<String> {
+    schema["enum"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected a string enum schema, got {schema:?}"))
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .unwrap_or_else(|| panic!("expected a string enum value, got {value:?}"))
+                .to_string()
+        })
+        .collect()
 }
 
 /// Narrow regression pins for the two one-time fixes on tagged-enum CRDs that

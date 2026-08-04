@@ -664,7 +664,7 @@ start_ldap_tls_service_if_needed() {
 # =============================================================================
 # Redis integration dependency
 # =============================================================================
-# Triggered by EdgionPlugins/Dsl, EdgionPlugins/RateLimitRedis, or the default
+# Triggered by Redis-dependent plugin and AI Gateway suites, or the default
 # full sweep. The runner first probes whether Redis is already reachable on
 # 127.0.0.1:16379; if not, it tries to start the bundled docker-compose
 # stack (matches edgion-tests/integration/conf/LinkSys/Redis); if Docker is unavailable
@@ -683,6 +683,12 @@ is_redis_service_required() {
         fi
     fi
 
+    if [ "$G_RESOURCE" = "EdgionAIService" ]; then
+        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "CredentialExhaustion" ]; then
+            return 0
+        fi
+    fi
+
     if [ "$G_RESOURCE" = "LinkSys" ]; then
         if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "Redis" ]; then
             return 0
@@ -696,7 +702,7 @@ is_redis_service_required() {
     fi
 
     case ",${explicit_suites}," in
-        *,EdgionPlugins/Dsl,*|*,EdgionPlugins/RateLimitRedis,*|*,LinkSys/Redis,*|*,TCPRoute/StreamPlugins,*)
+        *,EdgionPlugins/Dsl,*|*,EdgionPlugins/RateLimitRedis,*|*,EdgionAIService/SingleProvider,*|*,EdgionAIService/CredentialExhaustion,*|*,LinkSys/Redis,*|*,TCPRoute/StreamPlugins,*)
             return 0
             ;;
     esac
@@ -991,10 +997,26 @@ run_all_tests() {
         log_section "Running ${G_RESOURCE}${G_ITEM:+/$G_ITEM} tests"
         
         case "$G_RESOURCE" in
+            EdgionAIService)
+                if [ -z "$G_ITEM" ]; then
+                    run_test "EdgionAIService_SingleProvider" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionAIService -i SingleProvider" || test_failed=true
+                    run_test "EdgionAIService_AnthropicProvider" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionAIService -i AnthropicProvider" || test_failed=true
+                    run_test "EdgionAIService_Resilience" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionAIService -i Resilience" || test_failed=true
+                    run_test "EdgionAIService_CredentialExhaustion" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionAIService -i CredentialExhaustion" || test_failed=true
+                    run_test "CredentialReservationRedis" "cargo test --manifest-path ${PROJECT_ROOT}/Cargo.toml -p edgion-tests --test credential_reservation_redis -- --ignored --nocapture" || test_failed=true
+                else
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "EdgionAIService_${item_safe}" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionAIService -i ${G_ITEM}" || test_failed=true
+                    if [ "$G_ITEM" = "CredentialExhaustion" ]; then
+                        run_test "CredentialReservationRedis" "cargo test --manifest-path ${PROJECT_ROOT}/Cargo.toml -p edgion-tests --test credential_reservation_redis -- --ignored --nocapture" || test_failed=true
+                    fi
+                fi
+                ;;
             HTTPRoute)
                 if [ -z "$G_ITEM" ]; then
                     # Run all HTTPRoute tests
                     run_test "HTTPRoute_Basic" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Basic" || test_failed=true
+                    run_test "HTTPRoute_SseStreaming" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i SseStreaming" || test_failed=true
                     run_test "HTTPRoute_Delegation" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Delegation" || test_failed=true
                     run_test "HTTPRoute_Match" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Match" || test_failed=true
                     run_test "HTTPRoute_Backend" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Backend" || test_failed=true
@@ -1236,9 +1258,16 @@ run_all_tests() {
         fi
         
         log_section "Run Gateway mode tests"
+
+        run_test "EdgionAIService_SingleProvider" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionAIService -i SingleProvider" || test_failed=true
+        run_test "EdgionAIService_AnthropicProvider" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionAIService -i AnthropicProvider" || test_failed=true
+        run_test "EdgionAIService_Resilience" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionAIService -i Resilience" || test_failed=true
+        run_test "EdgionAIService_CredentialExhaustion" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionAIService -i CredentialExhaustion" || test_failed=true
+        run_test "CredentialReservationRedis" "cargo test --manifest-path ${PROJECT_ROOT}/Cargo.toml -p edgion-tests --test credential_reservation_redis -- --ignored --nocapture" || test_failed=true
         
         # HTTPRoute Tests
         run_test "HTTPRoute_Basic" "${EDGION_TEST_CLIENT_BIN} -g http" || test_failed=true
+        run_test "HTTPRoute_SseStreaming" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i SseStreaming" || test_failed=true
         run_test "HTTPRoute_Delegation" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Delegation" || test_failed=true
         run_test "HTTPRoute_Match" "${EDGION_TEST_CLIENT_BIN} -g http-match" || test_failed=true
         run_test "HTTPRoute_Backend_LBRoundRobin" "${EDGION_TEST_CLIENT_BIN} -g lb-rr" || test_failed=true
@@ -1724,7 +1753,11 @@ main() {
         exit 1
     fi
 
-    if ! ensure_loopback_aliases; then
+    # The AI provider suites use only 127.0.0.1. Do not require the
+    # macOS-only aliases that belong exclusively to the LB endpoint suites.
+    if [ "$G_RESOURCE" = "EdgionAIService" ] && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "AnthropicProvider" ] || [ "$G_ITEM" = "Resilience" ] || [ "$G_ITEM" = "CredentialExhaustion" ]; }; then
+        log_info "Skipping LB loopback-alias check for EdgionAIService${G_ITEM:+/${G_ITEM}}"
+    elif ! ensure_loopback_aliases; then
         log_error "Loopback alias check failed"
         exit 1
     fi
@@ -1885,6 +1918,11 @@ main() {
     if $do_start; then
         log_section "Step 2: Start all services and load config"
         export EDGION_TEST_CONTROLLER_GRPC_PORT="${CONTROLLER_GRPC_PORT}"
+        if [ -z "$G_RESOURCE" ] || [ "$G_RESOURCE" = "EdgionAIService" ] || [[ ",${suites}," == *",EdgionAIService/SingleProvider,"* ]] || [[ ",${suites}," == *",EdgionAIService/AnthropicProvider,"* ]] || [[ ",${suites}," == *",EdgionAIService/Resilience,"* ]] || [[ ",${suites}," == *",EdgionAIService/CredentialExhaustion,"* ]]; then
+            export EDGION_TEST_ENABLE_GENAI_METRICS=1
+        else
+            unset EDGION_TEST_ENABLE_GENAI_METRICS
+        fi
         
         # Build start command
         local start_cmd="${UTILS_DIR}/start_all_with_conf.sh"

@@ -126,6 +126,7 @@ impl RequestFilter for DynamicExternalUpstream {
             // Regular external server (not another gateway): let the global
             // `forward_normalized_path` / per-route annotation policy decide.
             preserve_raw_path: false,
+            upstream_read_timeout_override: None,
         };
         let resolved = format!("{}:{}", target.domain, target.effective_port());
         match session.set_upstream_jump(UpstreamJumpTarget::External(info)) {
@@ -187,7 +188,13 @@ mod tests {
         let mut session = MockPluginSession::new();
         session.expect_ctx().return_const(EdgionHttpContext::new());
         session.expect_key_get().return_const(Some("us".to_string()));
-        session.expect_set_upstream_jump().return_const(SetJumpOutcome::Set);
+        session
+            .expect_set_upstream_jump()
+            .withf(|target| match target {
+                UpstreamJumpTarget::External(jump) => jump.upstream_read_timeout_override.is_none(),
+                _ => false,
+            })
+            .return_const(SetJumpOutcome::Set);
         session
             .expect_record_outcome()
             .withf(|o, v| *o == DyeOutcome::Success && v == "api-us.example.com:8443")

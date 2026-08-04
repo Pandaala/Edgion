@@ -177,8 +177,26 @@ pub(crate) fn sp_resolve_target_rule_scoped<'a>(
     route_ns: &str,
     token: Option<&str>,
 ) -> Option<usize> {
+    sp_resolve_target_rule_scoped_indexed(
+        ctx,
+        backends
+            .enumerate()
+            .map(|(index, (name, namespace))| (index, name, namespace)),
+        route_ns,
+        token,
+    )
+}
+
+/// Indexed form used when a typed backend list filters non-Service slots but
+/// must still return the original `backendRefs` position.
+pub(crate) fn sp_resolve_target_rule_scoped_indexed<'a>(
+    ctx: &mut EdgionHttpContext,
+    backends: impl Iterator<Item = (usize, &'a str, Option<&'a str>)>,
+    route_ns: &str,
+    token: Option<&str>,
+) -> Option<usize> {
     let token = token?;
-    match sp_lookup_rule_scoped(backends, route_ns, token) {
+    match sp_lookup_rule_scoped_indexed(backends, route_ns, token) {
         Some((idx, addr)) => {
             ctx.sp_target_addr = Some(addr);
             ctx.sp_sticky_addr = Some(addr);
@@ -199,12 +217,27 @@ pub(crate) fn sp_resolve_target_rule_scoped<'a>(
 /// the same endpoint address is registered under two backendRefs' Services
 /// (two Services selecting the same pods on the same targetPort), the first
 /// declared backendRef wins — the same ambiguity a merged Envoy cluster has.
+#[cfg(test)]
 fn sp_lookup_rule_scoped<'a>(
     backends: impl Iterator<Item = (&'a str, Option<&'a str>)>,
     route_ns: &str,
     token: &str,
 ) -> Option<(usize, std::net::SocketAddr)> {
-    for (idx, (name, ns)) in backends.enumerate() {
+    sp_lookup_rule_scoped_indexed(
+        backends
+            .enumerate()
+            .map(|(index, (name, namespace))| (index, name, namespace)),
+        route_ns,
+        token,
+    )
+}
+
+fn sp_lookup_rule_scoped_indexed<'a>(
+    backends: impl Iterator<Item = (usize, &'a str, Option<&'a str>)>,
+    route_ns: &str,
+    token: &str,
+) -> Option<(usize, std::net::SocketAddr)> {
+    for (idx, name, ns) in backends {
         let ns = ns.unwrap_or(route_ns);
         let service_key = format!("{}/{}", ns, name);
         let affinity_map = crate::lb::runtime_state::sp_affinity_get_or_build_key(&service_key, || {
@@ -327,6 +360,13 @@ mod tests {
         let token_b = generate_session_token(&b_addr.to_string());
         let hit = sp_lookup_rule_scoped(refs.iter().copied(), "rule-scope-test", &token_b);
         assert_eq!(hit, Some((1, b_addr)), "token bound to svc-b must resolve to index 1");
+        let indexed_refs = [(0, "svc-a", None::<&str>), (2, "svc-b", None)];
+        let indexed_hit = sp_lookup_rule_scoped_indexed(indexed_refs.into_iter(), "rule-scope-test", &token_b);
+        assert_eq!(
+            indexed_hit,
+            Some((2, b_addr)),
+            "typed filtering must retain the raw backendRef slot"
+        );
 
         let token_a = generate_session_token(&a_addr.to_string());
         let hit = sp_lookup_rule_scoped(refs.iter().copied(), "rule-scope-test", &token_a);

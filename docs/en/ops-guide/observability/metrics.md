@@ -95,6 +95,41 @@ metrics:
 
 ⚠️ The `test_key` / `test_data` labels appear **only** under `--integration-testing-mode` with an explicit Gateway annotation opt-in. `test_data` varies per request, so it is unbounded in cardinality. **Never enable integration-testing mode in production.**
 
+### Optional GenAI token counter
+
+`edgion_gateway_genai_tokens_total` is disabled by default. Enable it in the Gateway
+process configuration when Prometheus token-rate or trend aggregation is useful:
+
+```yaml
+metrics:
+  genai_tokens:
+    enabled: true
+```
+
+This is a startup-time setting; changing it requires a Gateway restart. When disabled,
+the metric family is not registered. The counter has only three fixed-enum labels:
+
+- `direction`: `input` or `output`
+- `provider`: `openai`, `openai_compatible`, or `anthropic`
+- `usage_source`: `reported` or `estimated`
+
+Their Cartesian product is bounded to at most twelve series per Gateway process. There
+is deliberately no `model` label, so model names cannot expand Prometheus cardinality.
+Use `rate(edgion_gateway_genai_tokens_total[5m])` for rates rather than treating the raw
+counter as durable state: every Gateway process restart resets its counters.
+
+When enabled, the counter aggregates the reported or bounded estimated usage of every
+dispatched attempt, including attempts followed by a retry. A pre-dispatch failure contributes
+nothing. It does not export resource, model, credential, or request identity labels.
+
+This metric is **not** a persistent usage or billing ledger. Independently of the metric
+switch, the access log records the final request summary and a bounded `genai.attempts`
+ledger with per-attempt usage source, tokens, cost, status/failure, Retry-After, and TTFT.
+An ambiguous result may retain the full input-plus-maximum-output Redis reservation for
+rate-limit safety while its durable log records only observed or bounded estimated usage;
+the retained reservation is not asserted consumption. Ship and retain access logs when
+durable accounting is required; do not use Prometheus counter values as authoritative billing.
+
 ### Enabling the latency histogram
 
 `edgion_gateway_request_duration_ms` is off by default. Enable it under the `metrics.request_duration` section:

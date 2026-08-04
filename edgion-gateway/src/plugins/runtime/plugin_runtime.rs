@@ -31,6 +31,7 @@ use super::session_adapter::PingoraSessionAdapter;
 use super::traits::{
     PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };
+use crate::plugins::http::ai_proxy::AiProxy;
 use crate::plugins::http::all_endpoint_status::AllEndpointStatus;
 use crate::plugins::http::bandwidth_limit::BandwidthLimit;
 use crate::plugins::http::basic_auth::BasicAuth;
@@ -377,10 +378,12 @@ impl PluginRuntime {
                 }
                 HTTPRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
-                        let mut ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
+                        let extension_namespace = ext_ref.resolved_namespace.as_deref().unwrap_or(namespace);
+                        let mut ext_filter = ExtensionRefFilter::new(extension_namespace.to_string(), ext_ref.clone());
                         if assign_indices {
                             let idx = self.ext_ref_keys.len();
-                            self.ext_ref_keys.push((namespace.to_string(), ext_ref.name.clone()));
+                            self.ext_ref_keys
+                                .push((extension_namespace.to_string(), ext_ref.name.clone()));
                             ext_filter.set_index(idx);
                         }
                         self.add_request_filter(Box::new(ext_filter.clone()));
@@ -1268,6 +1271,7 @@ impl PluginRuntime {
                 namespace.to_string(),
             )))),
             EdgionPlugin::BasicAuth(config) => CreateResult::Ok(Some(Box::new(BasicAuth::new(config)))),
+            EdgionPlugin::AiProxy(config) => CreateResult::Ok(AiProxy::create(config, namespace, entry_scope)),
             EdgionPlugin::Cors(config) => CreateResult::Ok(Some(Box::new(Cors::new(config)))),
             EdgionPlugin::Csrf(config) => CreateResult::Ok(Some(Box::new(Csrf::new(config)))),
             EdgionPlugin::IpRestriction(config) => CreateResult::Ok(Some(IpRestriction::create(config, namespace))),
@@ -1351,6 +1355,7 @@ impl PluginRuntime {
             | EdgionPlugin::UrlRewrite(_)
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::AiProxy(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
             | EdgionPlugin::IpRestriction(_)
@@ -1406,6 +1411,7 @@ impl PluginRuntime {
             | EdgionPlugin::UrlRewrite(_)
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::AiProxy(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
             | EdgionPlugin::IpRestriction(_)
@@ -1459,6 +1465,7 @@ impl PluginRuntime {
             | EdgionPlugin::UrlRewrite(_)
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::AiProxy(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
             | EdgionPlugin::IpRestriction(_)
@@ -1503,6 +1510,7 @@ impl PluginRuntime {
             EdgionPlugin::RequestRedirect(_) => "RequestRedirect",
             EdgionPlugin::ResponseHeaderModifier(_) => "ResponseHeaderModifier",
             EdgionPlugin::BasicAuth(_) => "BasicAuth",
+            EdgionPlugin::AiProxy(_) => "AiProxy",
             EdgionPlugin::Cors(_) => "Cors",
             EdgionPlugin::Csrf(_) => "Csrf",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
@@ -2888,6 +2896,47 @@ mod tests {
         // Verify get_plugin_name works.
         assert_eq!(PluginRuntime::get_plugin_name(&plugin), "Canary");
     }
+
+    #[test]
+    fn ai_proxy_is_constructed_only_for_request_stage() {
+        use edgion_resources::resources::edgion_plugins::{
+            AiBackendSelection, AiBackendSelectionConfig, AiProxyConfig, OnUnknownModel,
+        };
+
+        let plugin = EdgionPlugin::AiProxy(AiProxyConfig {
+            backend_selection: AiBackendSelectionConfig {
+                selection_type: AiBackendSelection::Weighted,
+            },
+            inject_usage_tracking: true,
+            on_unknown_model: OnUnknownModel::Reject,
+            token_quota: None,
+        });
+
+        let request = PluginRuntime::create_request_filter_from_edgion(
+            &plugin,
+            "tenant-a",
+            plugin.body_requirement(edgion_resources::resources::edgion_plugins::BodyStage::Request),
+            "tenant-a/plugins/#0",
+        );
+        let CreateResult::Ok(Some(filter)) = request else {
+            panic!("AiProxy must construct in request stage");
+        };
+        assert_eq!(filter.name(), "AiProxy");
+
+        assert!(matches!(
+            PluginRuntime::create_upstream_response_filter_from_edgion(&plugin, "tenant-a"),
+            CreateResult::WrongStage
+        ));
+        assert!(matches!(
+            PluginRuntime::create_upstream_response_body_filter_from_edgion(&plugin, "tenant-a"),
+            CreateResult::WrongStage
+        ));
+        assert!(matches!(
+            PluginRuntime::create_upstream_response_from_edgion(&plugin, "tenant-a"),
+            CreateResult::WrongStage
+        ));
+        assert_eq!(PluginRuntime::get_plugin_name(&plugin), "AiProxy");
+    }
 }
 
 #[cfg(test)]
@@ -2913,6 +2962,7 @@ mod ext_ref_index_tests {
                 group: "edgion.io".into(),
                 kind: kind.into(),
                 name: name.into(),
+                resolved_namespace: None,
             }),
         }
     }

@@ -1,5 +1,6 @@
 //! PluginSession trait - shared across all filter stages
 
+use crate::ai::{AiAttemptPlan, AiRequestContext};
 use crate::ctx::ClientCertInfo;
 use crate::plugins::runtime::dye_plan::CompiledDyePlan;
 use crate::plugins::runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
@@ -318,6 +319,28 @@ pub trait PluginSession: Send + Sync {
     /// access log `errors` array. Narrow interface — plugins cannot mutate other
     /// ctx fields; only the error list.
     fn add_error(&mut self, status: EdgionStatus);
+
+    /// Claim the request-wide AI context. The first writer wins; alternate
+    /// adapters without a mutable Edgion context fail closed by default.
+    fn set_ai_request_context(&mut self, context: AiRequestContext) -> bool {
+        drop(context);
+        false
+    }
+
+    /// Claim the immutable request-wide AI attempt plan. The first writer wins.
+    fn set_ai_attempt_plan(&mut self, plan: AiAttemptPlan) -> bool {
+        drop(plan);
+        false
+    }
+
+    /// Install a bounded response-stream observer. Alternate adapters that do
+    /// not run the proxy response-body pipeline drop it by default.
+    fn install_stream_processor(
+        &mut self,
+        processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
+    ) {
+        drop(processor);
+    }
 
     /// Claim the request-wide JSON Schema validation slot.
     ///

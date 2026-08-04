@@ -7,7 +7,7 @@ use crate::runtime::GatewayInfo;
 use crate::MatchInfo;
 use edgion_resources::err::EdError;
 use edgion_resources::resources::common::ParentReference;
-use edgion_resources::{HTTPBackendRef, HTTPRoute, HTTPRouteRule};
+use edgion_resources::{HTTPBackendRef, HTTPBackendRefKind, HTTPRoute, HTTPRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
 use std::cmp::Ordering;
@@ -85,8 +85,57 @@ pub struct CompiledBackend {
     /// is mutated after selection; clone-on-`select()` matches today's cost (the
     /// old selector also cloned `HTTPBackendRef`).
     pub schema: HTTPBackendRef,
+    /// Original position in `HTTPRouteRule.backendRefs`. This remains stable
+    /// across typed filtering and is the conformance/metrics slot identity.
+    pub slot: usize,
+    /// Cold-path classification. Service-only consumers must explicitly match
+    /// `Service`; AI routing consumes the full ordered slot list separately.
+    pub target: CompiledBackendTarget,
     /// Compiled backend-level plugin chain (built from `schema.filters`).
     pub plugin_runtime: Arc<PluginRuntime>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CompiledBackendTarget {
+    Service { namespace: String, name: String },
+    EdgionAIService { namespace: String, name: String },
+    Invalid { classified_kind: HTTPBackendRefKind },
+}
+
+impl CompiledBackend {
+    pub fn is_service(&self) -> bool {
+        matches!(self.target, CompiledBackendTarget::Service { .. })
+    }
+
+    pub fn compile(
+        schema: HTTPBackendRef,
+        route_namespace: &str,
+        slot: usize,
+        plugin_runtime: Arc<PluginRuntime>,
+    ) -> Self {
+        let target = Self::compile_target(&schema, route_namespace);
+        Self {
+            schema,
+            slot,
+            target,
+            plugin_runtime,
+        }
+    }
+
+    fn compile_target(schema: &HTTPBackendRef, route_namespace: &str) -> CompiledBackendTarget {
+        let namespace = schema.namespace.as_deref().unwrap_or(route_namespace).to_string();
+        match schema.backend_kind() {
+            HTTPBackendRefKind::Service => CompiledBackendTarget::Service {
+                namespace,
+                name: schema.name.clone(),
+            },
+            HTTPBackendRefKind::EdgionAIService if schema.port.is_none() => CompiledBackendTarget::EdgionAIService {
+                namespace,
+                name: schema.name.clone(),
+            },
+            classified_kind => CompiledBackendTarget::Invalid { classified_kind },
+        }
+    }
 }
 
 impl std::ops::Deref for CompiledBackend {
@@ -172,17 +221,15 @@ impl HttpRouteRuleUnit {
         });
         let backends: Vec<CompiledBackend> = rule.backend_refs.as_ref().map_or_else(Vec::new, |refs| {
             refs.iter()
-                .map(|br| {
+                .enumerate()
+                .map(|(slot, br)| {
                     let plugin_runtime = Arc::new(match &br.filters {
                         Some(filters) => {
                             PluginRuntime::from_httproute_filters_for_backend(filters, namespace, &mirror_tuning)
                         }
                         None => PluginRuntime::new(),
                     });
-                    CompiledBackend {
-                        schema: br.clone(),
-                        plugin_runtime,
-                    }
+                    CompiledBackend::compile(br.clone(), namespace, slot, plugin_runtime)
                 })
                 .collect()
         });
@@ -196,9 +243,17 @@ impl HttpRouteRuleUnit {
     /// Compiled backends are Arc-shared; only the WRR cursor is per-hostname.
     pub fn build_backend_selector(backends: &[CompiledBackend]) -> Arc<BackendSelector<CompiledBackend>> {
         let selector = BackendSelector::new();
-        if !backends.is_empty() {
-            let weights: Vec<Option<i32>> = backends.iter().map(|b| b.schema.weight.or(Some(1))).collect();
-            selector.init(backends.to_vec(), weights);
+        let service_backends = backends
+            .iter()
+            .filter(|backend| backend.is_service())
+            .cloned()
+            .collect::<Vec<_>>();
+        if !service_backends.is_empty() {
+            let weights = service_backends
+                .iter()
+                .map(|backend| backend.schema.weight.or(Some(1)))
+                .collect();
+            selector.init(service_backends, weights);
         }
         Arc::new(selector)
     }
@@ -425,6 +480,72 @@ impl HttpRouteRuleUnit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compile_http_rule_preserves_slots_and_types_backends() {
+        let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
+            "backendRefs": [
+                {"name": "service-a", "port": 8080, "weight": 7},
+                {"kind": "ServiceExternalName", "name": "dns-svc", "port": 30001, "weight": 1},
+                {"group": "edgion.io", "kind": "EdgionAIService", "name": "ai-a", "weight": 3},
+                {"group": "edgion.io", "kind": "EdgionAIService", "name": "ai-bad", "port": 443},
+                {"group": "example.io", "kind": "Other", "name": "unsupported"}
+            ]
+        }))
+        .unwrap();
+
+        let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "route-ns");
+        assert_eq!(runtime.backends.len(), 5);
+        assert_eq!(
+            runtime.backends.iter().map(|backend| backend.slot).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4]
+        );
+        assert_eq!(runtime.backends[0].schema.weight, Some(7));
+        assert_eq!(
+            runtime.backends[0].target,
+            CompiledBackendTarget::Service {
+                namespace: "route-ns".to_string(),
+                name: "service-a".to_string()
+            }
+        );
+        assert_eq!(
+            runtime.backends[1].target,
+            CompiledBackendTarget::Service {
+                namespace: "route-ns".to_string(),
+                name: "dns-svc".to_string()
+            }
+        );
+        assert_eq!(
+            runtime.backends[2].target,
+            CompiledBackendTarget::EdgionAIService {
+                namespace: "route-ns".to_string(),
+                name: "ai-a".to_string()
+            }
+        );
+        assert_eq!(
+            runtime.backends[3].target,
+            CompiledBackendTarget::Invalid {
+                classified_kind: HTTPBackendRefKind::EdgionAIService
+            }
+        );
+        assert_eq!(
+            runtime.backends[4].target,
+            CompiledBackendTarget::Invalid {
+                classified_kind: HTTPBackendRefKind::Unsupported
+            }
+        );
+
+        let selector = HttpRouteRuleUnit::build_backend_selector(&runtime.backends);
+        // Only Service-family slots (0, 1) enter the WRR selector; AI/Invalid are excluded.
+        let mut seen = [0u32; 2];
+        for _ in 0..20 {
+            let selected = selector.select().unwrap();
+            assert!(selected.is_service());
+            assert!(selected.slot == 0 || selected.slot == 1);
+            seen[selected.slot] += 1;
+        }
+        assert!(seen[0] > 0 && seen[1] > 0);
+    }
 
     fn make_specificity(
         has_method: bool,

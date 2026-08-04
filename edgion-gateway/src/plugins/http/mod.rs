@@ -1,5 +1,6 @@
 //! Plugin store module for EdgionPlugins resources
 
+pub mod ai_proxy;
 pub mod all_endpoint_status;
 pub mod bandwidth_limit;
 pub mod basic_auth;
@@ -41,6 +42,7 @@ pub mod response_rewrite;
 pub mod trace_context;
 pub mod wasm;
 
+pub use ai_proxy::AiProxy;
 pub use all_endpoint_status::AllEndpointStatus;
 pub use bandwidth_limit::BandwidthLimit;
 pub use basic_auth::BasicAuth;
@@ -77,9 +79,10 @@ pub use wasm::WasmPlugin;
 
 // Re-export plugin configs from types
 pub use edgion_resources::resources::edgion_plugins::{
-    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, DslConfig,
-    DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, FaultInjectionConfig, ForwardAuthConfig,
-    HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig,
-    JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig,
-    RateLimitRedisConfig, RealIpConfig, RegionRouteConfig, RequestRestrictionConfig, ResponseRewriteConfig,
+    AiProxyConfig, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig,
+    CtxSetConfig, DslConfig, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, FaultInjectionConfig,
+    ForwardAuthConfig, HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig,
+    JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig,
+    ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig, RegionRouteConfig,
+    RequestRestrictionConfig, ResponseRewriteConfig,
 };

@@ -6,10 +6,11 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::super::ref_grant::{is_cross_ns_ref_allowed, validate_http_route_if_enabled};
-use super::route_delegation::{flatten_route, DelegationLookup};
+use super::route_delegation::{flatten_route, populate_terminal_rule_identities, DelegationLookup};
 use super::{
-    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_policies_for_route,
-    requeue_backend_policies_for_services, requeue_parent_gateways, update_gateway_route_index,
+    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_policies_for_ai_targets,
+    requeue_backend_policies_for_route, requeue_backend_policies_for_services, requeue_parent_gateways,
+    update_gateway_route_index,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, set_parent_conditions_full, update_condition,
@@ -18,8 +19,11 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::prelude_resources::HTTPRoute;
 use edgion_resources::resources::common::{ParentReference, RefDenied};
+use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+use edgion_resources::resources::edgion_plugins::{EdgionPlugin, EdgionPlugins};
 use edgion_resources::resources::http_route::{
-    DelegationIssue, HTTPRouteFilterType, HTTPRouteStatus, RouteParentStatus, GATEWAY_API_GROUP,
+    DelegationIssue, HTTPBackendRefKind, HTTPRouteFilterType, HTTPRouteRule, HTTPRouteStatus, RouteParentStatus,
+    GATEWAY_API_GROUP,
 };
 use edgion_resources::ResourceKind;
 
@@ -185,6 +189,105 @@ impl HttpRouteHandler {
             manager.add_ref(ns.clone(), resource_ref.clone());
         }
     }
+
+    /// Register rule-level EdgionPlugins ExtensionRefs for plugin-change requeue.
+    ///
+    /// BackendRef filters deliberately do not participate: AiProxy is a
+    /// route-rule policy, and the AI routing contract requires exactly one
+    /// rule-level reference. Replacing the full ref set on every reconcile
+    /// also handles delete-to-create coalescing.
+    fn register_plugin_refs(route: &HTTPRoute, ctx: &HandlerContext) {
+        let resource_ref = Self::create_resource_ref(route);
+        let manager = &ctx.runtime().plugin_ref_mgr;
+        manager.clear_resource_refs(&resource_ref);
+
+        let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+        for rule in route.effective_rules().into_iter().flatten() {
+            for filter in rule.filters.iter().flatten() {
+                if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
+                    continue;
+                }
+                let Some(extension_ref) = &filter.extension_ref else {
+                    continue;
+                };
+                if (extension_ref.group.is_empty() || extension_ref.group == "edgion.io")
+                    && extension_ref.kind == "EdgionPlugins"
+                {
+                    let ref_namespace = extension_ref.resolved_namespace.as_deref().unwrap_or(namespace);
+                    manager.add_ref(format!("{ref_namespace}/{}", extension_ref.name), resource_ref.clone());
+                }
+            }
+        }
+    }
+
+    /// Replace this route's EdgionAIService dependency set and return the
+    /// old/new union plus the removed subset. The union is needed because an
+    /// EBTP attached to either side may change the route's Gateway ancestors.
+    fn register_ai_service_refs(
+        route: &HTTPRoute,
+        flattened_tuples: &[(Option<String>, Option<String>, Option<String>, String)],
+        ctx: &HandlerContext,
+    ) -> AiRefDelta {
+        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        let resource_ref = Self::create_resource_ref(route);
+        let manager = &ctx.runtime().ai_service_ref_mgr;
+        let old: HashSet<String> = manager.clear_resource_refs(&resource_ref).into_iter().collect();
+        let canonical_key = |group: Option<&str>, kind: Option<&str>, namespace: Option<&str>, name: &str| {
+            if group == Some("edgion.io") && kind == Some("EdgionAIService") {
+                Some(
+                    PolicyTargetKey {
+                        target_kind: PolicyTargetKind::EdgionAIService,
+                        namespace: namespace.unwrap_or(route_ns).to_string(),
+                        name: name.to_string(),
+                    }
+                    .to_string(),
+                )
+            } else {
+                None
+            }
+        };
+
+        let mut effective = HashSet::new();
+        for rule in route.effective_rules().into_iter().flatten() {
+            for backend_ref in rule.backend_refs.iter().flatten() {
+                if let Some(key) = canonical_key(
+                    backend_ref.group.as_deref(),
+                    backend_ref.kind.as_deref(),
+                    backend_ref.namespace.as_deref(),
+                    &backend_ref.name,
+                ) {
+                    effective.insert(key);
+                }
+            }
+        }
+        let new: HashSet<String> = if route.spec.resolved_rules.is_some() {
+            // FlattenOutcome preserves each declaring child namespace. Keep
+            // only tuples whose rule survived Controller-side AI validation.
+            flattened_tuples
+                .iter()
+                .filter_map(|(group, kind, namespace, name)| {
+                    canonical_key(group.as_deref(), kind.as_deref(), namespace.as_deref(), name)
+                })
+                .filter(|key| effective.contains(key))
+                .collect()
+        } else {
+            effective
+        };
+        for key in &new {
+            manager.add_ref(key.clone(), resource_ref.clone());
+        }
+        let mut affected: Vec<String> = old.union(&new).cloned().collect();
+        affected.sort_unstable();
+        let mut dropped: Vec<String> = old.difference(&new).cloned().collect();
+        dropped.sort_unstable();
+        AiRefDelta { affected, dropped }
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct AiRefDelta {
+    affected: Vec<String>,
+    dropped: Vec<String>,
 }
 
 impl Default for HttpRouteHandler {
@@ -206,6 +309,11 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
     async fn parse(&self, mut route: HTTPRoute, _ctx: &HandlerContext) -> ProcessResult<HTTPRoute> {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default").to_string();
         let route_ns = route_ns.as_str();
+
+        // Terminal identity is controller-owned transport metadata. Stamp the
+        // root rules before flattening so non-delegating siblings inherit it;
+        // delegated child terminals are stamped by the flattener itself.
+        populate_terminal_rule_identities(&mut route);
 
         // Mark denied cross-namespace references on the operator-authored rules.
         // MUST run BEFORE the delegation flatten: flatten clones non-delegating
@@ -264,15 +372,46 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // controller-derived: clear any user-provided or stale values.
         route.spec.resolved_rules = None;
         route.spec.delegation_issues = Vec::new();
-        let delegation_outcome = {
+        let mut delegation_outcome = {
             let adapter = RuntimeDelegationLookup {
                 runtime: _ctx.runtime(),
             };
             flatten_route(&route, &adapter)
         };
+        // Dependency registration below must inspect the rules that the
+        // Gateway will actually compile, including delegated child filters.
+        route.spec.resolved_rules = delegation_outcome.resolved_rules.clone();
+        if let Some(rules) = &mut route.spec.resolved_rules {
+            let mut resolved_index = 0usize;
+            rules.retain(|rule| {
+                let reason = ai_rule_invalid_reason(rule, route_ns, |namespace, name| {
+                    enabled_ai_proxy_count(_ctx.runtime(), namespace, name)
+                });
+                let keep = reason.is_none();
+                if let Some(reason) = reason {
+                    delegation_outcome.issues.push(DelegationIssue::RuleDropped {
+                        message: format!("resolvedRules[{resolved_index}]: {reason}"),
+                    });
+                }
+                resolved_index += 1;
+                keep
+            });
+        }
 
         // Record cross-namespace references for revalidation when ReferenceGrant changes
         Self::record_cross_ns_refs(&route, &delegation_outcome.cross_ns_target_namespaces, _ctx);
+
+        // Track rule-level EdgionPlugins references so plugin changes recompile
+        // every affected HTTPRoute through its normal workqueue.
+        Self::register_plugin_refs(&route, _ctx);
+
+        let ai_ref_delta = Self::register_ai_service_refs(&route, &delegation_outcome.ai_service_backend_tuples, _ctx);
+        requeue_backend_policies_for_ai_targets(&ai_ref_delta.affected, _ctx).await;
+        tracing::debug!(
+            route = %format!("{route_ns}/{}", route.metadata.name.as_deref().unwrap_or("")),
+            dropped_ai_services = ?ai_ref_delta.dropped,
+            "Replaced HTTPRoute EdgionAIService references"
+        );
 
         // Register Service backend references for cross-resource requeue, then
         // requeue BTPs bound to any Service dropped from backendRefs (the apply
@@ -328,7 +467,6 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 }
             }
         }
-        route.spec.resolved_rules = delegation_outcome.resolved_rules;
         route.spec.delegation_issues = delegation_outcome.issues;
 
         // Treat resolved_listeners as controller-derived state.
@@ -418,10 +556,13 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
     async fn on_delete(&self, route: &HTTPRoute, ctx: &HandlerContext) {
         let resource_ref = Self::create_resource_ref(route);
         ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().plugin_ref_mgr.clear_resource_refs(&resource_ref);
 
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
         requeue_backend_policies_for_route(ResourceKind::HTTPRoute, route_ns, route_name, ctx).await;
+        let removed_ai_targets = ctx.runtime().ai_service_ref_mgr.clear_resource_refs(&resource_ref);
+        requeue_backend_policies_for_ai_targets(&removed_ai_targets, ctx).await;
         super::route_utils::clear_service_backend_refs(ResourceKind::HTTPRoute, route_ns, route_name, ctx.runtime());
 
         remove_from_gateway_route_index(ResourceKind::HTTPRoute, route_ns, route_name, ctx.runtime());
@@ -467,11 +608,18 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
 
-        let validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
+        let mut validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
+        for (index, rule) in route.spec.rules.iter().flatten().enumerate() {
+            if let Some(message) = ai_rule_invalid_reason(rule, route_ns, |namespace, name| {
+                enabled_ai_proxy_count(_ctx.runtime(), namespace, name)
+            }) {
+                validation_accepted_errors.push(AcceptedError::UnsupportedValue {
+                    message: format!("rules[{index}]: {message}"),
+                });
+            }
+        }
 
-        let backend_ref_tuples = collect_backend_ref_tuples(route);
-        let mut resolved_refs_errors =
-            super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples, _ctx.runtime());
+        let mut resolved_refs_errors = validate_http_backend_refs(route, route_ns, _ctx.runtime());
         let ref_denied_list = collect_ref_denied_list(route);
         resolved_refs_errors.extend(super::route_utils::collect_ref_denied_errors(
             route_ns,
@@ -497,7 +645,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         }
 
         // Per-rule validation: find rules where ALL backend refs are invalid
-        let invalid_details = find_invalid_rule_details(route, route_ns);
+        let invalid_details = find_controller_invalid_rule_details(route, route_ns, _ctx.runtime());
         let invalid_indices: Vec<usize> = invalid_details.iter().map(|(i, _)| *i).collect();
         let total_rules = route.spec.rules.as_ref().map_or(0, |r| r.len());
         let valid_rules = total_rules - invalid_indices.len();
@@ -664,26 +812,56 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
 /// Delegation backendRefs (`kind: HTTPRoute`) are excluded — they are not
 /// Service backends; their resolution problems are reported through
 /// `DelegationIssue` (MissingChild → ResolvedRefs, drops → PartiallyInvalid).
-fn collect_backend_ref_tuples(route: &HTTPRoute) -> Vec<(Option<&str>, Option<&str>, Option<&str>, &str)> {
-    let mut tuples = Vec::new();
-    if let Some(rules) = &route.spec.rules {
-        for rule in rules {
-            if let Some(backend_refs) = &rule.backend_refs {
-                for br in backend_refs {
-                    if br.is_route_delegation_ref() {
+fn validate_http_backend_refs(
+    route: &HTTPRoute,
+    route_ns: &str,
+    runtime: &ControllerRuntime,
+) -> Vec<ResolvedRefsError> {
+    let mut errors = Vec::new();
+    for rule in route.effective_rules().into_iter().flatten() {
+        for backend_ref in rule.backend_refs.iter().flatten() {
+            let namespace = backend_ref.namespace.as_deref().unwrap_or(route_ns);
+            match backend_ref.backend_kind() {
+                HTTPBackendRefKind::Service => {
+                    if !super::route_utils::service_exists(namespace, &backend_ref.name, runtime) {
+                        errors.push(ResolvedRefsError::BackendNotFound {
+                            namespace: namespace.to_string(),
+                            name: backend_ref.name.clone(),
+                        });
+                    }
+                }
+                HTTPBackendRefKind::EdgionAIService => {
+                    if backend_ref.port.is_some() {
+                        errors.push(ResolvedRefsError::InvalidKind {
+                            kind: "edgion.io/EdgionAIService with port".to_string(),
+                            name: backend_ref.name.clone(),
+                        });
                         continue;
                     }
-                    tuples.push((
-                        br.group.as_deref(),
-                        br.kind.as_deref(),
-                        br.namespace.as_deref(),
-                        br.name.as_str(),
-                    ));
+                    let exists = runtime
+                        .processor_registry
+                        .get("EdgionAIService")
+                        .is_none_or(|processor| processor.contains_key(&format!("{namespace}/{}", backend_ref.name)));
+                    if !exists {
+                        errors.push(ResolvedRefsError::EdgionAIServiceNotFound {
+                            namespace: namespace.to_string(),
+                            name: backend_ref.name.clone(),
+                        });
+                    }
                 }
+                HTTPBackendRefKind::RouteDelegation => {}
+                HTTPBackendRefKind::Unsupported => errors.push(ResolvedRefsError::InvalidKind {
+                    kind: format!(
+                        "{}/{}",
+                        backend_ref.group.as_deref().unwrap_or(""),
+                        backend_ref.kind.as_deref().unwrap_or("Service")
+                    ),
+                    name: backend_ref.name.clone(),
+                }),
             }
         }
     }
-    tuples
+    errors
 }
 
 /// Collect Option<&RefDenied> from all backend refs for shared error collection.
@@ -820,6 +998,125 @@ fn invalid_session_persistence_reason(rule: &edgion_resources::resources::http_r
         .map(|e| format!("sessionPersistence: {e}"))
 }
 
+fn enabled_ai_proxy_count(runtime: &ControllerRuntime, namespace: &str, name: &str) -> Option<usize> {
+    let processor = runtime.processor_registry.get("EdgionPlugins")?;
+    let key = format!("{namespace}/{name}");
+    if !processor.contains_key(&key) {
+        return None;
+    }
+    let plugins = processor.get_raw_any(&key)?.downcast::<EdgionPlugins>().ok()?;
+    Some(
+        plugins
+            .spec
+            .request_plugins
+            .iter()
+            .flatten()
+            .filter(|entry| entry.enable && matches!(entry.plugin, EdgionPlugin::AiProxy(_)))
+            .count(),
+    )
+}
+
+/// Enforce the Controller-owned AI routing contract for one effective rule.
+/// The lookup returns the number of enabled request-stage AiProxy entries in a
+/// referenced EdgionPlugins object, or `None` when that object is unavailable.
+fn ai_rule_invalid_reason(
+    rule: &HTTPRouteRule,
+    route_namespace: &str,
+    mut lookup: impl FnMut(&str, &str) -> Option<usize>,
+) -> Option<String> {
+    let backend_refs: Vec<_> = rule.backend_refs.iter().flatten().collect();
+    let ai_backends: Vec<_> = backend_refs
+        .iter()
+        .copied()
+        .filter(|backend_ref| backend_ref.backend_kind() == HTTPBackendRefKind::EdgionAIService)
+        .collect();
+
+    if !ai_backends.is_empty() {
+        if rule
+            .retry
+            .as_ref()
+            .and_then(|retry| retry.attempts)
+            .is_some_and(|attempts| attempts > 7)
+        {
+            return Some("AI routing retry.attempts must not exceed 7".to_string());
+        }
+        if ai_backends.len() != backend_refs.len() {
+            return Some("EdgionAIService backends must not be mixed with other backend kinds".to_string());
+        }
+        if ai_backends.iter().any(|backend_ref| backend_ref.port.is_some()) {
+            return Some("EdgionAIService backendRefs must not set port".to_string());
+        }
+        if let Some(filter) = ai_backends
+            .iter()
+            .flat_map(|backend_ref| backend_ref.filters.iter().flatten())
+            .find(|filter| {
+                !matches!(
+                    filter.filter_type,
+                    HTTPRouteFilterType::RequestHeaderModifier | HTTPRouteFilterType::ResponseHeaderModifier
+                )
+            })
+        {
+            return Some(format!(
+                "EdgionAIService backendRefs do not support {:?} filters",
+                filter.filter_type
+            ));
+        }
+    }
+
+    let mut ai_proxy_count = 0usize;
+    let mut missing_plugin = None;
+    for filter in rule.filters.iter().flatten() {
+        if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
+            continue;
+        }
+        let Some(extension_ref) = &filter.extension_ref else {
+            continue;
+        };
+        if !(extension_ref.group.is_empty() || extension_ref.group == "edgion.io")
+            || extension_ref.kind != "EdgionPlugins"
+        {
+            continue;
+        }
+        let namespace = extension_ref.resolved_namespace.as_deref().unwrap_or(route_namespace);
+        match lookup(namespace, &extension_ref.name) {
+            Some(count) => ai_proxy_count += count,
+            None => missing_plugin = Some(format!("{namespace}/{}", extension_ref.name)),
+        }
+    }
+
+    if ai_backends.is_empty() {
+        return (ai_proxy_count > 0)
+            .then(|| "AiProxy requires a rule whose forwarding backends are all EdgionAIService".to_string());
+    }
+    if let Some(key) = missing_plugin {
+        return Some(format!(
+            "AI routing requires exactly one enabled AiProxy, but EdgionPlugins '{key}' was not found"
+        ));
+    }
+    (ai_proxy_count != 1).then(|| format!("AI routing requires exactly one enabled AiProxy (found {ai_proxy_count})"))
+}
+
+fn find_controller_invalid_rule_details(
+    route: &HTTPRoute,
+    route_ns: &str,
+    runtime: &ControllerRuntime,
+) -> Vec<(usize, String)> {
+    let mut details = find_invalid_rule_details(route, route_ns);
+    let already_invalid: HashSet<usize> = details.iter().map(|(index, _)| *index).collect();
+    for (index, rule) in route.spec.rules.iter().flatten().enumerate() {
+        if already_invalid.contains(&index) {
+            continue;
+        }
+        if let Some(reason) = ai_rule_invalid_reason(rule, route_ns, |namespace, name| {
+            enabled_ai_proxy_count(runtime, namespace, name)
+        }) {
+            details.push((index, reason));
+        }
+    }
+    details.sort_by_key(|(index, _)| *index);
+    details
+}
+
 /// Find rules that are invalid, returning `(index, reason)` for each.
 ///
 /// A rule is invalid if:
@@ -935,6 +1232,170 @@ spec:
         details.into_iter().map(|(i, _)| i).collect()
     }
 
+    fn ai_rule(backends: serde_json::Value, filters: serde_json::Value) -> HTTPRouteRule {
+        serde_json::from_value(serde_json::json!({
+            "backendRefs": backends,
+            "filters": filters,
+        }))
+        .expect("AI rule must parse")
+    }
+
+    #[test]
+    fn ai_rule_requires_homogeneous_backends_and_exactly_one_ai_proxy() {
+        let extension_ref = serde_json::json!([{
+            "type": "ExtensionRef",
+            "extensionRef": {
+                "group": "edgion.io",
+                "kind": "EdgionPlugins",
+                "name": "ai",
+                "resolvedNamespace": "child"
+            }
+        }]);
+        let pure_ai = ai_rule(
+            serde_json::json!([{
+                "group": "edgion.io", "kind": "EdgionAIService", "name": "models"
+            }]),
+            extension_ref.clone(),
+        );
+        assert_eq!(
+            ai_rule_invalid_reason(&pure_ai, "parent", |namespace, name| {
+                assert_eq!((namespace, name), ("child", "ai"));
+                Some(1)
+            }),
+            None
+        );
+
+        let missing = ai_rule_invalid_reason(&pure_ai, "parent", |_, _| Some(0)).unwrap();
+        assert!(missing.contains("exactly one enabled AiProxy"), "{missing}");
+
+        let mixed = ai_rule(
+            serde_json::json!([
+                {"group": "edgion.io", "kind": "EdgionAIService", "name": "models"},
+                {"name": "ordinary", "port": 80}
+            ]),
+            extension_ref,
+        );
+        let reason = ai_rule_invalid_reason(&mixed, "parent", |_, _| Some(1)).unwrap();
+        assert!(reason.contains("must not be mixed"), "{reason}");
+    }
+
+    #[test]
+    fn ai_backend_filters_allow_only_header_modifiers() {
+        let extension_ref = serde_json::json!([{
+            "type": "ExtensionRef",
+            "extensionRef": {
+                "group": "edgion.io", "kind": "EdgionPlugins", "name": "ai"
+            }
+        }]);
+        let allowed = ai_rule(
+            serde_json::json!([{
+                "group": "edgion.io", "kind": "EdgionAIService", "name": "models",
+                "filters": [
+                    {"type": "RequestHeaderModifier", "requestHeaderModifier": {"set": [{"name": "x-tenant", "value": "a"}]}},
+                    {"type": "ResponseHeaderModifier", "responseHeaderModifier": {"set": [{"name": "x-ai", "value": "yes"}]}}
+                ]
+            }]),
+            extension_ref.clone(),
+        );
+        assert!(ai_rule_invalid_reason(&allowed, "default", |_, _| Some(1)).is_none());
+
+        let rejected = ai_rule(
+            serde_json::json!([{
+                "group": "edgion.io", "kind": "EdgionAIService", "name": "models",
+                "filters": [{"type": "URLRewrite", "urlRewrite": {"path": {"type": "ReplaceFullPath", "replaceFullPath": "/v2"}}}]
+            }]),
+            extension_ref,
+        );
+        let reason = ai_rule_invalid_reason(&rejected, "default", |_, _| Some(1)).unwrap();
+        assert!(reason.contains("URLRewrite"), "{reason}");
+    }
+
+    #[test]
+    fn ai_rule_rejects_more_than_seven_explicit_retries() {
+        let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
+            "backendRefs": [{
+                "group": "edgion.io", "kind": "EdgionAIService", "name": "models"
+            }],
+            "filters": [{
+                "type": "ExtensionRef",
+                "extensionRef": {
+                    "group": "edgion.io", "kind": "EdgionPlugins", "name": "ai"
+                }
+            }],
+            "retry": {"attempts": 8}
+        }))
+        .expect("AI rule must parse");
+
+        let reason = ai_rule_invalid_reason(&rule, "default", |_, _| Some(1)).unwrap();
+        assert!(reason.contains("must not exceed 7"), "{reason}");
+    }
+
+    #[test]
+    fn ai_and_plugin_reverse_refs_replace_old_effective_dependencies() {
+        let ctx = make_ctx();
+        let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"name": "parent", "namespace": "infra"},
+            "spec": {
+                "resolvedRules": [{
+                    "backendRefs": [{
+                        "group": "edgion.io", "kind": "EdgionAIService",
+                        "name": "models-a", "namespace": "child"
+                    }],
+                    "filters": [{
+                        "type": "ExtensionRef",
+                        "extensionRef": {
+                            "group": "edgion.io", "kind": "EdgionPlugins",
+                            "name": "ai-plugins", "resolvedNamespace": "child"
+                        }
+                    }]
+                }]
+            }
+        }))
+        .unwrap();
+        let route_ref = HttpRouteHandler::create_resource_ref(&route);
+
+        let first_tuples = vec![(
+            Some("edgion.io".to_string()),
+            Some("EdgionAIService".to_string()),
+            Some("child".to_string()),
+            "models-a".to_string(),
+        )];
+        let first = HttpRouteHandler::register_ai_service_refs(&route, &first_tuples, &ctx);
+        assert_eq!(
+            first.affected,
+            vec!["edgion.io/EdgionAIService/child/models-a".to_string()]
+        );
+        HttpRouteHandler::register_plugin_refs(&route, &ctx);
+        assert_eq!(
+            ctx.runtime().plugin_ref_mgr.get_dependencies(&route_ref.key()),
+            vec!["child/ai-plugins".to_string()]
+        );
+
+        let resolved = route.spec.resolved_rules.as_mut().unwrap();
+        resolved[0].backend_refs.as_mut().unwrap()[0].name = "models-b".to_string();
+        resolved[0].filters = None;
+        let second_tuples = vec![(
+            Some("edgion.io".to_string()),
+            Some("EdgionAIService".to_string()),
+            Some("child".to_string()),
+            "models-b".to_string(),
+        )];
+        let second = HttpRouteHandler::register_ai_service_refs(&route, &second_tuples, &ctx);
+        assert_eq!(
+            second.dropped,
+            vec!["edgion.io/EdgionAIService/child/models-a".to_string()]
+        );
+        assert_eq!(second.affected.len(), 2);
+        HttpRouteHandler::register_plugin_refs(&route, &ctx);
+        assert!(ctx
+            .runtime()
+            .plugin_ref_mgr
+            .get_dependencies(&route_ref.key())
+            .is_empty());
+    }
+
     #[tokio::test]
     async fn parse_marks_ref_denied_before_flatten_copies_siblings() {
         // Regression (P0): flatten copies non-delegating sibling rules into
@@ -1031,8 +1492,8 @@ spec:
             "delegation ref must not be ref_denied: {:?}",
             br.ref_denied
         );
-        // And the tuple collection excludes it (no InvalidKind on status path).
-        assert!(collect_backend_ref_tuples(&parsed).is_empty());
+        // And HTTP-specific validation excludes it (no InvalidKind on status path).
+        assert!(validate_http_backend_refs(&parsed, "infra", ctx.runtime()).is_empty());
     }
 
     #[test]

@@ -8,7 +8,7 @@ use edgion_resources::ResourceKind;
 const SCHEMA_VERSION: u8 = 1;
 const NON_RESOURCE_KIND: &str = "NonResource";
 
-const RESOURCE_KINDS: [ResourceKind; 21] = [
+const RESOURCE_KINDS: [ResourceKind; 22] = [
     ResourceKind::GatewayClass,
     ResourceKind::EdgionGatewayConfig,
     ResourceKind::Gateway,
@@ -30,6 +30,7 @@ const RESOURCE_KINDS: [ResourceKind; 21] = [
     ResourceKind::EdgionAcme,
     ResourceKind::ConfigMap,
     ResourceKind::EdgionBackendTrafficPolicy,
+    ResourceKind::EdgionAIService,
 ];
 
 /// Compile-time guard that `RESOURCE_KINDS` still covers every `ResourceKind`.
@@ -67,7 +68,8 @@ const fn _resource_kinds_catalog_is_exhaustive(kind: ResourceKind) {
         | ResourceKind::BackendTLSPolicy
         | ResourceKind::EdgionAcme
         | ResourceKind::ConfigMap
-        | ResourceKind::EdgionBackendTrafficPolicy => {}
+        | ResourceKind::EdgionBackendTrafficPolicy
+        | ResourceKind::EdgionAIService => {}
     }
 }
 
@@ -192,7 +194,7 @@ mod tests {
     #[test]
     fn deny_all_has_fixed_cardinality_and_canonical_serialization() {
         let access = snapshot(&role(Vec::new())).unwrap();
-        assert_eq!(access.resources.len(), 21);
+        assert_eq!(access.resources.len(), 22);
         assert!(access.resources.iter().all(|row| row.verbs.is_empty()));
         assert_eq!(access.operations.len(), 9);
         assert!(access.operations.iter().all(|operation| !operation.allowed));

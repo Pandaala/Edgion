@@ -1,3 +1,4 @@
+use super::pg_upstream_response_body_filter::enforce_stream_processor_framing;
 use super::pg_upstream_response_filter::{is_interim_informational, response_denial_error, response_stage_settled};
 use super::EdgionHttpProxy;
 use crate::EdgionHttpContext;
@@ -101,6 +102,13 @@ pub async fn response_filter(
                     .await;
             }
         }
+    }
+
+    // Async response plugins run after H1 made its framing choice. Remove a
+    // stale length once more so they cannot produce CL+TE or incorrect H2
+    // length metadata for a body-mutating processor.
+    if !response_stage_settled(ctx) {
+        enforce_stream_processor_framing(upstream_response, ctx);
     }
 
     // A denial no local reply could carry aborts before the forward path below.

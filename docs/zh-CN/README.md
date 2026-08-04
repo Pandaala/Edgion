@@ -18,6 +18,7 @@
 - **高性能路由** — 基数树 + 缓存优化，支持路径变量的 Exact/Prefix 匹配。按 Gateway API 规范进行优先级规则评估。
 - **高级 TLS** — mTLS、ACME 自动签发（HTTP-01 / DNS-01）、按域名的 TLS 版本和密码套件控制。
 - **流量管理** — 加权金丝雀路由；多种负载均衡算法（Round Robin、EWMA、最少连接、一致性哈希、加权）。
+- **AI Gateway** — 兼容 OpenAI 的 LLM 入口：`EdgionAIService` 凭据池、智能后端选择、有界故障切换、用量与成本核算。详见 [AI Gateway 专栏](ai-gateway/README.md)。
 - **强大的插件系统** — 通过插件引用组合，内置 DSL 支持自定义逻辑。
   - HTTP 插件：认证 · 安全 · 流量管理 · 可观测性（25+）
   - Stream 插件：TCP/UDP 流量控制
@@ -196,6 +197,7 @@ requestPlugins:
 
 | | 文档 | 说明 |
 |---|------|------|
+| 🤖 | [AI Gateway](ai-gateway/README.md) | 兼容 OpenAI 的 LLM 路由、凭据池、智能选择、弹性故障切换、用量与成本 |
 | 📘 | [用户指南](user-guide/README.md) | HTTPRoute、GRPCRoute、插件、负载均衡、弹性能力和流量管理 |
 | 🔧 | [运维指南](ops-guide/README.md) | Gateway 配置、TLS、可观测性、ACME 和生产运维 |
 | 🛠️ | [开发指南](dev-guide/README.md) | 架构内部实现、新增资源/插件、编码规范 |

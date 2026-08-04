@@ -187,6 +187,7 @@ impl EdgionPluginsHandler {
                 // Non-ref-bearing variants: explicit arms so a future ref-bearing
                 // variant forces a compile error here (fail-safe completeness guard).
                 EdgionPlugin::RequestHeaderModifier(_)
+                | EdgionPlugin::AiProxy(_)
                 | EdgionPlugin::ResponseHeaderModifier(_)
                 | EdgionPlugin::RequestRedirect(_)
                 | EdgionPlugin::UrlRewrite(_)
@@ -340,7 +341,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
     }
 
     async fn on_change(&self, ep: &EdgionPlugins, ctx: &HandlerContext) {
-        requeue_referencing_gateways(ep, ctx).await;
+        requeue_referencing_resources(ep, ctx).await;
     }
 
     async fn on_delete(&self, ep: &EdgionPlugins, ctx: &HandlerContext) {
@@ -352,7 +353,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
         Self::clear_config_data_refs(ep, ctx);
         ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
-        requeue_referencing_gateways(ep, ctx).await;
+        requeue_referencing_resources(ep, ctx).await;
 
         tracing::debug!(
             edgion_plugins = %resource_ref.key(),
@@ -853,9 +854,8 @@ pub fn resolve_canary_active_profile_refs(ep: &EdgionPlugins, ctx: &HandlerConte
     errors
 }
 
-/// Requeue all Gateways that reference this EdgionPlugins via
-/// `edgion.io/edgion-plugins` annotation.
-async fn requeue_referencing_gateways(ep: &EdgionPlugins, ctx: &HandlerContext) {
+/// Requeue all Gateways and HTTPRoutes that reference this EdgionPlugins.
+async fn requeue_referencing_resources(ep: &EdgionPlugins, ctx: &HandlerContext) {
     let Some(ep_name) = ep.metadata.name.as_deref().filter(|n| !n.is_empty()) else {
         return;
     };
@@ -865,11 +865,11 @@ async fn requeue_referencing_gateways(ep: &EdgionPlugins, ctx: &HandlerContext) 
         tracing::info!(
             ep_key = %ep_key,
             ref_count = refs.len(),
-            "EdgionPlugins changed, requeuing referencing Gateways"
+            "EdgionPlugins changed, requeuing referencing resources"
         );
     }
-    for gw_ref in refs {
-        ctx.requeue("Gateway", gw_ref.resource_key()).await;
+    for resource_ref in refs {
+        ctx.requeue(resource_ref.kind_str(), resource_ref.resource_key()).await;
     }
 }
 
@@ -2549,6 +2549,7 @@ mod tests {
                 | EdgionPlugin::GlobalAccessControl(_)
                 | EdgionPlugin::Canary(_) => true,
                 EdgionPlugin::RequestHeaderModifier(_)
+                | EdgionPlugin::AiProxy(_)
                 | EdgionPlugin::ResponseHeaderModifier(_)
                 | EdgionPlugin::RequestRedirect(_)
                 | EdgionPlugin::UrlRewrite(_)

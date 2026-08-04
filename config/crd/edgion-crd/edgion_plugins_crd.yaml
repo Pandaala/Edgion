@@ -175,6 +175,7 @@ spec:
                         description: "Plugin type"
                         enum:
                           - BasicAuth
+                          - AiProxy
                           - Cors
                           - Csrf
                           - CtxSet

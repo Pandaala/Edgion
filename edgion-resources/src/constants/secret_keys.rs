@@ -12,3 +12,9 @@ pub mod tls {
     /// CA certificate for mTLS verification
     pub const CA_CERT: &str = "ca.crt";
 }
+
+/// AI provider credential keys.
+pub mod ai {
+    /// Provider API key used by `EdgionAIService`.
+    pub const API_KEY: &str = "api-key";
+}

@@ -1,8 +1,11 @@
 use super::EdgionHttpProxy;
-use crate::cli::config::{get_backend_requests_config, get_request_duration_config};
+use crate::ai::{estimated_cost_usd, GenAiAttemptUsageSource, GenAiSummary, ReportedAiUsage};
+use crate::cli::config::{get_backend_requests_config, get_genai_tokens_config, get_request_duration_config};
+use crate::ctx::ResponseStreamKind;
 use crate::link_sys::LogMeta;
 use crate::observe::metrics::{
-    global_metrics, record_backend_request, record_request_duration, status_group, TestData, TestType,
+    global_metrics, record_backend_request, record_genai_tokens, record_request_duration, status_group,
+    GenAiUsageSource, TestData, TestType,
 };
 use crate::observe::AccessLogEntry;
 use crate::EdgionHttpContext;
@@ -34,6 +37,10 @@ pub async fn logging(
         ctx.request_info.status = Some(resp_header.status.as_u16());
     }
 
+    let ai_ttft_ms = ctx.get_current_upstream().and_then(|upstream| upstream.bt);
+    ctx.ai_attempt_runtime.finalize(ai_ttft_ms).await;
+    finalize_ai_usage(ctx);
+    finalize_ai_quota(ctx).await;
     record_request_metrics(ctx, _e);
 
     // Streamed body handlers whose pump never reached EOS (client abort,
@@ -98,6 +105,123 @@ pub async fn logging(
             global_metrics().access_log_dropped();
         }
     }
+}
+
+/// Finalize AI usage once at the request's universal logging boundary.
+#[inline]
+fn finalize_ai_usage(ctx: &mut EdgionHttpContext) {
+    finalize_ai_usage_with_metrics_enabled(ctx, get_genai_tokens_config().enabled);
+}
+
+/// Testable finalizer with the restart-bound metric switch passed explicitly,
+/// avoiding process-global `OnceLock` mutation in parallel unit tests.
+#[inline]
+fn finalize_ai_usage_with_metrics_enabled(ctx: &mut EdgionHttpContext, metrics_enabled: bool) {
+    if ctx.genai_summary.is_some() {
+        return;
+    }
+    if ctx.ai_attempt_plan.is_some() && !ctx.ai_attempt_runtime.ever_dispatched() {
+        return;
+    }
+    let Some(ai) = ctx.ai.as_ref() else {
+        return;
+    };
+
+    let provider = ai.provider;
+    let model = ai.model.clone();
+    let (usage, usage_source) = match ai.usage.reported_usage() {
+        Some(usage) => (usage, GenAiUsageSource::Reported),
+        None => (
+            ReportedAiUsage {
+                input_tokens: ceil_chars_div_four(ai.usage.input_chars()),
+                output_tokens: ceil_chars_div_four(ai.usage.output_chars()),
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+            },
+            GenAiUsageSource::Estimated,
+        ),
+    };
+    let streaming = ctx.response_stream_kind == ResponseStreamKind::Sse;
+    let ttft_ms = ctx.get_current_upstream().and_then(|upstream| upstream.bt);
+
+    // Store the immutable summary before metric emission. Its presence is the
+    // commit sentinel, so re-entry can never increment the counters twice.
+    ctx.genai_summary = Some(GenAiSummary {
+        provider: provider.as_str(),
+        model,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_read_input_tokens: usage.cache_read_input_tokens,
+        cache_write_input_tokens: usage.cache_write_input_tokens,
+        streaming,
+        usage_estimated: usage_source == GenAiUsageSource::Estimated,
+        estimated_cost_usd: ai.pricing.map(|pricing| estimated_cost_usd(pricing, usage)),
+        quota_status: ai.quota_status,
+        ttft_ms,
+        attempts: ctx.ai_attempt_runtime.attempts().to_vec(),
+        attempts_truncated: ctx.ai_attempt_runtime.attempts_truncated(),
+    });
+    if ctx.ai_attempt_runtime.ever_dispatched() {
+        if let Ok(totals) = ctx.ai_attempt_runtime.metric_totals() {
+            for total in totals {
+                let source = match total.usage_source {
+                    GenAiAttemptUsageSource::Reported => GenAiUsageSource::Reported,
+                    GenAiAttemptUsageSource::Estimated => GenAiUsageSource::Estimated,
+                };
+                record_genai_tokens(
+                    metrics_enabled,
+                    total.provider,
+                    source,
+                    total.input_tokens,
+                    total.output_tokens,
+                );
+            }
+        }
+    } else {
+        record_genai_tokens(
+            metrics_enabled,
+            provider,
+            usage_source,
+            usage.input_tokens,
+            usage.output_tokens,
+        );
+    }
+}
+
+async fn finalize_ai_quota(ctx: &mut EdgionHttpContext) {
+    let Some(summary) = ctx.genai_summary.as_ref() else {
+        return;
+    };
+    let authoritative_total = if ctx.ai_attempt_runtime.ever_dispatched() {
+        ctx.ai_attempt_runtime.charged_request_tokens().ok()
+    } else {
+        summary.input_tokens.checked_add(summary.output_tokens)
+    };
+    let Some(authoritative_total) = authoritative_total else {
+        if let Some(summary) = ctx.genai_summary.as_mut() {
+            summary.quota_status = Some("accounting_overflow");
+        }
+        ctx.add_error(edgion_resources::EdgionStatus::AiQuotaReconciliationFailed);
+        return;
+    };
+    let Some(quota) = ctx.ai.as_mut().and_then(|ai| ai.quota.as_mut()) else {
+        return;
+    };
+    let status = quota.finalize(authoritative_total).await;
+    if let Some(summary) = ctx.genai_summary.as_mut() {
+        summary.quota_status = Some(status.as_str());
+    }
+    if matches!(
+        status,
+        crate::ai::quota::QuotaFinalStatus::Failed | crate::ai::quota::QuotaFinalStatus::TimedOut
+    ) {
+        ctx.add_error(edgion_resources::EdgionStatus::AiQuotaReconciliationFailed);
+    }
+}
+
+#[inline]
+const fn ceil_chars_div_four(chars: u64) -> u64 {
+    chars / 4 + if chars % 4 == 0 { 0 } else { 1 }
 }
 
 #[inline]
@@ -521,5 +645,320 @@ mod tests {
         // Second cleanup: lb_committed was taken; must be a no-op.
         lb_runtime_cleanup(&mut ctx);
         assert_eq!(a.conn(), 1, "second cleanup must not decrement again");
+    }
+}
+
+#[cfg(test)]
+mod genai_tests {
+    use super::*;
+    use crate::ai::{
+        AiProviderLabel, AiRequestContext, AiUsageShared, GenAiAttempt, GenAiAttemptFailure, GenAiAttemptUsageSource,
+        UsageExtractionProcessor,
+    };
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::StreamingResponseProcessor;
+    use crate::BackendContext;
+    use bytes::Bytes;
+    use edgion_resources::resources::edgion_ai_service::AiModelPricing;
+    use metrics_exporter_prometheus::PrometheusBuilder;
+    use std::sync::Arc;
+
+    fn ai_context(provider: AiProviderLabel, model: &str, requested_streaming: bool) -> EdgionHttpContext {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.ai = Some(AiRequestContext {
+            provider,
+            model: model.to_string(),
+            pricing: None,
+            requested_streaming,
+            usage: Arc::new(AiUsageShared::default()),
+            quota: None,
+            quota_status: None,
+        });
+        ctx
+    }
+
+    fn observe_response(ctx: &EdgionHttpContext, body: &[u8], eos: bool, kind: ResponseStreamKind) {
+        let shared = ctx.ai.as_ref().unwrap().usage.clone();
+        let mut processor = UsageExtractionProcessor::new(shared);
+        let mut chunk = Some(Bytes::copy_from_slice(body));
+        let mut session = MockPluginSession::new();
+        processor.on_chunk(&mut chunk, eos, kind, &mut session);
+        assert_eq!(chunk.as_deref(), Some(body), "usage observation must not mutate body");
+    }
+
+    fn init_backend_context(ctx: &mut EdgionHttpContext) {
+        ctx.backend_context = Some(BackendContext {
+            source: None,
+            rsc: None,
+            service_key: None,
+            service_kind: None,
+            upstreams: Vec::new(),
+            current_upstream_id: None,
+            backend_ref_idx: None,
+        });
+    }
+
+    #[test]
+    fn ceil_character_estimate_is_overflow_safe() {
+        assert_eq!(ceil_chars_div_four(0), 0);
+        assert_eq!(ceil_chars_div_four(1), 1);
+        assert_eq!(ceil_chars_div_four(4), 1);
+        assert_eq!(ceil_chars_div_four(5), 2);
+        assert_eq!(ceil_chars_div_four(u64::MAX), u64::MAX / 4 + 1);
+    }
+
+    #[test]
+    fn finalize_uses_reported_usage_and_actual_sse_classification() {
+        let mut ctx = ai_context(AiProviderLabel::OpenAi, "gpt-declared", false);
+        observe_response(
+            &ctx,
+            b"data: {\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7}}\n\n",
+            true,
+            ResponseStreamKind::Sse,
+        );
+        ctx.response_stream_kind = ResponseStreamKind::Sse;
+        finalize_ai_usage_with_metrics_enabled(&mut ctx, false);
+
+        let summary = ctx.genai_summary.as_ref().unwrap();
+        assert_eq!((summary.input_tokens, summary.output_tokens), (12, 7));
+        assert!(!summary.usage_estimated);
+        assert!(
+            summary.streaming,
+            "actual response classification must win over requested=false"
+        );
+    }
+
+    #[test]
+    fn finalize_prices_ordinary_cached_and_output_tokens_without_float() {
+        let mut ctx = ai_context(AiProviderLabel::OpenAi, "gpt-declared", false);
+        ctx.ai.as_mut().unwrap().pricing = Some(
+            AiModelPricing {
+                input_per_million_usd: "10".to_string(),
+                output_per_million_usd: "20".to_string(),
+                cache_read_input_per_million_usd: Some("1".to_string()),
+                cache_write_input_per_million_usd: Some("2".to_string()),
+            }
+            .parsed()
+            .unwrap(),
+        );
+        observe_response(
+            &ctx,
+            br#"{"usage":{"prompt_tokens":100,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":20},"cache_creation_input_tokens":10}}"#,
+            true,
+            ResponseStreamKind::None,
+        );
+        finalize_ai_usage_with_metrics_enabled(&mut ctx, false);
+
+        let summary = ctx.genai_summary.as_ref().unwrap();
+        assert_eq!(summary.cache_read_input_tokens, 20);
+        assert_eq!(summary.cache_write_input_tokens, 10);
+        assert_eq!(summary.estimated_cost_usd.as_deref(), Some("0.00084"));
+        let json = crate::observe::AccessLogEntry::from_context(&ctx).to_json();
+        assert!(json.contains(r#""estimated_cost_usd":"0.00084""#));
+    }
+
+    #[test]
+    fn finalize_preserves_quota_admission_bypass_status() {
+        let mut ctx = ai_context(AiProviderLabel::OpenAi, "model-a", false);
+        let ai = ctx.ai.as_mut().unwrap();
+        ai.quota_status = Some("fail_open");
+        ai.usage.publish_reported_usage(2, 3, 0, 0);
+
+        finalize_ai_usage_with_metrics_enabled(&mut ctx, false);
+
+        assert_eq!(ctx.genai_summary.unwrap().quota_status, Some("fail_open"));
+    }
+
+    #[test]
+    fn finalize_estimates_partial_aborted_stream_and_emits_metrics_once() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let mut ctx = ai_context(AiProviderLabel::OpenAiCompatible, "other", true);
+        ctx.ai.as_ref().unwrap().usage.set_input_chars(5);
+        observe_response(&ctx, b"data: hello", false, ResponseStreamKind::Sse);
+        ctx.response_stream_kind = ResponseStreamKind::Sse;
+        metrics::with_local_recorder(&recorder, || {
+            finalize_ai_usage_with_metrics_enabled(&mut ctx, true);
+            finalize_ai_usage_with_metrics_enabled(&mut ctx, true);
+        });
+
+        let summary = ctx.genai_summary.as_ref().unwrap();
+        assert_eq!((summary.input_tokens, summary.output_tokens), (2, 2));
+        assert!(summary.usage_estimated);
+        assert!(summary.streaming);
+
+        let rendered = handle.render();
+        let samples: Vec<&str> = rendered
+            .lines()
+            .filter(|line| line.starts_with(crate::observe::metrics::registry::names::GENAI_TOKENS_TOTAL))
+            .collect();
+        assert_eq!(
+            samples.len(),
+            2,
+            "aborted request must emit one input/output pair:\n{rendered}"
+        );
+        assert!(samples.iter().all(|line| line.ends_with(" 2")));
+    }
+
+    #[test]
+    fn ttft_uses_only_current_attempt_and_is_absent_without_its_body() {
+        let mut ctx = ai_context(AiProviderLabel::OpenAi, "gpt-declared", false);
+        init_backend_context(&mut ctx);
+        ctx.push_upstream(None, None);
+        ctx.get_current_upstream_mut().unwrap().bt = Some(10);
+        ctx.push_upstream(None, None);
+        finalize_ai_usage_with_metrics_enabled(&mut ctx, false);
+        assert_eq!(ctx.genai_summary.as_ref().unwrap().ttft_ms, None);
+
+        let mut with_body = ai_context(AiProviderLabel::OpenAi, "gpt-declared", false);
+        init_backend_context(&mut with_body);
+        with_body.push_upstream(None, None);
+        with_body.get_current_upstream_mut().unwrap().bt = Some(10);
+        with_body.push_upstream(None, None);
+        with_body.get_current_upstream_mut().unwrap().bt = Some(23);
+        finalize_ai_usage_with_metrics_enabled(&mut with_body, false);
+        assert_eq!(with_body.genai_summary.as_ref().unwrap().ttft_ms, Some(23));
+    }
+
+    #[test]
+    fn finalize_is_idempotent_and_emits_metrics_once() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let mut ctx = ai_context(AiProviderLabel::OpenAi, "gpt-declared", false);
+        observe_response(
+            &ctx,
+            br#"{"usage":{"prompt_tokens":12,"completion_tokens":7}}"#,
+            true,
+            ResponseStreamKind::None,
+        );
+
+        metrics::with_local_recorder(&recorder, || {
+            finalize_ai_usage_with_metrics_enabled(&mut ctx, true);
+            let first = ctx.genai_summary.clone();
+            finalize_ai_usage_with_metrics_enabled(&mut ctx, true);
+            assert_eq!(ctx.genai_summary, first);
+        });
+        let rendered = handle.render();
+        let samples: Vec<&str> = rendered
+            .lines()
+            .filter(|line| line.starts_with(crate::observe::metrics::registry::names::GENAI_TOKENS_TOTAL))
+            .collect();
+        assert_eq!(
+            samples.len(),
+            2,
+            "one request must create only input/output series:\n{rendered}"
+        );
+        assert!(samples.iter().any(|line| line.ends_with(" 12")));
+        assert!(samples.iter().any(|line| line.ends_with(" 7")));
+    }
+
+    #[test]
+    fn retry_metrics_sum_all_attempts_and_emit_once() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let mut ctx = ai_context(AiProviderLabel::OpenAi, "gpt-declared", false);
+        for (number, input_tokens, output_tokens, failure) in
+            [(1, 3, 4, Some(GenAiAttemptFailure::RetryableStatus)), (2, 5, 7, None)]
+        {
+            ctx.ai_attempt_runtime.record_test_attempt(
+                GenAiAttempt {
+                    number,
+                    service: "service-a".to_string(),
+                    provider: "openai",
+                    credential: "primary".to_string(),
+                    status: Some(200),
+                    failure,
+                    retry_after_seconds: None,
+                    ttft_ms: None,
+                    usage_source: GenAiAttemptUsageSource::Reported,
+                    input_tokens,
+                    output_tokens,
+                    estimated_cost_usd: None,
+                },
+                AiProviderLabel::OpenAi,
+            );
+        }
+
+        metrics::with_local_recorder(&recorder, || {
+            finalize_ai_usage_with_metrics_enabled(&mut ctx, true);
+            finalize_ai_usage_with_metrics_enabled(&mut ctx, true);
+        });
+
+        let rendered = handle.render();
+        let samples: Vec<&str> = rendered
+            .lines()
+            .filter(|line| line.starts_with(crate::observe::metrics::registry::names::GENAI_TOKENS_TOTAL))
+            .collect();
+        assert_eq!(
+            samples.len(),
+            2,
+            "attempts must share fixed-label input/output series:\n{rendered}"
+        );
+        assert!(samples.iter().any(|line| line.ends_with(" 8")));
+        assert!(samples.iter().any(|line| line.ends_with(" 11")));
+        assert!(samples.iter().all(|line| line.contains("provider=\"openai\"")));
+        assert!(samples.iter().all(|line| line.contains("usage_source=\"reported\"")));
+    }
+
+    #[test]
+    fn disabled_or_non_ai_finalization_never_registers_metric_family() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            let mut ai = ai_context(AiProviderLabel::OpenAi, "gpt-declared", false);
+            finalize_ai_usage_with_metrics_enabled(&mut ai, false);
+            let mut ordinary = EdgionHttpContext::new();
+            finalize_ai_usage_with_metrics_enabled(&mut ordinary, true);
+            assert!(ordinary.genai_summary.is_none());
+        });
+        assert!(!handle
+            .render()
+            .contains(crate::observe::metrics::registry::names::GENAI_TOKENS_TOTAL));
+    }
+
+    #[test]
+    fn access_log_genai_shape_contains_no_request_response_or_key_text() {
+        let prompt = "PROMPT-FIXTURE-DO-NOT-LOG";
+        let completion = "COMPLETION-FIXTURE-DO-NOT-LOG";
+        let api_key = "API-KEY-FIXTURE-DO-NOT-LOG";
+        let mut ctx = ai_context(AiProviderLabel::OpenAi, "gpt-declared", false);
+        ctx.ai
+            .as_ref()
+            .unwrap()
+            .usage
+            .set_input_chars(prompt.chars().count() as u64);
+        let event = format!("data: {completion}");
+        observe_response(&ctx, event.as_bytes(), false, ResponseStreamKind::Sse);
+        finalize_ai_usage_with_metrics_enabled(&mut ctx, false);
+
+        let json = crate::observe::AccessLogEntry::from_context(&ctx).to_json();
+        assert!(!json.contains(prompt));
+        assert!(!json.contains(completion));
+        assert!(!json.contains(api_key));
+        assert!(!json.contains("authorization"));
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let genai = value["genai"].as_object().unwrap();
+        assert_eq!(genai["provider"], "openai");
+        assert_eq!(genai["model"], "gpt-declared");
+        assert_eq!(genai["streaming"], false);
+        assert!(genai.get("ttft_ms").is_none());
+        let keys: std::collections::BTreeSet<&str> = genai.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [
+                "input_tokens",
+                "model",
+                "output_tokens",
+                "provider",
+                "streaming",
+                "usage_estimated",
+            ]
+            .into_iter()
+            .collect()
+        );
+
+        let ordinary = EdgionHttpContext::new();
+        let ordinary_json = crate::observe::AccessLogEntry::from_context(&ordinary).to_json();
+        assert!(!ordinary_json.contains("\"genai\""));
     }
 }

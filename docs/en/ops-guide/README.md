@@ -35,8 +35,9 @@ This section is intended for operators, covering Gateway deployment, configurati
 
 ### Observability
 
-- [Access Log](./observability/access-log.md): Access log fields and output.
+- [Access Log](./observability/access-log.md): Access log fields and output (including the AI `genai` ledger).
 - [Metrics](./observability/metrics.md): Prometheus metrics collection and alerting recommendations.
+- [Metrics Inventory](./observability/metrics-inventory.md): Authoritative catalog of every `edgion_*` metric (CI-guarded).
 
 ### Configuration Reference
 

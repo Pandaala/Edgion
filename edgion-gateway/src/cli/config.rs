@@ -604,6 +604,8 @@ pub struct MetricsConfig {
     pub request_duration: RequestDurationConfig,
     /// `edgion_backend_requests_total` per-label toggles
     pub backend_requests: BackendRequestsConfig,
+    /// Optional bounded GenAI token trend counter.
+    pub genai_tokens: GenAiTokensConfig,
     /// Max distinct series before the runtime cardinality guard acts (0 = off).
     #[serde(default = "default_cardinality_cap")]
     pub cardinality_cap: usize,
@@ -618,6 +620,7 @@ impl Default for MetricsConfig {
             listen: "0.0.0.0:12090".to_string(),
             request_duration: RequestDurationConfig::default(),
             backend_requests: BackendRequestsConfig::default(),
+            genai_tokens: GenAiTokensConfig::default(),
             cardinality_cap: default_cardinality_cap(),
             cardinality_mode: Default::default(),
         }
@@ -626,6 +629,16 @@ impl Default for MetricsConfig {
 
 fn default_cardinality_cap() -> usize {
     10_000
+}
+
+/// `edgion_gateway_genai_tokens_total` configuration
+/// (`metrics.genai_tokens` in YAML).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GenAiTokensConfig {
+    /// Enable the bounded token rate/trend counter. Per-request access-log
+    /// usage is always recorded independently of this switch.
+    pub enabled: bool,
 }
 
 /// Request duration histogram configuration (`metrics.request_duration` in YAML)
@@ -782,6 +795,26 @@ pub fn init_backend_requests_config(config: BackendRequestsConfig) {
 #[inline]
 pub fn get_backend_requests_config() -> &'static BackendRequestsConfig {
     BACKEND_REQUESTS_CONFIG.get_or_init(BackendRequestsConfig::default)
+}
+
+// ============================================
+// GenAI Token Counter Configuration
+// ============================================
+
+/// Global restart-bound GenAI token counter configuration.
+static GENAI_TOKENS_CONFIG: OnceLock<GenAiTokensConfig> = OnceLock::new();
+
+/// Initialize the global GenAI token counter configuration once at startup.
+pub fn init_genai_tokens_config(config: GenAiTokensConfig) {
+    let result = GENAI_TOKENS_CONFIG.set(config);
+    debug_assert!(result.is_ok(), "init_genai_tokens_config called more than once");
+}
+
+/// Get the GenAI token counter configuration. Tests and tooling that do not
+/// boot the Gateway default to disabled without registering the metric family.
+#[inline]
+pub fn get_genai_tokens_config() -> &'static GenAiTokensConfig {
+    GENAI_TOKENS_CONFIG.get_or_init(GenAiTokensConfig::default)
 }
 
 // ============================================
@@ -1184,6 +1217,20 @@ access_log_sensitive:
         // (120xx). Changing this would silently break the port-unification plan.
         let cfg = MetricsConfig::default();
         assert_eq!(cfg.listen, "0.0.0.0:12090");
+    }
+
+    #[test]
+    fn genai_token_metric_is_disabled_by_default_and_yaml_can_enable_it() {
+        assert!(!MetricsConfig::default().genai_tokens.enabled);
+
+        let cfg: MetricsConfig = serde_yaml::from_str(
+            r#"
+genai_tokens:
+  enabled: true
+"#,
+        )
+        .unwrap();
+        assert!(cfg.genai_tokens.enabled);
     }
 
     #[test]

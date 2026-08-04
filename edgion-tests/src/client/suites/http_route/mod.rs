@@ -5,6 +5,7 @@
 mod basic;
 mod delegation;
 mod multi_port;
+mod sse_streaming;
 
 // Sub-modules - by function
 mod backend;
@@ -18,6 +19,7 @@ pub use basic::HttpTestSuite;
 pub use dangling_extension_ref::DanglingExtensionRefTestSuite;
 pub use delegation::{DelegationDynamicInitialTestSuite, DelegationDynamicUpdateTestSuite, DelegationTestSuite};
 pub use multi_port::MultiPortTestSuite;
+pub use sse_streaming::SseStreamingTestSuite;
 
 // Export sub-module tests
 pub use backend::{

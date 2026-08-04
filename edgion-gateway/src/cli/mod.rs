@@ -1,3 +1,4 @@
+use crate::ai::{get_adaptive_telemetry_store, run_adaptive_telemetry_ticker};
 use crate::api;
 use crate::cli::pingora::{create_and_configure_server, run_server};
 use crate::conf_sync::{ConfigClient, ConfigSyncClient};
@@ -138,6 +139,13 @@ impl EdgionGatewayCli {
         config: &EdgionGatewayConfig,
         shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) {
+        // One process-wide adaptive publisher. Request paths only update
+        // captured atomics; no per-request task is created.
+        tokio::spawn(run_adaptive_telemetry_ticker(
+            get_adaptive_telemetry_store(),
+            shutdown_rx.clone(),
+        ));
+
         // Start backend cleaner; stop it when the shutdown signal fires.
         let mut cleaner = BackendCleaner::new();
         cleaner.start();
@@ -639,6 +647,7 @@ impl EdgionGatewayCli {
         // 14. Initialize metrics configuration (global OnceLock for hot-path access)
         config::init_request_duration_config(config.metrics.request_duration.clone());
         config::init_backend_requests_config(config.metrics.backend_requests.clone());
+        config::init_genai_tokens_config(config.metrics.genai_tokens.clone());
 
         // 15. Initialize path normalization config (global OnceLock for hot-path access)
         edgion_resources::path_normalization::init_path_normalization_config(config.path_normalization.clone());

@@ -1,0 +1,63 @@
+apiVersion: edgion.io/v1
+kind: EdgionAIService
+metadata:
+  name: fixture-provider
+  namespace: edgion-test
+spec:
+  provider: OpenAICompatible
+  endpoint: http://127.0.0.1:30001/ai/prefix
+  allowInsecureHttp: true
+  credentialPool:
+    credentials:
+      - name: primary
+        secretRef:
+          name: ai-provider-credential
+  models:
+    - name: fixture-model
+      aliases:
+        - fixture-alias
+      pricing:
+        inputPerMillionUsd: "10"
+        outputPerMillionUsd: "20"
+    - name: premium-model
+    - name: economy-model
+  defaults:
+    streaming: true
+---
+apiVersion: edgion.io/v1
+kind: EdgionAIService
+metadata:
+  name: fixture-provider-streaming-disabled
+  namespace: edgion-test
+spec:
+  provider: OpenAICompatible
+  endpoint: http://127.0.0.1:30001/ai/prefix
+  allowInsecureHttp: true
+  credentialPool:
+    credentials:
+      - name: primary
+        secretRef:
+          name: ai-provider-credential
+  models:
+    - name: fixture-model
+  defaults:
+    streaming: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionAIService
+metadata:
+  name: fixture-provider-retryable
+  namespace: edgion-test
+spec:
+  provider: OpenAICompatible
+  endpoint: http://127.0.0.1:30001/ai/fail-503
+  allowInsecureHttp: true
+  credentialPool:
+    credentials:
+      - name: retry-primary
+        secretRef:
+          name: ai-provider-credential
+  models:
+    - name: fixture-model
+  defaults:
+    streaming: true

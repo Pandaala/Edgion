@@ -10,6 +10,7 @@
 use crate::backends::discovery::get_roundrobin_store;
 use crate::conf_sync::conf_client::ConfigClient;
 use crate::lb::compiled_selector;
+use edgion_resources::HTTPBackendRefKind;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -59,7 +60,7 @@ pub fn preload_load_balancers(config_client: Arc<ConfigClient>) {
                 continue;
             };
             for br in backend_refs {
-                if br.is_route_delegation_ref() {
+                if br.backend_kind() != HTTPBackendRefKind::Service {
                     continue;
                 }
                 let ns = br.namespace.as_deref().unwrap_or(route_ns);

@@ -16,6 +16,7 @@ use crate::{InternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataRef};
 use edgion_resources::resources::edgion_plugins::plugin_configs::{CanaryConfig, DynUpstreamOnInvalid};
+use edgion_resources::HTTPBackendRefKind;
 
 /// Resolve the "namespace/name" Selector store key for a (possibly denied)
 /// `activeProfileRef`. Returns `None` when no ref is configured OR the ref
@@ -145,6 +146,9 @@ impl RequestFilter for Canary {
         };
 
         let found = backend_refs.iter().any(|br| {
+            if br.backend_kind() != HTTPBackendRefKind::Service {
+                return false;
+            }
             if br.name != target.name {
                 return false;
             }
@@ -251,6 +255,8 @@ mod tests {
             },
             rule: Arc::new(HTTPRouteRule {
                 name: None,
+                resolved_terminal_route_uid: None,
+                resolved_terminal_rule_identity: None,
                 matches: None,
                 filters: None,
                 backend_refs: Some(backend_refs),

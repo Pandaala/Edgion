@@ -162,6 +162,7 @@ The log is always JSON, one entry per line. Optional fields are omitted entirely
   },
   "match_info": { },
   "backend_context": { },
+  "genai": { },
   "stage_logs": [ ],
   "info": [ ],
   "errors": [ ]
@@ -180,6 +181,7 @@ Request-scoped fields (`client-addr`, `host`, `path`, `status`, etc.) nest one l
 | `request_info` | Object | Request-scoped fields — see [Request fields](#request-fields) below |
 | `match_info` | Object | Matched route identity (omitted when no route matched) |
 | `backend_context` | Object | Backend identity and upstream timing (omitted/`null` when no backend was used) |
+| `genai` | Object | Final GenAI usage and bounded per-attempt accounting (omitted for non-AI requests) |
 | `stage_logs` | Array\<Object\> | Per-plugin execution logs grouped by stage (omitted when empty) |
 | `info` | Array\<String\> | Gateway-internal informational events (omitted when empty) |
 | `errors` | Array\<String\> | Error reasons captured during processing (omitted when empty) |
@@ -240,6 +242,35 @@ When no route matches, the entire `match_info` object is omitted.
 | `err` | Array\<String\> | — | Error/reason labels for this attempt (omitted when empty). Retry decisions are labeled explicitly: connect failures carry the error type (`ConnectTimedout`, `TLSHandshakeTimedout`, `ConnectRefused`, ...), per-try timeouts carry `ReadTimedout`/`WriteTimedout`, status-code retries carry `RetryOnStatus`, stale-keepalive retries carry `ConnectionReuseRetry` |
 
 When no backend was used (route not matched, or the request was short-circuited by a plugin), `backend_context` is `null` or omitted.
+
+### `genai` fields
+
+The final request summary contains `provider`, `model`, `input_tokens`, `output_tokens`, optional
+cache-token counts and `estimated_cost_usd`, `streaming`, `usage_estimated`, optional `quota_status`
+and `ttft_ms`, plus the per-attempt fields below. `attempts` contains at most eight dispatched
+attempts and its serialized section is capped at 8 KiB. `attempts_truncated` is present and `true`
+when later summaries were omitted to preserve either bound.
+
+| `attempts[]` field | Type | Description |
+|--------------------|------|-------------|
+| `number` | Integer | One-based dispatched-attempt number |
+| `service` | String | Bounded namespaced EdgionAIService key (`namespace/name`) |
+| `provider` | String | Fixed provider enum |
+| `credential` | String | Non-secret configured credential alias; never provider credential or Secret data |
+| `status` | Integer | Provider HTTP status, when received |
+| `failure` | String | Fixed class: `retryable_status`, `ambiguous_transport`, `backend_request_timeout`, or `incomplete_response` |
+| `retry_after_seconds` | Integer | Accepted bounded Retry-After cooldown, in seconds |
+| `ttft_ms` | Integer | Time to the first non-empty response body chunk for the successful final attempt |
+| `usage_source` | String | `reported` or `estimated` |
+| `input_tokens` | Integer | Reported or bounded estimated input tokens for this attempt |
+| `output_tokens` | Integer | Reported or bounded estimated output tokens for this attempt |
+| `estimated_cost_usd` | String | Estimated attempt cost when pricing is configured |
+
+The ledger never stores provider URLs, resolved addresses, Secret values, request/response bodies,
+provider error text, prompts, completions, or tool arguments. For an ambiguous post-dispatch result,
+Redis may conservatively retain the full input-plus-maximum-output reservation until its window
+expires. That reservation protects the rate limit; it is distinct from the durable observed or
+estimated usage recorded here and is not a claim that all reserved tokens were consumed.
 
 ### `stage_logs` fields
 

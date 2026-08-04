@@ -24,6 +24,7 @@ pub enum ResourceKind {
     EdgionAcme = 20,
     ConfigMap = 21,
     EdgionBackendTrafficPolicy = 22,
+    EdgionAIService = 23,
 }
 
 impl ResourceKind {
@@ -57,6 +58,7 @@ impl ResourceKind {
             ResourceKind::EdgionAcme => "EdgionAcme",
             ResourceKind::ConfigMap => "ConfigMap",
             ResourceKind::EdgionBackendTrafficPolicy => "EdgionBackendTrafficPolicy",
+            ResourceKind::EdgionAIService => "EdgionAIService",
         }
     }
 
@@ -98,10 +100,11 @@ impl ResourceKind {
                 ResourceKind::BackendTLSPolicy => {}
                 ResourceKind::EdgionAcme => {}
                 ResourceKind::ConfigMap => {}
-                ResourceKind::EdgionBackendTrafficPolicy => {} // NOTE: When adding a new ResourceKind variant:
-                                                               // 1. Add it to this match
-                                                               // 2. Add corresponding entry in src/resource/defs.rs
-                                                               // The compiler will ensure both are in sync.
+                ResourceKind::EdgionBackendTrafficPolicy => {}
+                ResourceKind::EdgionAIService => {} // NOTE: When adding a new ResourceKind variant:
+                                                    // 1. Add it to this match
+                                                    // 2. Add corresponding entry in src/resource/defs.rs
+                                                    // The compiler will ensure both are in sync.
             }
         }
         // Trigger the check
@@ -160,6 +163,7 @@ impl ResourceKind {
             "edgionacme" => Some(ResourceKind::EdgionAcme),
             "configmap" => Some(ResourceKind::ConfigMap),
             "edgionbackendtrafficpolicy" => Some(ResourceKind::EdgionBackendTrafficPolicy),
+            "edgionaiservice" => Some(ResourceKind::EdgionAIService),
             _ => None,
         }
     }

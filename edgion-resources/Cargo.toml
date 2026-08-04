@@ -33,6 +33,7 @@ regex.workspace = true
 smallvec.workspace = true
 parking_lot.workspace = true
 url.workspace = true
+http.workspace = true
 
 # Errors
 thiserror.workspace = true
@@ -53,4 +54,3 @@ tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-http.workspace = true

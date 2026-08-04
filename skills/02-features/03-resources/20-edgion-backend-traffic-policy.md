@@ -1,605 +1,66 @@
 ---
 name: edgion-backend-traffic-policy-features
-description: Full EdgionBackendTrafficPolicy schema — per-destination load balancing, active health check, outlier detection, and dynamic upstream authority (Host/SNI) attached to a Service via targetRefs.
+description: Canonical EdgionBackendTrafficPolicy schema for homogeneous Service or EdgionAIService direct-backend targets.
 ---
 
-# EdgionBackendTrafficPolicy Resource
+# EdgionBackendTrafficPolicy resource
 
 > API: `edgion.io/v1` | Scope: Namespaced | Short name: `ebtp`
-> Design: `docs/superpowers/specs/2026-07-10-edgion-backend-traffic-policy-design.md`,
-> `docs/superpowers/specs/2026-07-14-dynamic-upstream-authority-design.md` (`upstreamAuthority`)
+> Internal processing: [../../01-architecture/05-resources/20-edgion-backend-traffic-policy.md](../../01-architecture/05-resources/20-edgion-backend-traffic-policy.md)
 
-`EdgionBackendTrafficPolicy` is the single configuration surface for "how the
-gateway connects to a backend Service": load-balancing algorithm (including
-consistent hash and the panic threshold), active health checks, outlier
-detection (passive ejection), a per-backend retry budget (see
-[`retryConstraint`](#retryconstraint)), and dynamic upstream authority
-(per-request `Host`/SNI on a fixed dial target — see
-[`upstreamAuthority`](#upstreamauthority)). It attaches to one or more
-Services in the **same namespace** via `spec.targetRefs`, following the
-Gateway API policy-attachment pattern (the same `DirectSameNs` semantics as
-[BackendTLSPolicy](12-backend-tls-policy.md)).
+EdgionBackendTrafficPolicy (EBTP) configures one or more direct backend destinations. A policy
+targets either core Services or EdgionAIServices in its own Namespace. It does not target HTTPRoute
+and does not define a backend list for routing.
 
-It replaces three previously separate mechanisms, all removed: the
-`edgion.io/health-check` and `edgion.io/circuit-breaker` /
-`edgion.io/outlier-detection` Service (and EndpointSlice) annotations, the
-`edgion.io/panic-threshold` Service annotation, and the route-level
-`LBPolicy*` `ExtensionRef` filters. `BackendTLSPolicy` (upstream TLS/mTLS) is
-**not** absorbed and stays a separate resource.
+For AI traffic, HTTPRoute `backendRefs` remains the only candidate, order, and weight source;
+rule-level `AiProxy.backendSelection` chooses among those candidates. EBTP independently controls
+connection establishment and resilience for each referenced destination.
 
-## Full Schema
+## Target contract
 
 ```yaml
-apiVersion: edgion.io/v1
-kind: EdgionBackendTrafficPolicy
-metadata:
-  name: payments-policy
-  namespace: prod
-spec:
-  targetRefs:
-    - kind: Service          # v1: only Service (group "" / core)
-      name: payments
-
-  loadBalancer:               # optional; absent = RoundRobin, no panic override
-    type: LeastConn           # RoundRobin | LeastConn | Ewma | ConsistentHash
-    consistentHash:            # required iff type == ConsistentHash
-      hashOn: header           # header | cookie | queryParam | sourceIp
-      key: x-user-id
-    panicThreshold: 30         # 0-100; overrides the global
-                                # EdgionGatewayConfig.spec.loadBalancing.panicThreshold
-
-  healthCheck:                 # optional; absent = no active probing
-    active:
-      type: http                # http | tcp | grpc
-      path: /healthz
-      port: 8080
-      interval: 10s
-      timeout: 3s
-      healthyThreshold: 2
-      unhealthyThreshold: 3
-      expectedStatuses: [200]
-      host: payments.internal
-      grpcServiceName: ""
-
-  outlierDetection:            # optional; absent = no passive ejection
-    consecutiveErrors: 5
-    consecutiveGatewayErrors: 5
-    consecutiveLocalOriginFailures: 5
-    ejectionTime: 30s
-    maxEjectionTime: 5m
-    maxEjectionPercent: 50
-
-  retryConstraint:             # optional; absent = no retry budget (only maxRetries applies)
-    budget:
-      percent: 20               # 0-100, default 20
-      interval: 10s              # GEP-2257, [1s, 1h], default 10s
-    minRetryRate:
-      count: 10                 # 1..=1_000_000, default 10
-      interval: 1s                # GEP-2257, (0s, 1h], default 1s
-
-  upstreamAuthority:            # optional; absent = today's static-SNI behavior
-    pattern: "*.sandbox.internal"                # exactly one leading "*." wildcard label
-    template: "${ctx:tenant}.sandbox.internal"    # required; literal tail must equal
-                                                   # the pattern's suffix
-    healthCheckHost: "probe.sandbox.internal"     # required iff healthCheck.active is set
-
-  connection:                  # optional; absent = use the global defaultConnectTimeout
-    connectTimeout: 300ms       # GEP-2257, (0s, 1h]. HTTP upstream only — see below.
-status:
-  ancestors: []                 # GEP-2648 per-ancestor (Gateway) status
+targetRefs:
+  - group: ""
+    kind: Service
+    name: api-service
 ```
 
-All six spec sections (`loadBalancer`, `healthCheck`, `outlierDetection`,
-`retryConstraint`, `upstreamAuthority`, and each field within them) are
-optional; an absent section means "default behavior" for that concern (see
-[Defaults](#defaults-when-no-policy-applies) below). Sections are **atomic**:
-whichever policy wins for a Service (see [Conflict resolution](#conflict-resolution))
-provides the whole section — there is no per-field merge across policies.
-
-## spec Field Details
-
-### targetRefs
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `group` | `String` | No | Empty string (default) = core API group. Only the core group is supported in v1. |
-| `kind` | `String` | Yes | Only `Service` is supported in v1. |
-| `name` | `String` | Yes | Service name, same namespace as the policy. |
-
-### loadBalancer
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `type` | Enum | Yes (if section present) | `RoundRobin` \| `LeastConn` \| `Ewma` \| `ConsistentHash`. `RoundRobin` is the engine default and needs no explicit `consistentHash`. |
-| `consistentHash` | Object | Only when `type: ConsistentHash` | `hashOn` (`header` \| `cookie` \| `queryParam` \| `sourceIp`) + `key` (header/cookie/query-param name; **omit for `sourceIp`**). For `sourceIp` a present `key` is rejected (Accepted=False); for the other three an absent/empty `key` is rejected. The whole section is rejected when present with any other `type`, or absent when `type: ConsistentHash`. |
-| `panicThreshold` | `u8` | No | `0`-`100`. Overrides `EdgionGatewayConfig.spec.loadBalancing.panicThreshold` for the target Service(s). Values > 100 are rejected. |
-
-`consistentHash.hashOn` maps onto the gateway's `ConsistentHashOn` runtime enum
-(`edgion-resources/src/resources/lb_policy.rs`): `header` → `Header`, `cookie`
-→ `Cookie`, `queryParam` → `Arg`, `sourceIp` → `SourceIp` (a no-argument variant
-that hashes on the RealIp-normalized client source IP). The field is deliberately
-**not** named `on`
-— an unquoted `on` is a YAML 1.1 boolean, and `sigs.k8s.io/yaml` (kubectl's
-converter) would turn the key into `"true"`, breaking structural validation.
-
-### healthCheck
-
-Reuses the existing `ServiceHealthCheck` / `ActiveHealthCheckConfig` shape
-unchanged (same fields as the pre-existing health-check annotation payload) —
-see `edgion-resources/src/resources/health_check.rs`. Validation
-(`ActiveHealthCheckConfig`'s own rules: thresholds ≥ 1, non-zero
-interval/timeout, non-empty `path` and `expectedStatuses` for `http`) is
-unchanged.
-
-### outlierDetection
-
-Mirrors the pre-existing circuit-breaker annotation payload — see
-`edgion-resources/src/resources/outlier_detection.rs`
-(`OutlierDetectionConfig`). Three independent failure counters
-(`consecutiveErrors` = application 5xx, `consecutiveGatewayErrors` = upstream
-502/503/504, `consecutiveLocalOriginFailures` = connect/TLS/transport
-failures); any one reaching its threshold ejects the endpoint.
-`consecutiveGatewayErrors`, `consecutiveLocalOriginFailures`, and
-`maxEjectionTime` are sibling-dependent defaults (`consecutiveErrors`,
-the resolved `consecutiveGatewayErrors`, and `max("5m", ejectionTime)`
-respectively) resolved by `OutlierDetectionConfig::normalize()` in code — the
-CRD YAML deliberately does **not** declare OpenAPI defaults for those three
-fields, since a naive schema default would short-circuit the cross-field
-resolution.
-
-The counting unit is the **upstream attempt**, not the client request: every
-completed upstream response is classified before route-level retry decides
-whether to retry it, so a rule with `retry.attempts: N` lets one client request
-contribute up to `N + 1` consecutive failures (all on the same endpoint when
-every attempt lands there, e.g. a single-endpoint Service). Thresholds must
-therefore be tuned above `attempts + 1` if a single request must not trip
-ejection. `maxEjectionPercent` does not backstop this on a single-endpoint
-Service — the guard floors at one ejectable endpoint
-(`outlier_detection/store.rs`, `max_ejectable.max(1)`). See
-`skills/04-review/routing/status-retry-outlier-detection-per-attempt.md`.
-
-### retryConstraint
-
-> Design: `docs/superpowers/specs/2026-07-21-retry-budget-retryconstraint-design.md`
-
-A **retry budget**: caps the volume of retries the gateway sends to the
-target Service as a percentage of the overall request volume over a sliding
-window, so a partial backend degradation cannot be amplified into a full
-outage by a retry storm. This is the official (non-vendor) Gateway API
-`BackendTrafficPolicy.spec.retryConstraint` field, faithfully ported. It is
-independent of, and **composes with**, the existing static per-request
-`maxRetries` (route-level `retry.attempts`, falling back to the global
-`EdgionGatewayConfig.spec.max_retries`): a retry must pass both — `maxRetries`
-bounds retries *per request*, `retryConstraint` bounds aggregate retries *per
-backend*.
-
-| Field | Type | Required | Description |
-|-------|------|----------|--------------|
-| `budget.percent` | `u8` | No | Max retries as a percentage of **total attempts** (originals + retries, not originals-only), 0-100. Default `20`. |
-| `budget.interval` | `String` (GEP-2257) | No | Sliding window over which the percentage is computed. Range `[1s, 1h]`. Default `10s`. |
-| `minRetryRate.count` | `u32` | No | A floor: this many retries per `interval` are always allowed, regardless of the percentage budget. Range `1..=1_000_000`. Default `10`. |
-| `minRetryRate.interval` | `String` (GEP-2257) | No | Window for `minRetryRate.count`, independent of `budget.interval`. Range `(0s, 1h]`. Default `1s`. |
-
-`retryConstraint: {}` (the section present with no fields) is valid and
-resolves to the upstream defaults — a 20%/10s budget with a 10/1s floor. The
-`minRetryRate` floor exists so a low-traffic backend, whose percentage cap
-would otherwise round down to ~0, can still retry a trickle of requests; it
-is **always present** (matching upstream, which has no null option) — there
-is no way to configure a bare percentage budget with the floor disabled.
-
-**How the budget is evaluated.** A retry is permitted when it is under
-*either* the percentage ceiling *or* the floor (`within_pct || within_floor`,
-not an additive allowance). The percentage ceiling's denominator is **total
-attempts** — every upstream attempt (the original plus every retry)
-increments it, matching upstream's own worked example where retries are
-explicitly a subset of the request volume, not a separate originals-only
-count. Concurrency makes the check-then-increment across the two windows a
-**soft** cap, not exact: under high concurrency it may over-admit slightly
-(bounded by the number of concurrent deciders). This is an accepted
-approximation for a coarse anti-storm mechanism, not a hot-path-lock
-guarantee.
-
-**Which retries count.** Connect failures, per-try (`backendRequest`)
-timeouts, and retryable status codes count toward the budget. A retry driven
-by passive keepalive-connection reuse (a stale pooled connection reset,
-unrelated to backend health) does **not** count as a retry against the
-budget — but it still counts as an attempt in the denominator, like any
-other attempt.
-
-**On exhaustion.** When the budget refuses a retry, the gateway does not
-retry and returns a deterministic `503` to the client (per upstream:
-"additional retries … MUST return a 503"), stamping
-`EdgionStatus::RetryBudgetExhausted` for access-log attribution. No internal
-detail (dependency errors, addresses) leaks in the response body.
-
-**Observability.** Every denial increments the label-less
-`edgion_gateway_retry_budget_denied_total` counter (no per-Service label —
-avoids unbounded cardinality from Service churn). Which backend was
-throttled is attributed via the per-request access log /
-`EdgionStatus::RetryBudgetExhausted`, both already Service-scoped.
-
-**Example.**
+or:
 
 ```yaml
-apiVersion: edgion.io/v1
-kind: EdgionBackendTrafficPolicy
-metadata:
-  name: payments-retry-budget
-  namespace: production
-spec:
-  targetRefs:
-    - kind: Service
-      name: payments
-  retryConstraint:
-    budget:
-      percent: 20
-      interval: 10s
-    minRetryRate:
-      count: 10
-      interval: 1s
+targetRefs:
+  - group: edgion.io
+    kind: EdgionAIService
+    name: primary-provider
 ```
 
-### upstreamAuthority
+Rules:
 
-Lets a Service that dispatches on virtual host — e.g. a multi-tenant sandbox
-backend serving `tenant-a.sandbox.internal`, `tenant-b.sandbox.internal`, …
-behind one wildcard certificate — vary the upstream `Host` header and TLS SNI
-**per request**, while the dial target stays pinned to whatever the Service
-resolves to. Both the standard backend path (HTTPRoute/GRPCRoute → Service)
-and the outbound path (Webhook LinkSys / `forward_auth`, when their `target`
-names the same Service) read this one section; see
-`docs/superpowers/specs/2026-07-14-dynamic-upstream-authority-design.md` for
-the full design and safety argument.
+- A policy has 1–16 `targetRefs`
+- Every target is in the policy's Namespace; cross-Namespace targets are not supported
+- Accepted target pairs are core-group `Service` and `edgion.io/EdgionAIService`
+- All refs in one policy have the same target kind
+- Duplicate typed targets are rejected
+- A Service and EdgionAIService with the same Namespace/name are distinct targets
+- HTTPRoute, GRPCRoute, and other route kinds are not valid targets
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `pattern` | `String` | Yes (if section present) | Exactly one leading `*.` wildcard label followed by a non-empty literal suffix, e.g. `*.sandbox.internal`. This is simultaneously the allowlist and the shape every render must fit. |
-| `template` | `String` | Yes | How the wildcard label is produced per request, e.g. `${ctx:tenant}.sandbox.internal`. Its literal tail must equal `pattern`'s suffix exactly, and the remaining prefix — the label slot — must contain no literal `.` (it may still mix literals and `${...}` expressions, e.g. `tenant-${ctx:id}`). Rejected (`Accepted=False`) otherwise. |
-| `healthCheckHost` | `String` | Required whenever `healthCheck.active` is configured on the same policy | Static authority the active health probe sends, since a probe has no request to render a label from. Must itself match `pattern` (`Accepted=False` otherwise). |
+## Section applicability
 
-**How it works.** Only the wildcard **label** is rendered from request
-context (`${ctx:...}`, `${header:...}`, …) — never a whole hostname. The
-template's fixed suffix is never produced by rendering; it is concatenated
-onto the rendered label afterward. Because the suffix is a compile-time
-constant, every possible render lands inside `pattern` by construction —
-there is no rendered hostname to re-parse and no way for an injected value to
-relocate the host.
+| Section | Service | EdgionAIService |
+|---------|---------|-----------------|
+| `loadBalancer` | Supported | Rejected |
+| `healthCheck` | Supported | Rejected |
+| `outlierDetection` | Supported | Supported |
+| `retryConstraint` | Supported | Supported |
+| `circuitBreaker` | Supported | Supported |
+| `upstreamAuthority` | Supported | Rejected |
+| `connection` | Supported | Supported |
 
-The **dial target never moves**. The gateway still connects to the Service's
-resolved endpoints exactly as it does today; the composed authority becomes
-only the `Host` header (and, over TLS, the SNI and the certificate-validation
-name). The composed authority is never resolved in DNS — this is what removes
-the "dynamic forward proxy" confused-deputy risk class rather than merely
-mitigating it. `upstreamAuthority` only engages for a pool Service: a
-`ServiceClusterIp` or `ExternalName` target resolves to a fixed `Static`
-target with no Service key to attach a policy to, so it never gets the
-authority treatment.
+Unsupported sections reject the entire policy; they are never silently ignored. EdgionAIService
+has one provider endpoint, so cross-service load balancing belongs to AiProxy and Host/SNI comes
+from that endpoint. Edgion does not issue unauthenticated active probes to public AI providers.
 
-**Fail-closed behavior.** A label that fails to render (the common case: a
-`${ctx:...}` variable no plugin set) or renders to something that fails DNS-
-label validation is a hard failure — **never** a silent fallback to the
-static SNI/Host, which would send the request to the wrong virtual host.
-
-- **Standard path**: `502`, with an `EdgionStatus` marking the authority
-  rejection; the peer is left untouched.
-- **Outbound path**: always fail-close with `statusOnError` (default 503).
-  The failure vocabulary across all outbound paths is now FROZEN to maintain
-  predictability; existing shapes are grandfathered in and new unification is
-  not planned. See the
-  [unification-points registry](../../01-architecture/00-common/05-unification-points.md)
-  (entry 2) and
-  `docs/superpowers/specs/2026-07-20-failure-policy-freeze-design.md`.
-
-**The `${ctx:...}` ordering constraint.** On the standard path the template
-renders at peer-build time (`upstream_peer`). A plugin that writes
-`ctx:tenant` must therefore run in `request_filter` or an earlier stage —
-strictly **before** `upstream_peer`. A ctx variable written by a plugin stage
-that runs later does not exist yet when the peer is built: the render yields
-an empty label and the request fails closed (`502`, reason `render_empty` on
-the `edgion_gateway_upstream_authority_rejected_total` metric). This is the
-most likely operator mistake — watch that metric.
-
-**Two residual risks, documented rather than mitigated in-process:**
-
-- **The backend must not treat `Host` as an authorization credential.**
-  Within the allowlist, a client picks which vhost on that backend it
-  reaches — that is the backend's own authorization boundary, not the
-  gateway's egress boundary. A backend that trusts `Host` for tenant identity
-  is broken by this feature, regardless of how the gateway enforces the
-  pattern.
-- **Connection-pool / TLS-session cardinality scales with the number of live
-  distinct authorities, not with the number of backends.** `reqwest` pools
-  per `(scheme, host, port)` and Pingora's upstream reuse keys on the peer
-  (which includes SNI), so N tenants sharing one destination address can open
-  up to N distinct pools/TLS sessions. Cap idle connections per host if
-  tenant cardinality is high. Cleartext backends do not pay this cost — with
-  no SNI, only the `Host` header varies and one pool serves every tenant.
-
-**Two known limitations:**
-
-- **The Pingora active-health probe is cleartext-only today.**
-  `healthCheckHost` fixes the `Host` header the standard-path probe sends,
-  but the probe client carries no TLS configuration at all, so it does not
-  set SNI or validate a certificate on that path. A TLS backend that
-  dispatches on SNI (not just `Host`) is not correctly health-checkable via
-  the standard path yet. The **outbound** path's own probe
-  (`ExternalHttpConnection.healthCheck.active`) is unaffected — it does
-  support TLS.
-- **A mixed (partially-literal) label slot can defeat the fail-closed
-  `render_empty` signal.** The empty-render check runs on the whole rendered
-  label, not per variable. `${ctx:tenant}` alone with an unset `ctx:tenant`
-  renders `""` and correctly fails closed. But a slot like `t${ctx:id}` with
-  an unset `ctx:id` renders `"t"` — non-empty, and `"t"` is a perfectly valid
-  DNS label — so the request silently routes to whatever vhost `t.<suffix>`
-  happens to be, instead of failing closed. (`tenant-${ctx:id}` is *not* an
-  example of this: its empty case renders `"tenant-"`, which fails the
-  trailing-hyphen rule and is correctly rejected as `invalid_label` — the
-  danger is specifically a mixed slot whose literal-only remainder still
-  happens to pass DNS-label validation.) **Recommendation: use a label slot
-  that is a single `${...}` variable with no literal characters**, so the
-  `render_empty` fail-closed signal is reliable.
-
-**Minimal example.**
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: sandbox-gw
-  namespace: prod
-spec:
-  selector:
-    app: sandbox-gw
-  ports:
-    - port: 443
-      targetPort: 8443
----
-apiVersion: edgion.io/v1
-kind: EdgionBackendTrafficPolicy
-metadata:
-  name: sandbox-authority
-  namespace: prod
-spec:
-  targetRefs:
-    - kind: Service
-      name: sandbox-gw
-  upstreamAuthority:
-    pattern: "*.sandbox.internal"
-    template: "${ctx:tenant}.sandbox.internal"
-    healthCheckHost: "probe.sandbox.internal"
----
-# CtxSet runs in the RequestFilter stage, which is BEFORE upstream_peer, so
-# ctx:tenant exists by the time the authority template renders.
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: sandbox-tenant-ctx
-  namespace: prod
-spec:
-  requestPlugins:
-    - type: CtxSet
-      config:
-        vars:
-          - name: "tenant"
-            from:
-              type: header
-              name: "X-Tenant-Id"
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: sandbox-route
-  namespace: prod
-spec:
-  parentRefs:
-    - name: main-gateway
-  rules:
-    - filters:
-        - type: ExtensionRef
-          extensionRef:
-            group: edgion.io
-            kind: EdgionPlugins
-            name: sandbox-tenant-ctx
-      backendRefs:
-        - name: sandbox-gw
-          port: 443
-```
-
-### connection
-
-> Design: `docs/superpowers/specs/2026-07-22-per-backend-connect-timeout-design.md`
-
-A per-backend override of the gateway->backend **connection-establishment**
-deadline, for the targeted Services' **HTTP upstream** connections only.
-
-| Field | Type | Required | Description |
-|-------|------|----------|--------------|
-| `connectTimeout` | `String` (GEP-2257) | No | Overrides `EdgionGatewayConfig.spec.httpTimeout.backend.defaultConnectTimeout` for the targeted Services. Range `(0s, 1h]`. Absent = use the global default. |
-
-`connection: {}` (the section present with no fields) is valid and is a
-no-op — identical to the section being absent.
-
-**Stream note.** This field is ignored by TCPRoute/TLSRoute backends: the
-stream (TCP/TLS) connect deadline is a separate global,
-`EdgionGatewayConfig.spec.tcpTimeout.connectTimeout`, resolved independently
-via `resolve_tcp_connect_timeout`. There is no per-backend override for the
-stream path yet.
-
-**Migration note.** The connection-establishment deadline is resolved
-independently of the route-level `backendRequest` / global
-`defaultRequestTimeout` (they bound only read/write I/O). Before this field
-existed, a route whose effective `backendRequest` was *shorter* than the
-global `defaultConnectTimeout` (default `5s`) incidentally also bounded
-connection establishment to that shorter value. A route in that situation
-that sets no `connection.connectTimeout` now gets the full `5s` connect
-deadline instead — a *looser*, slower-to-fail connect bound than before. Set
-`connection.connectTimeout` explicitly to restore a tight connect bound.
-
-**Example.**
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionBackendTrafficPolicy
-metadata:
-  name: payments-connect-timeout
-  namespace: production
-spec:
-  targetRefs:
-    - kind: Service
-      name: payments
-  connection:
-    connectTimeout: 500ms
-```
-
-## Defaults When No Policy Applies
-
-| Concern | Default (no policy, or no matching section) |
-|---------|-----------------------------------------------|
-| Health check | None — no probe task runs |
-| Outlier detection | None — no ejection tracking |
-| Retry budget (`retryConstraint`) | None — no aggregate cap; only the static per-request `maxRetries` applies |
-| Connect timeout (`connection.connectTimeout`) | None — the global `EdgionGatewayConfig.spec.httpTimeout.backend.defaultConnectTimeout` applies |
-| Panic threshold | The global `EdgionGatewayConfig.spec.loadBalancing.panicThreshold` (itself `0` = disabled by default) |
-| LB algorithm | `RoundRobin` |
-
-**When to set `panicThreshold`.** The engine-wide default is `0` (disabled),
-matching Istio's Kubernetes default, because a 50% threshold misfires on small
-pools — a 2-pod service losing 1 pod hits 50% and would route back to the bad
-pod. Set it (e.g. `50`) via this policy's `spec.loadBalancer.panicThreshold`
-for services with **larger** backend pools (≈ ≥ 5 endpoints), where losing
-many backends at once more likely means a systemic problem (a misconfigured
-health-check path, a network partition) than genuine failure. The canonical
-case: a renamed health-check endpoint marks every backend unhealthy and,
-without panic mode, takes the whole service offline with 503s.
-
-## Conflict Resolution
-
-When multiple `EdgionBackendTrafficPolicy` resources target the same Service,
-**oldest `creationTimestamp` wins**:
-
-1. Sort by `creationTimestamp` ascending (earlier-created wins).
-2. A policy with no `creationTimestamp` (the file-system conf center produces
-   `None`) loses to any timestamped policy.
-3. Remaining ties break by resource name, lexicographic.
-
-Both the Controller (status computation) and the gateway `ConfHandler` (store
-writes) apply the identical rule
-(`edgion_resources::resources::edgion_backend_traffic_policy::precedence_key`).
-The losing policy gets `Accepted=False`/reason `Conflicted` (see
-[Status Schema](#status-schema)); deleting the winner promotes the
-next-oldest loser on the next reconcile. This is the same precedence rule
-`BackendTLSPolicy` uses (`handlers/backend_tls_policy.rs`), scoped per target
-Service key instead of per `(Service, sectionName)`.
-
-**Per-ancestor scoping.** Unlike `BackendTLSPolicy`'s single, policy-wide
-conflict flag, `EdgionBackendTrafficPolicy` reports conflict **per ancestor
-Gateway**: a policy that targets multiple Services can win on one Service and
-lose on another, and only the ancestor Gateways reached by the *lost* Service
-report `Accepted=False/Conflicted` — ancestors reached only by Services the
-policy still wins stay `Accepted=True`. For example, a policy targeting
-`svc-a` (unconflicted, routed only through `gw-a`) and `svc-b` (lost to an
-older sibling, routed only through `gw-b`) reports `gw-a`'s ancestor entry as
-`Accepted=True` and `gw-b`'s as `Accepted=False/Conflicted`.
-
-## Status Schema
-
-`status` follows GEP-2648's `PolicyAncestorStatus` shape: one entry per
-ancestor **Gateway** whose routes reach one of this policy's target Services,
-each keyed by the composite `(ancestorRef, controllerName)` and carrying its
-own `conditions`. This is the same shape `BackendTLSPolicy` uses. The list is
-sorted by gateway key, capped at 16 entries (GEP-2648's `maxItems: 16`), and
-**empty** when no route currently references any target Service — see
-[Behavioral notes](#behavioral-notes) below.
-
-Example: a policy targeting a Service reachable through two Gateways, where a
-sibling policy has won oldest-wins arbitration on `gw-b`:
-
-```yaml
-status:
-  ancestors:
-    - ancestorRef:
-        group: gateway.networking.k8s.io
-        kind: Gateway
-        namespace: prod
-        name: gw-a
-      controllerName: edgion.io/gateway-controller
-      conditions:
-        - type: Accepted
-          status: "True"
-          reason: Accepted
-          message: Policy accepted
-        - type: ResolvedRefs
-          status: "True"
-          reason: ResolvedRefs
-          message: All target Services resolved
-    - ancestorRef:
-        group: gateway.networking.k8s.io
-        kind: Gateway
-        namespace: prod
-        name: gw-b
-      controllerName: edgion.io/gateway-controller
-      conditions:
-        - type: Accepted
-          status: "False"
-          reason: Conflicted
-          message: "Conflicts with an older policy targeting: prod/payments"
-        - type: ResolvedRefs
-          status: "True"
-          reason: ResolvedRefs
-          message: All target Services resolved
-```
-
-Each ancestor carries exactly two condition **types** — `Accepted` and
-`ResolvedRefs`. There is no separate `Conflicted` condition type: GEP-2648
-folds conflict into `Accepted=False` with reason `Conflicted`.
-
-### Accepted condition reasons
-
-Priority when more than one applies: `Invalid` > `Conflicted` > `Accepted`.
-
-| Reason | Meaning |
-|--------|---------|
-| `Accepted` | Spec validation passed and this policy is not conflicted on this ancestor. |
-| `Invalid` | `spec.get_validation_errors()` (plus any cross-object errors, e.g. an out-of-pattern `upstreamAuthority` BackendTLSPolicy hostname) is non-empty. Takes priority over `Conflicted` — a conflicted-and-invalid policy reports `Invalid` until the validation error is fixed independently. |
-| `Conflicted` | Another policy in the same namespace won oldest-wins arbitration over a target Service that reaches this ancestor (see [Conflict Resolution](#conflict-resolution)). Scoped per ancestor — only the Gateways reached by the *lost* Service report this reason. |
-
-Following the lenient-admission pattern used by `EdgionPlugins`, an
-`Accepted=False` policy still syncs to the gateway — the gateway `ConfHandler`
-re-runs the same validation and skips invalid specs as defense in depth, so an
-invalid policy never reaches the runtime stores.
-
-### ResolvedRefs condition reasons
-
-Evaluated **per ancestor**: only the target Services that reach a given
-ancestor Gateway are considered for that ancestor's `ResolvedRefs`.
-
-| Reason | Meaning |
-|--------|---------|
-| `ResolvedRefs` | Every target Service reaching this ancestor exists in the current Service cache. |
-| `ServiceNotFound` | At least one target Service reaching this ancestor does not currently exist. The policy still syncs and takes effect the moment the Service appears — a Service create/delete requeues the policy. |
-
-### Behavioral notes
-
-- **Empty `ancestors` when unreferenced.** A policy whose target Services no
-  route currently references has an **empty** `status.ancestors` — no
-  condition of any kind is reported, matching the `BackendTLSPolicy` handler's
-  precedent. There is no ancestor to attach `Accepted`/`ResolvedRefs` to until
-  some route makes the Service (and therefore a Gateway) reachable.
-- **Freshness edges.** `status.ancestors` is recomputed whenever any of these
-  change (this handler is a sink in the requeue DAG — it never itself
-  requeues routes, gateways, or Services):
-  - **Service change** — the `ServiceHandler` requeues every policy
-    registered against that Service key (`service_ref_mgr`).
-  - **Route change** — `requeue_backend_policies_for_route` /
-    `requeue_backend_policies_for_services` (`handlers/mod.rs`) requeue
-    policies bound to the route's backend Services so ancestor Gateways
-    re-resolve.
-  - **Sibling policy change** (another policy targeting the same Service) —
-    `parse`'s `should_requeue_siblings` gate.
-
-## Examples
-
-### Least-connection LB with active health check
+## Complete Service schema example
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -613,84 +74,205 @@ spec:
       name: api-service
   loadBalancer:
     type: LeastConn
+    panicThreshold: 30
   healthCheck:
     active:
       type: http
       path: /healthz
+      port: 8080
       interval: 10s
       timeout: 3s
-```
-
-### Consistent hash by cookie, with outlier detection
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionBackendTrafficPolicy
-metadata:
-  name: cache-policy
-  namespace: production
-spec:
-  targetRefs:
-    - kind: Service
-      name: cache-service
-  loadBalancer:
-    type: ConsistentHash
-    consistentHash:
-      hashOn: cookie
-      key: session_id
+      healthyThreshold: 2
+      unhealthyThreshold: 3
+      expectedStatuses: [200]
   outlierDetection:
     consecutiveErrors: 5
+    consecutiveGatewayErrors: 5
+    consecutiveLocalOriginFailures: 5
     ejectionTime: 30s
+    maxEjectionTime: 5m
     maxEjectionPercent: 50
+  retryConstraint:
+    budget:
+      percent: 20
+      interval: 10s
+    minRetryRate:
+      count: 10
+      interval: 1s
+  circuitBreaker:
+    maxParallelRequests: 200
+  connection:
+    connectTimeout: 300ms
 ```
 
-### Panic-threshold override only
+Every policy section is optional. An absent section means the normal global or engine default for
+that concern. One winning policy contributes its complete configuration atomically; Edgion never
+merges fields from competing policies.
+
+## Configuration fields
+
+### `targetRefs`
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `group` | String | No | Core API group | `""` or `core` for Service; exactly `edgion.io` for EdgionAIService |
+| `kind` | String | Yes | — | `Service` or `EdgionAIService`, paired with the correct group |
+| `name` | String | Yes | — | Same-Namespace target name |
+
+### `loadBalancer` (Service only)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | Enum | Yes with section | — | `RoundRobin`, `LeastConn`, `Ewma`, or `ConsistentHash` |
+| `consistentHash` | Object | With `ConsistentHash` | — | Hash source and optional key |
+| `consistentHash.hashOn` | Enum | With `ConsistentHash` | — | `header`, `cookie`, `queryParam`, or `sourceIp` |
+| `consistentHash.key` | String | Conditional | — | Required for header/cookie/query; absent for `sourceIp` |
+| `panicThreshold` | Integer | No | Global value | Percentage from 0 through 100 |
+
+The field is named `hashOn`, not `on`, because YAML 1.1 converters may interpret an unquoted `on`
+key as a Boolean.
+
+### `healthCheck` (Service only)
+
+`healthCheck.active` uses the shared active-health-check shape. Supported probe types are `http`,
+`tcp`, and `grpc`. Thresholds are at least one; interval and timeout are non-zero; HTTP requires a
+non-empty path and status list. See [Service backends](16-service-backends.md) for probe behavior.
+
+### `outlierDetection`
+
+| Field | Meaning |
+|-------|---------|
+| `consecutiveErrors` | Application 5xx threshold |
+| `consecutiveGatewayErrors` | Upstream 502/503/504 threshold |
+| `consecutiveLocalOriginFailures` | Connect/TLS/transport threshold |
+| `ejectionTime` | Initial ejection duration |
+| `maxEjectionTime` | Maximum bounded ejection duration |
+| `maxEjectionPercent` | Maximum ejected share for a Service endpoint pool |
+
+Classification is per upstream attempt. For Service targets, state is per endpoint. For
+EdgionAIService targets, the stable destination is the typed service and passive state is further
+isolated by credential alias, so one failing or rate-limited credential does not eject its
+siblings. A half-open lease admits one probe after ejection expires.
+
+### `retryConstraint`
+
+Retry constraint is an aggregate anti-storm budget, not permission to retry. `HTTPRoute.retry`
+decides whether a request may retry, and EBTP decides whether aggregate retry volume remains within
+budget. Both must pass.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `budget.percent` | Integer | No | `20` | Retry share of total attempts, 0–100 |
+| `budget.interval` | Duration | No | `10s` | Sliding window from 1 s through 1 h |
+| `minRetryRate.count` | Integer | No | `10` | Low-traffic floor, 1–1,000,000 retries |
+| `minRetryRate.interval` | Duration | No | `1s` | Independent floor window, greater than zero and at most 1 h |
+
+`retryConstraint: {}` enables the defaults. Absence disables the aggregate gate. A retry is
+admitted when it is under either the percentage ceiling or the floor. The percentage denominator
+counts all dispatched attempts. For AI traffic, pre-dispatch skips consume neither route retry
+capacity nor retry-budget counters; a retryable dispatched failure charges the failed source
+EdgionAIService.
+
+### `circuitBreaker`
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `maxParallelRequests` | Positive integer | Yes with section | — | Service: maximum concurrent requests per endpoint. EdgionAIService: aggregate concurrent requests for the service |
+
+Excess requests fail without queueing. For AI traffic, credential-specific outlier state remains
+separate from this aggregate service guard.
+
+### `upstreamAuthority` (Service only)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `pattern` | String | Yes | One leading wildcard label, such as `*.sandbox.internal` |
+| `template` | String | Yes | Produces only the wildcard label; fixed suffix must match `pattern` |
+| `healthCheckHost` | String | With active health check | Static authority for request-less probes |
+
+The dial target remains the Service endpoints. The rendered authority becomes only HTTP Host and,
+for TLS, SNI and certificate-validation name. Rendering failure or an invalid DNS label fails
+closed; it never falls back to the static authority. Prefer a label made of one `${...}` variable,
+without literal characters, so an unset variable reliably renders empty.
+
+### `connection`
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `connectTimeout` | GEP-2257 duration | No | Global HTTP backend connect timeout | Per-target connection-establishment deadline, greater than zero and at most 1 h |
+
+This field applies to HTTP upstream connections, including AI provider connections. It does not
+change TCPRoute/TLSRoute stream connect deadlines. Request and backend-request deadlines remain on
+HTTPRoute; EdgionAIService has no timeout field.
+
+## EdgionAIService example
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionBackendTrafficPolicy
 metadata:
-  name: large-pool-panic
+  name: ai-provider-resilience
   namespace: production
 spec:
   targetRefs:
-    - kind: Service
-      name: fanout-service
-  loadBalancer:
-    type: RoundRobin
-    panicThreshold: 50
+    - group: edgion.io
+      kind: EdgionAIService
+      name: primary-provider
+  connection:
+    connectTimeout: 2s
+  retryConstraint:
+    budget:
+      percent: 20
+      interval: 10s
+  circuitBreaker:
+    maxParallelRequests: 200
+  outlierDetection:
+    consecutiveErrors: 5
+    consecutiveGatewayErrors: 3
+    consecutiveLocalOriginFailures: 3
+    ejectionTime: 30s
+    maxEjectionTime: 5m
 ```
 
-## Behavior Changes From The Removed Mechanisms
+The HTTPRoute continues to reference `primary-provider` directly. This policy neither attaches to
+the route nor adds the provider to any route.
 
-- **Per-route LB is gone.** Before this resource, the LB algorithm was carried
-  per `HTTPRoute`/`GRPCRoute` `backendRef` via an `ExtensionRef` filter
-  (`LBPolicyConsistentHash`, `LBPolicyLeastConn`, `LBPolicyEwma`), so two
-  routes to the same Service could use different algorithms. LB policy is now
-  strictly **per-destination**: one algorithm per Service, matching the Istio
-  `DestinationRule` model. A route that still references an `LBPolicy*`
-  `ExtensionRef` fails validation like any other unrecognized `extensionRef`
-  kind.
-- Health check, outlier detection, and panic threshold move from
-  Service/EndpointSlice annotations to this CRD; the former EndpointSlice-tier
-  override (higher priority than the Service tier) has no replacement — the
-  policy attaches only at the Service level.
-- Not in scope for v1: static IP / external-hostname targets, connection-pool
-  parameters (still route annotations), cross-namespace `targetRefs`,
-  port-level (`sectionName`) overrides, and policy-driven LB for TCP/UDP/TLS
-  routes (they remain fixed RoundRobin).
+## Conflict resolution and status
 
-## Architecture / Data-Plane Flow
+Arbitration runs independently for each typed target. Oldest `creationTimestamp` wins; missing
+timestamps lose to timestamped policies, and the policy name breaks remaining ties. A multi-target
+policy may win one target and lose another. Deleting or invalidating the winner promotes the next
+valid resolved sibling.
 
-Internal processing flow (Controller `ProcessorHandler`, gateway
-`ConfHandler`, and the runtime stores) lives in
-[01-architecture/02-gateway/07-backends.md](../../01-architecture/02-gateway/07-backends.md)
-(health check + outlier detection) and
-[01-architecture/02-gateway/06-load-balancing.md](../../01-architecture/02-gateway/06-load-balancing.md)
-(LB algorithm resolution) — this page covers the external schema only.
+`status.ancestors` follows GEP-2648 and contains at most 16 Gateway ancestor entries. Each entry
+contains `Accepted` and `ResolvedRefs` conditions:
 
-## Related Documentation
+| Condition/reason | Meaning |
+|------------------|---------|
+| `Accepted=True/Accepted` | Spec is valid and wins every relevant target for this ancestor |
+| `Accepted=False/Invalid` | Structural, field-matrix, or section validation failed |
+| `Accepted=False/Conflicted` | An older policy wins a relevant typed target |
+| `ResolvedRefs=True/ResolvedRefs` | Relevant target objects exist |
+| `ResolvedRefs=False` | One or more relevant Service or EdgionAIService objects do not exist |
 
-- [16-service-backends.md](16-service-backends.md) — Service/EndpointSlice discovery this policy attaches to.
-- [12-backend-tls-policy.md](12-backend-tls-policy.md) — the sibling policy-attachment resource for upstream TLS (not absorbed by this CRD).
-- User-facing how-to: `docs/en/user-guide/http-route/backends/health-check.md`, `circuit-breaker.md`, `docs/en/user-guide/http-route/lb-algorithms.md`.
+An unreferenced policy has an empty ancestor list. Target apply/delete and route dependency changes
+requeue the policy through its serialized workqueue so status and arbitration self-heal.
+
+## Defaults without a matching section
+
+| Concern | Default |
+|---------|---------|
+| Load balancing | Service `RoundRobin`; AI service choice remains AiProxy's route-scoped selection |
+| Active health check | None |
+| Outlier detection | None |
+| Retry constraint | None; only configured HTTPRoute retry permission applies |
+| Circuit breaker | No concurrency cap |
+| Connect timeout | Global HTTP backend connect timeout |
+| Panic threshold | Global load-balancing value for Service targets |
+
+## Related documentation
+
+- [Service backends](16-service-backends.md)
+- [EdgionAIService](22-edgion-ai-service.md)
+- [BackendTLSPolicy](12-backend-tls-policy.md)
+- [Internal backend-policy processing](../../01-architecture/05-resources/20-edgion-backend-traffic-policy.md)

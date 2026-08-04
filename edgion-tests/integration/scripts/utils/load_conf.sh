@@ -301,6 +301,14 @@ get_all_suites() {
             suites="$suites Status/$name"
         fi
     done
+
+    # EdgionAIService test suites
+    for subdir in "${CONF_DIR}/EdgionAIService"/*; do
+        if [ -d "$subdir" ]; then
+            local name=$(basename "$subdir")
+            suites="$suites EdgionAIService/$name"
+        fi
+    done
     
     echo "$suites"
 }

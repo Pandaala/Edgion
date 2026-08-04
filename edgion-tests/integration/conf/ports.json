@@ -1,5 +1,5 @@
 {
-  "current_max": 31944,
+  "current_max": 31949,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -316,6 +316,21 @@
     },
     "EdgionBackendTrafficPolicy/ConnectTimeout": {
       "http": 31943
+    },
+    "HTTPRoute/SseStreaming": {
+      "http": 31947
+    },
+    "EdgionAIService/SingleProvider": {
+      "http": 31945
+    },
+    "EdgionAIService/AnthropicProvider": {
+      "http": 31946
+    },
+    "EdgionAIService/Resilience": {
+      "http": 31949
+    },
+    "EdgionAIService/CredentialExhaustion": {
+      "http": 31948
     }
   }
 }

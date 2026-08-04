@@ -3,9 +3,44 @@ import { defineConfig } from 'vitepress'
 // Nav route paths shared between locales — change here to keep both nav bars in sync
 const PATHS = {
   gettingStarted: 'getting-started/installation-and-deployment',
+  aiGateway:      'ai-gateway/',
   userGuide:      'user-guide/http-route/overview',
   opsGuide:       'ops-guide/gateway/overview',
   devGuide:       'dev-guide/architecture-overview',
+}
+
+const enAiGatewaySidebar = {
+  text: 'AI Gateway',
+  collapsed: false,
+  items: [
+    { text: 'Overview', link: '/en/ai-gateway/' },
+    { text: 'Quick Start', link: '/en/ai-gateway/quick-start' },
+    { text: 'Concepts', link: '/en/ai-gateway/concepts' },
+    { text: 'EdgionAIService', link: '/en/ai-gateway/edgion-ai-service' },
+    { text: 'Routing and Selection', link: '/en/ai-gateway/routing' },
+    { text: 'Credentials and Limits', link: '/en/ai-gateway/credentials-and-limits' },
+    { text: 'Resilience and Failover', link: '/en/ai-gateway/resilience' },
+    { text: 'Providers', link: '/en/ai-gateway/providers' },
+    { text: 'Quotas and Cost', link: '/en/ai-gateway/quotas-and-cost' },
+    { text: 'Observability', link: '/en/ai-gateway/observability' },
+  ],
+}
+
+const zhAiGatewaySidebar = {
+  text: 'AI Gateway',
+  collapsed: false,
+  items: [
+    { text: '概览', link: '/zh-CN/ai-gateway/' },
+    { text: '快速开始', link: '/zh-CN/ai-gateway/quick-start' },
+    { text: '概念', link: '/zh-CN/ai-gateway/concepts' },
+    { text: 'EdgionAIService', link: '/zh-CN/ai-gateway/edgion-ai-service' },
+    { text: '路由与选择', link: '/zh-CN/ai-gateway/routing' },
+    { text: '凭据与限额', link: '/zh-CN/ai-gateway/credentials-and-limits' },
+    { text: '弹性与故障切换', link: '/zh-CN/ai-gateway/resilience' },
+    { text: '提供商', link: '/zh-CN/ai-gateway/providers' },
+    { text: '配额与成本', link: '/zh-CN/ai-gateway/quotas-and-cost' },
+    { text: '可观测性', link: '/zh-CN/ai-gateway/observability' },
+  ],
 }
 
 const enSidebar = [
@@ -17,6 +52,7 @@ const enSidebar = [
       { text: 'Core Concepts', link: '/en/getting-started/core-concepts' },
     ],
   },
+  enAiGatewaySidebar,
   {
     text: 'User Guide',
     items: [
@@ -57,6 +93,7 @@ const enSidebar = [
                 text: 'Edgion Plugins',
                 collapsed: true,
                 items: [
+                  { text: 'AI Proxy → AI Gateway', link: '/en/ai-gateway/' },
                   { text: 'Basic Auth', link: '/en/user-guide/http-route/filters/edgion-plugins/basic-auth' },
                   { text: 'JWT Auth', link: '/en/user-guide/http-route/filters/edgion-plugins/jwt-auth' },
                   { text: 'Key Auth', link: '/en/user-guide/http-route/filters/edgion-plugins/key-auth' },
@@ -265,6 +302,7 @@ const zhSidebar = [
       { text: '核心概念', link: '/zh-CN/getting-started/core-concepts' },
     ],
   },
+  zhAiGatewaySidebar,
   {
     text: '用户指南',
     items: [
@@ -305,6 +343,7 @@ const zhSidebar = [
                 text: 'Edgion 插件',
                 collapsed: true,
                 items: [
+                  { text: 'AI Proxy → AI Gateway', link: '/zh-CN/ai-gateway/' },
                   { text: 'Basic Auth', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/basic-auth' },
                   { text: 'JWT Auth', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/jwt-auth' },
                   { text: 'Key Auth', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/key-auth' },
@@ -503,6 +542,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: 'Getting Started', link: `/en/${PATHS.gettingStarted}` },
+          { text: 'AI Gateway',      link: `/en/${PATHS.aiGateway}` },
           { text: 'User Guide',      link: `/en/${PATHS.userGuide}` },
           { text: 'Ops Guide',       link: `/en/${PATHS.opsGuide}` },
           { text: 'Dev Guide',       link: `/en/${PATHS.devGuide}` },
@@ -519,6 +559,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: '快速开始', link: `/zh-CN/${PATHS.gettingStarted}` },
+          { text: 'AI Gateway', link: `/zh-CN/${PATHS.aiGateway}` },
           { text: '用户指南', link: `/zh-CN/${PATHS.userGuide}` },
           { text: '运维指南', link: `/zh-CN/${PATHS.opsGuide}` },
           { text: '开发指南', link: `/zh-CN/${PATHS.devGuide}` },

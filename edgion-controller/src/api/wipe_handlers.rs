@@ -6,7 +6,7 @@
 //!                     EdgionPlugins, EdgionStreamPlugins, BackendTLSPolicy,
 //!                     EdgionBackendTrafficPolicy
 //! Tier 2 (config):    Gateway, GatewayClass, EdgionGatewayConfig, EdgionTls, EdgionAcme,
-//!                     EdgionConfigData, LinkSys, ReferenceGrant
+//!                     EdgionConfigData, LinkSys, EdgionAIService, ReferenceGrant
 //! Tier 3 (low-level): Service, EndpointSlice, Secret, ConfigMap
 
 use crate::api::types::AdminState;
@@ -53,6 +53,7 @@ const TIER_2: &[ResourceKind] = &[
     ResourceKind::EdgionAcme,
     ResourceKind::EdgionConfigData,
     ResourceKind::LinkSys,
+    ResourceKind::EdgionAIService,
     ResourceKind::ReferenceGrant,
 ];
 
@@ -301,7 +302,7 @@ mod tests {
         all.extend(TIER_1);
         all.extend(TIER_2);
         all.extend(TIER_3);
-        assert_eq!(all.len(), 21, "tiers must cover all 21 ResourceKind variants");
+        assert_eq!(all.len(), 22, "tiers must cover all 22 ResourceKind variants");
         // Verify no duplicates
         let mut seen = std::collections::HashSet::new();
         for k in &all {

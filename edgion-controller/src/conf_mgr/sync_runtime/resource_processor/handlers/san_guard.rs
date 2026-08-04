@@ -167,6 +167,7 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
                         // rather than silently escaping the check. Mirrors the
                         // exhaustive `SystemConfig` match in `check_link_sys_san`.
                         EdgionPlugin::RequestHeaderModifier(_)
+                        | EdgionPlugin::AiProxy(_)
                         | EdgionPlugin::ResponseHeaderModifier(_)
                         | EdgionPlugin::RequestRedirect(_)
                         | EdgionPlugin::UrlRewrite(_)

@@ -711,6 +711,7 @@ mod tests {
                     group: "edgion.io".to_string(),
                     kind: "EdgionPlugins".to_string(),
                     name: "cors".to_string(),
+                    resolved_namespace: None,
                 }),
             },
         ]);

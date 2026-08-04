@@ -1,0 +1,105 @@
+apiVersion: edgion.io/v1
+kind: EdgionAIService
+metadata:
+  name: resilience-rate-limited
+  namespace: edgion-test
+spec:
+  provider: OpenAICompatible
+  endpoint: http://127.0.0.1:30001/ai/resilience-429
+  allowInsecureHttp: true
+  credentialPool:
+    credentials:
+      - name: rate-primary
+        secretRef:
+          name: ai-resilience-openai-credential
+  models:
+    - name: fixture-model
+---
+apiVersion: edgion.io/v1
+kind: EdgionAIService
+metadata:
+  name: resilience-healthy
+  namespace: edgion-test
+spec:
+  provider: Anthropic
+  endpoint: http://127.0.0.1:30001/anthropic/prefix
+  allowInsecureHttp: true
+  credentialPool:
+    credentials:
+      - name: healthy-primary
+        secretRef:
+          name: ai-resilience-anthropic-credential
+  models:
+    - name: claude-fixture
+      aliases:
+        - fixture-model
+  defaults:
+    maxOutputTokens: 64
+---
+apiVersion: edgion.io/v1
+kind: EdgionAIService
+metadata:
+  name: resilience-stream-primary
+  namespace: edgion-test
+spec:
+  provider: OpenAICompatible
+  endpoint: http://127.0.0.1:30001/ai/resilience-stream
+  allowInsecureHttp: true
+  credentialPool:
+    credentials:
+      - name: stream-primary
+        secretRef:
+          name: ai-resilience-openai-credential
+  models:
+    - name: fixture-model
+---
+apiVersion: edgion.io/v1
+kind: EdgionAIService
+metadata:
+  name: resilience-stream-fallback
+  namespace: edgion-test
+spec:
+  provider: OpenAICompatible
+  endpoint: http://127.0.0.1:30001/ai/resilience-stream-fallback
+  allowInsecureHttp: true
+  credentialPool:
+    credentials:
+      - name: stream-fallback
+        secretRef:
+          name: ai-resilience-openai-credential
+  models:
+    - name: fixture-model
+---
+apiVersion: edgion.io/v1
+kind: EdgionAIService
+metadata:
+  name: resilience-half-open-primary
+  namespace: edgion-test
+spec:
+  provider: OpenAICompatible
+  endpoint: http://127.0.0.1:30001/ai/resilience-half-open-primary
+  allowInsecureHttp: true
+  credentialPool:
+    credentials:
+      - name: half-open-primary
+        secretRef:
+          name: ai-resilience-openai-credential
+  models:
+    - name: fixture-model
+---
+apiVersion: edgion.io/v1
+kind: EdgionAIService
+metadata:
+  name: resilience-half-open-fallback
+  namespace: edgion-test
+spec:
+  provider: OpenAICompatible
+  endpoint: http://127.0.0.1:30001/ai/resilience-half-open-fallback
+  allowInsecureHttp: true
+  credentialPool:
+    credentials:
+      - name: half-open-fallback
+        secretRef:
+          name: ai-resilience-openai-credential
+  models:
+    - name: fixture-model

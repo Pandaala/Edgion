@@ -52,6 +52,7 @@ pub fn build_capabilities() -> &'static str {
     "format=edgion-build-capabilities/v1\nbody-buffering=enabled\npingora-mode=edgion-fork\n"
 }
 
+pub mod ai;
 pub mod api;
 pub mod backends;
 pub mod cache;
@@ -67,6 +68,7 @@ pub mod request_body;
 pub mod routes;
 pub mod runtime;
 pub mod services;
+pub mod sse;
 pub mod tls;
 pub mod util;
 

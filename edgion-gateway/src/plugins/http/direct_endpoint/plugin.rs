@@ -316,6 +316,8 @@ mod tests {
             },
             rule: Arc::new(HTTPRouteRule {
                 name: None,
+                resolved_terminal_route_uid: None,
+                resolved_terminal_rule_identity: None,
                 matches: None,
                 filters: None,
                 backend_refs: Some(backend_refs),

@@ -6,6 +6,7 @@ use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{
     DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch, DynamicInternalUpstreamConfig,
 };
+use edgion_resources::HTTPBackendRefKind;
 
 pub struct DynamicInternalUpstream {
     name: String,
@@ -131,6 +132,9 @@ impl RequestFilter for DynamicInternalUpstream {
 
         // Pre-validate: check if target name exists in backend_refs
         let found = backend_refs.iter().any(|br| {
+            if br.backend_kind() != HTTPBackendRefKind::Service {
+                return false;
+            }
             if br.name != target_name {
                 return false;
             }
@@ -232,6 +236,8 @@ mod tests {
             },
             rule: Arc::new(HTTPRouteRule {
                 name: None,
+                resolved_terminal_route_uid: None,
+                resolved_terminal_rule_identity: None,
                 matches: None,
                 filters: None,
                 backend_refs: Some(backend_refs),

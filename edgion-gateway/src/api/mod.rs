@@ -398,6 +398,7 @@ struct StoreStatsResponse {
     health_check_config_store: SimpleCountStats,
     gateway_backend_tls_store: SimpleCountStats,
     edgion_config_data_store: SimpleCountStats,
+    ai_service_store: SimpleCountStats,
     link_sys_runtime: LinkSysRuntimeStats,
     plugin_store_v2: PluginStoreStatsV2,
     stream_plugin_store_v2: PluginStoreStatsV2,
@@ -533,6 +534,10 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         count: crate::plugins::runtime::edgion_config_data::count_edgion_config_data(),
     };
 
+    let ai_service_store = SimpleCountStats {
+        count: crate::ai::count_ai_services(),
+    };
+
     let link_sys_runtime = LinkSysRuntimeStats {
         redis_clients: crate::link_sys::runtime::store::redis_client_count(),
         etcd_clients: crate::link_sys::runtime::store::etcd_client_count(),
@@ -573,6 +578,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         health_check_config_store,
         gateway_backend_tls_store,
         edgion_config_data_store,
+        ai_service_store,
         link_sys_runtime,
         plugin_store_v2,
         stream_plugin_store_v2,
@@ -1692,6 +1698,118 @@ mod edgion_tls_scrub_tests {
 }
 
 #[cfg(test)]
+mod edgion_ai_service_admin_tests {
+    use super::*;
+    use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
+    use edgion_resources::resources::edgion_ai_service::{
+        AiCredential, AiCredentialPool, AiModel, AiProvider, AiServiceDefaults, EdgionAIService, EdgionAIServiceSpec,
+    };
+    use edgion_resources::resources::edgion_plugins::OnRedisFailure;
+    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::ByteString;
+    use std::collections::BTreeMap;
+
+    fn ai_service(name: &str, endpoint: &str, credential: Option<&[u8]>) -> EdgionAIService {
+        let secret = credential.map(|value| Secret {
+            data: Some(BTreeMap::from([("api-key".to_string(), ByteString(value.to_vec()))])),
+            ..Default::default()
+        });
+        let spec = EdgionAIServiceSpec {
+            provider: AiProvider::OpenAICompatible,
+            endpoint: Some(endpoint.to_string()),
+            allow_insecure_http: false,
+            credential_pool: AiCredentialPool {
+                redis_ref: None,
+                on_redis_failure: OnRedisFailure::Deny,
+                credentials: vec![AiCredential {
+                    name: "primary".to_string(),
+                    weight: 1,
+                    credential: SecretSlot {
+                        secret_ref: SecretObjectReference {
+                            group: None,
+                            kind: None,
+                            name: "provider-key".to_string(),
+                            namespace: None,
+                        },
+                        secret,
+                    },
+                    limits: None,
+                }],
+            },
+            models: vec![AiModel {
+                name: "model-a".to_string(),
+                aliases: vec![],
+                pricing: None,
+            }],
+            defaults: AiServiceDefaults::default(),
+        };
+        let mut service = EdgionAIService::new(name, spec);
+        service.metadata.namespace = Some("ai-admin-test".to_string());
+        service
+    }
+
+    #[test]
+    fn configclient_redacts_ai_credential_and_retains_inactive_resources() {
+        let _store_guard = crate::ai::lock_global_ai_service_store_for_test();
+        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let _enter = rt.enter();
+        let client = ConfigClient::new("cid-ai".to_string(), "cname-ai".to_string());
+        let mut active = ai_service("active", "https://ai.example.com/v1", Some(b"admin-private-key"));
+        let mut secondary = active.spec.credential_pool.credentials[0].clone();
+        secondary.name = "secondary".to_string();
+        secondary.credential.secret = Some(Secret {
+            data: Some(BTreeMap::from([(
+                "api-key".to_string(),
+                ByteString(b"secondary-private-key".to_vec()),
+            )])),
+            ..Default::default()
+        });
+        active.spec.credential_pool.credentials.push(secondary);
+
+        client.edgion_ai_services().reset(
+            vec![
+                active,
+                ai_service("unresolved", "https://ai.example.com/v1", None),
+                ai_service("invalid", "http://ai.example.com/v1", Some(b"invalid-private-key")),
+            ],
+            1,
+        );
+
+        let listed = list_client_resources(&client, ResourceKind::EdgionAIService);
+        assert_eq!(
+            listed.len(),
+            3,
+            "ClientCache must retain inactive resources for Admin visibility"
+        );
+        let active = listed
+            .iter()
+            .find(|value| value["metadata"]["name"] == "active")
+            .expect("active resource listed");
+        assert_eq!(
+            active["spec"]["credentialPool"]["credentials"][0]["secret"],
+            "[redacted]"
+        );
+        assert_eq!(
+            active["spec"]["credentialPool"]["credentials"][1]["secret"],
+            "[redacted]"
+        );
+        let serialized = serde_json::to_string(&listed).unwrap();
+        assert!(!serialized.contains("admin-private-key"));
+        assert!(!serialized.contains("secondary-private-key"));
+        assert!(!serialized.contains("invalid-private-key"));
+
+        let runtime = crate::ai::get_global_ai_service_store();
+        assert_eq!(runtime.count(), 1, "only the valid, resolved resource is activatable");
+        assert!(runtime.get_by_key("ai-admin-test/active").is_some());
+        assert!(runtime.get_by_key("ai-admin-test/unresolved").is_none());
+        assert!(runtime.get_by_key("ai-admin-test/invalid").is_none());
+
+        client.edgion_ai_services().reset(Vec::new(), 2);
+        assert_eq!(runtime.count(), 0, "wipe must clear the derived runtime store");
+    }
+}
+
+#[cfg(test)]
 mod store_stats_tests {
     use super::*;
 
@@ -1760,6 +1878,7 @@ mod store_stats_tests {
             health_check_config_store: SimpleCountStats { count: 0 },
             gateway_backend_tls_store: SimpleCountStats { count: 0 },
             edgion_config_data_store: SimpleCountStats { count: 0 },
+            ai_service_store: SimpleCountStats { count: 0 },
             link_sys_runtime: LinkSysRuntimeStats {
                 redis_clients: 0,
                 etcd_clients: 0,
@@ -1777,6 +1896,7 @@ mod store_stats_tests {
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json.is_object());
         assert!(json.get("client_caches").is_some());
+        assert!(json.get("ai_service_store").is_some());
         assert!(json.get("plugin_store_v2").is_some());
         assert!(json.get("stream_plugin_store_v2").is_some());
         assert!(json.get("plugin_store").is_none());

@@ -101,6 +101,9 @@ impl RouteRules {
         }
 
         for cb in unit.backends.iter() {
+            if !cb.is_service() {
+                continue;
+            }
             let br = &cb.schema;
             // Match by name
             if br.name != target_name {

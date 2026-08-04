@@ -72,6 +72,7 @@ const fn is_default_readable(kind: ResourceKind) -> bool {
         ResourceKind::EdgionAcme => true,
         ResourceKind::ConfigMap => true,
         ResourceKind::EdgionBackendTrafficPolicy => true,
+        ResourceKind::EdgionAIService => true,
     }
 }
 
@@ -109,6 +110,7 @@ const DEFAULT_READ_KINDS: &[&str] = &[
     ResourceKind::EdgionAcme.as_str(),
     ResourceKind::ConfigMap.as_str(),
     ResourceKind::EdgionBackendTrafficPolicy.as_str(),
+    ResourceKind::EdgionAIService.as_str(),
 ];
 
 /// Build the built-in default Center policy.
@@ -333,13 +335,13 @@ mod tests {
 
     #[test]
     fn default_policy_read_kinds_count() {
-        // ResourceKind has 22 named variants (including Unspecified and Secret).
+        // ResourceKind has 23 named variants (including Unspecified and Secret).
         // The read set must exclude exactly Unspecified and Secret, so
-        // expected = 22 - 2 = 20.
+        // expected = 23 - 2 = 21.
         //
         // If a new ResourceKind variant is added and DEFAULT_READ_KINDS is not
         // updated, this test will fail with a count mismatch.
-        let total_variants: usize = 22; // update when adding a new ResourceKind variant
+        let total_variants: usize = 23; // update when adding a new ResourceKind variant
         let expected = total_variants - 2; // minus Unspecified and Secret
         assert_eq!(
             DEFAULT_READ_KINDS.len(),
@@ -388,6 +390,7 @@ mod tests {
             ResourceKind::EdgionAcme,
             ResourceKind::ConfigMap,
             ResourceKind::EdgionBackendTrafficPolicy,
+            ResourceKind::EdgionAIService,
         ];
 
         for variant in &all_variants {

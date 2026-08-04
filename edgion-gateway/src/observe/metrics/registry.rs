@@ -24,6 +24,9 @@ pub mod names {
     // Gateway traffic byte counters
     pub const GATEWAY_REQUEST_BYTES: &str = "edgion_gateway_request_bytes_total";
     pub const GATEWAY_RESPONSE_BYTES: &str = "edgion_gateway_response_bytes_total";
+    // Optional GenAI token rate/trend counter. Fixed labels yield at most
+    // 2 directions x 3 providers x 2 usage sources = 12 series.
+    pub const GENAI_TOKENS_TOTAL: &str = "edgion_gateway_genai_tokens_total";
     // Request mirror metrics (counter only — per-request latency is captured
     // in the mirror access log `et` field; mirror is fire-and-forget and its
     // tail latency does not affect user traffic, so no histogram is carried).
@@ -146,6 +149,58 @@ static GLOBAL_METRICS: LazyLock<GatewayMetrics> = LazyLock::new(GatewayMetrics::
 /// Get the global metrics instance
 pub fn global_metrics() -> &'static GatewayMetrics {
     &GLOBAL_METRICS
+}
+
+/// Whether a provider reported token counts or Edgion estimated them from
+/// observed characters. Fixed enum values keep the metric label bounded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenAiUsageSource {
+    Reported,
+    Estimated,
+}
+
+impl GenAiUsageSource {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Reported => "reported",
+            Self::Estimated => "estimated",
+        }
+    }
+}
+
+/// Record one finalized AI request's input and output token counts.
+///
+/// The disabled branch returns before invoking `counter!`, so the family is
+/// neither registered nor emitted by a default-configured Gateway. Provider
+/// and usage source are enums, direction is hard-coded, and model is
+/// deliberately absent: the complete family is bounded to twelve series.
+#[inline]
+pub fn record_genai_tokens(
+    enabled: bool,
+    provider: crate::ai::AiProviderLabel,
+    usage_source: GenAiUsageSource,
+    input_tokens: u64,
+    output_tokens: u64,
+) {
+    if !enabled {
+        return;
+    }
+    let provider = provider.as_str();
+    let usage_source = usage_source.as_str();
+    counter!(
+        names::GENAI_TOKENS_TOTAL,
+        "direction" => "input",
+        "provider" => provider,
+        "usage_source" => usage_source,
+    )
+    .increment(input_tokens);
+    counter!(
+        names::GENAI_TOKENS_TOTAL,
+        "direction" => "output",
+        "provider" => provider,
+        "usage_source" => usage_source,
+    )
+    .increment(output_tokens);
 }
 
 /// Gateway metrics collection
@@ -967,6 +1022,67 @@ mod tests {
         assert_eq!(names::FIPS_HOST_ENABLED, "edgion_gateway_fips_host_enabled");
         assert_eq!(names::FIPS_HOST_DETECT_ERROR, "edgion_gateway_fips_host_detect_error");
         assert_eq!(names::FIPS_POLICY_ACTIVE, "edgion_gateway_fips_policy_active");
+    }
+
+    #[test]
+    fn genai_metric_disabled_does_not_register_family() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            record_genai_tokens(
+                false,
+                crate::ai::AiProviderLabel::OpenAi,
+                GenAiUsageSource::Reported,
+                11,
+                7,
+            );
+        });
+        assert!(!handle.render().contains(names::GENAI_TOKENS_TOTAL));
+    }
+
+    #[test]
+    fn genai_metric_has_exactly_twelve_fixed_series_and_no_model_label() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            for provider in [
+                crate::ai::AiProviderLabel::OpenAi,
+                crate::ai::AiProviderLabel::OpenAiCompatible,
+                crate::ai::AiProviderLabel::Anthropic,
+            ] {
+                for source in [GenAiUsageSource::Reported, GenAiUsageSource::Estimated] {
+                    record_genai_tokens(true, provider, source, 1, 2);
+                }
+            }
+        });
+
+        let rendered = handle.render();
+        let samples: Vec<&str> = rendered
+            .lines()
+            .filter(|line| line.starts_with(names::GENAI_TOKENS_TOTAL))
+            .collect();
+        assert_eq!(
+            samples.len(),
+            12,
+            "fixed label domains must yield twelve series:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("model="),
+            "model must never be a metric label:\n{rendered}"
+        );
+        for sample in samples {
+            assert!(sample.contains("direction=\"input\"") || sample.contains("direction=\"output\""));
+            assert!(
+                sample.contains("provider=\"openai\"")
+                    || sample.contains("provider=\"openai_compatible\"")
+                    || sample.contains("provider=\"anthropic\"")
+            );
+            assert!(sample.contains("usage_source=\"reported\"") || sample.contains("usage_source=\"estimated\""));
+            assert!(
+                sample.ends_with(" 1") || sample.ends_with(" 2"),
+                "counter must retain integer increments: {sample}"
+            );
+        }
     }
 }
 

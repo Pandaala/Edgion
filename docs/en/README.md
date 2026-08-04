@@ -7,6 +7,7 @@ Edgion is a high-performance API Gateway built on Pingora and the Kubernetes Gat
 | Guide | Description |
 |-------|-------------|
 | [Getting Started](./getting-started/README.md) | Installation, first gateway, core concepts |
+| [AI Gateway](./ai-gateway/README.md) | OpenAI-compatible LLM routing, credentials, selection, resilience, usage, and cost |
 | [User Guide](./user-guide/README.md) | HTTPRoute, GRPCRoute, plugins, load balancing, resilience |
 | [Ops Guide](./ops-guide/README.md) | Gateway configuration, TLS, observability, ACME, production operations |
 | [Dev Guide](./dev-guide/README.md) | Architecture internals, adding resources/plugins, coding conventions |

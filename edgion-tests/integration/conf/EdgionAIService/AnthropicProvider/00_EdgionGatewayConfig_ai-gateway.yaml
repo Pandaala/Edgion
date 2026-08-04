@@ -1,0 +1,22 @@
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: anthropic-ai-gateway-egc
+spec:
+  server:
+    enableCompression: true
+  securityProtect:
+    # Test-only native provider fixture on loopback.
+    allowLoopbackUpstream: true
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: anthropic-ai-gateway-class
+spec:
+  controllerName: edgion.io/gateway-controller
+  description: "Anthropic AI Gateway integration listener"
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: anthropic-ai-gateway-egc

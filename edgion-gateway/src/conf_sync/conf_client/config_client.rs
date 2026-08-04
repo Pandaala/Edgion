@@ -30,6 +30,7 @@ pub struct ConfigClient {
     edgion_stream_plugins: ClientCache<EdgionStreamPlugins>,
     backend_tls_policies: ClientCache<BackendTLSPolicy>,
     edgion_config_data: ClientCache<EdgionConfigData>,
+    edgion_ai_services: ClientCache<EdgionAIService>,
     edgion_acme: ClientCache<EdgionAcme>,
     edgion_backend_traffic_policy: ClientCache<EdgionBackendTrafficPolicy>,
     // secrets: ClientCache<Secret>,  // Secret now follows related resources
@@ -137,6 +138,11 @@ impl ConfigClient {
                 ed_cache.set_conf_processor(ed_handler);
                 ed_cache
             },
+            edgion_ai_services: {
+                let cache = ClientCache::new(client_id.clone(), client_name.clone());
+                cache.set_conf_processor(crate::ai::create_ai_service_handler());
+                cache
+            },
             edgion_acme: edgion_acme_cache,
             edgion_backend_traffic_policy: edgion_backend_traffic_policy_cache,
             required_cache_names: RwLock::new(None),
@@ -220,6 +226,12 @@ impl ConfigClient {
         &self.edgion_tls
     }
 
+    /// Typed accessor retained for Admin redaction tests.
+    #[cfg(test)]
+    pub fn edgion_ai_services(&self) -> &ClientCache<EdgionAIService> {
+        &self.edgion_ai_services
+    }
+
     /// Get the DynClientCache for a given ResourceKind.
     ///
     /// Uses exhaustive match on ResourceKind to ensure compile-time completeness.
@@ -247,6 +259,7 @@ impl ConfigClient {
             ResourceKind::EdgionStreamPlugins => Some(&self.edgion_stream_plugins),
             ResourceKind::BackendTLSPolicy => Some(&self.backend_tls_policies),
             ResourceKind::EdgionConfigData => Some(&self.edgion_config_data),
+            ResourceKind::EdgionAIService => Some(&self.edgion_ai_services),
             // These are intentionally not cached on Gateway side
             ResourceKind::Secret => None,
             ResourceKind::ConfigMap => None,
@@ -425,8 +438,8 @@ mod tests {
         let _enter = rt.enter();
         let client = ConfigClient::new("cid".to_string(), "cname".to_string());
         let stats = client.client_cache_stats();
-        // 18: Secret, ConfigMap, ReferenceGrant, and Unspecified have no ClientCache on the gateway side.
-        assert_eq!(stats.len(), 18, "expected 18 gateway-side ClientCache kinds");
+        // 19: Secret, ConfigMap, ReferenceGrant, and Unspecified have no ClientCache on the gateway side.
+        assert_eq!(stats.len(), 19, "expected 19 gateway-side ClientCache kinds");
         for (kind, count) in &stats {
             assert_eq!(*count, 0, "kind {kind} should start empty");
         }

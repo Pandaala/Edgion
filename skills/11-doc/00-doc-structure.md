@@ -11,17 +11,24 @@ docs/
 └── superpowers/           # Internal design proposals and plans (not user-facing)
 ```
 
+Under each language directory, `ai-gateway/` is a first-class product column
+(alongside `getting-started/`, `user-guide/`, `ops-guide/`, and `dev-guide/`).
+VitePress top nav and the landing-page features card must stay in sync when the
+column changes.
+
 The intended steady state is matching relative paths under `en/` and `zh-CN/`.
 Track and close any temporary translation gap explicitly.
 
 ## Four-layer system
 
-Each language directory has four audience layers, plus three auxiliary
-directories (`migrations/`, `promotion/`, and `release-notes/`):
+Each language directory has four audience layers, plus the product-feature
+`ai-gateway/` column and three auxiliary directories (`migrations/`,
+`promotion/`, and `release-notes/`):
 
 | Layer | Directory | Audience | Positioning |
 |-------|-----------|----------|-------------|
 | 1 | `getting-started/` | New users | From zero to first successful run; runnable in 5 minutes |
+| feature | `ai-gateway/` | AI / LLM operators and app developers | Dedicated AI Gateway column (Envoy AI Gateway–style): routing, credentials, resilience, providers, quotas, observability |
 | 2 | `user-guide/` | Daily users | Usage guide organized by feature; Route types, plugins, match rules, backend configuration |
 | 3 | `ops-guide/` | Operators | Gateway operations: Gateway configuration, TLS, listeners, observability, infrastructure |
 | 4 | `dev-guide/` | Developers / contributors | Architecture overview, plugin development, resource registration, logging, CI/CD |
@@ -98,6 +105,11 @@ The document you're writing is about…
 
 ├── First-time user contact, quick onboarding?
 │   └── getting-started/
+│
+├── AI / LLM gateway features (EdgionAIService, AiProxy, AI resilience, GenAI usage)?
+│   └── ai-gateway/
+│   ├── Keep the EdgionPlugins `ai-proxy.md` page as a short pointer into this column
+│   └── Do not grow AI product docs under filters/edgion-plugins alone
 │
 ├── How to use a particular route type (HTTP/gRPC/TCP/UDP)?
 │   └── user-guide/<route-type>/

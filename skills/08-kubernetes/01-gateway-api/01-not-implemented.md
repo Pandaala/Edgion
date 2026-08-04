@@ -171,12 +171,14 @@ Edgion has unified these features behind its own namespaced CRD,
 Gateway-API-policy-attachment style via `targetRefs` — same `DirectSameNs`
 attachment model the standard BackendTLSPolicy uses), covering load balancing
 (incl. consistent hash and panic threshold), active health check, and outlier
-detection (passive ejection / circuit breaking). See
+detection (passive ejection), retry budgets, concurrency circuit breaking, and
+connection-establishment timeout. Homogeneous same-namespace targets may be
+core Services or `edgion.io/EdgionAIService`; the AI kind accepts only the
+resilience sections and is never a Route attachment. See
 [03-resources/20-edgion-backend-traffic-policy.md](../../02-features/03-resources/20-edgion-backend-traffic-policy.md).
 This is functionally equivalent in spirit to the standard BTP direction but is
-not the standard `XBackendTrafficPolicy` CRD itself, and connection-pool /
-retry-budget fields are not yet covered (v1 scope; see the design doc's
-Non-Goals).
+not the standard `XBackendTrafficPolicy` CRD itself. Connection-pool tuning,
+cross-namespace targets, and Route targets remain out of scope.
 
 - Will reconsider migrating onto the standard CRD only after BTP graduates from Experimental to Standard/GA
 - The current Edgion-native CRD is usable by users today and does not affect actual functionality

@@ -3,7 +3,7 @@
 use crate::observe::access_log::log_ext::LogExt;
 use crate::plugins::StageLogs;
 use crate::routes::grpc::GrpcMatchInfo;
-use crate::{BackendContext, EdgionHttpContext, MatchInfo, RequestInfo};
+use crate::{ai::GenAiSummary, BackendContext, EdgionHttpContext, MatchInfo, RequestInfo};
 use edgion_resources::EdgionStatus;
 use serde::Serialize;
 
@@ -57,6 +57,12 @@ pub struct AccessLogEntry<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream_authority: Option<&'a str>,
 
+    /// Final AI usage and routing summary. Model-level detail belongs here,
+    /// not in Prometheus labels. The type cannot carry request/response text or
+    /// provider credentials.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub genai: Option<&'a GenAiSummary>,
+
     /// Operator-declared fields (`AccessLogExtern`), nested one level deep.
     ///
     /// Nested rather than flattened: the top-level namespace holds `errors` and
@@ -98,6 +104,7 @@ impl<'a> AccessLogEntry<'a> {
             stage_logs: &ctx.stage_logs,
             conn_est: None,
             upstream_authority: ctx.upstream_authority.as_deref(),
+            genai: ctx.genai_summary.as_ref(),
             ext: LogExt::default(),
         }
     }

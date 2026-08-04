@@ -279,12 +279,8 @@ pub fn gateway_api_kind_names() -> HashSet<&'static str> {
     GATEWAY_API_RESOURCES.iter().map(|r| r.kind).collect()
 }
 
-/// Validate that all entries in `no_watch_kinds` are recognized resource kinds.
-/// Logs a warning for each unrecognized value.
-pub fn validate_no_watch_kinds(no_watch_kinds: &[String]) {
-    let known = gateway_api_kind_names();
-    // Also accept Edgion and K8s-native kinds that appear in all_processor_kinds
-    let other_known: HashSet<&str> = [
+fn other_known_kind_names() -> HashSet<&'static str> {
+    [
         "Secret",
         "Service",
         "EndpointSlice",
@@ -293,12 +289,21 @@ pub fn validate_no_watch_kinds(no_watch_kinds: &[String]) {
         "EdgionStreamPlugins",
         "EdgionConfigData",
         "LinkSys",
+        "EdgionAIService",
         "EdgionAcme",
         "EdgionBackendTrafficPolicy",
         "EdgionGatewayConfig",
     ]
     .into_iter()
-    .collect();
+    .collect()
+}
+
+/// Validate that all entries in `no_watch_kinds` are recognized resource kinds.
+/// Logs a warning for each unrecognized value.
+pub fn validate_no_watch_kinds(no_watch_kinds: &[String]) {
+    let known = gateway_api_kind_names();
+    // Also accept Edgion and K8s-native kinds that appear in all_processor_kinds
+    let other_known = other_known_kind_names();
 
     for kind in no_watch_kinds {
         if !known.contains(kind.as_str()) && !other_known.contains(kind.as_str()) {
@@ -527,5 +532,10 @@ mod tests {
         };
         assert!(is_api_unavailable(&kube::Error::Api(response(404))));
         assert!(!is_api_unavailable(&kube::Error::Api(response(403))));
+    }
+
+    #[test]
+    fn ai_service_is_a_known_no_watch_kind() {
+        assert!(other_known_kind_names().contains("EdgionAIService"));
     }
 }

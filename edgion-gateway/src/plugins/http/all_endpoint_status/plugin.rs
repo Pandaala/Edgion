@@ -26,6 +26,7 @@ use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::plugin_configs::all_endpoint_status::MAX_GLOBAL_CONCURRENCY;
 use edgion_resources::resources::edgion_plugins::AllEndpointStatusConfig;
+use edgion_resources::HTTPBackendRefKind;
 
 /// Global configuration for AllEndpointStatus plugin.
 /// Stored in YAML config, loaded at gateway startup, applies to all instances.
@@ -640,6 +641,9 @@ impl RequestFilter for AllEndpointStatus {
         let mut unsafe_endpoint_count = 0usize;
 
         for backend_ref in &backend_refs {
+            if backend_ref.backend_kind() != HTTPBackendRefKind::Service {
+                continue;
+            }
             let namespace = backend_ref.namespace.as_deref().unwrap_or(&route_namespace);
             let port = backend_ref.port.map(|p| p as u16).unwrap_or(80);
             let use_tls = backend_ref.backend_tls_policy.is_some();

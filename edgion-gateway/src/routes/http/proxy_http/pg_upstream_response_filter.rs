@@ -1,12 +1,20 @@
+use super::content_type::classify_response_stream_kind;
+use super::pg_init_downstream_modules::DEFAULT_COMPRESSION_LEVEL;
+use super::pg_upstream_response_body_filter::{enforce_stream_processor_framing, run_stream_processor_headers};
 use super::EdgionHttpProxy;
+use crate::ctx::ResponseStreamKind;
 use crate::routes::http::session_persistence;
 use crate::{EdgionHttpContext, ResponseStageDenial, SessionPersistenceState};
 use edgion_resources::resources::http_route::SessionPersistenceType;
 use edgion_resources::EdgionStatus;
+use pingora_core::modules::http::compression::ResponseCompression;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
+
+const MAX_PROVIDER_RESET_HINT_BYTES: usize = 64;
+const OPENAI_RESET_HEADERS: [&str; 2] = ["x-ratelimit-reset-requests", "x-ratelimit-reset-tokens"];
 
 /// Whether this response header is an INTERIM one that both response-stage
 /// entry points must forward untouched.
@@ -26,6 +34,14 @@ use std::time::Instant;
 #[inline]
 pub(super) fn is_interim_informational(status: http::StatusCode) -> bool {
     status.is_informational() && status.as_u16() != 101
+}
+
+#[inline]
+pub(super) fn has_final_response_written(session: &Session) -> bool {
+    session
+        .as_ref()
+        .response_written()
+        .is_some_and(|header| !is_interim_informational(header.status))
 }
 
 /// Whether the response-stage plugin chains have already produced a terminal
@@ -63,6 +79,17 @@ fn release_late_request_body_view(ctx: &mut EdgionHttpContext) {
     // the lifetime of the response. Retry early returns deliberately occur
     // before this point and keep the view for the next attempt.
     ctx.request_body.release_view();
+}
+
+#[inline]
+fn enable_compression(edgion_http: &EdgionHttpProxy) -> bool {
+    edgion_http
+        .edgion_gateway_config
+        .spec
+        .server
+        .as_ref()
+        .map(|s| s.enable_compression)
+        .unwrap_or(false)
 }
 
 #[inline]
@@ -120,69 +147,171 @@ pub fn upstream_response_filter(
         }
     }
 
-    // Check if status code triggers retry based on rule.retry.codes
-    if let Some(route_unit) = ctx.route_unit.as_ref() {
-        if let Some(parsed_retry) = route_unit.rule.parsed_retry.as_ref() {
-            if let Some(codes) = parsed_retry.codes.as_ref() {
-                if codes.contains(&status_code) {
-                    // Determine max_retries: rule.retry.attempts > global
-                    let max_retries = parsed_retry
-                        .attempts
-                        .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
+    if ctx.ai_attempt_plan.is_some() {
+        let wants_retry = status_code != 101
+            && ctx
+                .route_unit
+                .as_ref()
+                .and_then(|route| route.rule.parsed_retry.as_ref())
+                .and_then(|retry| retry.codes.as_ref())
+                .is_some_and(|codes| codes.contains(&status_code));
+        if status_code == 429 {
+            let now = SystemTime::now();
+            let retry_after = upstream_response
+                .headers
+                .get("retry-after")
+                .and_then(|value| value.to_str().ok())
+                .filter(|value| value.len() <= MAX_PROVIDER_RESET_HINT_BYTES)
+                .map(str::to_owned);
+            let reset_hint = ctx
+                .ai
+                .as_ref()
+                .and_then(|ai| provider_reset_hint(&upstream_response.headers, ai.provider, now));
+            let cooldown = ctx.ai_attempt_runtime.active_mut().and_then(|active| {
+                retry_after
+                    .as_deref()
+                    .and_then(|value| active.apply_retry_after(value, now))
+                    .or_else(|| reset_hint.and_then(|hint| active.apply_cooldown(hint)))
+            });
 
-                    // Check request timeout. Either the route-level
-                    // `request_timeout` or a client-supplied `grpc-timeout`
-                    // having expired disqualifies a status-code retry.
-                    let request_timeout_exceeded = route_unit
-                        .rule
-                        .parsed_timeouts
-                        .as_ref()
-                        .and_then(|t| t.request_timeout.as_duration())
-                        .map(|timeout| Instant::now().saturating_duration_since(ctx.start_time) >= timeout)
-                        .unwrap_or(false);
-                    let deadline_exceeded = request_timeout_exceeded || ctx.grpc_deadline_exceeded();
+            // Only an accepted, bounded hint is forwarded. Retried responses
+            // are discarded later in this hook; a final 429 therefore exposes
+            // the same normalized delta-seconds used for credential cooldown.
+            upstream_response.remove_header("retry-after");
+            if let Some(cooldown) = cooldown {
+                let seconds = crate::ai::attempt_runtime::cooldown_delta_seconds(cooldown);
+                let _ = upstream_response.insert_header("retry-after", seconds.to_string());
+            }
+        }
+        let failure_class = crate::backends::FailureClass::from_http_status(status_code)
+            .or_else(|| (status_code == 429 || wants_retry).then_some(crate::backends::FailureClass::Application));
+        if let Some(active) = ctx.ai_attempt_runtime.active_mut() {
+            active.record_response(status_code, failure_class);
+        }
+        let buffer_ok = !session.as_ref().retry_buffer_truncated() && !ctx.request_body_stream_active;
+        let gates_allow_retry = !ctx.request_timeout_exceeded()
+            && !ctx.grpc_deadline_exceeded()
+            && !ctx.request_info.response_committed
+            && !has_final_response_written(session)
+            && buffer_ok;
+        match crate::ai::dispatch::handle_ai_response(ctx, wants_retry, gates_allow_retry)
+            .map_err(|_| pingora_core::Error::new(pingora_core::ErrorType::InternalError))?
+        {
+            crate::ai::dispatch::AiRetryDecision::Retry => {
+                ctx.ai_attempt_runtime
+                    .finish_failure(crate::ai::attempt_runtime::AiAttemptFailure::Known(
+                        failure_class.unwrap_or(crate::backends::FailureClass::Application),
+                    ));
+                ctx.retry_on_status = true;
+                if let Some(upstream) = ctx.get_current_upstream_mut() {
+                    upstream.err.push("AiRetryOnStatus".to_string());
+                }
+                return Err(pingora_core::Error::explain(
+                    pingora_core::ErrorType::HTTPStatus(status_code),
+                    "AI retry on upstream status",
+                ));
+            }
+            crate::ai::dispatch::AiRetryDecision::BudgetDenied => {
+                ctx.ai_attempt_runtime
+                    .finish_failure(crate::ai::attempt_runtime::AiAttemptFailure::Known(
+                        failure_class.unwrap_or(crate::backends::FailureClass::Application),
+                    ));
+                crate::observe::metrics::record_retry_budget_denied();
+                ctx.add_error(EdgionStatus::RetryBudgetExhausted);
+                return Err(pingora_core::Error::explain(
+                    pingora_core::ErrorType::HTTPStatus(503),
+                    "AI retry budget exhausted",
+                ));
+            }
+            crate::ai::dispatch::AiRetryDecision::Final => {}
+        }
+    } else {
+        // Check if status code triggers retry based on rule.retry.codes
+        if let Some(route_unit) = ctx.route_unit.as_ref() {
+            if let Some(parsed_retry) = route_unit.rule.parsed_retry.as_ref() {
+                if let Some(codes) = parsed_retry.codes.as_ref() {
+                    if codes.contains(&status_code) {
+                        // Determine max_retries: rule.retry.attempts > global
+                        let max_retries = parsed_retry
+                            .attempts
+                            .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
 
-                    // Streamed body handlers make the request non-replayable
-                    // while `retry_buffer_truncated()` still reports `false`
-                    // (no buffer was allocated) — include the monotonic latch
-                    // in the decision (contract §4.6).
-                    let buffer_ok = !session.as_ref().retry_buffer_truncated() && !ctx.request_body_stream_active;
-                    if ctx.try_cnt <= max_retries && !deadline_exceeded && buffer_ok {
-                        // Retry budget (retryConstraint): composes AFTER the
-                        // maxRetries/deadline/buffer checks above (D3). This is the
-                        // point where a status-code retry is DECIDED, so the budget
-                        // is consulted here. On refusal, `retry_on_status` is left
-                        // false (making pg_error_while_proxy Case 1 a no-op so no
-                        // already-started response is corrupted) and a deterministic
-                        // 503 is raised as a synthetic HTTPStatus error. The
-                        // per-upstream entry keeps the backend's real observed status
-                        // (stamped earlier); the 503 is a request-level outcome.
-                        if let Some(budget) = super::pg_upstream_peer::retry_budget_for(ctx) {
-                            if !budget.try_retry() {
-                                crate::observe::metrics::record_retry_budget_denied();
-                                ctx.add_error(EdgionStatus::RetryBudgetExhausted);
-                                return Err(pingora_core::Error::explain(
-                                    pingora_core::ErrorType::HTTPStatus(503),
-                                    "retry budget exhausted",
-                                ));
+                        // Check request timeout. Either the route-level
+                        // `request_timeout` or a client-supplied `grpc-timeout`
+                        // having expired disqualifies a status-code retry.
+                        let request_timeout_exceeded = route_unit
+                            .rule
+                            .parsed_timeouts
+                            .as_ref()
+                            .and_then(|t| t.request_timeout.as_duration())
+                            .map(|timeout| Instant::now().saturating_duration_since(ctx.start_time) >= timeout)
+                            .unwrap_or(false);
+                        let deadline_exceeded = request_timeout_exceeded || ctx.grpc_deadline_exceeded();
+
+                        // Streamed body handlers make the request non-replayable
+                        // while `retry_buffer_truncated()` still reports `false`
+                        // (no buffer was allocated) — include the monotonic latch
+                        // in the decision (contract §4.6).
+                        let buffer_ok = !session.as_ref().retry_buffer_truncated() && !ctx.request_body_stream_active;
+                        if ctx.try_cnt <= max_retries && !deadline_exceeded && buffer_ok {
+                            // Retry budget (retryConstraint): composes AFTER the
+                            // maxRetries/deadline/buffer checks above (D3). This is the
+                            // point where a status-code retry is DECIDED, so the budget
+                            // is consulted here. On refusal, `retry_on_status` is left
+                            // false (making pg_error_while_proxy Case 1 a no-op so no
+                            // already-started response is corrupted) and a deterministic
+                            // 503 is raised as a synthetic HTTPStatus error. The
+                            // per-upstream entry keeps the backend's real observed status
+                            // (stamped earlier); the 503 is a request-level outcome.
+                            if let Some(budget) = super::pg_upstream_peer::retry_budget_for(ctx) {
+                                if !budget.try_retry() {
+                                    crate::observe::metrics::record_retry_budget_denied();
+                                    ctx.add_error(EdgionStatus::RetryBudgetExhausted);
+                                    return Err(pingora_core::Error::explain(
+                                        pingora_core::ErrorType::HTTPStatus(503),
+                                        "retry budget exhausted",
+                                    ));
+                                }
                             }
+                            ctx.retry_on_status = true;
+                            // Stamp the attempt's per-upstream log entry with an
+                            // explicit retry reason so access-log aggregation can
+                            // count retries by reason instead of inferring this
+                            // case from the entry's status code.
+                            if let Some(upstream) = ctx.get_current_upstream_mut() {
+                                upstream.err.push("RetryOnStatus".to_string());
+                            }
+                            return Err(pingora_core::Error::explain(
+                                pingora_core::ErrorType::HTTPStatus(status_code),
+                                format!("retry on status {}", status_code),
+                            ));
                         }
-                        ctx.retry_on_status = true;
-                        // Stamp the attempt's per-upstream log entry with an
-                        // explicit retry reason so access-log aggregation can
-                        // count retries by reason instead of inferring this
-                        // case from the entry's status code.
-                        if let Some(upstream) = ctx.get_current_upstream_mut() {
-                            upstream.err.push("RetryOnStatus".to_string());
-                        }
-                        return Err(pingora_core::Error::explain(
-                            pingora_core::ErrorType::HTTPStatus(status_code),
-                            format!("retry on status {}", status_code),
-                        ));
                     }
                 }
             }
         }
+    }
+
+    // Private response processors see only the final, non-retried response.
+    // They may normalize a provider status/content type and retain the body
+    // mode they will use later. Per-attempt upstream bookkeeping above keeps
+    // the provider's raw status; the request-level status is client-visible.
+    run_stream_processor_headers(upstream_response, ctx);
+    ctx.request_info.status = Some(upstream_response.status.as_u16());
+
+    // Classify and configure compression from the normalized client-visible
+    // header. A streaming response must never be compressed because the
+    // compressor buffers and stalls event delivery.
+    ctx.response_stream_kind = classify_response_stream_kind(upstream_response);
+    if let Some(compression_ctx) = session.downstream_modules_ctx.get_mut::<ResponseCompression>() {
+        let level = if ctx.response_stream_kind == ResponseStreamKind::Sse {
+            0
+        } else if enable_compression(edgion_http) {
+            DEFAULT_COMPRESSION_LEVEL
+        } else {
+            0
+        };
+        compression_ctx.adjust_level(level);
     }
 
     // Inject session persistence cookie/header if needed. Runs here, AFTER the
@@ -324,6 +453,12 @@ pub fn upstream_response_filter(
         }
     }
 
+    // H1 chooses chunked framing after this hook, so stale length metadata
+    // must be gone here even if a pending operation or sync plugin restored it.
+    if !response_stage_settled(ctx) {
+        enforce_stream_processor_framing(upstream_response, ctx);
+    }
+
     release_late_request_body_view(ctx);
 
     // A denial no local reply could carry aborts here: returning Ok would hand
@@ -333,6 +468,72 @@ pub fn upstream_response_filter(
     }
 
     Ok(())
+}
+
+fn provider_reset_hint(
+    headers: &http::HeaderMap,
+    provider: crate::ai::AiProviderLabel,
+    now: SystemTime,
+) -> Option<Duration> {
+    let names: &[&str] = match provider {
+        crate::ai::AiProviderLabel::OpenAi | crate::ai::AiProviderLabel::OpenAiCompatible => &OPENAI_RESET_HEADERS,
+        crate::ai::AiProviderLabel::Anthropic => &[],
+    };
+    names
+        .iter()
+        .filter_map(|name| headers.get(*name))
+        .filter_map(|value| value.to_str().ok())
+        .filter(|value| value.len() <= MAX_PROVIDER_RESET_HINT_BYTES)
+        .filter_map(|value| edgion_common::time::parse_rate_limit_reset(value, now))
+        .filter(|duration| !duration.is_zero())
+        .max()
+}
+
+#[cfg(test)]
+mod provider_reset_tests {
+    use super::{provider_reset_hint, MAX_PROVIDER_RESET_HINT_BYTES};
+    use crate::ai::AiProviderLabel;
+    use http::{HeaderMap, HeaderValue};
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn openai_reset_headers_accept_delta_and_choose_the_later_bound() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-reset-requests", HeaderValue::from_static("250ms"));
+        headers.insert("x-ratelimit-reset-tokens", HeaderValue::from_static("2s"));
+        assert_eq!(
+            provider_reset_hint(&headers, AiProviderLabel::OpenAi, SystemTime::UNIX_EPOCH),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(
+            provider_reset_hint(&headers, AiProviderLabel::OpenAiCompatible, SystemTime::UNIX_EPOCH),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(
+            provider_reset_hint(&headers, AiProviderLabel::Anthropic, SystemTime::UNIX_EPOCH),
+            None,
+            "provider-specific headers must not bleed across protocols"
+        );
+    }
+
+    #[test]
+    fn openai_reset_headers_accept_absolute_epoch_and_reject_unsafe_values() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-reset-requests", HeaderValue::from_static("1700000030"));
+        assert_eq!(
+            provider_reset_hint(&headers, AiProviderLabel::OpenAi, now),
+            Some(Duration::from_secs(30))
+        );
+
+        headers.insert("x-ratelimit-reset-requests", HeaderValue::from_static("invalid"));
+        headers.insert("x-ratelimit-reset-tokens", HeaderValue::from_static("1699999999"));
+        assert_eq!(provider_reset_hint(&headers, AiProviderLabel::OpenAi, now), None);
+
+        let oversized = "1".repeat(MAX_PROVIDER_RESET_HINT_BYTES + 1);
+        headers.insert("x-ratelimit-reset-tokens", HeaderValue::from_str(&oversized).unwrap());
+        assert_eq!(provider_reset_hint(&headers, AiProviderLabel::OpenAi, now), None);
+    }
 }
 
 #[cfg(test)]

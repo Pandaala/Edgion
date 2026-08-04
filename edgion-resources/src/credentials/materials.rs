@@ -62,6 +62,12 @@ pub struct WebhookApiKeyMaterial {
     pub api_key: String,
 }
 
+/// API key used to authenticate an AI provider request.
+#[derive(Clone, Debug)]
+pub struct AiApiKeyMaterial {
+    pub api_key: String,
+}
+
 /// ACME account credentials: a JSON-serialized `instant_acme::AccountCredentials`
 /// that holds the account's private key PEM and therefore must be zeroized.
 ///
@@ -152,6 +158,7 @@ mod tests {
         assert_send_sync::<BearerMaterial>();
         assert_send_sync::<HmacMaterial>();
         assert_send_sync::<WebhookApiKeyMaterial>();
+        assert_send_sync::<AiApiKeyMaterial>();
         assert_send_sync::<AcmeAccountMaterial>();
         assert_send_sync::<TlsMaterial>();
     }

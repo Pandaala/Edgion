@@ -72,8 +72,8 @@ pub fn status_to_idx(status: Option<u16>) -> StatusIdx {
 pub struct GatewayMatrixEntry {
     pub gateway_ns: String,
     pub gateway_name: String,
-    pub counters: Vec<[Counter; N_PS]>,
-    pub histograms: Option<Vec<[Histogram; N_PS]>>,
+    pub counters: Vec<Option<[Counter; N_PS]>>,
+    pub histograms: Option<Vec<Option<[Histogram; N_PS]>>>,
 }
 
 impl GatewayMatrixEntry {
@@ -90,9 +90,15 @@ impl GatewayMatrixEntry {
         if backend_idx >= self.counters.len() {
             return false;
         }
-        self.counters[backend_idx][ps_idx].increment(1);
+        let Some(counters) = self.counters[backend_idx].as_ref() else {
+            return false;
+        };
+        counters[ps_idx].increment(1);
         if let Some(hs) = self.histograms.as_ref() {
-            hs[backend_idx][ps_idx].record(duration_ms);
+            let Some(histograms) = hs[backend_idx].as_ref() else {
+                return false;
+            };
+            histograms[ps_idx].record(duration_ms);
         }
         true
     }
@@ -124,7 +130,19 @@ impl RouteMetricHandles {
         route_name: &str,
         backends: &[(String, String)],
     ) -> Self {
-        Self::build_with(
+        let indexed_backends = backends.iter().cloned().map(Some).collect::<Vec<_>>();
+        Self::build_sparse(attached_gateways, route_ns, route_name, &indexed_backends)
+    }
+
+    /// Build handles aligned to raw backendRef slots. `None` slots register no
+    /// Service metric handles and force the caller onto the dynamic fallback.
+    pub fn build_sparse(
+        attached_gateways: &[(String, String)],
+        route_ns: &str,
+        route_name: &str,
+        backends: &[Option<(String, String)>],
+    ) -> Self {
+        Self::build_sparse_with(
             attached_gateways,
             route_ns,
             route_name,
@@ -141,6 +159,25 @@ impl RouteMetricHandles {
         route_ns: &str,
         route_name: &str,
         backends: &[(String, String)],
+        backend_cfg: &BackendRequestsLabels,
+        duration_cfg: &RequestDurationConfig,
+    ) -> Self {
+        let indexed_backends = backends.iter().cloned().map(Some).collect::<Vec<_>>();
+        Self::build_sparse_with(
+            attached_gateways,
+            route_ns,
+            route_name,
+            &indexed_backends,
+            backend_cfg,
+            duration_cfg,
+        )
+    }
+
+    fn build_sparse_with(
+        attached_gateways: &[(String, String)],
+        route_ns: &str,
+        route_name: &str,
+        backends: &[Option<(String, String)>],
         backend_cfg: &BackendRequestsLabels,
         duration_cfg: &RequestDurationConfig,
     ) -> Self {
@@ -167,18 +204,25 @@ fn build_gateway_matrix(
     gw_name: &str,
     route_ns: &str,
     route_name: &str,
-    backends: &[(String, String)],
+    backends: &[Option<(String, String)>],
     backend_cfg: &BackendRequestsLabels,
     duration_cfg: &RequestDurationConfig,
 ) -> GatewayMatrixEntry {
-    let mut counters: Vec<[Counter; N_PS]> = Vec::with_capacity(backends.len());
-    let mut histograms: Option<Vec<[Histogram; N_PS]>> = if duration_cfg.enabled {
+    let mut counters: Vec<Option<[Counter; N_PS]>> = Vec::with_capacity(backends.len());
+    let mut histograms: Option<Vec<Option<[Histogram; N_PS]>>> = if duration_cfg.enabled {
         Some(Vec::with_capacity(backends.len()))
     } else {
         None
     };
 
-    for (b_ns, b_name) in backends {
+    for backend in backends {
+        let Some((b_ns, b_name)) = backend else {
+            counters.push(None);
+            if let Some(hs) = histograms.as_mut() {
+                hs.push(None);
+            }
+            continue;
+        };
         let counter_arr = std::array::from_fn(|cell_idx| {
             let (p, s) = unpack_ps(cell_idx);
             let labels = build_counter_labels(
@@ -194,7 +238,7 @@ fn build_gateway_matrix(
             );
             counter!(names::BACKEND_REQUESTS_TOTAL, labels)
         });
-        counters.push(counter_arr);
+        counters.push(Some(counter_arr));
 
         if let Some(hs) = histograms.as_mut() {
             let h_arr = std::array::from_fn(|cell_idx| {
@@ -212,7 +256,7 @@ fn build_gateway_matrix(
                 );
                 histogram!(names::GATEWAY_REQUEST_DURATION_MS, labels)
             });
-            hs.push(h_arr);
+            hs.push(Some(h_arr));
         }
     }
 
@@ -410,7 +454,7 @@ mod tests {
         // Sanity: lookup hits.
         let entry = handles.lookup("gw_ns", "gw_a").expect("gateway entry registered");
         assert_eq!(entry.counters.len(), 2);
-        assert_eq!(entry.counters[0].len(), N_PS);
+        assert_eq!(entry.counters[0].as_ref().unwrap().len(), N_PS);
 
         // Cardinality: 1 gw x 2 backends x 15 ps = 30 unique counter keys.
         // DebuggingRecorder deduplicates by key, so the snapshot size reflects unique registrations.
@@ -505,6 +549,37 @@ mod tests {
     }
 
     #[test]
+    fn sparse_build_preserves_raw_slots_without_registering_non_service_metrics() {
+        let gws = vec![("gw_ns".to_string(), "gw_a".to_string())];
+        let backends = vec![None, Some(("ns1".to_string(), "svc_a".to_string()))];
+        let backend_cfg = BackendRequestsLabels {
+            backend: true,
+            ..Default::default()
+        };
+        let duration_cfg = RequestDurationConfig::default();
+
+        let (snap, (invalid_slot, service_slot)) = run_with_recorder(|| {
+            let handles =
+                RouteMetricHandles::build_sparse_with(&gws, "rns", "route_a", &backends, &backend_cfg, &duration_cfg);
+            let entry = handles.lookup("gw_ns", "gw_a").unwrap();
+            (
+                entry.record(0, ps_index(ProtocolIdx::Http, StatusIdx::S2xx), 1.0),
+                entry.record(1, ps_index(ProtocolIdx::Http, StatusIdx::S2xx), 1.0),
+            )
+        });
+
+        assert!(!invalid_slot);
+        assert!(service_slot);
+        let registered = snap
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter(|(key, _, _, _)| key.key().name().contains("backend_requests_total"))
+            .count();
+        assert_eq!(registered, N_PS);
+    }
+
+    #[test]
     fn handle_path_emits_same_labels_as_fallback() {
         use crate::cli::config::{BackendRequestsLabels, RequestDurationConfig};
         use crate::observe::metrics::registry::record_backend_request;
@@ -524,7 +599,7 @@ mod tests {
                 RouteMetricHandles::build_with(&gws, "rns", "route_a", &backends, &backend_cfg, &duration_cfg);
             // Drive both paths once for the same (gw, route, backend, protocol, status):
             let entry = handles.lookup("gw_ns", "gw_a").unwrap();
-            entry.counters[0][ps_index(ProtocolIdx::Http, StatusIdx::S2xx)].increment(1);
+            entry.counters[0].as_ref().unwrap()[ps_index(ProtocolIdx::Http, StatusIdx::S2xx)].increment(1);
             // Fallback emits with the same input shape:
             record_backend_request(
                 &backend_cfg,

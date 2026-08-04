@@ -34,8 +34,9 @@
 
 ### 可观测性
 
-- [访问日志](./observability/access-log.md)：访问日志字段与输出。
+- [访问日志](./observability/access-log.md)：访问日志字段与输出（含 AI `genai` 账本）。
 - [监控指标](./observability/metrics.md)：Prometheus 指标采集与告警建议。
+- [指标清单](./observability/metrics-inventory.md)：全部 `edgion_*` 指标目录（与英文权威清单对称；CI 校验英文版）。
 
 ### 配置参考
 

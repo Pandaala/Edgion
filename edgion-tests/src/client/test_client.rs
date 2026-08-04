@@ -702,6 +702,10 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
 /// Return the port-config key for the given suite name.
 fn suite_to_port_key(suite: &str) -> &str {
     match suite {
+        "EdgionAIService/AnthropicProvider" => "EdgionAIService/AnthropicProvider",
+        "EdgionAIService/CredentialExhaustion" => "EdgionAIService/CredentialExhaustion",
+        "EdgionAIService/Resilience" => "EdgionAIService/Resilience",
+        "EdgionAIService/SingleProvider" => "EdgionAIService/SingleProvider",
         // Control-plane suite: no data-plane listener of its own; borrow a valid
         // HTTP port key so the per-suite context still resolves a port.
         "EdgionBackendTrafficPolicy" => "HTTPRoute/Backend/CircuitBreaker",
@@ -721,6 +725,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionBackendTrafficPolicy/ConnectTimeout" => "EdgionBackendTrafficPolicy/ConnectTimeout",
         // HTTPRoute
         "HTTPRoute/Basic" | "HTTPRoute" => "HTTPRoute/Basic",
+        "HTTPRoute/SseStreaming" => "HTTPRoute/SseStreaming",
         "HTTPRoute/Delegation" => "HTTPRoute/Delegation",
         "HTTPRoute/Match" => "HTTPRoute/Match",
         "HTTPRoute/Backend" | "HTTPRoute/Backend/LBRoundRobin" => "HTTPRoute/Backend/LBRoundRobin",
@@ -879,6 +884,34 @@ fn suite_to_port_key(suite: &str) -> &str {
 /// Register test suites matching the given suite name into the runner.
 fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, phase: Option<&str>) {
     match suite {
+        "EdgionAIService/AnthropicProvider" => {
+            if !gateway {
+                eprintln!("Error: EdgionAIService/AnthropicProvider tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::AnthropicProviderTestSuite));
+        }
+        "EdgionAIService/SingleProvider" => {
+            if !gateway {
+                eprintln!("Error: EdgionAIService/SingleProvider tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::SingleProviderTestSuite));
+        }
+        "EdgionAIService/Resilience" => {
+            if !gateway {
+                eprintln!("Error: EdgionAIService/Resilience tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::ResilienceTestSuite));
+        }
+        "EdgionAIService/CredentialExhaustion" => {
+            if !gateway {
+                eprintln!("Error: EdgionAIService/CredentialExhaustion tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::CredentialExhaustionTestSuite));
+        }
         // EdgionBackendTrafficPolicy (control-plane: policy sync, LB store
         // mapping, oldest-wins conflict, hot reload, resync survival).
         "EdgionBackendTrafficPolicy" => {
@@ -906,6 +939,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         // HTTPRoute
         "HTTPRoute/Basic" | "HTTPRoute" => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
+        }
+        "HTTPRoute/SseStreaming" => {
+            if !gateway {
+                eprintln!("Error: HTTPRoute/SseStreaming tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::SseStreamingTestSuite));
         }
         "HTTPRoute/Delegation" => {
             if !gateway {
@@ -2283,6 +2323,10 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::TcpTestSuite));
             runner.add_suite(Box::new(suites::UdpTestSuite));
             if gateway {
+                runner.add_suite(Box::new(suites::SingleProviderTestSuite));
+                runner.add_suite(Box::new(suites::AnthropicProviderTestSuite));
+                runner.add_suite(Box::new(suites::ResilienceTestSuite));
+                runner.add_suite(Box::new(suites::CredentialExhaustionTestSuite));
                 runner.add_suite(Box::new(suites::TcpIdleTimeoutTestSuite));
                 runner.add_suite(Box::new(suites::TcpKeepaliveSmokeTestSuite));
                 runner.add_suite(Box::new(suites::HttpMatchTestSuite));

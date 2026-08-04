@@ -42,6 +42,10 @@ pub struct ControllerRuntime {
     pub(crate) ref_grant_store: ReferenceGrantStore,
     pub(crate) cross_ns_ref_mgr: CrossNamespaceRefManager,
     pub(crate) service_ref_mgr: ServiceRefManager,
+    /// Tracks HTTPRoutes and EdgionBackendTrafficPolicies that reference each
+    /// EdgionAIService. Source keys use `PolicyTargetKey::to_string()` so AI
+    /// targets cannot collide with same-named core Services.
+    pub(crate) ai_service_ref_mgr: BidirectionalRefManager<ResourceRef>,
     pub(crate) secret_ref_manager: SecretRefManager,
     pub(crate) secret_store: SecretStore,
     pub(crate) gateway_route_index: GatewayRouteIndex,
@@ -73,9 +77,11 @@ pub struct ControllerRuntime {
     /// Forward: `"esp_ns/esp_name" → Set<Gateway ResourceRef>`
     /// Reverse: `Gateway ResourceRef → Set<"esp_ns/esp_name">`
     pub(crate) stream_plugin_ref_mgr: BidirectionalRefManager<ResourceRef>,
-    /// Tracks which Gateways reference each EdgionPlugins via the
-    /// `edgion.io/edgion-plugins` annotation.
-    /// Forward: `"ep_ns/ep_name" → Set<Gateway ResourceRef>`; reverse: Gateway → Set<key>.
+    /// Tracks which Gateways and HTTPRoutes reference each EdgionPlugins.
+    ///
+    /// Gateways use the `edgion.io/edgion-plugins` annotation; HTTPRoutes use
+    /// rule-level EdgionPlugins ExtensionRefs. Forward:
+    /// `"ep_ns/ep_name" → Set<ResourceRef>`; reverse: owner → Set<key>.
     pub(crate) plugin_ref_mgr: BidirectionalRefManager<ResourceRef>,
     /// Optional conf_writer injected by the ConfCenter implementation.
     /// Used by handlers to auto-create resources (e.g., EdgionConfigData for RegionRoute).
@@ -92,6 +98,7 @@ impl ControllerRuntime {
             ref_grant_store: ReferenceGrantStore::new(),
             cross_ns_ref_mgr: new_cross_ns_ref_manager(),
             service_ref_mgr: new_service_ref_manager(),
+            ai_service_ref_mgr: BidirectionalRefManager::with_component("ai_service_ref_mgr"),
             secret_ref_manager: new_secret_ref_manager(),
             secret_store: SecretStore::new(),
             gateway_route_index: GatewayRouteIndex::new(),
@@ -143,6 +150,9 @@ impl ControllerRuntime {
 
         self.service_ref_mgr.clear();
         tracing::info!(component = "controller_runtime", "Cleared ServiceRefManager");
+
+        self.ai_service_ref_mgr.clear();
+        tracing::info!(component = "controller_runtime", "Cleared AiServiceRefManager");
 
         self.secret_ref_manager.clear();
         tracing::info!(component = "controller_runtime", "Cleared SecretRefManager");

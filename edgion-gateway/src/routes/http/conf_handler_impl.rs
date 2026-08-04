@@ -71,6 +71,9 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
 
         // Step 2: Rebuild all per-listener managers (lock already held above).
         self.rebuild_all_listener_managers_locked();
+        if std::ptr::eq(self, get_global_http_route_managers()) {
+            crate::ai::reconcile_global_adaptive_telemetry();
+        }
 
         let elapsed = Instant::now().saturating_duration_since(start_time);
         tracing::info!(
@@ -139,6 +142,9 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
         }
 
         self.rebuild_affected_listener_managers(&affected_listeners);
+        if std::ptr::eq(self, get_global_http_route_managers()) {
+            crate::ai::reconcile_global_adaptive_telemetry();
+        }
 
         tracing::info!(
             component = "http_route_manager",
@@ -270,12 +276,14 @@ fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, S
         compiled_query_regexes,
         has_query_matchers,
         specificity,
-        metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
-            ctx.attached_gateways,
-            ctx.namespace,
-            ctx.name,
-            &http_backends_from_rule(&ctx.rule, ctx.namespace),
-        )),
+        metric_handles: Arc::new(
+            crate::observe::metrics::route_handles::RouteMetricHandles::build_sparse(
+                ctx.attached_gateways,
+                ctx.namespace,
+                ctx.name,
+                &http_backends_from_rule(&ctx.rule, ctx.namespace),
+            ),
+        ),
     })
 }
 
@@ -313,12 +321,14 @@ fn build_normal_route_unit(ctx: RouteUnitCtx<'_>) -> HttpRouteRuleUnit {
         compiled_query_regexes,
         has_query_matchers,
         specificity,
-        metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
-            ctx.attached_gateways,
-            ctx.namespace,
-            ctx.name,
-            &http_backends_from_rule(&ctx.rule, ctx.namespace),
-        )),
+        metric_handles: Arc::new(
+            crate::observe::metrics::route_handles::RouteMetricHandles::build_sparse(
+                ctx.attached_gateways,
+                ctx.namespace,
+                ctx.name,
+                &http_backends_from_rule(&ctx.rule, ctx.namespace),
+            ),
+        ),
     }
 }
 
@@ -596,18 +606,20 @@ pub(crate) fn build_domain_route_rules_from_routes(data: &HashMap<String, Arc<HT
     }
 }
 
-/// Extract `(backend_ns, backend_name)` tuples in `backend_refs` order, with
-/// fallback to `route_ns` when the backend ref omits its namespace.
-fn http_backends_from_rule(rule: &HTTPRouteRule, route_ns: &str) -> Vec<(String, String)> {
+/// Build a raw-slot-aligned Service metric view. Non-Service slots stay
+/// `None`, so they register no Service-labelled metric handles.
+fn http_backends_from_rule(rule: &HTTPRouteRule, route_ns: &str) -> Vec<Option<(String, String)>> {
     rule.backend_refs
         .as_ref()
         .map(|refs| {
             refs.iter()
                 .map(|b| {
-                    (
-                        b.namespace.clone().unwrap_or_else(|| route_ns.to_string()),
-                        b.name.clone(),
-                    )
+                    (b.backend_kind() == edgion_resources::HTTPBackendRefKind::Service).then(|| {
+                        (
+                            b.namespace.clone().unwrap_or_else(|| route_ns.to_string()),
+                            b.name.clone(),
+                        )
+                    })
                 })
                 .collect()
         })

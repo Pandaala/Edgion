@@ -21,15 +21,46 @@ use std::sync::Arc;
 
 use edgion_resources::resources::common::RefDenied;
 use edgion_resources::resources::http_route::{
-    DelegationIssue, HTTPBackendRef, HTTPPathMatch, HTTPRoute, HTTPRouteFilter, HTTPRouteFilterType, HTTPRouteMatch,
-    HTTPRouteRetry, HTTPRouteRule, HTTPRouteTimeouts, SessionPersistence, GATEWAY_API_GROUP,
+    DelegationIssue, HTTPBackendRef, HTTPBackendRefKind, HTTPPathMatch, HTTPRoute, HTTPRouteFilter,
+    HTTPRouteFilterType, HTTPRouteMatch, HTTPRouteRetry, HTTPRouteRule, HTTPRouteTimeouts, SessionPersistence,
+    GATEWAY_API_GROUP,
 };
 
 /// `(group, kind, namespace(explicit), name)` of a Service backendRef.
 pub type ServiceBackendTuple = (Option<String>, Option<String>, Option<String>, String);
+/// `(group, kind, namespace(explicit), name)` of an EdgionAIService backendRef.
+pub type AiServiceBackendTuple = (Option<String>, Option<String>, Option<String>, String);
 
 /// Maximum delegation chain depth (number of delegation edges from the root).
 pub const MAX_DELEGATION_DEPTH: usize = 8;
+
+const HTTP_ROUTE_KIND: &str = "HTTPRoute";
+
+/// Replace every operator-provided or stale terminal identity on the route's
+/// own rules with controller-derived values. Delegated terminal child rules are
+/// stamped independently while flattening because lookup returns raw resources.
+pub(super) fn populate_terminal_rule_identities(route: &mut HTTPRoute) {
+    let route_identity = terminal_route_identity(route);
+    for (index, rule) in route.spec.rules.iter_mut().flatten().enumerate() {
+        set_terminal_rule_identity(rule, &route_identity, index);
+    }
+}
+
+fn terminal_route_identity(route: &HTTPRoute) -> String {
+    route.metadata.uid.clone().unwrap_or_else(|| {
+        let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+        let name = route.metadata.name.as_deref().unwrap_or("");
+        format!("{HTTP_ROUTE_KIND}/{namespace}/{name}")
+    })
+}
+
+fn set_terminal_rule_identity(rule: &mut HTTPRouteRule, route_identity: &str, index: usize) {
+    rule.resolved_terminal_route_uid = Some(route_identity.to_string());
+    rule.resolved_terminal_rule_identity = Some(match rule.name.as_deref() {
+        Some(name) => format!("name:{name}"),
+        None => format!("index:{index}"),
+    });
+}
 
 /// Store abstraction so flattening is unit-testable without a ControllerRuntime.
 pub trait DelegationLookup {
@@ -64,6 +95,9 @@ pub struct FlattenOutcome {
     /// `(group, kind, namespace(explicit), name)` of Service backendRefs in
     /// the flattened rules, for ServiceRefManager registration on the parent.
     pub service_backend_tuples: Vec<ServiceBackendTuple>,
+    /// EdgionAIService backendRefs in flattened rules, with the declaring
+    /// child namespace made explicit for the parent's reverse-ref index.
+    pub ai_service_backend_tuples: Vec<AiServiceBackendTuple>,
     /// Namespaces referenced cross-namespace by flattened Service backendRefs
     /// (target ns ≠ declaring child ns), for CrossNsRefManager registration on
     /// the parent so ReferenceGrant changes requeue it.
@@ -84,6 +118,7 @@ impl FlattenOutcome {
             named_children: HashSet::new(),
             wildcard_namespaces: HashSet::new(),
             service_backend_tuples: Vec::new(),
+            ai_service_backend_tuples: Vec::new(),
             cross_ns_target_namespaces: HashSet::new(),
             expanded_children: HashSet::new(),
         }
@@ -128,6 +163,7 @@ struct FlattenCtx<'a> {
     named_children: HashSet<String>,
     wildcard_namespaces: HashSet<String>,
     service_backend_tuples: Vec<ServiceBackendTuple>,
+    ai_service_backend_tuples: Vec<AiServiceBackendTuple>,
     cross_ns_target_namespaces: HashSet<String>,
     expanded_children: HashSet<String>,
     /// Route keys on the current DFS path (root first), for cycle detection.
@@ -161,6 +197,7 @@ pub fn flatten_route(parent: &HTTPRoute, lookup: &dyn DelegationLookup) -> Flatt
         named_children: HashSet::new(),
         wildcard_namespaces: HashSet::new(),
         service_backend_tuples: Vec::new(),
+        ai_service_backend_tuples: Vec::new(),
         cross_ns_target_namespaces: HashSet::new(),
         expanded_children: HashSet::new(),
         path: vec![parent_key],
@@ -184,7 +221,7 @@ pub fn flatten_route(parent: &HTTPRoute, lookup: &dyn DelegationLookup) -> Flatt
             .is_some_and(|brs| brs.iter().any(HTTPBackendRef::is_route_delegation_ref));
         if !is_delegating {
             let mut copied = rule.clone();
-            collect_service_tuples(&mut ctx, parent_ns, &copied);
+            collect_backend_tuples(&mut ctx, parent_ns, &copied);
             // Non-delegating parent rule: keep operator-authored semantics
             // untouched (implicit backendRef namespace = parent ns is fine
             // because resolved_rules live on the parent).
@@ -210,6 +247,7 @@ pub fn flatten_route(parent: &HTTPRoute, lookup: &dyn DelegationLookup) -> Flatt
                         .flatten()
                         .filter(|f| f.filter_type == HTTPRouteFilterType::ExtensionRef)
                         .cloned()
+                        .map(|filter| with_extension_ref_namespace(filter, parent_ns))
                         .collect(),
                 };
                 let attrs = InheritedAttrs {
@@ -237,6 +275,7 @@ pub fn flatten_route(parent: &HTTPRoute, lookup: &dyn DelegationLookup) -> Flatt
         named_children: ctx.named_children,
         wildcard_namespaces: ctx.wildcard_namespaces,
         service_backend_tuples: ctx.service_backend_tuples,
+        ai_service_backend_tuples: ctx.ai_service_backend_tuples,
         cross_ns_target_namespaces: ctx.cross_ns_target_namespaces,
         expanded_children: ctx.expanded_children,
     }
@@ -507,13 +546,15 @@ fn flatten_child_rules(
                         extension: inherited
                             .extension
                             .iter()
+                            .cloned()
                             .chain(
                                 rule.filters
                                     .iter()
                                     .flatten()
-                                    .filter(|f| f.filter_type == HTTPRouteFilterType::ExtensionRef),
+                                    .filter(|f| f.filter_type == HTTPRouteFilterType::ExtensionRef)
+                                    .cloned()
+                                    .map(|filter| with_extension_ref_namespace(filter, child_ns)),
                             )
-                            .cloned()
                             .collect(),
                     };
                     let next_attrs = InheritedAttrs {
@@ -582,6 +623,8 @@ fn flatten_child_rules(
         }
 
         let mut flattened = rule.clone();
+        let child_route_identity = terminal_route_identity(child);
+        set_terminal_rule_identity(&mut flattened, &child_route_identity, idx);
         flattened.matches = Some(flattened_matches);
         flattened.name = Some(
             rule.name
@@ -599,8 +642,14 @@ fn flatten_child_rules(
                 .standard
                 .iter()
                 .chain(inherited.extension.iter())
-                .chain(rule.filters.iter().flatten())
                 .cloned()
+                .chain(
+                    rule.filters
+                        .iter()
+                        .flatten()
+                        .cloned()
+                        .map(|filter| with_extension_ref_namespace(filter, child_ns)),
+                )
                 .collect();
             if combined.is_empty() {
                 None
@@ -638,7 +687,7 @@ fn flatten_child_rules(
                 }
             }
         }
-        collect_service_tuples(ctx, child_ns, &flattened);
+        collect_backend_tuples(ctx, child_ns, &flattened);
         out_rules.push(flattened);
     }
 }
@@ -894,26 +943,30 @@ fn reverse_lock_allows(child: &HTTPRoute, parent_key: &str) -> bool {
     !has_lock
 }
 
-/// Record Service backendRef tuples of a flattened/copied rule for
-/// ServiceRefManager registration under the parent route.
-fn collect_service_tuples(ctx: &mut FlattenCtx, implicit_ns: &str, rule: &HTTPRouteRule) {
+fn with_extension_ref_namespace(mut filter: HTTPRouteFilter, namespace: &str) -> HTTPRouteFilter {
+    if filter.filter_type == HTTPRouteFilterType::ExtensionRef {
+        if let Some(extension_ref) = filter.extension_ref.as_mut() {
+            extension_ref.resolved_namespace = Some(namespace.to_string());
+        }
+    }
+    filter
+}
+
+/// Record typed backendRef tuples of a flattened/copied rule for reverse-ref
+/// registration under the parent route.
+fn collect_backend_tuples(ctx: &mut FlattenCtx, implicit_ns: &str, rule: &HTTPRouteRule) {
     for br in rule.backend_refs.iter().flatten() {
-        if br.is_route_delegation_ref() {
-            continue;
-        }
-        let group = br.group.as_deref().unwrap_or("");
-        if !group.is_empty() && group != "core" {
-            continue;
-        }
-        if br.kind.as_deref().unwrap_or("Service") != "Service" {
-            continue;
-        }
-        ctx.service_backend_tuples.push((
+        let tuple = (
             br.group.clone(),
             br.kind.clone(),
             Some(br.namespace.clone().unwrap_or_else(|| implicit_ns.to_string())),
             br.name.clone(),
-        ));
+        );
+        match br.backend_kind() {
+            HTTPBackendRefKind::Service => ctx.service_backend_tuples.push(tuple),
+            HTTPBackendRefKind::EdgionAIService => ctx.ai_service_backend_tuples.push(tuple),
+            HTTPBackendRefKind::RouteDelegation | HTTPBackendRefKind::Unsupported => {}
+        }
     }
 }
 
@@ -1745,5 +1798,91 @@ mod tests {
         let rules = outcome.resolved_rules.clone().unwrap();
         assert_eq!(rules[0].name.as_deref(), Some("user-named"));
         assert_eq!(rules[1].name.as_deref(), Some("billing.child.r1"));
+    }
+
+    #[test]
+    fn delegated_terminal_identity_uses_child_uid_and_original_rule_identity() {
+        let parent = simple_parent("/api", "billing", "child");
+        let mut child = route(
+            "billing",
+            "child",
+            serde_json::json!({"rules": [
+                {"name": "user-named",
+                 "matches": [{"path": {"type": "PathPrefix", "value": "/api/a"}}],
+                 "backendRefs": [{"name": "svc", "port": 80}]},
+                service_rule("/api/b", "svc")
+            ]}),
+        );
+        child.metadata.uid = Some("child-uid".to_string());
+
+        let rules = flatten_route(&parent, &FakeLookup::new(vec![child]))
+            .resolved_rules
+            .expect("delegation should produce resolved rules");
+        assert_eq!(rules[0].resolved_terminal_route_uid.as_deref(), Some("child-uid"));
+        assert_eq!(
+            rules[0].resolved_terminal_rule_identity.as_deref(),
+            Some("name:user-named")
+        );
+        assert_eq!(rules[1].resolved_terminal_route_uid.as_deref(), Some("child-uid"));
+        assert_eq!(rules[1].resolved_terminal_rule_identity.as_deref(), Some("index:1"));
+    }
+
+    #[test]
+    fn delegated_terminal_identity_changes_after_uid_delete_create() {
+        let parent = simple_parent("/api", "billing", "child");
+        let child_spec = serde_json::json!({"rules": [service_rule("/api/a", "svc")]});
+        let mut first = route("billing", "child", child_spec.clone());
+        first.metadata.uid = Some("child-generation-1".to_string());
+        let first_identity = flatten_route(&parent, &FakeLookup::new(vec![first]))
+            .resolved_rules
+            .expect("first child generation should flatten")[0]
+            .resolved_terminal_route_uid
+            .clone();
+
+        let mut recreated = route("billing", "child", child_spec);
+        recreated.metadata.uid = Some("child-generation-2".to_string());
+        let recreated_identity = flatten_route(&parent, &FakeLookup::new(vec![recreated]))
+            .resolved_rules
+            .expect("recreated child generation should flatten")[0]
+            .resolved_terminal_route_uid
+            .clone();
+
+        assert_eq!(first_identity.as_deref(), Some("child-generation-1"));
+        assert_eq!(recreated_identity.as_deref(), Some("child-generation-2"));
+        assert_ne!(first_identity, recreated_identity);
+    }
+
+    #[test]
+    fn ordinary_rules_get_uid_or_typed_key_and_deterministic_rule_identity() {
+        let mut uid_route = route(
+            "apps",
+            "ordinary",
+            serde_json::json!({"rules": [
+                {"name": "primary", "backendRefs": [{"name": "svc", "port": 80}]},
+                {"backendRefs": [{"name": "fallback", "port": 80}]}
+            ]}),
+        );
+        uid_route.metadata.uid = Some("ordinary-uid".to_string());
+        populate_terminal_rule_identities(&mut uid_route);
+        let rules = uid_route.spec.rules.as_ref().expect("ordinary route should keep rules");
+        assert_eq!(rules[0].resolved_terminal_route_uid.as_deref(), Some("ordinary-uid"));
+        assert_eq!(
+            rules[0].resolved_terminal_rule_identity.as_deref(),
+            Some("name:primary")
+        );
+        assert_eq!(rules[1].resolved_terminal_rule_identity.as_deref(), Some("index:1"));
+
+        let mut uidless = route(
+            "apps",
+            "file-route",
+            serde_json::json!({"rules": [{"backendRefs": [{"name": "svc", "port": 80}]}]}),
+        );
+        populate_terminal_rule_identities(&mut uidless);
+        let rule = &uidless.spec.rules.as_ref().expect("UID-less route should keep rules")[0];
+        assert_eq!(
+            rule.resolved_terminal_route_uid.as_deref(),
+            Some("HTTPRoute/apps/file-route")
+        );
+        assert_eq!(rule.resolved_terminal_rule_identity.as_deref(), Some("index:0"));
     }
 }

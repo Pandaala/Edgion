@@ -12,6 +12,7 @@ use super::dye_plan::{CompiledDyePlan, CompiledDyeRule};
 use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use super::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader, RouteProto};
 use super::traits::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult};
+use crate::ai::{AiAttemptPlan, AiRequestContext};
 use crate::link_sys::template::evaluate_template;
 use crate::request_body::BodyStorage;
 use crate::request_body::{BodyOperationError, BodyScanResult};
@@ -1044,6 +1045,21 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn add_error(&mut self, status: edgion_resources::EdgionStatus) {
         self.ctx.add_error(status);
+    }
+
+    fn set_ai_request_context(&mut self, context: AiRequestContext) -> bool {
+        self.ctx.try_set_ai_request_context(context)
+    }
+
+    fn set_ai_attempt_plan(&mut self, plan: AiAttemptPlan) -> bool {
+        self.ctx.try_set_ai_attempt_plan(plan)
+    }
+
+    fn install_stream_processor(
+        &mut self,
+        processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
+    ) {
+        self.ctx.stream_processors.push(processor);
     }
 
     fn claim_json_schema_validation(&mut self) -> bool {

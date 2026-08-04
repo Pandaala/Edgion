@@ -207,6 +207,16 @@ define_resources! {
         default_capacity: small,
     },
 
+    // ==================== AI Gateway Resources ====================
+    EdgionAIService {
+        enum_value: 23,
+        kind_name: "edgionaiservice",
+        kind_aliases: [],
+        cache_field: edgion_ai_services,
+        capacity_field: edgion_ai_services_capacity,
+        default_capacity: normal,
+    },
+
     // ==================== Infrastructure Resources ====================
     LinkSys {
         enum_value: 15,
@@ -225,8 +235,8 @@ mod tests {
 
     #[test]
     fn test_all_resource_infos_count() {
-        // We have 21 resource types (excluding Unspecified)
-        assert_eq!(ALL_RESOURCE_INFOS.len(), 21);
+        // We have 22 resource types (excluding Unspecified)
+        assert_eq!(ALL_RESOURCE_INFOS.len(), 22);
     }
 
     #[test]
