@@ -12,6 +12,7 @@ mod dangling_extension_ref;
 mod filters;
 mod r#match;
 mod protocol;
+mod transport;
 
 pub use basic::HttpTestSuite;
 pub use dangling_extension_ref::DanglingExtensionRefTestSuite;
@@ -34,3 +35,4 @@ pub use filters::{
 };
 pub use protocol::{H2TrailerMalformedTestSuite, H2cTestSuite, WebSocketTestSuite};
 pub use r#match::HttpMatchTestSuite;
+pub use transport::TransportTestSuite;

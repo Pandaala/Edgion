@@ -1,0 +1,18 @@
+# Backend Service for the raw HTTP/2 (h2c) transport backend (test_server
+# --transport-h2-port 30031).
+#
+# `appProtocol: kubernetes.io/h2c` is what selects an HTTP/2 upstream — the
+# exact precedent is HTTPRoute/Protocol/H2C/Service.yaml. The transport suite's
+# self-test case fails first if this silently stops selecting H2, so a later
+# negative assertion cannot pass vacuously against an H1 upstream.
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-transport-h2
+  namespace: edgion-test
+spec:
+  ports:
+    - port: 30031
+      targetPort: 30031
+      protocol: TCP
+      appProtocol: kubernetes.io/h2c

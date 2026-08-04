@@ -592,6 +592,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "h2-trailer-malformed" | "h2trailermalformed" | "h2tm" => {
                 "HTTPRoute/Protocol/H2TrailerMalformed".to_string()
             }
+            "transport" | "http-transport" => "HTTPRoute/Transport".to_string(),
             "lb-rr" | "lbrr" | "lb-roundrobin" => "HTTPRoute/Backend/LBRoundRobin".to_string(),
             "lb-ch" | "lbch" | "lb-consistenthash" => "HTTPRoute/Backend/LBConsistentHash".to_string(),
             "lb-lc" | "lblc" | "lb-leastconn" => "HTTPRoute/Backend/LBLeastConn".to_string(),
@@ -752,6 +753,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Protocol/H2C" => "HTTPRoute/Protocol/H2C",
         "HTTPRoute/Protocol/GrpcWeb" => "HTTPRoute/Protocol/GrpcWeb",
         "HTTPRoute/Protocol/H2TrailerMalformed" => "HTTPRoute/Protocol/H2TrailerMalformed",
+        "HTTPRoute/Transport" => "HTTPRoute/Transport",
         "HTTPRoute/MultiPort" => "HTTPRoute/MultiPort",
         // DanglingExtensionRef is parented to edgion-plugins-gateway (port 31180),
         // shared with EdgionPlugins ExtensionRef-based scenarios.
@@ -1210,6 +1212,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::H2TrailerMalformedTestSuite));
+        }
+        "HTTPRoute/Transport" => {
+            if !gateway {
+                eprintln!("Error: HTTPRoute/Transport tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TransportTestSuite));
         }
         "HTTPRoute/Protocol/HTTPS" => {
             if !gateway {

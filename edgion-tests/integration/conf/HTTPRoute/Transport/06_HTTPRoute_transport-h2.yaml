@@ -1,0 +1,35 @@
+# Ordinary (non-streamed) route to the raw HTTP/2 (h2c) transport backend.
+#
+# Proves: the upstream-protocol axis is one Service field. Same rules, same
+# hostnames pattern, same `/timeout` rule as the H1 sibling, so a shape's two
+# upstream combinations differ only in the hostname the case sends.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: transport-h2
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: transport-gateway
+      namespace: edgion-test
+  hostnames:
+    - "transport-h2.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /timeout
+      timeouts:
+        backendRequest: "2s"
+      backendRefs:
+        - name: test-transport-h2
+          namespace: edgion-test
+          port: 30031
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: test-transport-h2
+          namespace: edgion-test
+          port: 30031

@@ -1,0 +1,32 @@
+# Streamed route to the raw HTTP/1.1 transport backend.
+#
+# Proves the `Streamed` row of contract §3 against an H1 upstream: the upstream
+# request carries `Transfer-Encoding: chunked` and NO `Content-Length`,
+# whatever the downstream client declared — and that nothing in Edgion's header
+# rewrite or backend selection undoes it.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: transport-streamed-h1
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: transport-gateway
+      namespace: edgion-test
+  hostnames:
+    - "transport-streamed-h1.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: transport-streamed
+      backendRefs:
+        - name: test-transport-h1
+          namespace: edgion-test
+          port: 30030

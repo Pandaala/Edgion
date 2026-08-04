@@ -153,6 +153,30 @@ impl HttpTestSuite {
             })
         })
     }
+
+    /// Parameterized case body, built from a closure that *captures* `label`.
+    ///
+    /// A bare `fn` pointer cannot capture anything, so this shape only compiles
+    /// because `TestCase::new` accepts any `Fn(TestContext) -> TestFuture`. It
+    /// touches no network and asserts only that the captured parameter survived
+    /// into the case body — its job is to fail compilation if `TestFn` is ever
+    /// narrowed back to a plain `fn` pointer.
+    fn test_captured_parameter(label: &'static str) -> TestCase {
+        TestCase::new(
+            format!("captured_parameter_{}", label),
+            "Framework guard: a case body built from a closure capturing a parameter",
+            move |_ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    if label.is_empty() {
+                        TestResult::failed(start.elapsed(), "captured parameter was lost".to_string())
+                    } else {
+                        TestResult::passed_with_message(start.elapsed(), format!("captured parameter: {}", label))
+                    }
+                })
+            },
+        )
+    }
 }
 
 #[async_trait]
@@ -168,6 +192,7 @@ impl TestSuite for HttpTestSuite {
             Self::test_echo_post(),
             Self::test_status_codes(),
             Self::test_delay(),
+            Self::test_captured_parameter("closure"),
         ]
     }
 }

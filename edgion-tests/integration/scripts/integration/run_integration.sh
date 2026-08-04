@@ -1008,6 +1008,7 @@ run_all_tests() {
                     run_test "HTTPRoute_Protocol_H2C" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Protocol/H2C" || test_failed=true
                     run_test "HTTPRoute_Protocol_GrpcWeb" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Protocol/GrpcWeb" || test_failed=true
                     run_test "HTTPRoute_Protocol_H2TrailerMalformed" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Protocol/H2TrailerMalformed" || test_failed=true
+                    run_test "HTTPRoute_Transport" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Transport" || test_failed=true
                     run_test "HTTPRoute_MultiPort" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i MultiPort" || test_failed=true
                 else
                     # Run specified sub-item test
@@ -1278,6 +1279,7 @@ run_all_tests() {
         run_test "HTTPRoute_Protocol_H2C" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Protocol/H2C" || test_failed=true
         run_test "HTTPRoute_Protocol_GrpcWeb" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Protocol/GrpcWeb" || test_failed=true
         run_test "HTTPRoute_Protocol_H2TrailerMalformed" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Protocol/H2TrailerMalformed" || test_failed=true
+        run_test "HTTPRoute_Transport" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Transport" || test_failed=true
         run_test "HTTPRoute_MultiPort" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i MultiPort" || test_failed=true
         run_test "HTTPRoute_Backend_LBEwma" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Backend/LBEwma" || test_failed=true
         run_test "HTTPRoute_Backend_LBEwmaRetryOnStatus" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Backend/LBEwmaRetryOnStatus" || test_failed=true

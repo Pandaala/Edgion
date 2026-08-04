@@ -1,0 +1,30 @@
+# ExtProc with requestBodyMode STREAMED, attached to the two `transport-streamed-*`
+# routes.
+#
+# Proves: this is the only configuration that makes Edgion select
+# `UpstreamRequestBodyDisposition::Streamed`, which is what the contract §3
+# framing table is about. `ctx.request_body_stream_active` is computed by the
+# plugin resolution chain and no fork test can observe that computation, so the
+# framing it produces has to be asserted here, end to end, after Edgion's own
+# `upstream_request_filter` header rewrite has run.
+#
+# The processor is the same fake ext_proc backend the ExtProc suite uses
+# (127.0.0.1:30041). Its default RequestBody verdict replaces each chunk, so
+# these cases assert *framing*, never body bytes.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: transport-streamed
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "127.0.0.1:30041"
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+          requestBodyMode: STREAMED
+        failureModeAllow: false

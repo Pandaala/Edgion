@@ -1,5 +1,5 @@
 {
-  "current_max": 31942,
+  "current_max": 31944,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -61,6 +61,9 @@
     },
     "HTTPRoute/Protocol/H2TrailerMalformed": {
       "http": 31082
+    },
+    "HTTPRoute/Transport": {
+      "http": 31944
     },
     "GRPCRoute/Basic": {
       "grpc": 31050

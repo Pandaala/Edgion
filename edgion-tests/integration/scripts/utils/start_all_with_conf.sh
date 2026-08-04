@@ -435,6 +435,8 @@ start_test_server() {
         --auth-port 30040 \
         --ext-proc-port 30041 \
         --h2-trailer-malformed-port 30025 \
+        --transport-h1-port 30030 \
+        --transport-h2-port 30031 \
         --log-level info \
         $ext_proc_tls_args \
         $https_backend_args \

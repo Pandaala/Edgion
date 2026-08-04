@@ -25,7 +25,7 @@ pub use http_route::{
     LBRoundRobinTestSuite, MultiPortTestSuite, PanicThresholdTestSuite, PartiallyInvalidTestSuite,
     PerTryTimeoutTestSuite, PercentMirrorTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite,
     SpChangeFinalTestSuite, SpChangeInitialTestSuite, SpWeightedFinalTestSuite, SpWeightedInitialTestSuite,
-    SpWeightedZeroWeightTestSuite, TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
+    SpWeightedZeroWeightTestSuite, TimeoutTestSuite, TransportTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
 pub use edgion_backend_traffic_policy::{

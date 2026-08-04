@@ -1,0 +1,16 @@
+# Backend Service for the raw HTTP/1.1 transport backend (test_server
+# --transport-h1-port 30030).
+#
+# No appProtocol: the upstream connection is HTTP/1.1. Paired with
+# 03_Service_test-transport-h2.yaml, this is the whole upstream-protocol axis of
+# the matrix — one Service field, no per-combination Gateway or listener.
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-transport-h1
+  namespace: edgion-test
+spec:
+  ports:
+    - port: 30030
+      targetPort: 30030
+      protocol: TCP

@@ -29,9 +29,9 @@ fn extract_server_port(body: &str) -> Option<u16> {
 }
 
 /// Send one request to the hot-swap route and check the routed backend port.
-/// `expected_port` is passed explicitly by each non-generic wrapper below rather than
-/// captured by a closure, since `TestCase::new` requires a plain `fn` pointer (closures
-/// can only coerce to `fn` if they capture nothing).
+/// `expected_port` is passed explicitly by each non-generic wrapper below. That
+/// shape predates `TestCase::new` accepting capturing closures; it is kept as-is
+/// because the wrappers are also the suite's test-case names.
 async fn check_routes_to(ctx: TestContext, expected_port: u16) -> TestResult {
     let start = Instant::now();
     let client = &ctx.http_client;

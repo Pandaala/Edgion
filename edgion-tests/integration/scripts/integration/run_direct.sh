@@ -31,6 +31,9 @@ TEST_SERVER_GRPC_PORT=30021
 TEST_SERVER_WS_PORT=30005
 TEST_SERVER_TCP_PORT=30010
 TEST_SERVER_UDP_PORT=30011
+# Raw transport-shape backends (see skills/05-testing/references/test-server-capabilities.md)
+TEST_SERVER_TRANSPORT_H1_PORT=30030
+TEST_SERVER_TRANSPORT_H2_PORT=30031
 
 # =============================================================================
 # log
@@ -161,6 +164,8 @@ start_test_server() {
         --websocket-port $TEST_SERVER_WS_PORT \
         --tcp-port $TEST_SERVER_TCP_PORT \
         --udp-port $TEST_SERVER_UDP_PORT \
+        --transport-h1-port $TEST_SERVER_TRANSPORT_H1_PORT \
+        --transport-h2-port $TEST_SERVER_TRANSPORT_H2_PORT \
         --log-level info \
         > "${LOG_DIR}/test_server.log" 2>&1 &
     echo $! > "${PID_DIR}/test_server.pid"

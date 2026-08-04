@@ -5,6 +5,7 @@ use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Test context - contains all configuration information needed for testing
@@ -353,8 +354,17 @@ impl TestResult {
     }
 }
 
-/// Test function type
-pub type TestFn = fn(TestContext) -> Pin<Box<dyn Future<Output = TestResult> + Send>>;
+/// Boxed future returned by a test case body.
+pub type TestFuture = Pin<Box<dyn Future<Output = TestResult> + Send>>;
+
+/// Test function type.
+///
+/// This is a reference-counted closure rather than a bare `fn` pointer so a test
+/// case can capture parameters (e.g. a downstream/upstream protocol combination)
+/// instead of requiring one hand-written `fn` per variant. Plain `fn` items and
+/// non-capturing closures still coerce into it through [`TestCase::new`], so
+/// existing call sites are unaffected.
+pub type TestFn = Arc<dyn Fn(TestContext) -> TestFuture + Send + Sync>;
 
 /// Test case
 pub struct TestCase {
@@ -365,11 +375,19 @@ pub struct TestCase {
 }
 
 impl TestCase {
-    pub fn new(name: impl Into<String>, description: impl Into<String>, test_fn: TestFn) -> Self {
+    /// Build a test case from any callable body.
+    ///
+    /// Accepts plain `fn` items, non-capturing closures, and closures that
+    /// capture parameters — the last of which is what makes a single case body
+    /// reusable across parameter combinations.
+    pub fn new<F>(name: impl Into<String>, description: impl Into<String>, test_fn: F) -> Self
+    where
+        F: Fn(TestContext) -> TestFuture + Send + Sync + 'static,
+    {
         Self {
             name: name.into(),
             description: description.into(),
-            test_fn,
+            test_fn: Arc::new(test_fn),
         }
     }
 

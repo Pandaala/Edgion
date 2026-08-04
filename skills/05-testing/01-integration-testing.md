@@ -111,6 +111,7 @@ summary. Current names are `main`, `linksys_etcd`, `linksys_es`, `linksys_otlp`,
 - `edgion-tests/integration/conf/`: test YAML, organized by resource/item
 - `edgion-tests/src/client/`: Rust test client and suite implementations
 - `edgion-tests/src/server/test_server.rs`: local HTTP/gRPC/WebSocket/TCP/UDP test backend
+- `edgion-tests/src/server/transport/`: raw HTTP/1.1 + HTTP/2 transport-shape backends and the transport event recorder
 - `edgion-tests/src/validator/`: `resource_diff`, `config_load_validator`
 - `edgion-tests/integration/scripts/integration/run_integration.sh`: main entry (shared controller/gateway suites)
 - `edgion-tests/integration/scripts/integration/run_all_integration.sh`: in-repo orchestrator for the stable job list above
@@ -187,6 +188,8 @@ When a test fails, first determine "the configuration didn't take effect" vs "th
 For most HTTP, gRPC, WebSocket, TCP, UDP, ForwardAuth, OIDC, mirror, delay, and status-code scenarios, `test_server` is sufficient. Only extend `edgion-tests/src/server/test_server.rs` when existing endpoints or protocols truly do not cover your scenario.
 
 The backend ports and endpoints already supported by `test_server` are in [references/test-server-capabilities.md](references/test-server-capabilities.md).
+
+For **transport-level** needs — an upstream that responds before the request body is complete, half-closes mid-request, resets at a chosen byte offset, never responds, or answers with deliberately malformed framing — do not add another mock. `test_server` already exposes two raw listeners for exactly this (`--transport-h1-port 30030`, `--transport-h2-port 30031`), steered per request by `x-up-*` headers, plus a transport event recorder at `/transport/query/{trace_id}` that reports what the gateway actually put on the wire toward the upstream (including upstream connection identity and reuse, which no echoed response header can show). See the "Transport-shape backends" section of the capability reference.
 
 ### 4. Suite registration touchpoints must be complete
 

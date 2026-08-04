@@ -19,6 +19,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
 use tracing::{error, info};
 
+// Transport-shape backends + the transport event recorder. Lives in its own
+// module tree because it is a self-contained protocol harness (raw H1, raw H2,
+// a global event log) rather than another axum endpoint.
+#[path = "transport/mod.rs"]
+mod transport;
+
 // ============================================================================
 // Mirror Capture Store  (global, for test validation)
 // ============================================================================
@@ -131,6 +137,19 @@ struct Cli {
     /// H2 raw backend port that sends protocol-violating streams (for H2TrailerMalformed testing)
     #[arg(long)]
     h2_trailer_malformed_port: Option<u16>,
+
+    /// Raw HTTP/1.1 transport-shape backend port (default 30030 in the launch
+    /// scripts). Steered per request by the `x-up-*` control headers; every
+    /// wire-level fact it observes lands in the transport event recorder,
+    /// queryable at `/transport/query/{trace_id}` on the HTTP router.
+    #[arg(long)]
+    transport_h1_port: Option<u16>,
+
+    /// Raw HTTP/2 (h2c prior-knowledge) transport-shape backend port
+    /// (default 30031 in the launch scripts). Same `x-up-*` vocabulary as the
+    /// H1 backend, plus RST_STREAM/GOAWAY with a chosen error code.
+    #[arg(long)]
+    transport_h2_port: Option<u16>,
 
     /// HTTPS backend multi-SNI port (for BackendTLSSNIHostOverride testing)
     /// The server uses a per-SNI cert resolver: hostname-a.example.com -> cert-a,
@@ -304,6 +323,18 @@ async fn main() -> Result<()> {
         handles.push(handle);
     }
 
+    // Start the raw HTTP/1.1 transport-shape backend (if configured)
+    if let Some(port) = cli.transport_h1_port {
+        let handle = tokio::spawn(transport::h1::start_transport_h1_server(port));
+        handles.push(handle);
+    }
+
+    // Start the raw HTTP/2 transport-shape backend (if configured)
+    if let Some(port) = cli.transport_h2_port {
+        let handle = tokio::spawn(transport::h2::start_transport_h2_server(port));
+        handles.push(handle);
+    }
+
     // Start HTTPS multi-SNI backend server (if configured)
     if let Some(multi_sni_port) = cli.https_backend_multi_sni_port {
         match (
@@ -460,6 +491,18 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/mirror/slow/{ms}", get(mirror_slow_handler).post(mirror_slow_handler))
         // GET /mirror/reset: clear all stored mirror captures (between test cases)
         .route("/mirror/reset", get(mirror_reset_handler))
+        // --- Transport event recorder (for the raw transport-shape backends) ---
+        // GET /transport/query/{trace_id}: the trace's own events, plus the
+        // connection-scoped events of every connection that carried it, plus a
+        // connections[] summary and the global conn_accepted_total.
+        .route(
+            "/transport/query/{trace_id}",
+            get(transport::recorder::transport_query_handler),
+        )
+        // GET /transport/reset: clear the per-case transport log (call first in every case)
+        .route("/transport/reset", get(transport::recorder::transport_reset_handler))
+        // GET /transport/dump: everything the recorder holds, for failure dumps
+        .route("/transport/dump", get(transport::recorder::transport_dump_handler))
         // --- Retry-sequence endpoints (for retry-on-status integration tests) ---
         .route(
             "/retry-sequence/{test_id}/{status_list}",

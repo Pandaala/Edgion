@@ -248,3 +248,18 @@ inherits = "release"
 lto = "thin"
 codegen-units = 1
 debug = 1
+
+# ==========================================================================
+# TEMPORARY — local Pingora fork iteration. NOT FOR COMMIT.
+# Redirects the fork dependencies to the working copy at
+# /Users/caohao/ws2/pingora so that fork-side fixes can be verified by the
+# Edgion integration suite before they are pushed to the `edgion` branch.
+# Remove this block (and revert Cargo.lock) once the fork change is pushed.
+# ==========================================================================
+[patch."https://github.com/Pandaala/pingora.git"]
+pingora-core = { path = "/Users/caohao/ws2/pingora/pingora-core" }
+pingora-http = { path = "/Users/caohao/ws2/pingora/pingora-http" }
+pingora-proxy = { path = "/Users/caohao/ws2/pingora/pingora-proxy" }
+pingora-limits = { path = "/Users/caohao/ws2/pingora/pingora-limits" }
+pingora-load-balancing = { path = "/Users/caohao/ws2/pingora/pingora-load-balancing" }
+pingora-ketama = { path = "/Users/caohao/ws2/pingora/pingora-ketama" }
