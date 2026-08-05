@@ -1,5 +1,6 @@
 //! Credential-first scheduling, RPM exhaustion, and TPM reconciliation.
 
+use super::gateway_admin::{admin_base, authed, service_uid, CREDENTIAL_RESERVATION_KEY_PREFIX as KEY_PREFIX};
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use edgion_gateway::plugins::common::redis_rate_limiter::build_credential_reservation_keys;
@@ -12,7 +13,6 @@ pub struct CredentialExhaustionTestSuite;
 
 const HOST: &str = "ai-credential-exhaustion.example.com";
 const PATH: &str = "/v1/chat/completions";
-const KEY_PREFIX: &str = "edgion:aic:";
 const REDIS_NAME: &str = "default_credential-exhaustion-redis";
 const SAFE_ATTEMPT_FIELDS: [&str; 12] = [
     "number",
@@ -57,22 +57,6 @@ fn gateway_client(ctx: &TestContext) -> Result<reqwest::Client, String> {
         .map_err(|error| format!("failed to build credential-exhaustion client: {error}"))
 }
 
-fn admin_base(ctx: &TestContext) -> String {
-    std::env::var("EDGION_GATEWAY_ADMIN_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| format!("http://{}:12001", ctx.target_host))
-        .trim_end_matches('/')
-        .to_string()
-}
-
-fn authed(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-    match std::env::var("EDGION_GATEWAY_ADMIN_TOKEN") {
-        Ok(token) if !token.trim().is_empty() => request.bearer_auth(token),
-        _ => request,
-    }
-}
-
 fn even_trace_id() -> String {
     let mut bytes = *uuid::Uuid::new_v4().as_bytes();
     bytes[15] &= 0xfe;
@@ -93,42 +77,9 @@ async fn provider_observations(ctx: &TestContext, trace: &str) -> Result<Value, 
         .map_err(|error| format!("invalid provider observation response: {error}"))
 }
 
-async fn service_uid(ctx: &TestContext, name: &str) -> Result<String, String> {
-    let response = authed(
-        ctx.http_client
-            .get(format!("{}/configclient/edgionaiservice/list", admin_base(ctx))),
-    )
-    .send()
-    .await
-    .map_err(|error| format!("AI service configclient request failed: {error}"))?;
-    let status = response.status();
-    let listed: Value = response
-        .json()
-        .await
-        .map_err(|error| format!("invalid AI service configclient response: {error}"))?;
-    if !status.is_success() {
-        return Err(format!("AI service configclient returned {status}: {listed}"));
-    }
-    let service = listed["data"]
-        .as_array()
-        .and_then(|items| {
-            items.iter().find(|item| {
-                item.pointer("/metadata/namespace").and_then(Value::as_str) == Some("edgion-test")
-                    && item.pointer("/metadata/name").and_then(Value::as_str) == Some(name)
-            })
-        })
-        .ok_or_else(|| format!("AI service edgion-test/{name} is not synced: {listed}"))?;
-    Ok(service
-        .pointer("/metadata/uid")
-        .and_then(Value::as_str)
-        .filter(|uid| !uid.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("edgion.io/EdgionAIService/edgion-test/{name}")))
-}
-
 async fn prepare_buckets(ctx: &TestContext) -> Result<Vec<CredentialBucket>, String> {
-    let primary_uid = service_uid(ctx, "credential-exhaustion-primary").await?;
-    let secondary_uid = service_uid(ctx, "credential-exhaustion-secondary").await?;
+    let primary_uid = service_uid(ctx, "edgion-test", "credential-exhaustion-primary").await?;
+    let secondary_uid = service_uid(ctx, "edgion-test", "credential-exhaustion-secondary").await?;
     let window = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| format!("system clock is before the Unix epoch: {error}"))?

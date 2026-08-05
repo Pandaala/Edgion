@@ -20,17 +20,50 @@ use crate::sse::SseDecoder;
 
 pub const MAX_NON_STREAMING_USAGE_BYTES: usize = 1024 * 1024;
 
-/// Injected before terminating an over-quota stream. Reuses the exact
-/// message/type/code the 429 admission-time rejection renders
-/// (`AiProxyError::QuotaExceeded`, see `ai/error.rs`), rather than a
-/// private `quota_exceeded` vocabulary: a client that already learned to key
-/// off `error.code` from the admission path recognizes a mid-stream cutoff
-/// the same way. Kept minimal and free of internal detail: the diagnosis
-/// belongs in the access log and EdgionStatus, not in a body the client reads.
-pub(crate) static QUOTA_EXCEEDED_SSE_EVENT: LazyLock<Bytes> = LazyLock::new(|| {
-    let (_, body) = render_openai_error(AiProxyError::QuotaExceeded);
-    Bytes::from(format!("event: error\ndata: {body}\n\n"))
-});
+/// Renders one injected mid-stream error event.
+///
+/// Every injection leads with a blank line, and that prefix is load-bearing
+/// rather than cosmetic — do not delete it. These bytes are appended *after*
+/// the current chunk, whose end is wherever the upstream's chunk boundary
+/// happened to fall: nothing on the observational path rewrites or realigns
+/// it. If the upstream ended mid-event, an unprefixed injection would
+/// *continue* that partial event instead of starting a new one, so the client
+/// would parse one event whose data is truncated JSON glued to the error JSON
+/// — invalid, and dropped by every conforming client. The stream would still
+/// end cleanly with valid framing, which is exactly what makes the loss silent:
+/// the injected event is the client's *only* way to tell a deliberate quota
+/// cutoff from an upstream hang-up, and it would be gone. A hostile provider
+/// forces this by writing one byte per chunk; ordinary TCP segmentation causes
+/// it intermittently. `\n\n` closes any partial event (first newline ends the
+/// dangling line, second dispatches it) and dispatches nothing at an already
+/// clean boundary, so it is correct unconditionally and needs no decoder-state
+/// inspection.
+///
+/// The body reuses whatever the admission path already renders for the same
+/// outcome rather than inventing a mid-stream vocabulary, so a client that
+/// learned to key off `error.code` from a 429 recognizes the streaming form
+/// the same way. It is kept minimal and free of internal detail: the diagnosis
+/// belongs in the access log and `EdgionStatus`, not in a body the client
+/// reads.
+fn injected_sse_error_event(error: AiProxyError) -> Bytes {
+    let (_, body) = render_openai_error(error);
+    Bytes::from(format!("\n\nevent: error\ndata: {body}\n\n"))
+}
+
+/// Injected before terminating an over-quota stream, reusing the exact
+/// message/type/code of the 429 admission-time rejection
+/// (`AiProxyError::QuotaExceeded`, see `ai/error.rs`).
+pub(crate) static QUOTA_EXCEEDED_SSE_EVENT: LazyLock<Bytes> =
+    LazyLock::new(|| injected_sse_error_event(AiProxyError::QuotaExceeded));
+
+/// Injected before terminating a stream whose quota can no longer be
+/// evaluated, reusing `AiProxyError::QuotaUnavailable` — the same error the
+/// admission path renders when enforcement cannot be performed (no quota
+/// identity, quota backend unreachable). Deliberately does not say "SSE
+/// decoding degraded": that is an internal detail belonging to the access log
+/// and `EdgionStatus`, not to a body the client reads.
+pub(crate) static QUOTA_UNENFORCEABLE_SSE_EVENT: LazyLock<Bytes> =
+    LazyLock::new(|| injected_sse_error_event(AiProxyError::QuotaUnavailable));
 
 /// Ends a streaming AI response over quota, shared by every processor that
 /// can reach this decision (`UsageExtractionProcessor` for OpenAI-shaped
@@ -47,8 +80,9 @@ pub(crate) static QUOTA_EXCEEDED_SSE_EVENT: LazyLock<Bytes> = LazyLock::new(|| {
 /// no in-band diagnostic, which is otherwise invisible outside the body.
 ///
 /// `AiQuotaErrorEventDropped` is currently unreachable in production: this
-/// function is the only sink producer in the shipped response-processor
-/// chains, it pushes at most this one ~130-byte event, and the chain stops
+/// function and its `terminate_quota_unenforceable` sibling (mutually
+/// exclusive within one chunk) are the only sink producers in the shipped
+/// response-processor chains, each pushes at most one ~130-byte event, and the chain stops
 /// immediately after (`terminate()` aborts remaining processors for the
 /// chunk per the design doc §3.4) — so the sink's 1 MiB per-batch budget can
 /// never actually be exhausted by the time this call runs. The branch stays
@@ -56,12 +90,69 @@ pub(crate) static QUOTA_EXCEEDED_SSE_EVENT: LazyLock<Bytes> = LazyLock::new(|| {
 /// of this one and spends enough of the budget to matter; its test below
 /// exercises the branch directly by pre-filling the budget, which is not
 /// evidence of a live path today.
-pub(crate) fn terminate_over_quota(sink: &mut ResponseBodySink, session: &mut dyn PluginSession, inject: bool) {
-    if inject && sink.push(QUOTA_EXCEEDED_SSE_EVENT.clone()).is_err() {
+pub(crate) fn terminate_over_quota(
+    shared: &AiUsageShared,
+    sink: &mut ResponseBodySink,
+    session: &mut dyn PluginSession,
+    inject: bool,
+) {
+    terminate_ai_stream(
+        shared,
+        sink,
+        session,
+        inject,
+        &QUOTA_EXCEEDED_SSE_EVENT,
+        EdgionStatus::AiQuotaOverLimitTerminated,
+    );
+}
+
+/// Ends a streaming AI response whose quota can no longer be evaluated because
+/// SSE decoding degraded. Fails closed on the same reasoning as the admission
+/// path: a stream whose framing cannot be parsed is a stream whose cost cannot
+/// be bounded, and letting it run would leave the upstream generating billable
+/// tokens that no flush will ever observe.
+///
+/// Gated by the caller on exactly the conditions that gate
+/// [`terminate_over_quota`], so this adds no new failure shape and no new
+/// body-length surface — see `UsageExtractionProcessor::changes_body_length`.
+pub(crate) fn terminate_quota_unenforceable(
+    shared: &AiUsageShared,
+    sink: &mut ResponseBodySink,
+    session: &mut dyn PluginSession,
+    inject: bool,
+) {
+    terminate_ai_stream(
+        shared,
+        sink,
+        session,
+        inject,
+        &QUOTA_UNENFORCEABLE_SSE_EVENT,
+        EdgionStatus::AiSseDegradedQuotaTerminated,
+    );
+}
+
+/// Terminating stops the response immediately, so no further task — including
+/// the `end_of_stream = true` one — ever reaches the response-body hook. That
+/// is load-bearing (design doc §3.4: settlement must not depend on the eos
+/// callback), which is why the deliberate ending is latched here, at the only
+/// place that decides it, rather than being inferred later from a missing eos.
+/// Without it, `AiAttemptRuntimeState::finalize` cannot tell a gateway-initiated
+/// cut from an upstream truncation and has to retain the credential's whole
+/// input + max-output reservation for the rest of the rate-limit window.
+fn terminate_ai_stream(
+    shared: &AiUsageShared,
+    sink: &mut ResponseBodySink,
+    session: &mut dyn PluginSession,
+    inject: bool,
+    event: &LazyLock<Bytes>,
+    terminal_status: EdgionStatus,
+) {
+    if inject && sink.push((*event).clone()).is_err() {
         session.add_error(EdgionStatus::AiQuotaErrorEventDropped);
     }
     sink.terminate();
-    session.add_error(EdgionStatus::AiQuotaOverLimitTerminated);
+    shared.mark_gateway_terminated();
+    session.add_error(terminal_status);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,6 +296,7 @@ pub struct AiUsageShared {
     reported_usage: AtomicBool,
     sse_degraded: AtomicBool,
     non_streaming_overflowed: AtomicBool,
+    gateway_terminated: AtomicBool,
 }
 
 impl AiUsageShared {
@@ -244,6 +336,17 @@ impl AiUsageShared {
 
     pub fn non_streaming_overflowed(&self) -> bool {
         self.non_streaming_overflowed.load(Ordering::Acquire)
+    }
+
+    /// True once the gateway itself ended the stream (over quota, or quota no
+    /// longer enforceable). Read by attempt settlement, which must not mistake
+    /// the absent eos callback for an upstream truncation.
+    pub fn gateway_terminated(&self) -> bool {
+        self.gateway_terminated.load(Ordering::Acquire)
+    }
+
+    fn mark_gateway_terminated(&self) {
+        self.gateway_terminated.store(true, Ordering::Release);
     }
 
     fn add_output_chars(&self, delta: u64) {
@@ -557,6 +660,10 @@ pub struct UsageExtractionProcessor {
     non_streaming_chars: Utf8CharCounter,
     sse_chars: SseDataCharCounter,
     chars_finished: bool,
+    /// Latches the one-shot `AiSseDecodeDegraded` record. The decoder's
+    /// degraded flag is sticky, so without this every subsequent chunk of the
+    /// stream would append the same status again.
+    sse_degraded_reported: bool,
 }
 
 impl UsageExtractionProcessor {
@@ -582,6 +689,7 @@ impl UsageExtractionProcessor {
             non_streaming_chars: Utf8CharCounter::default(),
             sse_chars: SseDataCharCounter::default(),
             chars_finished: false,
+            sse_degraded_reported: false,
         }
     }
 
@@ -715,6 +823,15 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
         if let Some(bytes) = chunk.as_deref() {
             self.observe_chunk(bytes, stream_kind);
         }
+        // Recorded for every degraded stream, quota'd or not: even where no
+        // enforcement is at stake, degradation silently downgrades reported
+        // usage to the character estimate, and an operator cannot tell that
+        // from the numbers alone. Latched so a sticky flag cannot append this
+        // once per remaining chunk.
+        if !self.sse_degraded_reported && self.sse.degraded() {
+            self.sse_degraded_reported = true;
+            session.add_error(EdgionStatus::AiSseDecodeDegraded);
+        }
         if end_of_stream {
             self.finish(stream_kind);
             return;
@@ -741,13 +858,30 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
         // admission -- so under those actions the stream runs to completion
         // exactly as it did before this gate existed, even once quota goes
         // over limit.
-        if self.requested_streaming
-            && self.terminate_on_over_limit
-            && self.quota.as_ref().is_some_and(|quota| quota.over_limit())
-        {
+        //
+        // The degradation arm below shares this gate exactly, so
+        // `changes_body_length` continues to describe both terminations.
+        if !(self.requested_streaming && self.terminate_on_over_limit && self.quota.is_some()) {
+            return;
+        }
+        if self.quota.as_ref().is_some_and(|quota| quota.over_limit()) {
             // Settlement already happened via observe_chunk; the logging
             // phase records the outcome.
-            terminate_over_quota(sink, session, stream_kind == ResponseStreamKind::Sse);
+            terminate_over_quota(&self.shared, sink, session, stream_kind == ResponseStreamKind::Sse);
+        } else if self.sse.degraded() {
+            // `quota.add_output_units` is only ever called from inside
+            // `feed_each`'s visitor, and a degraded decoder returns from
+            // `feed_each` immediately for the rest of the stream. So from here
+            // on nothing grows the accumulator, no flush is triggered, and
+            // `over_limit()` can never flip — the branch above is dead for this
+            // request. Without this arm the upstream would keep generating
+            // billable tokens with enforcement silently switched off.
+            //
+            // Checked after the over-limit arm on purpose: if the limit was
+            // already reached, that is the accurate reason to report, and the
+            // two terminations must stay mutually exclusive because either one
+            // ends the stream.
+            terminate_quota_unenforceable(&self.shared, sink, session, stream_kind == ResponseStreamKind::Sse);
         }
     }
 }
@@ -791,6 +925,9 @@ mod tests {
 
     async fn feed(processor: &mut UsageExtractionProcessor, chunks: &[(&[u8], bool)], kind: ResponseStreamKind) {
         let mut session = MockPluginSession::new();
+        // Tests that assert on recorded statuses build their own session; this
+        // shared driver only has to tolerate them.
+        session.expect_add_error().return_const(());
         let mut sink = ResponseBodySink::new();
         for (chunk, eos) in chunks {
             let original = Bytes::copy_from_slice(chunk);
@@ -1021,7 +1158,7 @@ mod tests {
         quota.finish(QuotaFinalStatus::OverLimit);
         // terminate_on_over_limit = true: the route's `onExceeded` resolved
         // to `Reject`.
-        let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
+        let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, true);
 
         let mut session = MockPluginSession::new();
         session
@@ -1036,6 +1173,11 @@ mod tests {
             .await;
 
         assert!(sink.is_terminated(), "over-limit must end the stream");
+        assert!(
+            shared.gateway_terminated(),
+            "settlement can only tell this apart from an upstream truncation through this latch, \
+             because a terminate guarantees no eos callback ever follows"
+        );
         let extra = sink.peek_extra();
         assert_eq!(extra.len(), 1);
         assert_eq!(
@@ -1095,7 +1237,7 @@ mod tests {
         let shared = Arc::new(AiUsageShared::default());
         let quota = Arc::new(QuotaAccumulator::new(16));
         quota.finish(QuotaFinalStatus::OverLimit);
-        let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, false);
+        let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, false);
 
         let mut session = MockPluginSession::new();
         let mut sink = ResponseBodySink::new();
@@ -1108,12 +1250,189 @@ mod tests {
             !sink.is_terminated(),
             "Throttle/Downgrade must let an over-limit stream run to completion"
         );
+        assert!(
+            !shared.gateway_terminated(),
+            "the latch must follow the terminate, not the over-limit condition: this stream ends \
+             at its own eos and settles like any other"
+        );
         assert!(sink.peek_extra().is_empty(), "no error event without a terminate");
         assert_eq!(
             body,
             Some(Bytes::from_static(b"data: {\"x\":1}\n\n")),
             "the chunk must pass through untouched"
         );
+    }
+
+    /// Builds one unterminated SSE event past the decoder's cap, which is what
+    /// permanently degrades it.
+    fn oversized_sse_event() -> Bytes {
+        Bytes::from(vec![b'x'; crate::sse::DEFAULT_MAX_PENDING_EVENT_BYTES + 1])
+    }
+
+    #[tokio::test]
+    async fn oversized_sse_event_must_not_disable_mid_stream_quota_enforcement() {
+        // The regression this locks down: `quota.add_output_units` is only
+        // reachable from inside `feed_each`'s visitor, and a degraded decoder
+        // returns from `feed_each` immediately for the rest of the stream. So
+        // once degraded, nothing grows the accumulator, no flush runs, and
+        // `over_limit()` can never flip -- enforcement was silently off for the
+        // remainder of the request while the upstream kept billing.
+        let shared = Arc::new(AiUsageShared::default());
+        // Deliberately NOT over limit: the point is that enforcement is
+        // unreachable from here on, not that the limit was already hit.
+        let quota = Arc::new(QuotaAccumulator::new(16));
+        let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, true);
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiSseDecodeDegraded)
+            .times(1)
+            .return_const(());
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiSseDegradedQuotaTerminated)
+            .times(1)
+            .return_const(());
+        let mut sink = ResponseBodySink::new();
+        let mut body = Some(oversized_sse_event());
+        processor
+            .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+
+        assert!(shared.sse_degraded());
+        assert!(
+            sink.is_terminated(),
+            "a stream whose framing can no longer be parsed is a stream whose cost can no longer \
+             be bounded, so quota enforcement must fail closed"
+        );
+        assert!(
+            shared.gateway_terminated(),
+            "this cut is as deliberate as the over-limit one, so it must settle its reservation \
+             the same way instead of holding it for the rest of the window"
+        );
+        let extra = sink.peek_extra();
+        assert_eq!(extra.len(), 1);
+        assert_eq!(
+            extra[0], *QUOTA_UNENFORCEABLE_SSE_EVENT,
+            "the client must see the same error the admission path renders when quota cannot be \
+             enforced, not a private degradation vocabulary"
+        );
+    }
+
+    #[test]
+    fn every_injected_event_stays_parseable_after_an_unterminated_event() {
+        // Pins the BEHAVIOR the leading blank line exists for, not its bytes:
+        // asserting the sink carries the constant compares it to itself and
+        // would keep passing if the prefix were deleted. The injection lands
+        // at whatever byte offset the upstream's chunk boundary fell on, so a
+        // conforming client can always be partway through a `data:` line when
+        // it arrives -- certainly so on the degraded path, and reachable on
+        // the over-limit path through ordinary TCP segmentation or a provider
+        // writing one byte per chunk. Decoding that client's-eye view with the
+        // same WHATWG decoder is what proves the boundary actually works.
+        for (event, expected_code) in [
+            (&QUOTA_EXCEEDED_SSE_EVENT, "token_quota_exceeded"),
+            (&QUOTA_UNENFORCEABLE_SSE_EVENT, "token_quota_unavailable"),
+        ] {
+            let mut decoder = crate::sse::SseDecoder::with_default_limit();
+            let mut events = Vec::new();
+            decoder.feed(b"data: {\"choices\":[{\"delta\":{\"content\":\"partial", &mut events);
+            decoder.feed(event.as_ref(), &mut events);
+
+            assert_eq!(
+                events.len(),
+                2,
+                "the injected error must arrive as its own event, not concatenated onto the truncated one"
+            );
+            assert_eq!(events[1].event.as_deref(), Some("error"));
+            let value: serde_json::Value =
+                serde_json::from_str(&events[1].data).expect("the injected error must parse as JSON client-side");
+            assert_eq!(value["error"]["code"], expected_code);
+        }
+    }
+
+    #[test]
+    fn an_injected_event_dispatches_nothing_extra_at_a_clean_boundary() {
+        // The other half of the unconditional-prefix argument: a blank line
+        // with nothing buffered is a no-op dispatch, so paying two bytes to
+        // cover the mid-event case never costs a spurious event at a boundary
+        // that was already clean (the Anthropic translator's output always is,
+        // since it re-emits only complete events).
+        let mut decoder = crate::sse::SseDecoder::with_default_limit();
+        let mut events = Vec::new();
+        decoder.feed(b"data: {\"choices\":[]}\n\n", &mut events);
+        decoder.feed(QUOTA_EXCEEDED_SSE_EVENT.as_ref(), &mut events);
+
+        assert_eq!(
+            events.len(),
+            2,
+            "the leading blank line must not dispatch an empty event"
+        );
+        assert_eq!(events[1].event.as_deref(), Some("error"));
+    }
+
+    #[tokio::test]
+    async fn sse_degradation_without_quota_enforcement_only_records_the_signal() {
+        // Degradation predates mid-stream enforcement and was harmless on its
+        // own: usage falls back to the character estimate. That must stay
+        // true, so an unquota'd stream is never cut for a framing reason.
+        let shared = Arc::new(AiUsageShared::default());
+        let mut processor = UsageExtractionProcessor::new(shared.clone());
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiSseDecodeDegraded)
+            .times(1)
+            .return_const(());
+        let mut sink = ResponseBodySink::new();
+        let mut body = Some(oversized_sse_event());
+        processor
+            .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+        // A second chunk proves the sticky decoder flag does not re-append the
+        // status once per remaining chunk; `times(1)` above is the assertion.
+        let mut more = Some(Bytes::from_static(b"data: {\"x\":1}\n\n"));
+        processor
+            .on_chunk(&mut more, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+
+        assert!(shared.sse_degraded());
+        assert!(!sink.is_terminated(), "no quota enforcement, so nothing to fail closed");
+        assert!(sink.peek_extra().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_already_over_limit_stream_reports_over_limit_not_degradation() {
+        // Both conditions true at once: the accurate reason is that the limit
+        // was actually reached, and the two terminations must stay mutually
+        // exclusive because either one alone ends the stream.
+        let shared = Arc::new(AiUsageShared::default());
+        let quota = Arc::new(QuotaAccumulator::new(16));
+        quota.finish(QuotaFinalStatus::OverLimit);
+        let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiSseDecodeDegraded)
+            .times(1)
+            .return_const(());
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiQuotaOverLimitTerminated)
+            .times(1)
+            .return_const(());
+        let mut sink = ResponseBodySink::new();
+        let mut body = Some(oversized_sse_event());
+        processor
+            .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+
+        let extra = sink.peek_extra();
+        assert_eq!(extra.len(), 1, "exactly one termination, never both");
+        assert_eq!(extra[0], *QUOTA_EXCEEDED_SSE_EVENT);
     }
 
     #[tokio::test]

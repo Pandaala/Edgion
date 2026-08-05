@@ -1274,6 +1274,15 @@ struct AiStreamPlan {
     abort_after_chunks: bool,
 }
 
+/// Payload size for the `oversized` fixture modes, chosen so the surrounding
+/// event exceeds the gateway decoder's incomplete-event cap by a clear margin.
+/// Bound to the gateway constant on purpose: these fixtures exist to cross that
+/// limit, and a hardcoded literal would quietly stop doing so the next time the
+/// cap is raised.
+fn oversized_event_payload_bytes() -> usize {
+    edgion_gateway::sse::DEFAULT_MAX_PENDING_EVENT_BYTES + 4096
+}
+
 fn ai_stream_plan(mode: &str, observation: &str) -> AiStreamPlan {
     let first = format!(
         "data: {{\"id\":\"stream-fixture\",\"choices\":[{{\"delta\":{{\"content\":\"fixed \"}}}}],\"mock\":{observation}}}\n\n"
@@ -1297,13 +1306,15 @@ fn ai_stream_plan(mode: &str, observation: &str) -> AiStreamPlan {
             interval: Duration::ZERO,
             abort_after_chunks: false,
         },
-        // One event remains incomplete until the delimiter after 70 KiB,
-        // deliberately crossing the decoder's bounded inspection limit.
+        // One event remains incomplete until the delimiter well past the
+        // decoder's bounded inspection limit, deliberately crossing it. Sized
+        // from the constant rather than a literal so raising the cap cannot
+        // silently turn this fixture into an ordinary large event.
         "oversized" => AiStreamPlan {
             chunks: vec![
                 Bytes::from(format!(
                     "data: {{\"id\":\"oversized-fixture\",\"choices\":[{{\"delta\":{{\"content\":\"{}\"}}}}]}}\n\n",
-                    "x".repeat(70 * 1024)
+                    "x".repeat(oversized_event_payload_bytes())
                 )),
                 Bytes::from_static(usage.as_bytes()),
                 Bytes::from_static(done.as_bytes()),
@@ -1354,6 +1365,34 @@ fn ai_stream_plan(mode: &str, observation: &str) -> AiStreamPlan {
                     Bytes::from_static(b"data: [DONE]\n\n"),
                 ],
                 interval: Duration::from_millis(150),
+                abort_after_chunks: false,
+            }
+        }
+        // The same `quota_terminate` wire bytes, delivered one byte per write.
+        // A provider is free to segment wherever it likes, so the gateway's
+        // injected error event lands at an arbitrary offset -- one byte per
+        // write is simply the worst case stated explicitly, and it guarantees
+        // the mid-stream cut falls inside an SSE event rather than on a
+        // boundary. It also maximizes filter invocations and per-batch
+        // boundaries, which stresses the response-body sink's per-batch
+        // lifecycle far harder than any whole-event fixture.
+        //
+        // 2ms per byte keeps one ~90-byte event around 180ms, still an order
+        // of magnitude above the fixture plugin's 10ms quota flush interval,
+        // so the over-limit flip is observed with the same wide margin the
+        // paced fixture relies on. Unlike `quota_terminate` this mode declares
+        // no `content-length` (see `full_length` below): stale-length
+        // stripping is already covered there, and leaving it out keeps this
+        // fixture focused on the byte-boundary property.
+        "quota_terminate_byte_at_a_time" => {
+            let paced = ai_stream_plan("quota_terminate", observation);
+            AiStreamPlan {
+                chunks: paced
+                    .chunks
+                    .into_iter()
+                    .flat_map(|chunk| (0..chunk.len()).map(move |index| chunk.slice(index..index + 1)))
+                    .collect(),
+                interval: Duration::from_millis(2),
                 abort_after_chunks: false,
             }
         }
@@ -1788,7 +1827,7 @@ fn anthropic_stream_plan(mode: &str, observation: &AnthropicProviderObservation)
         return AiStreamPlan {
             chunks: vec![Bytes::from(format!(
                 "event: future_event\ndata: {{\"type\":\"future_event\",\"payload\":\"{}\"}}\n\n",
-                "x".repeat(70 * 1024)
+                "x".repeat(oversized_event_payload_bytes())
             ))],
             interval: Duration::ZERO,
             abort_after_chunks: false,
@@ -3744,7 +3783,7 @@ mod tests {
         assert!(missing.ends_with(b"data: [DONE]\n\n"));
 
         let oversized = ai_stream_plan("oversized", observation);
-        assert!(oversized.chunks[0].len() > 64 * 1024);
+        assert!(oversized.chunks[0].len() > edgion_gateway::sse::DEFAULT_MAX_PENDING_EVENT_BYTES);
         assert!(oversized.chunks[0].ends_with(b"\n\n"));
         assert_eq!(oversized.chunks.len(), 3);
 
@@ -3771,5 +3810,19 @@ mod tests {
         let tail = quota_terminate.chunks[5].clone();
         assert!(tail.windows(19).any(|window| window == b"unreachable_marker\""));
         assert_eq!(quota_terminate.chunks[6], Bytes::from_static(b"data: [DONE]\n\n"));
+
+        // Same bytes, one per write: the byte-at-a-time mode must stay a pure
+        // re-segmentation of the paced plan, or the client-side assertions
+        // that mirror the `quota_terminate` fixture would silently stop
+        // applying to it.
+        let byte_at_a_time = ai_stream_plan("quota_terminate_byte_at_a_time", observation);
+        assert!(byte_at_a_time.chunks.iter().all(|chunk| chunk.len() == 1));
+        assert_eq!(
+            byte_at_a_time.chunks.concat(),
+            quota_terminate.chunks.concat(),
+            "byte-at-a-time delivery must not change a single byte of the fixture body"
+        );
+        assert!(byte_at_a_time.interval <= Duration::from_millis(5));
+        assert!(!byte_at_a_time.abort_after_chunks);
     }
 }

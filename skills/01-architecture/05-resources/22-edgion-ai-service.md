@@ -104,8 +104,10 @@ response back incrementally. The main upstream response always remains on Pingor
 
 Credential RPM/TPM limits use the shared Redis limiter core. A TPM-limited credential requires a
 resolvable maximum-output bound. Reservations happen immediately before dispatch; known terminal
-usage reconciles the reservation, pre-dispatch cancellation releases it, and ambiguous dispatched
-outcomes conservatively retain it until the fixed window expires.
+usage reconciles the reservation, pre-dispatch cancellation releases it, a gateway-initiated
+mid-stream termination also reconciles (the gateway knows it ended the exchange, so the outcome is
+not ambiguous — see `skills/04-review/ai-quota/gateway-terminated-stream-settles-its-reservation.md`),
+and ambiguous dispatched outcomes conservatively retain it until the fixed window expires.
 
 ## Key sources
 

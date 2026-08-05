@@ -692,7 +692,7 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
             // Streaming mode always emits the OpenAI-shaped SSE wire format
             // to the client (that is the point of this translator), so the
             // injected event is always safe here.
-            terminate_over_quota(sink, session, true);
+            terminate_over_quota(&self.usage_shared, sink, session, true);
         }
     }
 }

@@ -37,6 +37,23 @@ pub enum EdgionStatus {
     /// event), which is recorded here so the gap is visible outside the body.
     AiQuotaErrorEventDropped = 999_13,
 
+    /// SSE decoding of an AI response gave up because one unterminated event
+    /// exceeded the decoder's byte cap. Parsing stops for the rest of that
+    /// stream, so reported token usage falls back to the character estimate.
+    /// On its own this costs accounting precision, not correctness — but it
+    /// is the precondition for `AiSseDegradedQuotaTerminated`, so it is worth
+    /// alerting on even when no stream was cut.
+    AiSseDecodeDegraded = 999_14,
+
+    /// The gateway cut an AI streaming response short because SSE decoding
+    /// had degraded while token-quota enforcement was active. A stream whose
+    /// framing can no longer be parsed is a stream whose cost can no longer be
+    /// bounded, so enforcement fails closed rather than letting the upstream
+    /// keep generating billable tokens unmetered. Distinct from
+    /// `AiQuotaOverLimitTerminated`: that one means the limit was actually
+    /// reached, this one means the limit could no longer be evaluated.
+    AiSseDegradedQuotaTerminated = 999_15,
+
     /// ACME HTTP-01 challenge served locally by the gateway (HTTP 200)
     AcmeChallengeServed = 200_01,
 
@@ -346,6 +363,8 @@ mod tests {
             EdgionStatus::AiQuotaReconciliationFailed => None,
             EdgionStatus::AiQuotaOverLimitTerminated => None,
             EdgionStatus::AiQuotaErrorEventDropped => None,
+            EdgionStatus::AiSseDecodeDegraded => None,
+            EdgionStatus::AiSseDegradedQuotaTerminated => None,
             EdgionStatus::AcmeChallengeServed => Some(200),
             EdgionStatus::HostMissing => Some(400),
             EdgionStatus::XffHeaderTooLong => Some(400),
@@ -430,6 +449,8 @@ mod tests {
             EdgionStatus::AiQuotaReconciliationFailed,
             EdgionStatus::AiQuotaOverLimitTerminated,
             EdgionStatus::AiQuotaErrorEventDropped,
+            EdgionStatus::AiSseDecodeDegraded,
+            EdgionStatus::AiSseDegradedQuotaTerminated,
             EdgionStatus::AcmeChallengeServed,
             EdgionStatus::HostMissing,
             EdgionStatus::XffHeaderTooLong,
