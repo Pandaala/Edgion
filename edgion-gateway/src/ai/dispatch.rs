@@ -4,9 +4,11 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::resources::edgion_ai_service::AiProvider;
 use edgion_resources::resources::http_route::HTTPRouteFilterType;
+use pingora_proxy::ResponseBodySink;
 use serde_json::Value;
 
 use crate::ai::anthropic::{
@@ -435,6 +437,7 @@ fn prepare_ready_attempt(
             created,
             Arc::clone(&usage),
             quota_accumulator.clone(),
+            plan.terminate_on_over_limit,
         )));
     }
     let usage_quota = (service.provider != AiProvider::Anthropic)
@@ -443,6 +446,8 @@ fn prepare_ready_attempt(
     response_processors.push(Box::new(UsageExtractionProcessor::new_with_quota(
         Arc::clone(&usage),
         usage_quota,
+        requested_streaming,
+        plan.terminate_on_over_limit,
     )));
     let response_processor: Box<dyn StreamingResponseProcessor> = Box::new(AiAttemptResponseProcessor {
         processors: response_processors,
@@ -737,6 +742,7 @@ struct AiAttemptResponseProcessor {
     eos: Arc<AtomicBool>,
 }
 
+#[async_trait]
 impl StreamingResponseProcessor for AiAttemptResponseProcessor {
     fn name(&self) -> &str {
         "AiAttemptResponse"
@@ -752,15 +758,21 @@ impl StreamingResponseProcessor for AiAttemptResponseProcessor {
         self.processors.iter().any(|processor| processor.changes_body_length())
     }
 
-    fn on_chunk(
+    async fn on_chunk(
         &mut self,
         chunk: &mut Option<Bytes>,
         end_of_stream: bool,
         stream_kind: crate::ctx::ResponseStreamKind,
+        sink: &mut ResponseBodySink,
         session: &mut dyn PluginSession,
     ) {
         for processor in &mut self.processors {
-            processor.on_chunk(chunk, end_of_stream, stream_kind, session);
+            processor
+                .on_chunk(chunk, end_of_stream, stream_kind, sink, session)
+                .await;
+            if sink.is_terminated() {
+                break;
+            }
         }
         if end_of_stream {
             crate::ai::attempt_runtime::mark_eos(&self.eos);
@@ -843,6 +855,7 @@ mod tests {
             service_snapshot: AiServiceStore::new().snapshot(),
             quota: None,
             quota_status: None,
+            terminate_on_over_limit: false,
         }
     }
 
@@ -1118,5 +1131,75 @@ mod tests {
         };
         assert!(matches!(allowed.scheduler.next_step(), NextStep::PickCredential(_)));
         assert_eq!(allowed.scheduler.failures()[0].kind, DispatchFailureKind::Ambiguous);
+    }
+
+    #[tokio::test]
+    async fn composite_ai_processor_stops_its_inner_chain_on_terminate() {
+        // AiAttemptResponseProcessor wraps its own Vec of sub-processors and
+        // is itself a chain: an inner terminate must stop it exactly like the
+        // outer driver stops the top-level chain, or a sub-processor after
+        // the terminating one would silently keep running.
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use parking_lot::Mutex;
+
+        struct Terminator;
+        #[async_trait]
+        impl StreamingResponseProcessor for Terminator {
+            fn name(&self) -> &str {
+                "terminator"
+            }
+            async fn on_chunk(
+                &mut self,
+                _chunk: &mut Option<Bytes>,
+                _end_of_stream: bool,
+                _stream_kind: crate::ctx::ResponseStreamKind,
+                sink: &mut ResponseBodySink,
+                _session: &mut dyn PluginSession,
+            ) {
+                sink.terminate();
+            }
+        }
+
+        struct MarkRan {
+            ran: Arc<Mutex<bool>>,
+        }
+        #[async_trait]
+        impl StreamingResponseProcessor for MarkRan {
+            fn name(&self) -> &str {
+                "mark-ran"
+            }
+            async fn on_chunk(
+                &mut self,
+                _chunk: &mut Option<Bytes>,
+                _end_of_stream: bool,
+                _stream_kind: crate::ctx::ResponseStreamKind,
+                _sink: &mut ResponseBodySink,
+                _session: &mut dyn PluginSession,
+            ) {
+                *self.ran.lock() = true;
+            }
+        }
+
+        let ran = Arc::new(Mutex::new(false));
+        let mut composite = AiAttemptResponseProcessor {
+            processors: vec![Box::new(Terminator), Box::new(MarkRan { ran: ran.clone() })],
+            eos: Arc::new(AtomicBool::new(false)),
+        };
+        let mut chunk = Some(Bytes::from_static(b"x"));
+        let mut sink = ResponseBodySink::new();
+        let mut session = MockPluginSession::new();
+
+        composite
+            .on_chunk(
+                &mut chunk,
+                false,
+                crate::ctx::ResponseStreamKind::None,
+                &mut sink,
+                &mut session,
+            )
+            .await;
+
+        assert!(sink.is_terminated());
+        assert!(!*ran.lock(), "the sub-processor after an inner terminate must not run");
     }
 }

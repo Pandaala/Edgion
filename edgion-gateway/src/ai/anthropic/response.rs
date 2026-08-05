@@ -3,14 +3,16 @@
 use std::io::{self, Write};
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::EdgionStatus;
 use http::StatusCode;
 use pingora_http::ResponseHeader;
+use pingora_proxy::ResponseBodySink;
 use serde_json::{json, Map, Value};
 
 use crate::ai::quota::QuotaAccumulator;
-use crate::ai::usage::AiUsageShared;
+use crate::ai::usage::{terminate_over_quota, AiUsageShared};
 use crate::ctx::ResponseStreamKind;
 use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
 use crate::plugins::runtime::PluginSession;
@@ -128,6 +130,12 @@ pub(crate) struct AnthropicResponseProcessor {
     created: u64,
     usage_shared: Arc<AiUsageShared>,
     quota: Option<Arc<QuotaAccumulator>>,
+    /// Resolved from the route's `AiTokenQuotaConfig.onExceeded`: `true`
+    /// only for `Reject`. See `UsageExtractionProcessor::terminate_on_over_limit`
+    /// for the full rationale; this processor gates its own mid-stream
+    /// termination on the same flag so Anthropic-backed traffic honors the
+    /// same operator-declared policy as OpenAI-shaped traffic.
+    terminate_on_over_limit: bool,
     mode: BodyMode,
     non_streaming_input: Vec<u8>,
     decoder: SseDecoder,
@@ -162,6 +170,7 @@ impl AnthropicResponseProcessor {
             created,
             usage_shared,
             None,
+            false,
         )
     }
 
@@ -172,6 +181,7 @@ impl AnthropicResponseProcessor {
         created: u64,
         usage_shared: Arc<AiUsageShared>,
         quota: Option<Arc<QuotaAccumulator>>,
+        terminate_on_over_limit: bool,
     ) -> Self {
         Self {
             canonical_model,
@@ -180,6 +190,7 @@ impl AnthropicResponseProcessor {
             created,
             usage_shared,
             quota,
+            terminate_on_over_limit,
             mode: BodyMode::AwaitingHeader,
             non_streaming_input: Vec::new(),
             decoder: SseDecoder::with_default_limit(),
@@ -626,6 +637,7 @@ impl AnthropicResponseProcessor {
     }
 }
 
+#[async_trait]
 impl StreamingResponseProcessor for AnthropicResponseProcessor {
     fn name(&self) -> &str {
         "anthropic_response_translation"
@@ -639,11 +651,12 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
         true
     }
 
-    fn on_chunk(
+    async fn on_chunk(
         &mut self,
         chunk: &mut Option<Bytes>,
         end_of_stream: bool,
         _stream_kind: ResponseStreamKind,
+        sink: &mut ResponseBodySink,
         session: &mut dyn PluginSession,
     ) {
         if self.sealed {
@@ -655,6 +668,31 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
             BodyMode::Fixed(error) => self.process_fixed(chunk, session, error),
             BodyMode::NonStreaming => self.process_non_streaming(chunk, end_of_stream, session),
             BodyMode::Streaming => self.process_streaming(chunk, end_of_stream, session),
+        }
+        // `BodyMode::Streaming` is reachable only when `requested_streaming`
+        // was true and the upstream header validated as a real event-stream
+        // (see `normalize_header`), so it already gates out non-streaming
+        // completions the same way `UsageExtractionProcessor` gates on
+        // `requested_streaming`. `!self.sealed` skips a chunk that just
+        // failed translation (it already carries `STREAM_ERROR`); `quota`
+        // accounting for Anthropic traffic lives entirely in this processor
+        // (see `handle_block_delta`/`handle_message_delta`), so this is the
+        // only place that can observe `over_limit()` for it. Also gated on
+        // `terminate_on_over_limit`: `Throttle`/`Downgrade` are the operator
+        // declaring "do not hard-fail this user", already honored at
+        // admission, so under those actions the stream runs to completion
+        // even once over limit -- see `UsageExtractionProcessor`'s identical
+        // gate for the full rationale.
+        if !end_of_stream
+            && !self.sealed
+            && matches!(self.mode, BodyMode::Streaming)
+            && self.terminate_on_over_limit
+            && self.quota.as_ref().is_some_and(|quota| quota.over_limit())
+        {
+            // Streaming mode always emits the OpenAI-shaped SSE wire format
+            // to the client (that is the point of this translator), so the
+            // injected event is always safe here.
+            terminate_over_quota(sink, session, true);
         }
     }
 }
@@ -955,6 +993,8 @@ fn append_capped(output: &mut Vec<u8>, bytes: &[u8], limit: usize) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::quota::QuotaFinalStatus;
+    use crate::ai::usage::QUOTA_EXCEEDED_SSE_EVENT;
     use crate::plugins::runtime::traits::session::MockPluginSession;
 
     fn processor(streaming: bool, usage_chunk: bool) -> (AnthropicResponseProcessor, Arc<AiUsageShared>) {
@@ -979,14 +1019,17 @@ mod tests {
         response
     }
 
-    fn run_chunk(
+    async fn run_chunk(
         processor: &mut AnthropicResponseProcessor,
         session: &mut MockPluginSession,
         bytes: Option<&[u8]>,
         eos: bool,
     ) -> Option<Bytes> {
         let mut chunk = bytes.map(Bytes::copy_from_slice);
-        processor.on_chunk(&mut chunk, eos, ResponseStreamKind::None, session);
+        let mut sink = ResponseBodySink::new();
+        processor
+            .on_chunk(&mut chunk, eos, ResponseStreamKind::None, &mut sink, session)
+            .await;
         chunk
     }
 
@@ -1028,8 +1071,8 @@ mod tests {
         .concat()
     }
 
-    #[test]
-    fn header_matrix_normalizes_and_strips_provider_metadata() {
+    #[tokio::test]
+    async fn header_matrix_normalizes_and_strips_provider_metadata() {
         let cases = [
             (400, 400, "invalid_request_error", "provider_invalid_request"),
             (413, 413, "invalid_request_error", "request_too_large"),
@@ -1066,8 +1109,9 @@ mod tests {
             assert_eq!(response.headers.get("retry-after").is_some(), expected == 429);
 
             let mut session = MockPluginSession::new();
-            let body =
-                run_chunk(&mut processor, &mut session, Some(b"provider secret body"), false).expect("fixed body");
+            let body = run_chunk(&mut processor, &mut session, Some(b"provider secret body"), false)
+                .await
+                .expect("fixed body");
             let body: Value = serde_json::from_slice(&body).expect("fixed JSON body");
             assert_eq!(body["error"]["type"], type_);
             assert_eq!(body["error"]["code"], code);
@@ -1075,8 +1119,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn success_header_requires_media_identity_and_bounded_length() {
+    #[tokio::test]
+    async fn success_header_requires_media_identity_and_bounded_length() {
         let (mut streaming, _) = processor(true, false);
         let mut good = header(200, "Text/Event-Stream; charset=utf-8");
         good.insert_header("content-encoding", "identity")
@@ -1116,14 +1160,14 @@ mod tests {
                 .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
                 .times(1)
                 .return_const(());
-            let body = run_chunk(&mut p, &mut session, None, true).expect("fixed body");
+            let body = run_chunk(&mut p, &mut session, None, true).await.expect("fixed body");
             let body: Value = serde_json::from_slice(&body).expect("fixed JSON body");
             assert_eq!(body["error"]["code"], expected_code);
         }
     }
 
-    #[test]
-    fn non_streaming_text_tools_stop_and_cache_usage_are_canonical() {
+    #[tokio::test]
+    async fn non_streaming_text_tools_stop_and_cache_usage_are_canonical() {
         let (mut processor, usage) = processor(false, false);
         let mut response = header(200, "application/json; charset=utf-8");
         processor.on_response_header(&mut response);
@@ -1140,9 +1184,12 @@ mod tests {
         .expect("fixture serializes");
         let split = provider.len() / 2;
         let mut session = MockPluginSession::new();
-        assert!(run_chunk(&mut processor, &mut session, Some(&provider[..split]), false).is_none());
-        let translated =
-            run_chunk(&mut processor, &mut session, Some(&provider[split..]), true).expect("translated response");
+        assert!(run_chunk(&mut processor, &mut session, Some(&provider[..split]), false)
+            .await
+            .is_none());
+        let translated = run_chunk(&mut processor, &mut session, Some(&provider[split..]), true)
+            .await
+            .expect("translated response");
         let translated: Value = serde_json::from_slice(&translated).expect("OpenAI response JSON");
         assert_eq!(translated["model"], "claude-canonical");
         assert_eq!(translated["choices"][0]["message"]["content"], "Hello world");
@@ -1160,8 +1207,8 @@ mod tests {
         assert_eq!(detailed.cache_write_input_tokens, 5);
     }
 
-    #[test]
-    fn malformed_non_streaming_response_is_fixed_redacted_and_sealed() {
+    #[tokio::test]
+    async fn malformed_non_streaming_response_is_fixed_redacted_and_sealed() {
         let (mut processor, _) = processor(false, false);
         processor.on_response_header(&mut header(200, "application/json"));
         let mut session = MockPluginSession::new();
@@ -1176,22 +1223,25 @@ mod tests {
             Some(b"{\"provider_secret\":\"must-not-leak\"}"),
             true,
         )
+        .await
         .expect("fixed failure");
         let rendered = String::from_utf8(body.to_vec()).expect("fixed UTF-8");
         assert!(rendered.contains("response_translation_failed"));
         assert!(!rendered.contains("must-not-leak"));
-        assert!(run_chunk(&mut processor, &mut session, Some(b"later raw bytes"), true).is_none());
+        assert!(run_chunk(&mut processor, &mut session, Some(b"later raw bytes"), true)
+            .await
+            .is_none());
     }
 
-    #[test]
-    fn streaming_translation_handles_every_byte_split_and_exact_usage() {
+    #[tokio::test]
+    async fn streaming_translation_handles_every_byte_split_and_exact_usage() {
         let fixture = streaming_fixture();
         for split in 0..=fixture.len() {
             let (mut processor, usage) = processor(true, true);
             processor.on_response_header(&mut header(200, "text/event-stream"));
             let mut session = MockPluginSession::new();
-            let first = run_chunk(&mut processor, &mut session, Some(&fixture.as_bytes()[..split]), false);
-            let second = run_chunk(&mut processor, &mut session, Some(&fixture.as_bytes()[split..]), true);
+            let first = run_chunk(&mut processor, &mut session, Some(&fixture.as_bytes()[..split]), false).await;
+            let second = run_chunk(&mut processor, &mut session, Some(&fixture.as_bytes()[split..]), true).await;
             let mut output = Vec::new();
             if let Some(first) = first {
                 output.extend_from_slice(&first);
@@ -1210,8 +1260,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn streaming_tools_forward_argument_fragments_without_accumulating() {
+    #[tokio::test]
+    async fn streaming_tools_forward_argument_fragments_without_accumulating() {
         let fixture = [
             event(
                 "message_start",
@@ -1240,8 +1290,9 @@ mod tests {
         let (mut processor, usage) = processor(true, false);
         processor.on_response_header(&mut header(200, "text/event-stream"));
         let mut session = MockPluginSession::new();
-        let output =
-            run_chunk(&mut processor, &mut session, Some(fixture.as_bytes()), true).expect("translated stream");
+        let output = run_chunk(&mut processor, &mut session, Some(fixture.as_bytes()), true)
+            .await
+            .expect("translated stream");
         let output = String::from_utf8(output.to_vec()).expect("UTF-8 output");
         assert!(output.contains("\"name\":\"weather\""));
         assert!(output.contains("\"arguments\":\"\""));
@@ -1252,8 +1303,8 @@ mod tests {
         assert_eq!(usage.reported_tokens(), Some((1, 2)));
     }
 
-    #[test]
-    fn malformed_order_clears_same_callback_output_and_emits_one_error() {
+    #[tokio::test]
+    async fn malformed_order_clears_same_callback_output_and_emits_one_error() {
         let fixture = [
             event(
                 "message_start",
@@ -1273,15 +1324,18 @@ mod tests {
             .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
             .times(1)
             .return_const(());
-        let output =
-            run_chunk(&mut processor, &mut session, Some(fixture.as_bytes()), false).expect("fixed stream error");
+        let output = run_chunk(&mut processor, &mut session, Some(fixture.as_bytes()), false)
+            .await
+            .expect("fixed stream error");
         assert_eq!(output.as_ref(), STREAM_ERROR);
         assert!(!String::from_utf8_lossy(&output).contains("must-not-leak"));
-        assert!(run_chunk(&mut processor, &mut session, Some(b"provider secret"), true).is_none());
+        assert!(run_chunk(&mut processor, &mut session, Some(b"provider secret"), true)
+            .await
+            .is_none());
     }
 
-    #[test]
-    fn unknown_events_and_ping_are_ignored_but_known_name_mismatch_fails() {
+    #[tokio::test]
+    async fn unknown_events_and_ping_are_ignored_but_known_name_mismatch_fails() {
         let unknown = event("future_event", json!({"type":"future_event","secret":"ignored"}));
         let ping = event("ping", json!({"type":"ping"}));
         let (mut processor, _) = self::processor(true, false);
@@ -1293,6 +1347,7 @@ mod tests {
             Some(format!("{unknown}{ping}").as_bytes()),
             false
         )
+        .await
         .is_none());
 
         session
@@ -1301,8 +1356,9 @@ mod tests {
             .times(1)
             .return_const(());
         let mismatch = event("ping", json!({"type":"message_start"}));
-        let output =
-            run_chunk(&mut processor, &mut session, Some(mismatch.as_bytes()), false).expect("fixed stream error");
+        let output = run_chunk(&mut processor, &mut session, Some(mismatch.as_bytes()), false)
+            .await
+            .expect("fixed stream error");
         assert_eq!(output.as_ref(), STREAM_ERROR);
 
         let (mut second_processor, _) = self::processor(true, false);
@@ -1311,12 +1367,13 @@ mod tests {
         session.expect_add_error().times(1).return_const(());
         let mismatch = event("error", json!({"type":"future_event"}));
         let output = run_chunk(&mut second_processor, &mut session, Some(mismatch.as_bytes()), false)
+            .await
             .expect("known event-name mismatch fails");
         assert_eq!(output.as_ref(), STREAM_ERROR);
     }
 
-    #[test]
-    fn missing_required_usage_fields_fail_instead_of_publishing_zero() {
+    #[tokio::test]
+    async fn missing_required_usage_fields_fail_instead_of_publishing_zero() {
         let provider = serde_json::to_vec(&json!({
             "id":"msg_1","type":"message","role":"assistant","model":"provider",
             "content":[{"type":"text","text":"Hello"}],"stop_reason":"end_turn",
@@ -1327,7 +1384,9 @@ mod tests {
         processor.on_response_header(&mut header(200, "application/json"));
         let mut session = MockPluginSession::new();
         session.expect_add_error().times(1).return_const(());
-        let output = run_chunk(&mut processor, &mut session, Some(&provider), true).expect("fixed error");
+        let output = run_chunk(&mut processor, &mut session, Some(&provider), true)
+            .await
+            .expect("fixed error");
         assert!(String::from_utf8_lossy(&output).contains("response_translation_failed"));
         assert_eq!(usage.reported_tokens(), None);
 
@@ -1352,14 +1411,15 @@ mod tests {
         processor.on_response_header(&mut header(200, "text/event-stream"));
         let mut session = MockPluginSession::new();
         session.expect_add_error().times(1).return_const(());
-        let output =
-            run_chunk(&mut processor, &mut session, Some(stream.as_bytes()), true).expect("fixed stream error");
+        let output = run_chunk(&mut processor, &mut session, Some(stream.as_bytes()), true)
+            .await
+            .expect("fixed stream error");
         assert_eq!(output.as_ref(), STREAM_ERROR);
         assert_eq!(usage.reported_tokens(), None);
     }
 
-    #[test]
-    fn malformed_utf8_and_nonempty_initial_content_fail_closed() {
+    #[tokio::test]
+    async fn malformed_utf8_and_nonempty_initial_content_fail_closed() {
         let valid_start = event(
             "message_start",
             json!({"type":"message_start","message":{"type":"message","id":"msg_1","model":"provider","role":"assistant","content":[],"usage":{"input_tokens":1}}}),
@@ -1398,14 +1458,16 @@ mod tests {
                 .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
                 .times(1)
                 .return_const(());
-            let output = run_chunk(&mut processor, &mut session, Some(&input), false).expect("fixed stream error");
+            let output = run_chunk(&mut processor, &mut session, Some(&input), false)
+                .await
+                .expect("fixed stream error");
             assert_eq!(output.as_ref(), STREAM_ERROR);
             assert!(!String::from_utf8_lossy(&output).contains("lost"));
         }
     }
 
-    #[test]
-    fn message_stop_is_terminal_and_eos_requires_an_idle_decoder() {
+    #[tokio::test]
+    async fn message_stop_is_terminal_and_eos_requires_an_idle_decoder() {
         for suffix in [
             event("ping", json!({"type":"ping"})),
             event("future_event", json!({"type":"future_event"})),
@@ -1421,14 +1483,130 @@ mod tests {
                 .times(1)
                 .return_const(());
             let output = run_chunk(&mut processor, &mut session, Some(input.as_bytes()), true)
+                .await
                 .expect("terminal violation emits a fixed stream error");
             assert_eq!(output.as_ref(), STREAM_ERROR);
             assert!(!String::from_utf8_lossy(&output).contains("[DONE]"));
         }
     }
 
-    #[test]
-    fn bounds_and_stop_reason_mapping_are_stable() {
+    #[tokio::test]
+    async fn streaming_translation_terminates_when_quota_is_over_limit() {
+        let usage = Arc::new(AiUsageShared::default());
+        let quota = Arc::new(QuotaAccumulator::new(16));
+        quota.finish(QuotaFinalStatus::OverLimit);
+        // terminate_on_over_limit = true: the route's `onExceeded` resolved
+        // to `Reject`.
+        let mut processor = AnthropicResponseProcessor::new_with_quota(
+            "claude-canonical".to_string(),
+            true,
+            false,
+            1_785_772_800,
+            Arc::clone(&usage),
+            Some(quota),
+            true,
+        );
+        processor.on_response_header(&mut header(200, "text/event-stream"));
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiQuotaOverLimitTerminated)
+            .times(1)
+            .return_const(());
+        let mut sink = ResponseBodySink::new();
+        let message_start = event(
+            "message_start",
+            json!({"type":"message_start","message":{"type":"message","id":"msg_1","model":"claude-provider","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":0}}}),
+        );
+        let mut chunk = Some(Bytes::from(message_start.into_bytes()));
+        processor
+            .on_chunk(&mut chunk, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+
+        assert!(
+            sink.is_terminated(),
+            "an over-limit quota must end an Anthropic-backed stream too"
+        );
+        let extra = sink.peek_extra();
+        assert_eq!(extra.len(), 1);
+        assert_eq!(
+            extra[0], *QUOTA_EXCEEDED_SSE_EVENT,
+            "the injected event must reuse the same message/type/code the 429 admission-time \
+             rejection renders"
+        );
+        assert!(chunk.is_some(), "the translated chunk in flight must not be dropped");
+    }
+
+    #[tokio::test]
+    async fn streaming_translation_is_not_terminated_under_throttle_or_downgrade() {
+        // `terminate_on_over_limit = false` is what the plugin computes for
+        // both `Throttle` and `Downgrade`; the processor only sees the
+        // resolved boolean, so a single `false` case covers both.
+        let usage = Arc::new(AiUsageShared::default());
+        let quota = Arc::new(QuotaAccumulator::new(16));
+        quota.finish(QuotaFinalStatus::OverLimit);
+        let mut processor = AnthropicResponseProcessor::new_with_quota(
+            "claude-canonical".to_string(),
+            true,
+            false,
+            1_785_772_800,
+            Arc::clone(&usage),
+            Some(quota),
+            false,
+        );
+        processor.on_response_header(&mut header(200, "text/event-stream"));
+
+        let mut session = MockPluginSession::new();
+        let mut sink = ResponseBodySink::new();
+        let message_start = event(
+            "message_start",
+            json!({"type":"message_start","message":{"type":"message","id":"msg_1","model":"claude-provider","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":0}}}),
+        );
+        let mut chunk = Some(Bytes::from(message_start.into_bytes()));
+        processor
+            .on_chunk(&mut chunk, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+
+        assert!(
+            !sink.is_terminated(),
+            "Throttle/Downgrade must let an over-limit Anthropic-backed stream run to completion"
+        );
+        assert!(sink.peek_extra().is_empty(), "no error event without a terminate");
+    }
+
+    #[tokio::test]
+    async fn non_streaming_translation_never_terminates_even_when_quota_is_over_limit() {
+        let usage = Arc::new(AiUsageShared::default());
+        let quota = Arc::new(QuotaAccumulator::new(16));
+        quota.finish(QuotaFinalStatus::OverLimit);
+        let mut processor = AnthropicResponseProcessor::new_with_quota(
+            "claude-canonical".to_string(),
+            false,
+            false,
+            1_785_772_800,
+            Arc::clone(&usage),
+            Some(quota),
+            true,
+        );
+        processor.on_response_header(&mut header(200, "application/json"));
+
+        let mut session = MockPluginSession::new();
+        let mut sink = ResponseBodySink::new();
+        let mut chunk = Some(Bytes::from_static(b"{\"partial"));
+        processor
+            .on_chunk(&mut chunk, false, ResponseStreamKind::None, &mut sink, &mut session)
+            .await;
+
+        assert!(
+            !sink.is_terminated(),
+            "a non-streaming completion has no burn left to stop and must not be cut short"
+        );
+        assert!(sink.peek_extra().is_empty());
+    }
+
+    #[tokio::test]
+    async fn bounds_and_stop_reason_mapping_are_stable() {
         for (anthropic, openai) in [
             ("end_turn", "stop"),
             ("stop_sequence", "stop"),
@@ -1453,7 +1631,9 @@ mod tests {
             .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
             .times(1)
             .return_const(());
-        let output = run_chunk(&mut processor, &mut session, Some(&oversized), false).expect("bounded error");
+        let output = run_chunk(&mut processor, &mut session, Some(&oversized), false)
+            .await
+            .expect("bounded error");
         let output: Value = serde_json::from_slice(&output).expect("fixed JSON");
         assert_eq!(output["error"]["code"], "response_too_large");
     }

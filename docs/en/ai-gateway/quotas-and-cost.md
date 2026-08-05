@@ -38,6 +38,35 @@ onExceeded:
 Quota uses fixed windows selected from each gateway instance's wall clock when a request starts.
 Keep gateway nodes time-synchronized.
 
+## Mid-stream termination
+
+`tokenQuota` enforcement is not purely an admission-time gate. A **streaming** request already in
+flight when its bucket goes over limit is cut short mid-response: the gateway injects one SSE
+`error` event using the same envelope the 429 admission rejection uses —
+`{"error":{"message":"The token quota has been exceeded.","type":"rate_limit_error","code":"token_quota_exceeded"}}`
+— then ends the response. The HTTP status stays `200`: the response was already committed before
+the cut, so it cannot change; the client sees the injected event followed by a clean end of
+stream, not a dropped connection.
+
+This follows `onExceeded: Reject` only. `Throttle` and `Downgrade` are an operator declaring "do
+not hard-fail this user"; that choice is honored for the rest of an admitted stream too, so a
+request admitted under either action still runs to completion even if it later goes over limit
+mid-stream.
+
+`over_limit()` reflects the identity's **shared** Redis-backed bucket, not the terminated
+request's own consumption. Concurrent requests on one identity (a user with several tabs open,
+for example) can therefore cut each other's streams: whichever request's next chunk happens to
+observe the bucket over limit is the one that gets terminated, essentially arbitrary rather than
+proportional to what that particular stream itself consumed — all three tabs can lose their
+stream even though only one of them pushed the bucket over.
+
+Alert on:
+
+| EdgionStatus | Code | Meaning |
+|--------------|------|---------|
+| `AiQuotaOverLimitTerminated` | `999_12` | A streaming AI response was cut short by quota enforcement — a deliberate action, not an upstream failure. |
+| `AiQuotaErrorEventDropped` | `999_13` | The injected error event did not fit the per-batch emit budget before the cut; the client saw a bare truncation instead of the diagnostic event. |
+
 ## Estimated cost
 
 Configure optional `models[].pricing` on EdgionAIService:

@@ -68,18 +68,28 @@ pub struct QuotaAccumulator {
     final_total: AtomicU64,
     final_requested: AtomicBool,
     completed: AtomicU8,
+    /// Sticky "this request is over its limit" latch, set as soon as ANY
+    /// flush — mid-stream or final — reports the cumulative total exceeded
+    /// the configured limit. Kept separate from `completed`: that field is
+    /// the terminal-status latch `wait_completed`/`finalize` block on, and
+    /// overloading it here would make an in-progress request look finished.
+    over_limit: AtomicBool,
     flush_tokens: u64,
     notify_worker: Notify,
     notify_completed: Notify,
 }
 
 impl QuotaAccumulator {
-    fn new(flush_tokens: u64) -> Self {
+    // `pub(crate)`, not private: `ai::usage`'s tests construct a
+    // `QuotaAccumulator` directly to exercise `over_limit()` without spinning
+    // up the full quota worker.
+    pub(crate) fn new(flush_tokens: u64) -> Self {
         Self {
             observed_output: AtomicU64::new(0),
             final_total: AtomicU64::new(0),
             final_requested: AtomicBool::new(false),
             completed: AtomicU8::new(0),
+            over_limit: AtomicBool::new(false),
             flush_tokens: flush_tokens.max(1),
             notify_worker: Notify::new(),
             notify_completed: Notify::new(),
@@ -119,9 +129,30 @@ impl QuotaAccumulator {
         self.notify_worker.notify_one();
     }
 
-    fn finish(&self, status: QuotaFinalStatus) {
+    // `pub(crate)` for the same reason as `new`: `ai::usage`'s test drives a
+    // `QuotaAccumulator` straight to a final status without the worker.
+    pub(crate) fn finish(&self, status: QuotaFinalStatus) {
+        if status == QuotaFinalStatus::OverLimit {
+            self.over_limit.store(true, Ordering::Release);
+        }
         self.completed.store(status as u8, Ordering::Release);
         self.notify_completed.notify_waiters();
+    }
+
+    /// Marks the request over its limit. Called by `run_worker` as soon as
+    /// any flush — mid-stream or final — reports the cumulative total
+    /// exceeded the configured limit, so a long-running stream does not have
+    /// to wait for final reconciliation before the body path can react.
+    /// Sticky: safe to call more than once.
+    pub(crate) fn mark_over_limit(&self) {
+        self.over_limit.store(true, Ordering::Release);
+    }
+
+    /// Whether any quota flush (mid-stream or final) has reported this
+    /// request over its limit. Non-blocking: a single Acquire atomic read,
+    /// safe on the response body hot path.
+    pub(crate) fn over_limit(&self) -> bool {
+        self.over_limit.load(Ordering::Acquire)
     }
 
     async fn wait_completed(&self) -> QuotaFinalStatus {
@@ -245,6 +276,12 @@ async fn run_worker(
                 charged_total = target;
                 retry_final = false;
                 has_charge = true;
+                if result.over_limit {
+                    // Publish as soon as this flush sees it, mid-stream or
+                    // final: the response body path polls this instead of
+                    // waiting for `finalize`'s end-of-stream reconciliation.
+                    accumulator.mark_over_limit();
+                }
                 lease_interval.reset_after(lease_refresh_interval);
                 if final_update {
                     accumulator.finish(if result.over_limit {
@@ -415,6 +452,58 @@ mod tests {
 
         assert_eq!(request.finalize(17).await, QuotaFinalStatus::Failed);
         assert!(sink.calls.lock().len() >= 2);
+    }
+
+    #[test]
+    fn over_limit_reports_the_final_status_without_blocking() {
+        let acc = QuotaAccumulator::new(16);
+        assert!(!acc.over_limit());
+        acc.finish(QuotaFinalStatus::Charged);
+        assert!(!acc.over_limit());
+
+        let acc = QuotaAccumulator::new(16);
+        acc.finish(QuotaFinalStatus::OverLimit);
+        assert!(acc.over_limit());
+    }
+
+    /// Regression coverage for the dead-code bug where `over_limit()` could
+    /// only ever become true through `finalize`'s end-of-stream
+    /// reconciliation, days after the body had already streamed. This test
+    /// never calls `finish` or `finalize` at all: it drives the accumulator
+    /// exactly the way production does — through `run_worker`'s mid-stream
+    /// flush — and proves `over_limit()` flips before any final
+    /// reconciliation happens.
+    #[tokio::test]
+    async fn mid_stream_flush_publishes_over_limit_before_final_reconciliation() {
+        let sink = Arc::new(RecordingSink::new());
+        let sink_trait: Arc<dyn QuotaSink> = sink.clone();
+        let mut request = AiQuotaRequest::start(
+            sink_trait,
+            10,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let accumulator = request.accumulator();
+        assert!(!accumulator.over_limit());
+
+        // RecordingSink reports over_limit for any total > 100.
+        accumulator.add_output_units(150);
+        sink.wait_for_calls(1).await;
+
+        assert!(
+            accumulator.over_limit(),
+            "a mid-stream flush must publish over-limit without waiting for finalize"
+        );
+        assert_eq!(
+            sink.calls.lock()[0],
+            (1, 150, false),
+            "the flush that reported it was non-final"
+        );
+
+        // Marking over-limit early must not short-circuit the final
+        // settlement the logging phase still depends on.
+        assert_eq!(request.finalize(150).await, QuotaFinalStatus::OverLimit);
     }
 
     #[tokio::test(start_paused = true)]

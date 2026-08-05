@@ -205,14 +205,19 @@ impl ProxyHttp for EdgionHttpProxy {
     }
 
     /// Returns `Ok(None)` to continue, `Ok(Some(duration))` to rate-limit for the given duration.
-    fn upstream_response_body_filter(
+    async fn upstream_response_body_filter(
         &self,
         session: &mut Session,
         body: &mut Option<bytes::Bytes>,
         end_of_stream: bool,
+        sink: &mut pingora_proxy::ResponseBodySink,
         ctx: &mut Self::CTX,
-    ) -> pingora_core::Result<Option<std::time::Duration>> {
-        pg_upstream_response_body_filter::upstream_response_body_filter(self, session, body, end_of_stream, ctx)
+    ) -> pingora_core::Result<Option<std::time::Duration>>
+    where
+        Self::CTX: Send + Sync,
+    {
+        pg_upstream_response_body_filter::upstream_response_body_filter(self, session, body, end_of_stream, sink, ctx)
+            .await
     }
 
     async fn logging(&self, session: &mut Session, e: Option<&Error>, ctx: &mut Self::CTX)

@@ -23,6 +23,20 @@ pub enum EdgionStatus {
     /// cost remain durable in the access log for external replay.
     AiQuotaReconciliationFailed = 999_11,
 
+    /// The gateway cut an AI streaming response short because the request's
+    /// token quota went over limit — a deliberate enforcement action, not an
+    /// upstream failure. Names the cause so an operator does not have to
+    /// guess "did upstream hang up, or did Edgion end this?" from a bare
+    /// truncated body.
+    AiQuotaOverLimitTerminated = 999_12,
+
+    /// The over-limit SSE error event could not be appended before
+    /// terminating the stream because an earlier processor had already
+    /// exhausted the per-batch response-body emit budget. The stream still
+    /// ends (the client sees a bare truncation instead of the diagnostic
+    /// event), which is recorded here so the gap is visible outside the body.
+    AiQuotaErrorEventDropped = 999_13,
+
     /// ACME HTTP-01 challenge served locally by the gateway (HTTP 200)
     AcmeChallengeServed = 200_01,
 
@@ -330,6 +344,8 @@ mod tests {
             EdgionStatus::AccessLogSerializeFailed => None,
             EdgionStatus::AiResponseTranslationFailed => None,
             EdgionStatus::AiQuotaReconciliationFailed => None,
+            EdgionStatus::AiQuotaOverLimitTerminated => None,
+            EdgionStatus::AiQuotaErrorEventDropped => None,
             EdgionStatus::AcmeChallengeServed => Some(200),
             EdgionStatus::HostMissing => Some(400),
             EdgionStatus::XffHeaderTooLong => Some(400),
@@ -412,6 +428,8 @@ mod tests {
             EdgionStatus::AccessLogSerializeFailed,
             EdgionStatus::AiResponseTranslationFailed,
             EdgionStatus::AiQuotaReconciliationFailed,
+            EdgionStatus::AiQuotaOverLimitTerminated,
+            EdgionStatus::AiQuotaErrorEventDropped,
             EdgionStatus::AcmeChallengeServed,
             EdgionStatus::HostMissing,
             EdgionStatus::XffHeaderTooLong,

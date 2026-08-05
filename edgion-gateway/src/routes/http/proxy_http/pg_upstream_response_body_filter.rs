@@ -5,7 +5,7 @@ use super::EdgionHttpProxy;
 use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
 use crate::EdgionHttpContext;
 use pingora_http::ResponseHeader;
-use pingora_proxy::Session;
+use pingora_proxy::{ResponseBodySink, Session};
 
 /// Run private response-processor header callbacks after raw response retry
 /// arbitration. The processor set is fixed during the request stage.
@@ -43,11 +43,16 @@ pub(crate) fn enforce_stream_processor_framing(response: &mut ResponseHeader, ct
 /// (once for the session adapter, once for the processor Vec); consequently a
 /// processor cannot install further processors mid-stream — that is
 /// intentional (the set is fixed at request stage).
-pub(crate) fn run_stream_processors(
+///
+/// A terminate stops the chain immediately: the response is ending, so later
+/// processors have nothing to contribute. Settlement belongs in the logging
+/// phase, which fires on this path too.
+pub(crate) async fn run_stream_processors(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     body: &mut Option<bytes::Bytes>,
     end_of_stream: bool,
+    sink: &mut ResponseBodySink,
 ) {
     if ctx.stream_processors.is_empty() && ctx.ai_stream_processor.is_none() {
         return;
@@ -57,11 +62,27 @@ pub(crate) fn run_stream_processors(
     let mut processors = std::mem::take(&mut ctx.stream_processors);
     {
         let mut adapter = PingoraSessionAdapter::new(session, ctx);
-        if let Some(processor) = ai_processor.as_mut() {
-            processor.on_chunk(body, end_of_stream, stream_kind, &mut adapter);
+        // Guarded like the plain chain below: a caller that re-enters this
+        // function on an already-terminated sink (unreachable today -- the
+        // fork returns `Terminate` before another `on_chunk` call can
+        // happen) must not resume the AI processor either. The driver holds
+        // its own contract rather than depending solely on the fork's pump.
+        if !sink.is_terminated() {
+            if let Some(processor) = ai_processor.as_mut() {
+                processor
+                    .on_chunk(body, end_of_stream, stream_kind, sink, &mut adapter)
+                    .await;
+            }
         }
-        for processor in processors.iter_mut() {
-            processor.on_chunk(body, end_of_stream, stream_kind, &mut adapter);
+        if !sink.is_terminated() {
+            for processor in processors.iter_mut() {
+                processor
+                    .on_chunk(body, end_of_stream, stream_kind, sink, &mut adapter)
+                    .await;
+                if sink.is_terminated() {
+                    break;
+                }
+            }
         }
     }
     ctx.ai_stream_processor = ai_processor;
@@ -74,11 +95,12 @@ pub(crate) fn run_stream_processors(
 /// - `Ok(None)` - continue processing normally
 /// - `Ok(Some(duration))` - rate limit for the given duration (for bandwidth throttling)
 #[inline]
-pub fn upstream_response_body_filter(
+pub async fn upstream_response_body_filter(
     _edgion_http: &EdgionHttpProxy,
     session: &mut Session,
     body: &mut Option<bytes::Bytes>,
     end_of_stream: bool,
+    sink: &mut ResponseBodySink,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Option<Duration>> {
     record_first_body_time(ctx, body.as_ref());
@@ -86,7 +108,7 @@ pub fn upstream_response_body_filter(
     // Writable streaming-processor pipeline (installed per-request by
     // request-stage plugins). Runs before the read-only filter chains so
     // e.g. bandwidth limiting sees post-mutation bytes.
-    run_stream_processors(session, ctx, body, end_of_stream);
+    run_stream_processors(session, ctx, body, end_of_stream, sink).await;
 
     // Run upstream_response_body_filter plugins for bandwidth throttling
     let mut max_delay: Option<Duration> = None;
@@ -163,7 +185,9 @@ mod tests {
     use crate::ctx::ResponseStreamKind;
     use crate::plugins::runtime::traits::session::PluginSession;
     use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
+    use async_trait::async_trait;
     use bytes::Bytes;
+    use parking_lot::Mutex;
     use tokio::io::AsyncWriteExt;
 
     fn ctx_with_upstream() -> crate::EdgionHttpContext {
@@ -204,15 +228,17 @@ mod tests {
     }
 
     struct Uppercase;
+    #[async_trait]
     impl StreamingResponseProcessor for Uppercase {
         fn name(&self) -> &str {
             "uppercase"
         }
-        fn on_chunk(
+        async fn on_chunk(
             &mut self,
             chunk: &mut Option<Bytes>,
             _end_of_stream: bool,
             _stream_kind: ResponseStreamKind,
+            _sink: &mut ResponseBodySink,
             _session: &mut dyn PluginSession,
         ) {
             if let Some(b) = chunk.take() {
@@ -222,15 +248,17 @@ mod tests {
     }
 
     struct DropChunk;
+    #[async_trait]
     impl StreamingResponseProcessor for DropChunk {
         fn name(&self) -> &str {
             "drop"
         }
-        fn on_chunk(
+        async fn on_chunk(
             &mut self,
             chunk: &mut Option<Bytes>,
             _end_of_stream: bool,
             _stream_kind: ResponseStreamKind,
+            _sink: &mut ResponseBodySink,
             _session: &mut dyn PluginSession,
         ) {
             *chunk = None;
@@ -238,15 +266,17 @@ mod tests {
     }
 
     struct DropSseChunk;
+    #[async_trait]
     impl StreamingResponseProcessor for DropSseChunk {
         fn name(&self) -> &str {
             "drop-sse"
         }
-        fn on_chunk(
+        async fn on_chunk(
             &mut self,
             chunk: &mut Option<Bytes>,
             _end_of_stream: bool,
             stream_kind: ResponseStreamKind,
+            _sink: &mut ResponseBodySink,
             _session: &mut dyn PluginSession,
         ) {
             if stream_kind == ResponseStreamKind::Sse {
@@ -256,6 +286,7 @@ mod tests {
     }
 
     struct HeaderMutator;
+    #[async_trait]
     impl StreamingResponseProcessor for HeaderMutator {
         fn name(&self) -> &str {
             "header-mutator"
@@ -270,13 +301,98 @@ mod tests {
             true
         }
 
-        fn on_chunk(
+        async fn on_chunk(
             &mut self,
             _chunk: &mut Option<Bytes>,
             _end_of_stream: bool,
             _stream_kind: ResponseStreamKind,
+            _sink: &mut ResponseBodySink,
             _session: &mut dyn PluginSession,
         ) {
+        }
+    }
+
+    struct Injector;
+    #[async_trait]
+    impl StreamingResponseProcessor for Injector {
+        fn name(&self) -> &str {
+            "injector"
+        }
+        fn changes_body_length(&self) -> bool {
+            true
+        }
+        async fn on_chunk(
+            &mut self,
+            _chunk: &mut Option<Bytes>,
+            _end_of_stream: bool,
+            _stream_kind: ResponseStreamKind,
+            sink: &mut ResponseBodySink,
+            _session: &mut dyn PluginSession,
+        ) {
+            sink.push(Bytes::from_static(b"-injected")).unwrap();
+        }
+    }
+
+    /// Records every byte it is shown, into a handle the test still owns.
+    struct SeesOnlyBody {
+        saw: Arc<Mutex<Vec<u8>>>,
+    }
+
+    #[async_trait]
+    impl StreamingResponseProcessor for SeesOnlyBody {
+        fn name(&self) -> &str {
+            "sees-only-body"
+        }
+        async fn on_chunk(
+            &mut self,
+            chunk: &mut Option<Bytes>,
+            _end_of_stream: bool,
+            _stream_kind: ResponseStreamKind,
+            _sink: &mut ResponseBodySink,
+            _session: &mut dyn PluginSession,
+        ) {
+            if let Some(bytes) = chunk.as_deref() {
+                self.saw.lock().extend_from_slice(bytes);
+            }
+        }
+    }
+
+    struct Terminator;
+    #[async_trait]
+    impl StreamingResponseProcessor for Terminator {
+        fn name(&self) -> &str {
+            "terminator"
+        }
+        async fn on_chunk(
+            &mut self,
+            _chunk: &mut Option<Bytes>,
+            _end_of_stream: bool,
+            _stream_kind: ResponseStreamKind,
+            sink: &mut ResponseBodySink,
+            _session: &mut dyn PluginSession,
+        ) {
+            sink.terminate();
+        }
+    }
+
+    /// Flips a shared flag if it ever runs, into a handle the test still owns.
+    struct MarkRan {
+        ran: Arc<Mutex<bool>>,
+    }
+    #[async_trait]
+    impl StreamingResponseProcessor for MarkRan {
+        fn name(&self) -> &str {
+            "mark-ran"
+        }
+        async fn on_chunk(
+            &mut self,
+            _chunk: &mut Option<Bytes>,
+            _end_of_stream: bool,
+            _stream_kind: ResponseStreamKind,
+            _sink: &mut ResponseBodySink,
+            _session: &mut dyn PluginSession,
+        ) {
+            *self.ran.lock() = true;
         }
     }
 
@@ -315,7 +431,8 @@ mod tests {
         ctx.stream_processors.push(Box::new(Uppercase));
 
         let mut body = Some(Bytes::from_static(b"data: hi\n\n"));
-        run_stream_processors(&mut session, &mut ctx, &mut body, false);
+        let mut sink = ResponseBodySink::new();
+        run_stream_processors(&mut session, &mut ctx, &mut body, false, &mut sink).await;
         assert_eq!(body.as_deref(), Some(b"DATA: HI\n\n".as_slice()));
         // Processors survive the call (they run once per chunk, not once per request).
         assert_eq!(ctx.stream_processors.len(), 1);
@@ -329,7 +446,8 @@ mod tests {
         ctx.stream_processors.push(Box::new(DropChunk));
 
         let mut body = Some(Bytes::from_static(b"payload"));
-        run_stream_processors(&mut session, &mut ctx, &mut body, true);
+        let mut sink = ResponseBodySink::new();
+        run_stream_processors(&mut session, &mut ctx, &mut body, true, &mut sink).await;
         assert!(body.is_none(), "second processor dropped the chunk");
     }
 
@@ -338,7 +456,8 @@ mod tests {
         let mut session = test_session().await;
         let mut ctx = crate::EdgionHttpContext::default();
         let mut body = Some(Bytes::from_static(b"untouched"));
-        run_stream_processors(&mut session, &mut ctx, &mut body, false);
+        let mut sink = ResponseBodySink::new();
+        run_stream_processors(&mut session, &mut ctx, &mut body, false, &mut sink).await;
         assert_eq!(body.as_deref(), Some(b"untouched".as_slice()));
     }
 
@@ -349,13 +468,80 @@ mod tests {
         ctx.stream_processors.push(Box::new(DropSseChunk));
 
         let mut body = Some(Bytes::from_static(b"ordinary"));
-        run_stream_processors(&mut session, &mut ctx, &mut body, false);
+        let mut sink = ResponseBodySink::new();
+        run_stream_processors(&mut session, &mut ctx, &mut body, false, &mut sink).await;
         assert_eq!(body.as_deref(), Some(b"ordinary".as_slice()));
 
         ctx.response_stream_kind = ResponseStreamKind::Sse;
         let mut body = Some(Bytes::from_static(b"data: event\n\n"));
-        run_stream_processors(&mut session, &mut ctx, &mut body, false);
+        let mut sink = ResponseBodySink::new();
+        run_stream_processors(&mut session, &mut ctx, &mut body, false, &mut sink).await;
         assert!(body.is_none(), "processor observed the SSE classification");
+    }
+
+    #[tokio::test]
+    async fn injected_content_is_not_visible_to_later_processors() {
+        // Injector pushes to the sink; the processor after it must see only the
+        // original body, never the injected bytes.
+        let mut session = test_session().await;
+        let saw = Arc::new(Mutex::new(Vec::new()));
+        let mut ctx = crate::EdgionHttpContext::default();
+        ctx.stream_processors.push(Box::new(Injector));
+        ctx.stream_processors.push(Box::new(SeesOnlyBody { saw: saw.clone() }));
+        let mut sink = ResponseBodySink::new();
+        let mut body = Some(Bytes::from_static(b"orig"));
+
+        run_stream_processors(&mut session, &mut ctx, &mut body, false, &mut sink).await;
+
+        assert_eq!(sink.peek_extra(), &[Bytes::from_static(b"-injected")]);
+        assert_eq!(
+            saw.lock().as_slice(),
+            b"orig",
+            "the sink is an injection channel, not part of the transform chain"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminate_stops_the_chain_immediately() {
+        // A processor that terminates must prevent every later processor from
+        // running at all -- not merely from seeing further chunks.
+        let mut session = test_session().await;
+        let ran = Arc::new(Mutex::new(false));
+
+        let mut ctx = crate::EdgionHttpContext::default();
+        ctx.stream_processors.push(Box::new(Terminator));
+        ctx.stream_processors.push(Box::new(MarkRan { ran: ran.clone() }));
+        let mut sink = ResponseBodySink::new();
+        let mut body = Some(Bytes::from_static(b"orig"));
+
+        run_stream_processors(&mut session, &mut ctx, &mut body, false, &mut sink).await;
+
+        assert!(sink.is_terminated());
+        assert!(!*ran.lock(), "processor after terminate must not run");
+    }
+
+    #[tokio::test]
+    async fn ai_processor_terminate_skips_the_entire_plain_chain() {
+        // The AI processor slot runs before the plain `stream_processors`
+        // chain. If it terminates, the plain chain must not run at all --
+        // this is the `!sink.is_terminated()` guard the driver holds on its
+        // own entry into that chain, not merely on later iterations of it.
+        let mut session = test_session().await;
+        let ran = Arc::new(Mutex::new(false));
+
+        let mut ctx = crate::EdgionHttpContext::default();
+        ctx.ai_stream_processor = Some(Box::new(Terminator));
+        ctx.stream_processors.push(Box::new(MarkRan { ran: ran.clone() }));
+        let mut sink = ResponseBodySink::new();
+        let mut body = Some(Bytes::from_static(b"orig"));
+
+        run_stream_processors(&mut session, &mut ctx, &mut body, false, &mut sink).await;
+
+        assert!(sink.is_terminated());
+        assert!(
+            !*ran.lock(),
+            "the plain chain must not run once the AI processor terminated"
+        );
     }
 
     #[test]

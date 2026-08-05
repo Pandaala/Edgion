@@ -1327,6 +1327,36 @@ fn ai_stream_plan(mode: &str, observation: &str) -> AiStreamPlan {
             interval: Duration::from_millis(50),
             abort_after_chunks: true,
         },
+        // Five real content deltas (one quota output unit each), spaced far
+        // apart (150ms) relative to the 10ms quota flush interval the
+        // `ai-proxy-quota-terminate` fixture plugin uses, so a real
+        // Redis-backed over-limit flip is always observed with a wide safety
+        // margin before the fixture's tail. The tail (usage + [DONE]) carries
+        // an `unreachable_marker` field so a test can assert its exact
+        // absence without needing to pin exactly which content chunk the
+        // gateway terminates on.
+        "quota_terminate" => {
+            let delta = |label: &str| {
+                Bytes::from(format!(
+                    "data: {{\"id\":\"quota-terminate-fixture\",\"choices\":[{{\"delta\":{{\"content\":\"{label}\"}}}}]}}\n\n"
+                ))
+            };
+            AiStreamPlan {
+                chunks: vec![
+                    delta("chunk-a"),
+                    delta("chunk-b"),
+                    delta("chunk-c"),
+                    delta("chunk-d"),
+                    delta("chunk-e"),
+                    Bytes::from_static(
+                        b"data: {\"id\":\"quota-terminate-fixture\",\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7,\"total_tokens\":18},\"unreachable_marker\":\"quota-terminate-must-not-reach-client\"}\n\n",
+                    ),
+                    Bytes::from_static(b"data: [DONE]\n\n"),
+                ],
+                interval: Duration::from_millis(150),
+                abort_after_chunks: false,
+            }
+        }
         // Long enough for Task 9 to drop the downstream client before the
         // provider reaches its final usage event.
         "long" => {
@@ -1375,7 +1405,14 @@ async fn ai_provider_handler(
     };
     let observation = ai_provider_observation(&path, &query, &parts.headers, &body);
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-    let streaming = json.get("stream").and_then(serde_json::Value::as_bool) == Some(true);
+    // `quota_terminate_force_sse` deliberately ignores the client's declared
+    // `stream` field: it simulates a provider that answers with an SSE body
+    // even though the caller asked for a plain JSON completion, which is the
+    // only way to observe the `requested_streaming` gate from outside the
+    // process (Edgion's own `requested_streaming` comes from the client
+    // request, not from the wire shape of the provider's answer).
+    let force_sse = query.mock_mode.as_deref() == Some("quota_terminate_force_sse");
+    let streaming = force_sse || json.get("stream").and_then(serde_json::Value::as_bool) == Some(true);
 
     if let Some(trace_id) = parts.headers.get("x-trace-id").and_then(|value| value.to_str().ok()) {
         let exhaustion_service = if path.starts_with("credential-exhaustion-primary/") {
@@ -1523,9 +1560,21 @@ async fn ai_provider_handler(
     let mode = if path.starts_with("resilience-stream/") {
         "resilience_abort"
     } else {
-        query.mock_mode.as_deref().unwrap_or("paced")
+        match query.mock_mode.as_deref().unwrap_or("paced") {
+            // The force-sse marker only changes admission (`streaming` above);
+            // the wire fixture itself is the same `quota_terminate` plan a
+            // normal streaming request would get.
+            "quota_terminate_force_sse" => "quota_terminate",
+            other => other,
+        }
     };
     let plan = ai_stream_plan(mode, &observation);
+    // Simulates a provider that pre-declares `Content-Length` for its full,
+    // untruncated SSE body (unusual, but legal) so the fixture can prove
+    // Edgion actually strips a stale length rather than merely never having
+    // one to strip in the first place — every other streaming fixture here
+    // is naturally unbounded and would pass a framing check trivially.
+    let full_length = (mode == "quota_terminate").then(|| plan.chunks.iter().map(Bytes::len).sum::<usize>());
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
     tokio::spawn(async move {
         for chunk in plan.chunks {
@@ -1546,10 +1595,14 @@ async fn ai_provider_handler(
         }
     });
 
-    Response::builder()
+    let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "text/event-stream")
-        .header("cache-control", "no-cache")
+        .header("cache-control", "no-cache");
+    if let Some(full_length) = full_length {
+        builder = builder.header("content-length", full_length.to_string());
+    }
+    builder
         .body(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)))
         .unwrap()
 }
@@ -3707,5 +3760,16 @@ mod tests {
         assert!(long.chunks.len() > 100);
         assert!(long.interval >= Duration::from_millis(100));
         assert_eq!(long.chunks.last().unwrap(), &Bytes::from_static(b"data: [DONE]\n\n"));
+
+        let quota_terminate = ai_stream_plan("quota_terminate", observation);
+        assert_eq!(quota_terminate.chunks.len(), 7, "5 content deltas + usage + [DONE]");
+        assert!(quota_terminate.interval >= Duration::from_millis(100));
+        assert!(!quota_terminate.abort_after_chunks);
+        for content_chunk in &quota_terminate.chunks[..5] {
+            assert!(content_chunk.windows(7).any(|window| window == b"\"delta\""));
+        }
+        let tail = quota_terminate.chunks[5].clone();
+        assert!(tail.windows(19).any(|window| window == b"unreachable_marker\""));
+        assert_eq!(quota_terminate.chunks[6], Bytes::from_static(b"data: [DONE]\n\n"));
     }
 }

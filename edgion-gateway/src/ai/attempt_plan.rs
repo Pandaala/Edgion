@@ -85,6 +85,13 @@ pub struct ReadyAiAttemptPlan {
     pub service_snapshot: AiServiceSnapshot,
     pub quota: Option<AiQuotaRequest>,
     pub quota_status: Option<&'static str>,
+    /// Resolved from the compiled `AiTokenQuotaConfig.onExceeded`: `true`
+    /// only for `Reject`. `Throttle`/`Downgrade` are an operator declaring
+    /// "do not hard-fail this user" -- honoring that at admission time only
+    /// and then hard-cutting an in-flight stream anyway would silently
+    /// override a configured choice, so the mid-stream response processors
+    /// gate their over-quota termination on this flag too.
+    pub terminate_on_over_limit: bool,
 }
 
 impl fmt::Debug for ReadyAiAttemptPlan {
@@ -102,6 +109,7 @@ impl fmt::Debug for ReadyAiAttemptPlan {
             .field("retry_cap_initialized", &self.retry_cap_initialized)
             .field("quota_configured", &self.quota.is_some())
             .field("quota_status", &self.quota_status)
+            .field("terminate_on_over_limit", &self.terminate_on_over_limit)
             .finish()
     }
 }
