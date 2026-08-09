@@ -26,6 +26,12 @@ model catalog. HTTPRoute references these resources directly from `backendRefs`.
 `https://api.anthropic.com`. There is no timeout field on EdgionAIService — use HTTPRoute
 `timeouts` and EBTP `connection.connectTimeout`.
 
+Be careful with field-name typos. In Kubernetes, the structural CRD prunes undeclared optional
+fields in `spec` before the Controller sees them. The resource may be accepted while the misspelled
+setting has no effect and produces no status condition. A typo that leaves a required field absent
+is rejected at admission. Filesystem and etcd configuration reject unknown fields within the strict
+`spec` tree during deserialization.
+
 ## HTTPRoute backend contract
 
 ```yaml

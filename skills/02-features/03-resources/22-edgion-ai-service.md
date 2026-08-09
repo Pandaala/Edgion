@@ -54,8 +54,13 @@ status:
   conditions: []
 ```
 
-Unknown fields are rejected. Resolved Secret objects are Controller-filled transport fields; they
-are excluded from the CRD schema and redacted from Admin configuration output.
+Input handling differs by config-center mode. On Kubernetes, the structural CRD prunes undeclared
+optional fields in `spec` before the Controller sees them, so a misspelled optional field may become
+a no-op without a status condition. A typo that leaves a required field absent or violates another
+schema constraint is rejected at admission. Filesystem and etcd input is deserialized directly and
+rejects unknown fields within the `deny_unknown_fields`-covered `spec` tree. Resolved Secret objects
+are Controller-filled transport fields; they are excluded from the CRD schema and redacted from
+Admin configuration output.
 
 ## `spec` fields
 

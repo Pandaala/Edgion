@@ -26,6 +26,10 @@
 EdgionAIService 没有 timeout 字段 — 使用 HTTPRoute `timeouts` 与 EBTP
 `connection.connectTimeout`。
 
+请特别检查字段名拼写。在 Kubernetes 中，结构化 CRD 会在 Controller 看到资源前剪除 `spec` 中未声明的
+可选字段。资源可能被正常接受，但拼错的设置不会生效，也不会产生 status condition。若拼写错误导致必填
+字段缺失，admission 会拒绝该资源。文件系统和 etcd 配置则会在反序列化时拒绝严格 `spec` 树中的未知字段。
+
 ## HTTPRoute 后端契约
 
 ```yaml
