@@ -421,6 +421,25 @@ impl AdaptiveTelemetryStore {
         self.states.load().len()
     }
 
+    /// Number of adaptive telemetry identities currently discoverable.
+    pub fn count(&self) -> usize {
+        self.states.load().len()
+    }
+
+    /// Adaptive telemetry identities currently tracked (snapshot).
+    pub fn keys(&self) -> Vec<String> {
+        self.states
+            .load()
+            .keys()
+            .map(|key| {
+                format!(
+                    "{}/{}/{}/{}",
+                    key.terminal_route_uid, key.rule_name, key.target, key.logical_model
+                )
+            })
+            .collect()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.states.load().is_empty()
     }
@@ -683,6 +702,28 @@ mod tests {
         let recreated = store.get_or_create(key);
         assert!(!Arc::ptr_eq(&first, &recreated));
         assert_eq!(recreated.snapshot(), AdaptiveSnapshot::default());
+    }
+
+    #[test]
+    fn count_and_keys_track_telemetry_lifecycle() {
+        let store = AdaptiveTelemetryStore::new();
+        assert_eq!(store.count(), 0);
+        assert!(store.keys().is_empty());
+
+        let key = key("uid-a", "model-a");
+        store.reconcile_keys(&HashSet::from([key.clone()]));
+        assert_eq!(store.count(), 1);
+        assert_eq!(
+            store.keys(),
+            vec![format!(
+                "{}/{}/{}/{}",
+                key.terminal_route_uid, key.rule_name, key.target, key.logical_model
+            )]
+        );
+
+        assert!(store.remove(&key));
+        assert_eq!(store.count(), 0);
+        assert!(store.keys().is_empty());
     }
 
     #[test]

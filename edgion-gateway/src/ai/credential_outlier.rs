@@ -160,6 +160,16 @@ impl AiCredentialOutlierStore {
         }
     }
 
+    /// Number of AI services with credential outlier state.
+    pub fn count(&self) -> usize {
+        self.services.len()
+    }
+
+    /// AI service target keys currently tracked (snapshot).
+    pub fn keys(&self) -> Vec<String> {
+        self.services.iter().map(|entry| entry.key().to_string()).collect()
+    }
+
     /// Publish the effective outlier config and current usable credential aliases.
     /// Equivalent config updates preserve cooldown/ejection state; a real config
     /// change resets it, matching the existing Service outlier store.
@@ -316,6 +326,22 @@ mod tests {
             max_ejection_seconds: max_seconds,
             max_ejection_percent: max_percent,
         }
+    }
+
+    #[test]
+    fn count_and_keys_track_service_lifecycle() {
+        let store = AiCredentialOutlierStore::new();
+        assert_eq!(store.count(), 0);
+        assert!(store.keys().is_empty());
+
+        let target = target("tracked");
+        store.configure_service(target.clone(), None, ["primary".to_string()]);
+        assert_eq!(store.count(), 1);
+        assert_eq!(store.keys(), vec![target.to_string()]);
+
+        store.remove_service(&target);
+        assert_eq!(store.count(), 0);
+        assert!(store.keys().is_empty());
     }
 
     #[test]

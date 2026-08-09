@@ -399,6 +399,8 @@ struct StoreStatsResponse {
     gateway_backend_tls_store: SimpleCountStats,
     edgion_config_data_store: SimpleCountStats,
     ai_service_store: SimpleCountStats,
+    ai_credential_outlier_store: SimpleCountStats,
+    adaptive_telemetry_store: SimpleCountStats,
     link_sys_runtime: LinkSysRuntimeStats,
     plugin_store_v2: PluginStoreStatsV2,
     stream_plugin_store_v2: PluginStoreStatsV2,
@@ -429,6 +431,20 @@ struct LinkSysStoreStats {
 #[derive(Serialize)]
 struct SimpleCountStats {
     count: usize,
+}
+
+fn collect_ai_runtime_store_counts(
+    credential_outliers: &crate::ai::AiCredentialOutlierStore,
+    adaptive_telemetry: &crate::ai::AdaptiveTelemetryStore,
+) -> (SimpleCountStats, SimpleCountStats) {
+    (
+        SimpleCountStats {
+            count: credential_outliers.count(),
+        },
+        SimpleCountStats {
+            count: adaptive_telemetry.count(),
+        },
+    )
 }
 
 #[derive(Serialize)]
@@ -537,6 +553,10 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
     let ai_service_store = SimpleCountStats {
         count: crate::ai::count_ai_services(),
     };
+    let (ai_credential_outlier_store, adaptive_telemetry_store) = collect_ai_runtime_store_counts(
+        crate::ai::get_ai_credential_outlier_store().as_ref(),
+        crate::ai::get_adaptive_telemetry_store().as_ref(),
+    );
 
     let link_sys_runtime = LinkSysRuntimeStats {
         redis_clients: crate::link_sys::runtime::store::redis_client_count(),
@@ -579,6 +599,8 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         gateway_backend_tls_store,
         edgion_config_data_store,
         ai_service_store,
+        ai_credential_outlier_store,
+        adaptive_telemetry_store,
         link_sys_runtime,
         plugin_store_v2,
         stream_plugin_store_v2,
@@ -1812,6 +1834,32 @@ mod edgion_ai_service_admin_tests {
 #[cfg(test)]
 mod store_stats_tests {
     use super::*;
+    use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+
+    #[test]
+    fn ai_runtime_store_collector_reports_populated_stores() {
+        let credential_outliers = crate::ai::AiCredentialOutlierStore::new();
+        let adaptive_telemetry = crate::ai::AdaptiveTelemetryStore::new();
+        let target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionAIService,
+            namespace: "default".to_string(),
+            name: "provider".to_string(),
+        };
+        credential_outliers.configure_service(target.clone(), None, ["primary".to_string()]);
+        let telemetry_key = crate::ai::AdaptiveTelemetryKey::new(
+            "route-uid".to_string(),
+            "rule".to_string(),
+            target,
+            "model".to_string(),
+        )
+        .unwrap();
+        adaptive_telemetry.reconcile_keys(&std::collections::HashSet::from([telemetry_key]));
+
+        let (credential_stats, telemetry_stats) =
+            collect_ai_runtime_store_counts(&credential_outliers, &adaptive_telemetry);
+        assert_eq!(credential_stats.count, 1);
+        assert_eq!(telemetry_stats.count, 1);
+    }
 
     #[test]
     fn store_stats_response_serializes() {
@@ -1879,6 +1927,8 @@ mod store_stats_tests {
             gateway_backend_tls_store: SimpleCountStats { count: 0 },
             edgion_config_data_store: SimpleCountStats { count: 0 },
             ai_service_store: SimpleCountStats { count: 0 },
+            ai_credential_outlier_store: SimpleCountStats { count: 0 },
+            adaptive_telemetry_store: SimpleCountStats { count: 0 },
             link_sys_runtime: LinkSysRuntimeStats {
                 redis_clients: 0,
                 etcd_clients: 0,
@@ -1897,6 +1947,8 @@ mod store_stats_tests {
         assert!(json.is_object());
         assert!(json.get("client_caches").is_some());
         assert!(json.get("ai_service_store").is_some());
+        assert_eq!(json["ai_credential_outlier_store"]["count"], 0);
+        assert_eq!(json["adaptive_telemetry_store"]["count"], 0);
         assert!(json.get("plugin_store_v2").is_some());
         assert!(json.get("stream_plugin_store_v2").is_some());
         assert!(json.get("plugin_store").is_none());
