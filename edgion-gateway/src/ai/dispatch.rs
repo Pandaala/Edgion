@@ -790,7 +790,7 @@ fn effective_max_output_tokens(body: &[u8], service_max: Option<u32>) -> Result<
     let max_tokens = value.get("max_tokens").and_then(Value::as_u64);
     let max_completion_tokens = value.get("max_completion_tokens").and_then(Value::as_u64);
     if max_tokens.is_some() && max_completion_tokens.is_some() && max_tokens != max_completion_tokens {
-        return Err(AiDispatchError::InvalidConfiguration);
+        return Err(AiDispatchError::Client(AiProxyError::MalformedBody));
     }
     Ok(match (request_output_bound(&value), service_max.map(u64::from)) {
         (Some(request), _) => request,
@@ -1056,6 +1056,18 @@ mod tests {
         );
         assert_eq!(request_max_tokens(br#"{"model":"logical"}"#), None);
         assert_eq!(request_max_tokens(b"not json"), None);
+    }
+
+    #[test]
+    fn conflicting_request_output_bounds_are_client_errors() {
+        assert_eq!(
+            effective_max_output_tokens(br#"{"max_tokens":64,"max_completion_tokens":128}"#, None),
+            Err(AiDispatchError::Client(AiProxyError::MalformedBody))
+        );
+        assert_eq!(
+            effective_max_output_tokens(br#"{"max_tokens":64,"max_completion_tokens":64}"#, None),
+            Ok(64)
+        );
     }
 
     #[test]

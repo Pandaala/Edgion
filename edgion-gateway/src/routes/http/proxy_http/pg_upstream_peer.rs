@@ -1515,6 +1515,10 @@ mod tests {
             ai_predispatch_error(AiDispatchError::Client(AiProxyError::UnsupportedParameter)),
             Some(AiProxyError::UnsupportedParameter)
         );
+        assert_eq!(
+            ai_predispatch_error(AiDispatchError::Client(AiProxyError::MalformedBody)),
+            Some(AiProxyError::MalformedBody)
+        );
         assert_eq!(ai_predispatch_error(AiDispatchError::Rejected), None);
         assert_eq!(ai_predispatch_error(AiDispatchError::InvalidConfiguration), None);
 
@@ -1524,6 +1528,12 @@ mod tests {
         assert_eq!(body["error"]["type"], "api_error");
         assert_eq!(body["error"]["code"], "service_unavailable");
         assert_eq!(body["error"].as_object().unwrap().len(), 3);
+
+        let (status, body) = render_openai_error(AiProxyError::MalformedBody);
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(status, 400);
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["code"], "invalid_request_body");
     }
 
     #[test]
