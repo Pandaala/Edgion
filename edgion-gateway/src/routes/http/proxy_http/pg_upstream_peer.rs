@@ -14,6 +14,7 @@ use crate::observe::metrics::record_authority_rejected;
 use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::routes::grpc::handle_grpc_upstream;
+use crate::routes::http::match_unit::CompiledBackendTarget;
 use crate::routes::http::routes_mgr::RouteRules;
 use crate::routes::http::session_persistence;
 use crate::util::net::{classify_backend_addr, resolve_domain, BlockedBackendReason};
@@ -1362,7 +1363,7 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
         return Ok(());
     }
 
-    let (name, namespace, kind_str, backend_ref_idx) = if let Some(grpc_br) = ctx.selected_grpc_backend.as_ref() {
+    let (name, namespace, service_kind, backend_ref_idx) = if let Some(grpc_br) = ctx.selected_grpc_backend.as_ref() {
         let route_ns = ctx
             .grpc_route_unit
             .as_ref()
@@ -1379,7 +1380,12 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
                     .position(|r| r.name == grpc_br.name && r.namespace.as_deref().unwrap_or(route_ns_str) == ns)
             })
         });
-        (grpc_br.name.clone(), ns, grpc_br.kind.clone(), idx)
+        (
+            grpc_br.name.clone(),
+            ns,
+            EdgionService::from_kind(grpc_br.kind.as_ref()),
+            idx,
+        )
     } else if let Some(http_br) = ctx.selected_backend.as_ref() {
         let route_ns = ctx
             .route_unit
@@ -1388,14 +1394,24 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
             .unwrap_or_default()
             .to_string();
         let ns = http_br.namespace.clone().unwrap_or(route_ns);
-        (http_br.name.clone(), ns, http_br.kind.clone(), Some(http_br.slot))
+        let service_kind = match &http_br.target {
+            CompiledBackendTarget::Service { .. } => EdgionService::from_kind(http_br.kind.as_ref()),
+            CompiledBackendTarget::EdgionAIService { .. } | CompiledBackendTarget::Invalid { .. } => {
+                EdgionService::Unsupported(
+                    http_br
+                        .kind
+                        .clone()
+                        .unwrap_or_else(|| "unsupported backend reference".to_string()),
+                )
+            }
+        };
+        (http_br.name.clone(), ns, service_kind, Some(http_br.slot))
     } else {
         return Err(PingoraError::new(ErrorType::InternalError));
     };
 
     let service_key = format!("{}/{}", namespace, name);
     let rsc = crate::Rsc::new("Service", namespace, name);
-    let service_kind = EdgionService::from_kind(kind_str.as_ref());
     ctx.init_backend_context(rsc, service_key, service_kind, backend_ref_idx);
     Ok(())
 }
@@ -1550,18 +1566,23 @@ mod tests {
     use super::{
         ai_predispatch_deadline_mapping, ai_predispatch_error, apply_upstream_authority_decision,
         apply_upstream_read_timeout_override, backoff_action, decide_upstream_authority, decide_want_raw,
-        fold_peer_timeouts, replay_write_floor, sp_should_refresh_on_cross_attempt_retry,
-        sp_should_repin_on_strict_retry, stop_ai_predispatch_if_expired, AuthorityDecision, BackoffAction,
+        fold_peer_timeouts, init_backend_context_if_needed, replay_write_floor,
+        sp_should_refresh_on_cross_attempt_retry, sp_should_repin_on_strict_retry, stop_ai_predispatch_if_expired,
+        AuthorityDecision, BackoffAction,
     };
     use crate::ai::dispatch::AiDispatchError;
     use crate::ai::{render_openai_error, AiProxyError};
     use crate::backends::policy::backend_traffic::authority::AuthorityError;
+    use crate::backends::EdgionService;
+    use crate::plugins::PluginRuntime;
+    use crate::routes::http::match_unit::{CompiledBackend, CompiledBackendTarget};
     use crate::{BackendContext, BackendTlsInfo, EdgionHttpContext, UpstreamInfo};
     use crate::{PeerTimeoutSource, SessionPersistenceState};
-    use edgion_resources::EdgionStatus;
+    use edgion_resources::{EdgionStatus, HTTPBackendRef};
     use pingora_core::prelude::HttpPeer;
     use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
     use pingora_core::ErrorType;
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -1627,6 +1648,34 @@ mod tests {
 
         assert_eq!(response.etype(), &ErrorType::HTTPStatus(504));
         assert_eq!(ctx.edgion_status, vec![EdgionStatus::GrpcClientDeadlineExceeded]);
+    }
+
+    #[test]
+    fn invalid_group_service_kind_stays_unsupported_after_selection() {
+        let schema: HTTPBackendRef = serde_json::from_value(serde_json::json!({
+            "group": "example.io",
+            "kind": "Service",
+            "name": "wrong-group-service",
+            "namespace": "route-ns",
+            "port": 8080
+        }))
+        .unwrap();
+        let backend = CompiledBackend::compile(schema, "route-ns", 0, Arc::new(PluginRuntime::new()));
+        assert_eq!(
+            backend.target,
+            CompiledBackendTarget::Invalid {
+                classified_kind: edgion_resources::HTTPBackendRefKind::Unsupported
+            }
+        );
+        let mut ctx = EdgionHttpContext::new();
+        ctx.selected_backend = Some(backend);
+
+        init_backend_context_if_needed(&mut ctx).unwrap();
+
+        assert!(matches!(
+            ctx.backend_context.as_ref().and_then(|context| context.service_kind.as_ref()),
+            Some(EdgionService::Unsupported(kind)) if kind == "Service"
+        ));
     }
 
     #[test]

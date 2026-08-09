@@ -404,6 +404,7 @@ fn is_service_family_kind(kind: Option<&str>) -> bool {
         None | Some("")
             | Some("Service")
             | Some("ServiceClusterIp")
+            | Some("ServiceImport")
             | Some("ServiceExternalName")
             | Some("ServiceEndpointSlice")
             | Some("EndpointSlice")
@@ -1315,6 +1316,7 @@ mod tests {
             // Edgion Service-family kinds still own the Service peer path.
             (None, Some("ServiceExternalName")),
             (None, Some("ServiceClusterIp")),
+            (None, Some("ServiceImport")),
             (None, Some("ServiceEndpointSlice")),
             (None, Some("EndpointSlice")),
             (Some("core"), Some("ServiceExternalName")),
@@ -1339,7 +1341,6 @@ mod tests {
             (Some(GATEWAY_API_GROUP), Some("Service")),
             (Some(EDGION_API_GROUP), Some("HTTPRoute")),
             (Some("example.io"), Some("Widget")),
-            (None, Some("ServiceImport")),
             // Service-family kinds under a non-core group stay Unsupported.
             (Some(EDGION_API_GROUP), Some("ServiceExternalName")),
             (Some(GATEWAY_API_GROUP), Some("ServiceClusterIp")),

@@ -107,6 +107,16 @@ impl CompiledBackend {
         matches!(self.target, CompiledBackendTarget::Service { .. })
     }
 
+    /// Whether this slot participates in ordinary HTTP backend selection.
+    /// Invalid refs retain their declared Gateway API traffic share and fail
+    /// after selection; valid AI refs are owned by the AI dispatch path.
+    fn is_generic_selectable(&self) -> bool {
+        matches!(
+            self.target,
+            CompiledBackendTarget::Service { .. } | CompiledBackendTarget::Invalid { .. }
+        )
+    }
+
     /// Whether this backend is an authorized EdgionAIService reference.
     ///
     /// AI routing bypasses the generic Service selector, so its callers must
@@ -252,17 +262,17 @@ impl HttpRouteRuleUnit {
     /// Compiled backends are Arc-shared; only the WRR cursor is per-hostname.
     pub fn build_backend_selector(backends: &[CompiledBackend]) -> Arc<BackendSelector<CompiledBackend>> {
         let selector = BackendSelector::new();
-        let service_backends = backends
+        let generic_backends = backends
             .iter()
-            .filter(|backend| backend.is_service())
+            .filter(|backend| backend.is_generic_selectable())
             .cloned()
             .collect::<Vec<_>>();
-        if !service_backends.is_empty() {
-            let weights = service_backends
+        if !generic_backends.is_empty() {
+            let weights = generic_backends
                 .iter()
                 .map(|backend| backend.schema.weight.or(Some(1)))
                 .collect();
-            selector.init(service_backends, weights);
+            selector.init(generic_backends, weights);
         }
         Arc::new(selector)
     }
@@ -496,18 +506,19 @@ mod tests {
             "backendRefs": [
                 {"name": "service-a", "port": 8080, "weight": 7},
                 {"kind": "ServiceExternalName", "name": "dns-svc", "port": 30001, "weight": 1},
+                {"kind": "ServiceImport", "name": "imported-svc", "port": 8080, "weight": 2},
                 {"group": "edgion.io", "kind": "EdgionAIService", "name": "ai-a", "weight": 3},
                 {"group": "edgion.io", "kind": "EdgionAIService", "name": "ai-bad", "port": 443},
-                {"group": "example.io", "kind": "Other", "name": "unsupported"}
+                {"group": "example.io", "kind": "Service", "name": "wrong-group-service"}
             ]
         }))
         .unwrap();
 
         let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "route-ns");
-        assert_eq!(runtime.backends.len(), 5);
+        assert_eq!(runtime.backends.len(), 6);
         assert_eq!(
             runtime.backends.iter().map(|backend| backend.slot).collect::<Vec<_>>(),
-            vec![0, 1, 2, 3, 4]
+            vec![0, 1, 2, 3, 4, 5]
         );
         assert_eq!(runtime.backends[0].schema.weight, Some(7));
         assert_eq!(
@@ -526,34 +537,40 @@ mod tests {
         );
         assert_eq!(
             runtime.backends[2].target,
+            CompiledBackendTarget::Service {
+                namespace: "route-ns".to_string(),
+                name: "imported-svc".to_string()
+            }
+        );
+        assert_eq!(
+            runtime.backends[3].target,
             CompiledBackendTarget::EdgionAIService {
                 namespace: "route-ns".to_string(),
                 name: "ai-a".to_string()
             }
         );
         assert_eq!(
-            runtime.backends[3].target,
+            runtime.backends[4].target,
             CompiledBackendTarget::Invalid {
                 classified_kind: HTTPBackendRefKind::EdgionAIService
             }
         );
         assert_eq!(
-            runtime.backends[4].target,
+            runtime.backends[5].target,
             CompiledBackendTarget::Invalid {
                 classified_kind: HTTPBackendRefKind::Unsupported
             }
         );
 
         let selector = HttpRouteRuleUnit::build_backend_selector(&runtime.backends);
-        // Only Service-family slots (0, 1) enter the WRR selector; AI/Invalid are excluded.
-        let mut seen = [0u32; 2];
-        for _ in 0..20 {
+        // Service-family and invalid slots retain their declared traffic share;
+        // the valid AI slot remains owned by AI dispatch and is excluded.
+        let mut seen = [0u32; 6];
+        for _ in 0..24 {
             let selected = selector.select().unwrap();
-            assert!(selected.is_service());
-            assert!(selected.slot == 0 || selected.slot == 1);
             seen[selected.slot] += 1;
         }
-        assert!(seen[0] > 0 && seen[1] > 0);
+        assert_eq!(seen, [14, 2, 4, 0, 2, 2]);
     }
 
     fn make_specificity(
