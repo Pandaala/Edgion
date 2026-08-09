@@ -677,12 +677,13 @@ mod genai_tests {
         ctx
     }
 
-    fn observe_response(ctx: &EdgionHttpContext, body: &[u8], eos: bool, kind: ResponseStreamKind) {
+    async fn observe_response(ctx: &EdgionHttpContext, body: &[u8], eos: bool, kind: ResponseStreamKind) {
         let shared = ctx.ai.as_ref().unwrap().usage.clone();
         let mut processor = UsageExtractionProcessor::new(shared);
         let mut chunk = Some(Bytes::copy_from_slice(body));
         let mut session = MockPluginSession::new();
-        processor.on_chunk(&mut chunk, eos, kind, &mut session);
+        let mut sink = pingora_proxy::ResponseBodySink::new();
+        processor.on_chunk(&mut chunk, eos, kind, &mut sink, &mut session).await;
         assert_eq!(chunk.as_deref(), Some(body), "usage observation must not mutate body");
     }
 
@@ -707,15 +708,16 @@ mod genai_tests {
         assert_eq!(ceil_chars_div_four(u64::MAX), u64::MAX / 4 + 1);
     }
 
-    #[test]
-    fn finalize_uses_reported_usage_and_actual_sse_classification() {
+    #[tokio::test]
+    async fn finalize_uses_reported_usage_and_actual_sse_classification() {
         let mut ctx = ai_context(AiProviderLabel::OpenAi, "gpt-declared", false);
         observe_response(
             &ctx,
             b"data: {\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7}}\n\n",
             true,
             ResponseStreamKind::Sse,
-        );
+        )
+        .await;
         ctx.response_stream_kind = ResponseStreamKind::Sse;
         finalize_ai_usage_with_metrics_enabled(&mut ctx, false);
 
@@ -728,8 +730,8 @@ mod genai_tests {
         );
     }
 
-    #[test]
-    fn finalize_prices_ordinary_cached_and_output_tokens_without_float() {
+    #[tokio::test]
+    async fn finalize_prices_ordinary_cached_and_output_tokens_without_float() {
         let mut ctx = ai_context(AiProviderLabel::OpenAi, "gpt-declared", false);
         ctx.ai.as_mut().unwrap().pricing = Some(
             AiModelPricing {
@@ -746,7 +748,8 @@ mod genai_tests {
             br#"{"usage":{"prompt_tokens":100,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":20},"cache_creation_input_tokens":10}}"#,
             true,
             ResponseStreamKind::None,
-        );
+        )
+        .await;
         finalize_ai_usage_with_metrics_enabled(&mut ctx, false);
 
         let summary = ctx.genai_summary.as_ref().unwrap();
@@ -769,13 +772,13 @@ mod genai_tests {
         assert_eq!(ctx.genai_summary.unwrap().quota_status, Some("fail_open"));
     }
 
-    #[test]
-    fn finalize_estimates_partial_aborted_stream_and_emits_metrics_once() {
+    #[tokio::test]
+    async fn finalize_estimates_partial_aborted_stream_and_emits_metrics_once() {
         let recorder = PrometheusBuilder::new().build_recorder();
         let handle = recorder.handle();
         let mut ctx = ai_context(AiProviderLabel::OpenAiCompatible, "other", true);
         ctx.ai.as_ref().unwrap().usage.set_input_chars(5);
-        observe_response(&ctx, b"data: hello", false, ResponseStreamKind::Sse);
+        observe_response(&ctx, b"data: hello", false, ResponseStreamKind::Sse).await;
         ctx.response_stream_kind = ResponseStreamKind::Sse;
         metrics::with_local_recorder(&recorder, || {
             finalize_ai_usage_with_metrics_enabled(&mut ctx, true);
@@ -820,8 +823,8 @@ mod genai_tests {
         assert_eq!(with_body.genai_summary.as_ref().unwrap().ttft_ms, Some(23));
     }
 
-    #[test]
-    fn finalize_is_idempotent_and_emits_metrics_once() {
+    #[tokio::test]
+    async fn finalize_is_idempotent_and_emits_metrics_once() {
         let recorder = PrometheusBuilder::new().build_recorder();
         let handle = recorder.handle();
         let mut ctx = ai_context(AiProviderLabel::OpenAi, "gpt-declared", false);
@@ -830,7 +833,8 @@ mod genai_tests {
             br#"{"usage":{"prompt_tokens":12,"completion_tokens":7}}"#,
             true,
             ResponseStreamKind::None,
-        );
+        )
+        .await;
 
         metrics::with_local_recorder(&recorder, || {
             finalize_ai_usage_with_metrics_enabled(&mut ctx, true);
@@ -916,8 +920,8 @@ mod genai_tests {
             .contains(crate::observe::metrics::registry::names::GENAI_TOKENS_TOTAL));
     }
 
-    #[test]
-    fn access_log_genai_shape_contains_no_request_response_or_key_text() {
+    #[tokio::test]
+    async fn access_log_genai_shape_contains_no_request_response_or_key_text() {
         let prompt = "PROMPT-FIXTURE-DO-NOT-LOG";
         let completion = "COMPLETION-FIXTURE-DO-NOT-LOG";
         let api_key = "API-KEY-FIXTURE-DO-NOT-LOG";
@@ -928,7 +932,7 @@ mod genai_tests {
             .usage
             .set_input_chars(prompt.chars().count() as u64);
         let event = format!("data: {completion}");
-        observe_response(&ctx, event.as_bytes(), false, ResponseStreamKind::Sse);
+        observe_response(&ctx, event.as_bytes(), false, ResponseStreamKind::Sse).await;
         finalize_ai_usage_with_metrics_enabled(&mut ctx, false);
 
         let json = crate::observe::AccessLogEntry::from_context(&ctx).to_json();

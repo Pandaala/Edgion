@@ -7,7 +7,34 @@
 //! limit.
 
 /// Hard cap on an incomplete (unterminated) SSE event.
-pub const DEFAULT_MAX_PENDING_EVENT_BYTES: usize = 64 * 1024;
+///
+/// Sized to the largest single event a legitimate provider can emit, not to the
+/// smallest buffer that works. A "fake streaming" upstream — one that generates
+/// the whole completion and then emits it as a single SSE event, common among
+/// OpenAI-compatible aggregators and self-hosted shims — produces roughly four
+/// bytes per output token, so today's 128K-output-token models reach ~512 KB in
+/// one event. 1 MiB covers every shipping model with headroom and matches
+/// `ai::usage::MAX_NON_STREAMING_USAGE_BYTES`, which already accepts the same
+/// payload in its non-streaming form.
+///
+/// The cost is worst-case memory per in-flight decoder, and it is only ever
+/// reached by a pathological stream: a normal event ends within a few hundred
+/// bytes and resets this accounting to zero. Sizing that worst case
+/// deliberately, because it grew 16x with this value:
+///
+/// - The cap bounds `retained_event_bytes + pending.len()`, but the resident
+///   allocation is `pending` plus `cur_data` carrying amortized-doubling
+///   slack, so budget ~1-2 MiB per decoder rather than exactly 1 MiB.
+/// - An Anthropic request runs **two** decoders (the translator's, fed the raw
+///   provider stream, and `UsageExtractionProcessor`'s, fed the translated
+///   output — see `ai::dispatch`), so that path doubles again.
+/// - There is no aggregate bound across concurrent streams; the ceiling is
+///   per-request and multiplies by AI stream concurrency.
+///
+/// Reaching it requires a hostile or broken **provider** (operator-configured),
+/// not an arbitrary client, which is why a per-request ceiling is accepted here
+/// instead of a global budget.
+pub const DEFAULT_MAX_PENDING_EVENT_BYTES: usize = 1024 * 1024;
 
 const UTF8_BOM: &[u8; 3] = b"\xef\xbb\xbf";
 
@@ -70,7 +97,8 @@ impl SseDecoder {
         }
     }
 
-    /// Create a decoder with the standard 64 KiB incomplete-event limit.
+    /// Create a decoder with the standard [`DEFAULT_MAX_PENDING_EVENT_BYTES`]
+    /// incomplete-event limit.
     pub fn with_default_limit() -> Self {
         Self::new(DEFAULT_MAX_PENDING_EVENT_BYTES)
     }

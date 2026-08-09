@@ -257,7 +257,7 @@ per-attempt 字段。`attempts` 最多包含八次已派发尝试，其序列化
 | `provider` | String | 固定提供商枚举 |
 | `credential` | String | 非敏感配置凭据别名；绝不是提供商凭据或 Secret 数据 |
 | `status` | Integer | 收到时的提供商 HTTP 状态 |
-| `failure` | String | 固定类别：`retryable_status`、`ambiguous_transport`、`backend_request_timeout` 或 `incomplete_response` |
+| `failure` | String | 固定类别：`retryable_status`、`ambiguous_transport`、`backend_request_timeout` 或 `incomplete_response`。`incomplete_response` 表示**提供商**提前中断；由网关自身结束的流（超配额，或配额已无法执行）不是提供商故障，不带 `failure`，请改看其 `EdgionStatus` 码 |
 | `retry_after_seconds` | Integer | 接受的有界 Retry-After 冷却，单位秒 |
 | `ttft_ms` | Integer | 最终成功尝试到达首个非空响应体分片的时间 |
 | `usage_source` | String | `reported` 或 `estimated` |

@@ -413,6 +413,10 @@ impl AiProxy {
             service_snapshot: snapshot,
             quota,
             quota_status,
+            terminate_on_over_limit: self
+                .quota
+                .as_ref()
+                .is_some_and(|quota| matches!(quota.on_exceeded(), QuotaExceededAction::Reject)),
         });
         if !session.set_ai_attempt_plan(plan) {
             return Self::reject(session, log, "plan-locked", AiProxyError::ServiceUnavailable);
@@ -906,6 +910,7 @@ mod tests {
             service_snapshot: AiServiceStore::new().snapshot(),
             quota: None,
             quota_status: None,
+            terminate_on_over_limit: false,
         };
         let rendered = format!("{plan:?}");
         assert!(!rendered.contains("must-not-render"));

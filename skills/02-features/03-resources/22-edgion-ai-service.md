@@ -104,8 +104,10 @@ cool down that credential without ejecting its siblings.
 
 RPM reserves one request immediately before dispatch. TPM reserves estimated input plus the
 explicit request or service maximum-output bound. Therefore a TPM-limited credential is invalid
-when no maximum-output bound can be resolved. Known terminal usage reconciles the reservation;
-ambiguous dispatched outcomes conservatively retain the full reservation until the window expires.
+when no maximum-output bound can be resolved. Known terminal usage reconciles the reservation, and
+so does a stream the gateway itself terminated mid-response (its outcome is known, not ambiguous);
+only genuinely ambiguous dispatched outcomes conservatively retain the full reservation until the
+window expires.
 
 ### `models`
 

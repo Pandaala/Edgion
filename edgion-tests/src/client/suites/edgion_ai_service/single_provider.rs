@@ -1,9 +1,14 @@
 //! Static end-to-end coverage for one OpenAI-compatible AI service.
 
+use super::gateway_admin::{admin_base, authed, service_uid, CREDENTIAL_RESERVATION_KEY_PREFIX};
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use crate::metrics_helper::MetricsClient;
+use crate::transport::{RawH1Conn, RawH2Conn};
 use async_trait::async_trait;
-use edgion_gateway::plugins::common::redis_rate_limiter::build_cumulative_quota_keys;
+use bytes::Bytes;
+use edgion_gateway::plugins::common::redis_rate_limiter::{
+    build_credential_reservation_keys, build_cumulative_quota_keys,
+};
 use futures::StreamExt;
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde_json::{json, Value};
@@ -22,8 +27,35 @@ const QUOTA_HOST: &str = "ai-quota.example.com";
 const RETRY_HOST: &str = "ai-retry.example.com";
 const THROTTLE_HOST: &str = "ai-quota-throttle.example.com";
 const DOWNGRADE_HOST: &str = "ai-quota-downgrade.example.com";
+const QUOTA_TERMINATE_HOST: &str = "ai-quota-terminate.example.com";
+const QUOTA_TERMINATE_GUARD_HOST: &str = "ai-quota-terminate-guard.example.com";
+/// Routes to `fixture-provider-credential-tpm`, the only fixture service that
+/// declares a per-credential `tokensPerMinute` limit and therefore the only
+/// one whose attempts take out — and must settle — a credential reservation.
+const CREDENTIAL_TPM_HOST: &str = "ai-credential-tpm.example.com";
 const PATH: &str = "/v1/chat/completions";
 const QUOTA_WINDOW_MS: u128 = 60 * 60 * 1_000;
+
+/// The SSE event a terminated stream must carry immediately before the
+/// gateway ends the response. Mirrors
+/// `edgion_gateway::ai::usage::QUOTA_EXCEEDED_SSE_EVENT`, which is
+/// `pub(crate)` inside the gateway crate and therefore not importable here.
+/// Reuses the same message/type/code the 429 admission-time rejection
+/// renders (`edgion_gateway::ai::error::AiProxyError::QuotaExceeded`).
+///
+/// Leads with a blank line, like its `QUOTA_UNENFORCEABLE_SSE_EVENT` sibling
+/// below and for the same reason: the injection is appended after whatever
+/// byte the upstream's chunk boundary fell on, so without its own boundary it
+/// would continue a half-delivered event instead of starting a new one.
+const QUOTA_EXCEEDED_SSE_EVENT: &[u8] = b"\n\nevent: error\ndata: {\"error\":{\"message\":\"The token quota has been exceeded.\",\"type\":\"rate_limit_error\",\"code\":\"token_quota_exceeded\"}}\n\n";
+
+/// The SSE event carried by a stream cut short because quota could no longer
+/// be evaluated (SSE decoding degraded). Mirrors
+/// `edgion_gateway::ai::usage::QUOTA_UNENFORCEABLE_SSE_EVENT`, which is
+/// `pub(crate)` and therefore not importable here. Reuses the same
+/// message/type/code the admission path renders when enforcement cannot be
+/// performed (`edgion_gateway::ai::error::AiProxyError::QuotaUnavailable`).
+const QUOTA_UNENFORCEABLE_SSE_EVENT: &[u8] = b"\n\nevent: error\ndata: {\"error\":{\"message\":\"Token quota enforcement is temporarily unavailable.\",\"type\":\"api_error\",\"code\":\"token_quota_unavailable\"}}\n\n";
 
 fn client(ctx: &TestContext, host: &str, h2: bool, raw_gzip: bool) -> Result<reqwest::Client, String> {
     let target_ip = ctx
@@ -127,7 +159,7 @@ async fn post_with_quota_identity(
     body: Value,
     trace_id: Option<&str>,
 ) -> Result<reqwest::Response, String> {
-    post_with_quota_identity_on_host(ctx, QUOTA_HOST, identity, body, trace_id).await
+    post_with_quota_identity_on_host(ctx, QUOTA_HOST, identity, body, "", trace_id).await
 }
 
 async fn post_with_quota_identity_on_host(
@@ -135,10 +167,11 @@ async fn post_with_quota_identity_on_host(
     host: &str,
     identity: &str,
     body: Value,
+    query: &str,
     trace_id: Option<&str>,
 ) -> Result<reqwest::Response, String> {
     let mut request = client(ctx, host, false, false)?
-        .post(request_url(ctx, host, PATH, ""))
+        .post(request_url(ctx, host, PATH, query))
         .header("x-quota-user", identity)
         .json(&body);
     if let Some(trace_id) = trace_id {
@@ -1294,6 +1327,7 @@ fn token_quota_throttle_one_shot(
             THROTTLE_HOST,
             &identity,
             json!({"model":"fixture-model","messages":[]}),
+            "",
             Some(&first_trace),
         )
         .await
@@ -1332,6 +1366,7 @@ fn token_quota_throttle_one_shot(
             THROTTLE_HOST,
             &identity,
             json!({"model":"fixture-model","messages":[]}),
+            "",
             None,
         )
         .await
@@ -1380,6 +1415,7 @@ fn token_quota_downgrade(ctx: TestContext) -> std::pin::Pin<Box<dyn std::future:
             DOWNGRADE_HOST,
             &identity,
             json!({"model":"premium-model","messages":[]}),
+            "",
             Some(&seed_trace),
         )
         .await
@@ -1419,6 +1455,7 @@ fn token_quota_downgrade(ctx: TestContext) -> std::pin::Pin<Box<dyn std::future:
             DOWNGRADE_HOST,
             &identity,
             json!({"model":"premium-model","messages":[]}),
+            "",
             Some(&trace),
         )
         .await
@@ -1496,7 +1533,9 @@ fn oversized_passthrough(ctx: TestContext) -> std::pin::Pin<Box<dyn std::future:
         };
         let expected = format!(
             "data: {{\"id\":\"oversized-fixture\",\"choices\":[{{\"delta\":{{\"content\":\"{}\"}}}}]}}\n\ndata: {{\"id\":\"stream-fixture\",\"choices\":[],\"usage\":{{\"prompt_tokens\":11,\"completion_tokens\":7,\"total_tokens\":18}}}}\n\ndata: [DONE]\n\n",
-            "x".repeat(70 * 1024)
+            // Must mirror `test_server::oversized_event_payload_bytes`, which
+            // is bound to the gateway's incomplete-event cap.
+            "x".repeat(edgion_gateway::sse::DEFAULT_MAX_PENDING_EVENT_BYTES + 4096)
         );
         if body.as_ref() != expected.as_bytes() {
             return TestResult::failed(
@@ -1511,6 +1550,946 @@ fn oversized_passthrough(ctx: TestContext) -> std::pin::Pin<Box<dyn std::future:
         TestResult::passed_with_message(
             start.elapsed(),
             format!("{} streaming bytes passed through", body.len()),
+        )
+    })
+}
+
+// ===========================================================================
+// Response-body pipeline verification (task B4): quota over-limit termination
+// ===========================================================================
+//
+// These three cases exercise the real, end-to-end quota-termination path
+// against the real `default/redis-test` Redis instance the harness already
+// starts for this item — no processor stub, no faked accumulator state. The
+// `ai-proxy-quota-terminate` plugin (09_EdgionPlugins) uses a deliberately
+// tiny limit (2 tokens) so the real `RedisQuotaSink` worker genuinely flips
+// `over_limit()` mid-stream through the same Redis round trip production
+// uses; see `edgion_gateway::ai::quota::runtime::RedisQuotaSink` and
+// `edgion_gateway::ai::usage::UsageExtractionProcessor::on_chunk`.
+//
+// The `quota_terminate` fixture (`test_server.rs::ai_stream_plan`) sends 5
+// one-quota-unit content deltas 150ms apart — generous headroom over the
+// plugin's 10ms flush interval — followed by a usage event and `[DONE]`
+// tagged with a distinct `unreachable_marker` so a test can assert their
+// absence without pinning the exact chunk the gateway terminates on.
+//
+// Chunks a/b/c are overwhelmingly likely, but not structurally guaranteed,
+// to never trip termination themselves. Within one `on_chunk` call there is
+// no `.await` between `observe_chunk` and the `over_limit()` check
+// (`ai/usage.rs`), so that check can only reflect a worker flush that
+// completed *before* the call began. But the worker always flushes whatever
+// `observed_output` currently holds, not a value pinned to the notify that
+// woke it — so, in principle, a first flush delayed past two whole 150ms
+// gaps could already report a later cumulative than the chunk that
+// triggered it. Given the 10ms flush interval and a local Redis, that would
+// take three orders of magnitude of scheduling lag beyond normal, and every
+// run observed so far (including the mutation tests below) landed
+// termination on exactly the fourth chunk. A violation of this margin would
+// surface as `check_quota_terminate_body`'s prefix assertion failing
+// loudly, not as a silent pass — which is why the assertions below check a
+// near-certain prefix, injected-event presence, and the tail's absence,
+// never an exact mid-stream cut point.
+
+/// Mirrors `test_server.rs::ai_stream_plan("quota_terminate", ..)` byte for
+/// byte. Kept in sync by construction (both sides are hand-written against
+/// the same fixture contract), not by sharing code across the
+/// gateway-crate/test-harness boundary.
+fn quota_terminate_delta(label: &str) -> Vec<u8> {
+    format!("data: {{\"id\":\"quota-terminate-fixture\",\"choices\":[{{\"delta\":{{\"content\":\"{label}\"}}}}]}}\n\n")
+        .into_bytes()
+}
+
+/// The three leading chunks that are overwhelmingly likely — but not
+/// structurally guaranteed — to never be terminated on; see the
+/// module-level comment for the exact margin and why a violation would
+/// fail loudly instead of passing silently.
+fn quota_terminate_guaranteed_prefix() -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&quota_terminate_delta("chunk-a"));
+    out.extend_from_slice(&quota_terminate_delta("chunk-b"));
+    out.extend_from_slice(&quota_terminate_delta("chunk-c"));
+    out
+}
+
+/// The complete, untruncated fixture body — what a client must receive if
+/// (and only if) termination never fires, i.e. exactly the shape a
+/// non-streaming request behind the same quota must still get in full.
+fn quota_terminate_full_body() -> Vec<u8> {
+    let mut out = quota_terminate_guaranteed_prefix();
+    out.extend_from_slice(&quota_terminate_delta("chunk-d"));
+    out.extend_from_slice(&quota_terminate_delta("chunk-e"));
+    out.extend_from_slice(
+        b"data: {\"id\":\"quota-terminate-fixture\",\"choices\":[],\"usage\":{\"prompt_tokens\":11,\
+          \"completion_tokens\":7,\"total_tokens\":18},\"unreachable_marker\":\"quota-terminate-must-not-reach-client\"}\n\n",
+    );
+    out.extend_from_slice(b"data: [DONE]\n\n");
+    out
+}
+
+/// Asserts the injected error survives as a *dispatchable* event in the
+/// client's own view of the stream, not merely as a byte sequence present
+/// somewhere in the body.
+///
+/// Byte containment is not the property that matters. The gateway appends the
+/// injection after whatever byte the upstream's chunk boundary fell on, so if
+/// that boundary lands inside an SSE event the injected bytes continue the
+/// half-delivered event instead of starting a new one: still present verbatim,
+/// still framed legally, but parsed as one event whose data is truncated JSON
+/// glued to the error JSON — which every conforming client drops. The stream
+/// then reads exactly like an upstream hang-up, and the injected event is the
+/// client's only way to tell the two apart. So this decodes the received bytes
+/// with the same WHATWG-conformant decoder a client would use and asserts the
+/// error arrives as its own event with parseable JSON.
+fn check_injected_event_is_dispatchable(body: &[u8]) -> Option<String> {
+    let mut decoder = edgion_gateway::sse::SseDecoder::with_default_limit();
+    let mut events = Vec::new();
+    decoder.feed(body, &mut events);
+
+    let Some(last) = events.last() else {
+        return Some("the terminated body dispatched no SSE events at all".to_string());
+    };
+    if last.event.as_deref() != Some("error") {
+        return Some(format!(
+            "the injected quota event was swallowed by a partial upstream event: the client's last dispatched \
+             event is {:?}, not `error` ({} events total)",
+            last.event,
+            events.len()
+        ));
+    }
+    match serde_json::from_str::<Value>(&last.data) {
+        Ok(value) if value["error"]["code"] == "token_quota_exceeded" => None,
+        Ok(value) => Some(format!(
+            "the injected error event carried an unexpected payload: {value}"
+        )),
+        Err(error) => Some(format!(
+            "the injected error event did not parse as JSON client-side ({error}) — its data was concatenated \
+             onto a half-delivered upstream event: {:?}",
+            last.data
+        )),
+    }
+}
+
+/// Shared assertion for a terminated stream's body, independent of exactly
+/// which chunk index the gateway cut on.
+fn check_quota_terminate_body(body: &[u8]) -> Option<String> {
+    let prefix = quota_terminate_guaranteed_prefix();
+    if !body.starts_with(prefix.as_slice()) {
+        return Some(format!(
+            "expected the body to start with the fixture's first 3 chunks ({} bytes — near-certain to survive \
+             termination given the timing margin, see the module comment); got {} bytes starting {:?}",
+            prefix.len(),
+            body.len(),
+            String::from_utf8_lossy(&body[..body.len().min(200)])
+        ));
+    }
+    // Parsed view first: both checks fail on a swallowed injection, but only
+    // this one names the reason. The byte-level `ends_with` below would
+    // otherwise report a generic "wrong tail" for the exact defect the parsed
+    // check exists to describe.
+    if let Some(error) = check_injected_event_is_dispatchable(body) {
+        return Some(error);
+    }
+    if !body.ends_with(QUOTA_EXCEEDED_SSE_EVENT) {
+        return Some(format!(
+            "expected the response to end with the injected quota_exceeded SSE event; got tail {:?}",
+            String::from_utf8_lossy(&body[body.len().saturating_sub(200)..])
+        ));
+    }
+    if body.windows(19).any(|window| window == b"unreachable_marker\"") {
+        return Some(
+            "terminated body must never contain the tail's unreachable_marker — the usage/[DONE] tail leaked \
+             through instead of being cut off"
+                .to_string(),
+        );
+    }
+    if body.windows(7).any(|window| window == b"[DONE]\n") {
+        return Some(
+            "terminated body must never reach the natural [DONE] end of stream — the gateway did not actually \
+             cut the response short"
+                .to_string(),
+        );
+    }
+    None
+}
+
+/// Item 1+2 (H1): the pre-termination content, the injected SSE error event,
+/// and a clean end of response — asserted on the *raw* wire (a hand-driven
+/// H1 connection, not a client library that would hide `Transfer-Encoding`).
+fn quota_termination_h1_framing(
+    ctx: TestContext,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
+    Box::pin(async move {
+        let start = Instant::now();
+        let identity = format!("quota-terminate-h1-{}", uuid::Uuid::new_v4());
+        let request_body = json!({"model":"fixture-model","stream":true,"messages":[]}).to_string();
+        let content_length = request_body.len().to_string();
+
+        let mut conn = match RawH1Conn::connect(&ctx.target_host, ctx.http_port).await {
+            Ok(conn) => conn,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        let head_result = conn
+            .write_head(
+                "POST",
+                "/v1/chat/completions?mock_mode=quota_terminate",
+                QUOTA_TERMINATE_HOST,
+                &[
+                    ("content-type", "application/json"),
+                    ("content-length", content_length.as_str()),
+                    ("x-quota-user", identity.as_str()),
+                ],
+            )
+            .await;
+        if let Err(error) = head_result {
+            return TestResult::failed(start.elapsed(), error);
+        }
+        if let Err(error) = conn.write_raw(request_body.as_bytes()).await {
+            return TestResult::failed(start.elapsed(), error);
+        }
+
+        let head = match conn.read_response_head(Duration::from_secs(5)).await {
+            Ok(head) => head,
+            Err(error) => return TestResult::failed(start.elapsed(), format!("no response head: {error}")),
+        };
+        if head.status != 200 {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("expected 200, got {} {}", head.status, head.reason),
+            );
+        }
+        if !head.is_chunked() {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("H1 terminated AI stream must be Transfer-Encoding: chunked; got {head}"),
+            );
+        }
+        // `header("content-length")` on the raw header text, not
+        // `content_length()` — the latter parses the value and reads a
+        // malformed `Content-Length: abc` as absent, which would pass here
+        // for the wrong reason.
+        if head.header("content-length").is_some() {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("H1 terminated AI stream must not carry Content-Length; got {head}"),
+            );
+        }
+
+        let body = match conn.read_body(&head, Duration::from_secs(5)).await {
+            Ok(body) => body,
+            Err(error) => {
+                return TestResult::failed(start.elapsed(), format!("chunked body did not end cleanly: {error}"));
+            }
+        };
+        if let Some(error) = check_quota_terminate_body(&body) {
+            return TestResult::failed(start.elapsed(), error);
+        }
+        TestResult::passed_with_message(
+            start.elapsed(),
+            format!(
+                "H1 quota termination stayed chunked with no Content-Length and ended cleanly ({} body bytes)",
+                body.len()
+            ),
+        )
+    })
+}
+
+/// D3 regression: the injected quota error event must survive an upstream
+/// that ends its chunks mid-event.
+///
+/// Same setup as `quota_termination_h1_framing`, except the provider writes
+/// one byte per write (`mock_mode=quota_terminate_byte_at_a_time`). That is
+/// simply the worst case of a freedom every provider has — where a chunk ends
+/// is not something the gateway controls — and ordinary TCP segmentation
+/// reaches it intermittently. Because the quota flush is asynchronous, several
+/// more bytes have already arrived by the time `over_limit()` is observed, so
+/// the cut lands inside an SSE event rather than on a boundary.
+///
+/// The injection is appended after the current chunk's bytes, so without its
+/// own leading boundary it would continue that half-delivered event: present
+/// on the wire, framed legally, and dropped by every conforming parser. The
+/// assertion is therefore on the client's parsed view
+/// (`check_injected_event_is_dispatchable`, reached through
+/// `check_quota_terminate_body`), not on raw byte containment.
+///
+/// Byte-at-a-time delivery also maximizes filter invocations and per-batch
+/// boundaries, so this exercises the response-body sink's per-batch lifecycle
+/// far harder than any whole-event fixture. If the boundary fix holds but this
+/// case still fails intermittently, that is a different and more serious bug —
+/// report it rather than relaxing the assertion.
+fn byte_at_a_time_sse_delivery_still_terminates(
+    ctx: TestContext,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
+    Box::pin(async move {
+        let start = Instant::now();
+        let identity = format!("quota-terminate-bytewise-{}", uuid::Uuid::new_v4());
+        let request_body = json!({"model":"fixture-model","stream":true,"messages":[]}).to_string();
+        let content_length = request_body.len().to_string();
+
+        let mut conn = match RawH1Conn::connect(&ctx.target_host, ctx.http_port).await {
+            Ok(conn) => conn,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        let head_result = conn
+            .write_head(
+                "POST",
+                "/v1/chat/completions?mock_mode=quota_terminate_byte_at_a_time",
+                QUOTA_TERMINATE_HOST,
+                &[
+                    ("content-type", "application/json"),
+                    ("content-length", content_length.as_str()),
+                    ("x-quota-user", identity.as_str()),
+                ],
+            )
+            .await;
+        if let Err(error) = head_result {
+            return TestResult::failed(start.elapsed(), error);
+        }
+        if let Err(error) = conn.write_raw(request_body.as_bytes()).await {
+            return TestResult::failed(start.elapsed(), error);
+        }
+
+        let head = match conn.read_response_head(Duration::from_secs(5)).await {
+            Ok(head) => head,
+            Err(error) => return TestResult::failed(start.elapsed(), format!("no response head: {error}")),
+        };
+        if head.status != 200 {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("expected 200, got {} {}", head.status, head.reason),
+            );
+        }
+
+        // Generous relative to the ~600ms this fixture needs to reach the cut
+        // at 2ms per byte, while still failing loudly if the stream runs to
+        // its natural end instead of being terminated.
+        let body = match conn.read_body(&head, Duration::from_secs(10)).await {
+            Ok(body) => body,
+            Err(error) => {
+                return TestResult::failed(start.elapsed(), format!("chunked body did not end cleanly: {error}"));
+            }
+        };
+        if let Some(error) = check_quota_terminate_body(&body) {
+            return TestResult::failed(start.elapsed(), error);
+        }
+        TestResult::passed_with_message(
+            start.elapsed(),
+            format!(
+                "byte-at-a-time upstream delivery still produced a dispatchable injected quota event \
+                 ({} body bytes)",
+                body.len()
+            ),
+        )
+    })
+}
+
+/// D1 regression: one oversized SSE event must not silently switch quota
+/// enforcement off for the rest of the stream.
+///
+/// `quota.add_output_units` is only reachable from inside `feed_each`'s
+/// visitor, and a degraded decoder returns from `feed_each` immediately for
+/// every later chunk. So once the decoder gives up, nothing grows the
+/// accumulator, no flush runs, `over_limit()` can never flip, and the
+/// over-limit termination path is dead for this request — the upstream would
+/// bill freely to the request timeout. Enforcement therefore fails closed
+/// here instead.
+///
+/// Reuses `mock_mode=oversized`, whose first chunk is one unterminated event
+/// past the decoder's cap (sized from the gateway constant) followed by a
+/// usage event and `[DONE]`. Those two trailing chunks are what must never
+/// reach the client. Driven over `RawH1Conn` so the cut is asserted on the
+/// wire rather than through a client library's parsed view.
+fn oversized_sse_event_must_not_disable_mid_stream_quota_enforcement(
+    ctx: TestContext,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
+    Box::pin(async move {
+        let start = Instant::now();
+        let identity = format!("quota-degraded-h1-{}", uuid::Uuid::new_v4());
+        let request_body = json!({"model":"fixture-model","stream":true,"messages":[]}).to_string();
+        let content_length = request_body.len().to_string();
+
+        let mut conn = match RawH1Conn::connect(&ctx.target_host, ctx.http_port).await {
+            Ok(conn) => conn,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        let head_result = conn
+            .write_head(
+                "POST",
+                "/v1/chat/completions?mock_mode=oversized",
+                QUOTA_TERMINATE_HOST,
+                &[
+                    ("content-type", "application/json"),
+                    ("content-length", content_length.as_str()),
+                    ("x-quota-user", identity.as_str()),
+                ],
+            )
+            .await;
+        if let Err(error) = head_result {
+            return TestResult::failed(start.elapsed(), error);
+        }
+        if let Err(error) = conn.write_raw(request_body.as_bytes()).await {
+            return TestResult::failed(start.elapsed(), error);
+        }
+
+        let head = match conn.read_response_head(Duration::from_secs(5)).await {
+            Ok(head) => head,
+            Err(error) => return TestResult::failed(start.elapsed(), format!("no response head: {error}")),
+        };
+        if head.status != 200 {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("expected 200, got {} {}", head.status, head.reason),
+            );
+        }
+
+        // Bounded well under the fixture's full run so "the stream completed
+        // normally" fails loudly instead of hanging.
+        let body = match conn.read_body(&head, Duration::from_secs(5)).await {
+            Ok(body) => body,
+            Err(error) => {
+                return TestResult::failed(start.elapsed(), format!("chunked body did not end cleanly: {error}"));
+            }
+        };
+
+        if !body.ends_with(QUOTA_UNENFORCEABLE_SSE_EVENT) {
+            return TestResult::failed(
+                start.elapsed(),
+                format!(
+                    "expected the response to end with the injected token_quota_unavailable SSE event; got tail {:?}",
+                    String::from_utf8_lossy(&body[body.len().saturating_sub(200)..])
+                ),
+            );
+        }
+        if body.windows(7).any(|window| window == b"[DONE]\n") {
+            return TestResult::failed(
+                start.elapsed(),
+                "a stream whose quota can no longer be evaluated must never reach the natural [DONE] end of \
+                 stream — enforcement was silently switched off by the oversized event"
+                    .to_string(),
+            );
+        }
+        if body.windows(9).any(|window| window == b"\"usage\":{") {
+            return TestResult::failed(
+                start.elapsed(),
+                "the fixture's trailing usage event leaked through instead of being cut off".to_string(),
+            );
+        }
+        TestResult::passed_with_message(
+            start.elapsed(),
+            format!(
+                "an oversized SSE event failed quota enforcement closed instead of disabling it ({} body bytes)",
+                body.len()
+            ),
+        )
+    })
+}
+
+/// Item 1+2 (H2): the same termination, over a hand-driven HTTP/2 connection
+/// so `content-length` absence and a clean `END_STREAM` (not a mid-body RST)
+/// are asserted on the real frames rather than a parsed client view.
+fn quota_termination_h2_framing(
+    ctx: TestContext,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
+    Box::pin(async move {
+        let start = Instant::now();
+        let identity = format!("quota-terminate-h2-{}", uuid::Uuid::new_v4());
+        let request_body = json!({"model":"fixture-model","stream":true,"messages":[]}).to_string();
+        let content_length = request_body.len().to_string();
+
+        let mut conn = match RawH2Conn::connect(&ctx.target_host, ctx.http_port).await {
+            Ok(conn) => conn,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        let uri = format!(
+            "http://{}:{}/v1/chat/completions?mock_mode=quota_terminate",
+            QUOTA_TERMINATE_HOST, ctx.http_port
+        );
+        let headers = [
+            ("content-type", "application/json"),
+            ("content-length", content_length.as_str()),
+            ("x-quota-user", identity.as_str()),
+        ];
+        let (response, mut send) = match conn.send_request("POST", &uri, &headers, false) {
+            Ok(pair) => pair,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        if let Err(error) = send.send_data(Bytes::from(request_body.into_bytes()), true) {
+            return TestResult::failed(start.elapsed(), format!("H2 request body write failed: {error}"));
+        }
+
+        let response = match tokio::time::timeout(Duration::from_secs(5), response).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => return TestResult::failed(start.elapsed(), format!("H2 response failed: {error}")),
+            Err(_) => return TestResult::failed(start.elapsed(), "no H2 response within 5s".to_string()),
+        };
+        if response.status().as_u16() != 200 {
+            return TestResult::failed(start.elapsed(), format!("expected 200, got {}", response.status()));
+        }
+        if response.headers().get("content-length").is_some() {
+            return TestResult::failed(
+                start.elapsed(),
+                format!(
+                    "H2 terminated AI stream must not carry content-length; got {:?}",
+                    response.headers()
+                ),
+            );
+        }
+
+        let mut body_stream = response.into_body();
+        let mut body = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), body_stream.data()).await {
+                Ok(Some(Ok(chunk))) => {
+                    let _ = body_stream.flow_control().release_capacity(chunk.len());
+                    body.extend_from_slice(&chunk);
+                }
+                Ok(Some(Err(error))) => {
+                    return TestResult::failed(start.elapsed(), format!("H2 body stream ended abnormally: {error}"));
+                }
+                Ok(None) => break,
+                Err(_) => return TestResult::failed(start.elapsed(), "H2 body read timed out".to_string()),
+            }
+        }
+        conn.shutdown();
+
+        if let Some(error) = check_quota_terminate_body(&body) {
+            return TestResult::failed(start.elapsed(), error);
+        }
+        TestResult::passed_with_message(
+            start.elapsed(),
+            format!(
+                "H2 quota termination carried no content-length and ended with a clean END_STREAM ({} body bytes)",
+                body.len()
+            ),
+        )
+    })
+}
+
+/// Item 3: a client that declares `"stream": false` must never be truncated
+/// by the quota-termination path, even when the upstream answers with an
+/// SSE body that genuinely goes over the same tiny limit. This drives the
+/// real `requested_streaming` gate on `UsageExtractionProcessor::on_chunk`
+/// (`edgion-gateway/src/ai/usage.rs`) — `requested_streaming` comes from the
+/// client's own request, and `stream_kind` (SSE vs. not) comes from the
+/// actual upstream response, so the only way to exercise the gate for real
+/// is a provider that answers with SSE despite the client's non-streaming
+/// request. `quota_terminate_force_sse` is exactly that fixture behavior.
+///
+/// The full-body check alone is not sufficient evidence: it would also pass
+/// if the quota plugin were silently disabled or misconfigured for this
+/// route (e.g. `tokenQuota` failing to compile, the identity never
+/// resolving, `default/redis-test` becoming unreachable) — cases where
+/// there is nothing at all for the gate to hold back. A same-identity
+/// follow-up request supplies that missing positive control — see the
+/// comment at its call site below for exactly what it does and does not
+/// prove.
+fn quota_termination_requires_streaming_request(
+    ctx: TestContext,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
+    Box::pin(async move {
+        let start = Instant::now();
+        let identity = format!("quota-terminate-guard-{}", uuid::Uuid::new_v4());
+        let request = match client(&ctx, QUOTA_TERMINATE_GUARD_HOST, false, false) {
+            Ok(client) => client,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        }
+        .post(request_url(
+            &ctx,
+            QUOTA_TERMINATE_GUARD_HOST,
+            PATH,
+            "?mock_mode=quota_terminate_force_sse",
+        ))
+        .header("x-quota-user", identity.as_str())
+        .json(&json!({"model":"fixture-model","stream":false,"messages":[]}));
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) => return TestResult::failed(start.elapsed(), format!("AI request failed: {error}")),
+        };
+        if response.status() != reqwest::StatusCode::OK {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("non-streaming guard request expected 200, got {}", response.status()),
+            );
+        }
+        if response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            != Some("text/event-stream")
+        {
+            return TestResult::failed(
+                start.elapsed(),
+                format!(
+                    "fixture must answer with an SSE content-type despite stream:false (test setup check); got {:?}",
+                    response.headers().get("content-type")
+                ),
+            );
+        }
+        let body = match response.bytes().await {
+            Ok(body) => body,
+            Err(error) => return TestResult::failed(start.elapsed(), format!("body read failed: {error}")),
+        };
+        let expected = quota_terminate_full_body();
+        if body.as_ref() != expected.as_slice() {
+            let contains_injected_event = body
+                .windows(QUOTA_EXCEEDED_SSE_EVENT.len())
+                .any(|window| window == QUOTA_EXCEEDED_SSE_EVENT);
+            return TestResult::failed(
+                start.elapsed(),
+                format!(
+                    "a non-streaming ('stream':false) request must never be truncated by quota termination, even \
+                     though the upstream answered with an over-limit SSE stream — expected the full {}-byte fixture \
+                     body, got {} bytes (injected quota_exceeded event present: {contains_injected_event})",
+                    expected.len(),
+                    body.len()
+                ),
+            );
+        }
+
+        // Positive control. The check above (full body, no truncation) can
+        // pass for two entirely different reasons: because the
+        // `requested_streaming` gate correctly held back a real over-limit
+        // termination, or because quota enforcement was never engaged for
+        // this identity/route at all (plugin misconfiguration, a failed
+        // `tokenQuota` compile, an unreachable `default/redis-test`, ...) —
+        // in which case there was nothing for the gate to hold back. A
+        // second request reusing the *same* `x-quota-user` identity on
+        // `QUOTA_TERMINATE_HOST` proves which one happened: the identity's
+        // Redis bucket is shared across both hostnames (same
+        // `ai-proxy-quota-terminate` plugin, so the same `entry_scope`), and
+        // `tokens: 2` means a guard request that was genuinely admitted and
+        // billed leaves the bucket over limit for every subsequent request
+        // in the same window. If quota enforcement were disabled or
+        // misconfigured, this request would be freely admitted (200)
+        // instead of rejected.
+        //
+        // This does not, by itself, prove the *mid-stream* estimate that
+        // feeds `over_limit()` during a long-running stream
+        // (`approximate_openai_output_units`) is what pushed the bucket
+        // over: production also reconciles the bucket from the stream's
+        // authoritative reported "usage" tokens once the response finishes
+        // (`pg_logging.rs::finalize_ai_quota`), and a well-formed SSE
+        // response will normally supply those regardless of whether the
+        // per-chunk estimate is healthy. That narrower claim — that
+        // `over_limit()` genuinely flips true *during* a stream and
+        // termination fires because of it — is what `quota_termination_h1_
+        // framing`/`_h2_framing` verify instead, including via mutation
+        // testing (see the B4 report). This control's job is narrower and
+        // still real: it proves quota enforcement is live for this
+        // identity, not merely that a body happened to arrive intact.
+        let control = match client(&ctx, QUOTA_TERMINATE_HOST, false, false) {
+            Ok(client) => client,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        }
+        .post(request_url(&ctx, QUOTA_TERMINATE_HOST, PATH, ""))
+        .header("x-quota-user", identity.as_str())
+        .json(&json!({"model":"fixture-model","messages":[]}))
+        .send()
+        .await;
+        let control = match control {
+            Ok(response) => response,
+            Err(error) => {
+                return TestResult::failed(start.elapsed(), format!("positive-control request failed: {error}"))
+            }
+        };
+        if control.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return TestResult::failed(
+                start.elapsed(),
+                format!(
+                    "positive control failed: expected the guard request to have driven the shared identity's \
+                     bucket over the 2-token limit, so a same-identity follow-up should be rejected with 429 — got \
+                     {} instead, meaning the guard request may never have accrued real quota usage",
+                    control.status()
+                ),
+            );
+        }
+        let control_body: Value = match control.json().await {
+            Ok(body) => body,
+            Err(error) => {
+                return TestResult::failed(
+                    start.elapsed(),
+                    format!("positive-control 429 body was not valid JSON: {error}"),
+                )
+            }
+        };
+        if control_body["error"]["code"] != "token_quota_exceeded" {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("positive-control 429 returned the wrong OpenAI error envelope: {control_body}"),
+            );
+        }
+
+        TestResult::passed_with_message(
+            start.elapsed(),
+            format!(
+                "non-streaming request received the full untruncated {}-byte body despite an over-limit SSE \
+                 upstream (requested_streaming gate held), and a same-identity follow-up confirmed the bucket was \
+                 genuinely driven over its 2-token limit (429 token_quota_exceeded)",
+                body.len()
+            ),
+        )
+    })
+}
+
+/// One credential-reservation window, in seconds. Mirrors the gateway's
+/// private `attempt_runtime::WINDOW`.
+const CREDENTIAL_RESERVATION_WINDOW_SECS: u64 = 60;
+/// `defaults.maxOutputTokens` of `fixture-provider-credential-tpm`, i.e. the
+/// output half of every reservation its attempts take out.
+const CREDENTIAL_TPM_MAX_OUTPUT_TOKENS: u64 = 4096;
+
+fn credential_window_now() -> (u64, u64) {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    (
+        seconds / CREDENTIAL_RESERVATION_WINDOW_SECS,
+        seconds % CREDENTIAL_RESERVATION_WINDOW_SECS,
+    )
+}
+
+/// Reads the credential's `tpm` counter for `window`, the window frozen before
+/// the request that took the reservation out. `None` means the bucket does not
+/// exist — which is itself a finding here, so the caller must not treat it as
+/// "nothing reserved yet": a reconciled bucket keeps its `tpm` field at a small
+/// value, it is never deleted.
+async fn credential_tpm_used(ctx: &TestContext, uid: &str, alias: &str, window: u64) -> Result<Option<u64>, String> {
+    let keys = build_credential_reservation_keys(
+        CREDENTIAL_RESERVATION_KEY_PREFIX,
+        b"edgion-test",
+        uid.as_bytes(),
+        alias.as_bytes(),
+        window,
+        uuid::Uuid::new_v4().to_string().as_bytes(),
+    )
+    .map_err(|error| format!("failed to derive the credential reservation bucket: {error}"))?;
+    let encoded = utf8_percent_encode(&keys.bucket, NON_ALPHANUMERIC);
+    let response = authed(ctx.http_client.get(format!(
+        "{}/api/v1/testing/link-sys/redis/default_redis-test/hgetall/{encoded}",
+        admin_base(ctx)
+    )))
+    .send()
+    .await
+    .map_err(|error| format!("credential bucket inspection failed: {error}"))?;
+    let status = response.status();
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|error| format!("invalid credential bucket response: {error}"))?;
+    if !status.is_success() || body["success"] != true {
+        return Err(format!("credential bucket inspection returned {status}: {body}"));
+    }
+    Ok(body["data"]["fields"]["tpm"]
+        .as_str()
+        .and_then(|value| value.parse::<u64>().ok()))
+}
+
+/// D2/D4 regression: a stream the gateway itself terminated must settle its
+/// credential reservation and must not be booked as an upstream truncation.
+///
+/// Terminating stops the response immediately, so the `end_of_stream = true`
+/// task never reaches the response-body hook — by design. Settlement used to
+/// read that missing eos as "the upstream truncated", which has two visible
+/// consequences, both asserted here:
+///
+///  - the attempt kept its whole `estimated input + maxOutputTokens`
+///    reservation charged against the credential for the rest of the
+///    60-second window, even though the gateway had just dropped that
+///    upstream connection itself. Asserted twice, deliberately: directly, by
+///    reading the credential's `tpm` counter back out of Redis (it must be a
+///    reconciled handful of tokens, not the 4096-token estimate), and then
+///    behaviorally, because `fixture-provider-credential-tpm` declares
+///    `tokensPerMinute: 6000` against `maxOutputTokens: 4096` so exactly one
+///    outstanding reservation fits — the second request below, a different
+///    quota identity and therefore an unrelated tenant sharing the
+///    credential, is admitted only if the first reservation was settled. The
+///    direct read is what keeps this honest: without it the whole scenario
+///    would still pass green if credential limits silently stopped reaching
+///    the gateway, since then no bucket would be charged at all.
+///  - the access log stamped `genai.attempts[].failure = "incomplete_response"`
+///    on a perfectly healthy provider, contradicting the
+///    `AiQuotaOverLimitTerminated` status carried by the very same log line.
+fn quota_terminated_stream_records_its_status_and_settles_its_bucket(
+    ctx: TestContext,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
+    Box::pin(async move {
+        let start = Instant::now();
+
+        // Everything below must land in one reservation window. A rollover
+        // would hand the neighbour request a fresh credential bucket and let
+        // this case pass no matter how the first request settled, and would
+        // point the direct read at a bucket that never existed. The scenario
+        // runs in about two seconds, so waiting out the tail of a window
+        // removes almost all of that risk; the frozen `window` below turns the
+        // residue into an explicit skip-style failure rather than a false pass.
+        let (_, elapsed) = credential_window_now();
+        if elapsed > CREDENTIAL_RESERVATION_WINDOW_SECS - 8 {
+            tokio::time::sleep(Duration::from_secs(CREDENTIAL_RESERVATION_WINDOW_SECS - elapsed + 1)).await;
+        }
+        let (window, _) = credential_window_now();
+
+        let uid = match service_uid(&ctx, "edgion-test", "fixture-provider-credential-tpm").await {
+            Ok(uid) => uid,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+
+        let identity = format!("quota-terminate-tpm-{}", uuid::Uuid::new_v4());
+        let trace = format!("ai-quota-terminate-tpm-{}", uuid::Uuid::new_v4());
+        let response = match post_with_quota_identity_on_host(
+            &ctx,
+            CREDENTIAL_TPM_HOST,
+            &identity,
+            json!({"model":"fixture-model","stream":true,"messages":[]}),
+            "?mock_mode=quota_terminate",
+            Some(&trace),
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        if response.status() != reqwest::StatusCode::OK {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("terminated stream expected 200, got {}", response.status()),
+            );
+        }
+        let frames = match collect_sse(response).await {
+            Ok((frames, _)) => frames,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        let contains = |frame: &[u8], needle: &[u8]| frame.windows(needle.len()).any(|window| window == needle);
+        if !frames.iter().any(|frame| contains(frame, b"token_quota_exceeded"))
+            || frames
+                .iter()
+                .any(|frame| contains(frame, b"quota-terminate-must-not-reach-client"))
+        {
+            return TestResult::failed(
+                start.elapsed(),
+                format!(
+                    "the stream was not terminated over quota: {} frames, expected the injected quota_exceeded \
+                     event and none of the fixture's post-termination tail",
+                    frames.len()
+                ),
+            );
+        }
+
+        let entry = match ctx.access_log_client().get_access_log_with_retry(&trace, 15, 200).await {
+            Ok(entry) => entry,
+            Err(error) => {
+                return TestResult::failed(
+                    start.elapsed(),
+                    format!("terminated stream access log missing: {error}"),
+                )
+            }
+        };
+        let errors = entry.data["errors"].as_array().cloned().unwrap_or_default();
+        let has = |status: &str| errors.iter().any(|value| value == status);
+        if !has("AiQuotaOverLimitTerminated") {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("the deliberate cut must be recorded as AiQuotaOverLimitTerminated; got errors {errors:?}"),
+            );
+        }
+        if has("AiQuotaErrorEventDropped") {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("the injected diagnostic event must have fit the emit budget; got errors {errors:?}"),
+            );
+        }
+        let attempts = entry.data["genai"]["attempts"].as_array().cloned().unwrap_or_default();
+        if attempts.is_empty() {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("the terminated attempt must still be logged: {}", entry.data["genai"]),
+            );
+        }
+        if attempts
+            .iter()
+            .any(|attempt| attempt["failure"] == "incomplete_response")
+        {
+            return TestResult::failed(
+                start.elapsed(),
+                format!(
+                    "a gateway-initiated cut must not be booked as an upstream truncation — that failure class is \
+                     what an operator alerts on for a genuinely broken provider: {attempts:?}"
+                ),
+            );
+        }
+
+        // The assertion that pins the defect itself. Settlement runs inline in
+        // the logging phase (`pg_logging.rs` finalizes the attempt runtime
+        // before the access-log entry is assembled), so by the time the entry
+        // above was readable this counter is already final.
+        match credential_tpm_used(&ctx, &uid, "primary", window).await {
+            Ok(Some(used)) if used < CREDENTIAL_TPM_MAX_OUTPUT_TOKENS => {}
+            Ok(Some(used)) => {
+                return TestResult::failed(
+                    start.elapsed(),
+                    format!(
+                        "the credential's per-minute token counter still holds {used} tokens: the terminated \
+                         attempt retained its full {CREDENTIAL_TPM_MAX_OUTPUT_TOKENS}-token output reservation \
+                         instead of reconciling it to what the stream actually consumed"
+                    ),
+                );
+            }
+            Ok(None) if credential_window_now().0 != window => {
+                return TestResult::failed(
+                    start.elapsed(),
+                    "the reservation window rolled over mid-scenario, so neither the direct read nor the neighbour \
+                     admission below would mean anything — rerun the case"
+                        .to_string(),
+                );
+            }
+            Ok(None) => {
+                return TestResult::failed(
+                    start.elapsed(),
+                    "no credential reservation bucket exists for edgion-test/fixture-provider-credential-tpm — the \
+                     per-credential TPM limit never reached the data plane, so this scenario proves nothing"
+                        .to_string(),
+                );
+            }
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        }
+
+        // The unrelated tenant. Same credential, same window, fresh quota
+        // identity so the route's own 2-token user limit cannot reject it at
+        // admission before the credential reservation is even consulted.
+        let other_identity = format!("quota-terminate-tpm-other-{}", uuid::Uuid::new_v4());
+        let neighbour = match post_with_quota_identity_on_host(
+            &ctx,
+            CREDENTIAL_TPM_HOST,
+            &other_identity,
+            json!({"model":"fixture-model","stream":true,"messages":[]}),
+            "?mock_mode=quota_terminate",
+            None,
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        if neighbour.status() != reqwest::StatusCode::OK {
+            return TestResult::failed(
+                start.elapsed(),
+                format!(
+                    "a second tenant sharing the credential was refused with {} — the terminated stream retained its \
+                     full {}-token reservation instead of reconciling it, leaking the credential's per-minute budget \
+                     for the rest of the window",
+                    neighbour.status(),
+                    CREDENTIAL_TPM_MAX_OUTPUT_TOKENS
+                ),
+            );
+        }
+        if let Err(error) = collect_sse(neighbour).await {
+            return TestResult::failed(start.elapsed(), error);
+        }
+
+        TestResult::passed_with_message(
+            start.elapsed(),
+            "a quota-terminated stream recorded AiQuotaOverLimitTerminated without an incomplete_response failure, \
+             and reconciled its credential reservation so an unrelated tenant kept its admission"
+                .to_string(),
         )
     })
 }
@@ -1580,8 +2559,38 @@ impl TestSuite for SingleProviderTestSuite {
             ),
             TestCase::new(
                 "oversized_sse_passthrough",
-                "An incomplete SSE event larger than 64 KiB remains byte-preserved",
+                "An incomplete SSE event past the decoder's cap remains byte-preserved",
                 oversized_passthrough,
+            ),
+            TestCase::new(
+                "oversized_sse_event_must_not_disable_mid_stream_quota_enforcement",
+                "An oversized SSE event fails quota enforcement closed instead of silently disabling it",
+                oversized_sse_event_must_not_disable_mid_stream_quota_enforcement,
+            ),
+            TestCase::new(
+                "quota_termination_h1_framing",
+                "H1: quota over-limit termination stays chunked with no Content-Length and ends cleanly",
+                quota_termination_h1_framing,
+            ),
+            TestCase::new(
+                "byte_at_a_time_sse_delivery_still_terminates",
+                "An upstream ending its chunks mid-event still yields a dispatchable injected quota error event",
+                byte_at_a_time_sse_delivery_still_terminates,
+            ),
+            TestCase::new(
+                "quota_termination_h2_framing",
+                "H2: quota over-limit termination carries no content-length and ends with a clean END_STREAM",
+                quota_termination_h2_framing,
+            ),
+            TestCase::new(
+                "quota_termination_requires_streaming_request",
+                "A non-streaming request is never truncated by quota termination, even over an over-limit SSE upstream",
+                quota_termination_requires_streaming_request,
+            ),
+            TestCase::new(
+                "quota_terminated_stream_records_its_status_and_settles_its_bucket",
+                "A quota-terminated stream settles its credential reservation and is not logged as an upstream truncation",
+                quota_terminated_stream_records_its_status_and_settles_its_bucket,
             ),
         ]
     }

@@ -424,24 +424,21 @@ impl AiAttemptRuntimeState {
         if let Some(mut active) = self.active.take() {
             let dispatched = active.dispatched;
             let eos = active.eos.load(Ordering::Acquire);
+            // A gateway-initiated mid-stream cut (over quota, or quota no
+            // longer enforceable) never produces an eos callback: the sink
+            // terminates the response first, by design (response-body pipeline
+            // spec §3.4). "No eos" therefore means one of two very different
+            // things, and only one of them is an unknown outcome:
+            //   - the upstream truncated  -> consumption is genuinely unknown;
+            //   - the gateway ended it    -> the upstream connection is being
+            //     dropped here and now, so consumption is knowable and the
+            //     attempt is not an incomplete provider response.
+            let settled = eos || active.usage.gateway_terminated();
             let successful_final = eos && active.status.is_some_and(|status| (200..300).contains(&status));
             let successful_ttft_ms = successful_final.then_some(ttft_ms).flatten();
-            let operation = if !dispatched {
-                SettlementOperation::Release
-            } else if eos {
-                active.record_success_once();
-                match active.final_charged_tokens() {
-                    Some(charged) => SettlementOperation::Reconcile(charged),
-                    None => {
-                        self.accounting_overflow = true;
-                        SettlementOperation::Retain
-                    }
-                }
-            } else {
-                SettlementOperation::Retain
-            };
+            let operation = self.settlement_for(&mut active, settled, eos);
             let entry = if dispatched {
-                let failure = (!eos).then_some(GenAiAttemptFailure::IncompleteResponse);
+                let failure = (!settled).then_some(GenAiAttemptFailure::IncompleteResponse);
                 let number = self.next_attempt_number();
                 active.ledger_entry(number, failure, successful_ttft_ms, true)
             } else {
@@ -455,6 +452,49 @@ impl AiAttemptRuntimeState {
             }
         }
         self.drain_pending().await;
+    }
+
+    /// Chooses how a finished attempt settles its credential reservation.
+    ///
+    /// `settled` means the gateway knows the exchange is over — the upstream
+    /// delivered EOS, or the gateway itself terminated the stream — so the
+    /// reservation can be reconciled down to what was actually consumed. Only a
+    /// genuinely unknown outcome (a truncated or still-open upstream) retains
+    /// the full input + max-output charge, because retaining is what protects
+    /// the credential's per-minute budget from unobserved consumption. Retaining
+    /// on a gateway-initiated cut protects nothing and instead holds the
+    /// unconsumed remainder of the reservation against every other tenant
+    /// sharing that credential until the window's TTL expires.
+    ///
+    /// Accepted accounting bias, per the billing-adjacent rule that a trade-off
+    /// must be stated: on the Anthropic path the reconciled estimate can be
+    /// short by roughly one chunk's characters ÷ 4, because a terminate stops
+    /// the processor chain for that chunk (spec §3.4) before the only writer of
+    /// `output_chars` observes the translated bytes. That is a bounded,
+    /// systematic tilt toward under-charging; it is accepted rather than
+    /// corrected because the correction would require running processors after
+    /// a terminate, which is exactly the post-terminate byte-leak class the
+    /// termination feature exists to prevent.
+    fn settlement_for(&mut self, active: &mut AiAttemptRuntime, settled: bool, eos: bool) -> SettlementOperation {
+        if !active.dispatched {
+            return SettlementOperation::Release;
+        }
+        if !settled {
+            return SettlementOperation::Retain;
+        }
+        if eos {
+            // The outlier-detection verdict still requires a real upstream EOS:
+            // a gateway-initiated cut says nothing about the credential's
+            // health, so it must not be committed as a success sample.
+            active.record_success_once();
+        }
+        match active.final_charged_tokens() {
+            Some(charged) => SettlementOperation::Reconcile(charged),
+            None => {
+                self.accounting_overflow = true;
+                SettlementOperation::Retain
+            }
+        }
     }
 
     fn next_attempt_number(&self) -> u8 {
@@ -972,6 +1012,65 @@ mod tests {
                 },
             ]
             .as_slice())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_gateway_terminated_stream_reconciles_its_reservation_and_is_not_an_incomplete_response() {
+        use bytes::Bytes;
+        use pingora_proxy::ResponseBodySink;
+
+        use crate::ai::quota::{QuotaAccumulator, QuotaFinalStatus};
+        use crate::ai::usage::UsageExtractionProcessor;
+        use crate::ctx::ResponseStreamKind;
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
+
+        // Driven through a real `on_chunk` on purpose. The sibling tests build
+        // their attempt state directly via `attempt(input, output_chars, eos)`,
+        // which is exactly why "terminate => the eos latch is never set" stayed
+        // invisible: `mark_eos` is reachable only from the `end_of_stream`
+        // branch, and a terminate guarantees that branch never runs.
+        let shared = Arc::new(AiUsageShared::default());
+        let quota = Arc::new(QuotaAccumulator::new(16));
+        quota.finish(QuotaFinalStatus::OverLimit);
+        let mut processor = UsageExtractionProcessor::new_with_quota(Arc::clone(&shared), Some(quota), true, true);
+        let mut session = MockPluginSession::new();
+        session.expect_add_error().return_const(());
+        let mut sink = ResponseBodySink::new();
+        let mut body = Some(Bytes::from_static(
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n",
+        ));
+        processor
+            .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+        assert!(sink.is_terminated(), "an over-limit stream under Reject is cut here");
+
+        let mut state = AiAttemptRuntimeState::default();
+        let mut active = attempt(5, 0, false);
+        active.usage = Arc::clone(&shared);
+        let eos = active.eos.load(Ordering::Acquire);
+        let settled = eos || active.usage.gateway_terminated();
+        assert!(!eos, "the terminate above ends the response before any eos task");
+        assert!(settled, "the gateway still knows this exchange is over");
+
+        // Called directly because a unit test holds no Redis lease, so the
+        // chosen operation is the only observable form of the decision.
+        let operation = state.settlement_for(&mut active, settled, eos);
+        assert!(
+            matches!(operation, SettlementOperation::Reconcile(charged) if charged > 5),
+            "the credential reservation must be reconciled down to observed consumption; \
+             retaining it would hold the unconsumed remainder against every other tenant \
+             sharing the credential until the rate-limit window expires"
+        );
+
+        state.install(active);
+        state.mark_dispatched();
+        state.finalize(None).await;
+        assert_eq!(state.attempts().len(), 1);
+        assert!(
+            state.attempts()[0].failure.is_none(),
+            "a policy-driven cut is not an upstream truncation, so it must not be logged as one"
         );
     }
 

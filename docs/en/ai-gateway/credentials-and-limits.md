@@ -29,6 +29,10 @@ when Redis is unavailable.
   TPM-limited credential is invalid when no maximum-output bound can be resolved.
 - Known final usage reconciles the reservation.
 - A pre-dispatch cancellation releases it.
+- A stream the gateway itself ended mid-response — over quota, or quota no longer enforceable —
+  also reconciles. The gateway drops that upstream connection itself, so the outcome is known, not
+  ambiguous; retaining it would hold the unconsumed remainder against every other tenant sharing
+  the credential for the rest of the window.
 - A timeout, reset, or other ambiguous result after dispatch retains the full reservation until the
   Redis window expires. That retained reservation protects the rate limit; it is **not** a claim
   that the provider consumed every reserved token. Durable accounting uses the access log.

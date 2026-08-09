@@ -258,7 +258,7 @@ when later summaries were omitted to preserve either bound.
 | `provider` | String | Fixed provider enum |
 | `credential` | String | Non-secret configured credential alias; never provider credential or Secret data |
 | `status` | Integer | Provider HTTP status, when received |
-| `failure` | String | Fixed class: `retryable_status`, `ambiguous_transport`, `backend_request_timeout`, or `incomplete_response` |
+| `failure` | String | Fixed class: `retryable_status`, `ambiguous_transport`, `backend_request_timeout`, or `incomplete_response`. `incomplete_response` means the *provider* stopped early; a stream the gateway itself ended (over quota, or quota no longer enforceable) is not a provider failure and carries no `failure` — read its `EdgionStatus` code instead |
 | `retry_after_seconds` | Integer | Accepted bounded Retry-After cooldown, in seconds |
 | `ttft_ms` | Integer | Time to the first non-empty response body chunk for the successful final attempt |
 | `usage_source` | String | `reported` or `estimated` |

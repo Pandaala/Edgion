@@ -210,13 +210,14 @@ impl ProxyHttp for EdgionHttpProxy {
         session: &mut Session,
         body: &mut Option<bytes::Bytes>,
         end_of_stream: bool,
-        _sink: &mut ResponseBodySink,
+        sink: &mut ResponseBodySink,
         ctx: &mut Self::CTX,
     ) -> pingora_core::Result<Option<std::time::Duration>>
     where
         Self::CTX: Send + Sync,
     {
-        pg_upstream_response_body_filter::upstream_response_body_filter(self, session, body, end_of_stream, ctx)
+        pg_upstream_response_body_filter::upstream_response_body_filter(self, session, body, end_of_stream, sink, ctx)
+            .await
     }
 
     async fn logging(&self, session: &mut Session, e: Option<&Error>, ctx: &mut Self::CTX)
