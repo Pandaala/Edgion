@@ -97,10 +97,23 @@ static AI_CREDENTIAL_EXHAUSTION_OBSERVATIONS: std::sync::LazyLock<
     Mutex<std::collections::HashMap<String, Vec<AiCredentialExhaustionObservation>>>,
 > = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
+/// Per-trace lifecycle of the paced AI stream used to verify that a downstream
+/// client disconnect cancels the gateway's upstream body consumption.
+static AI_LONG_STREAM_OBSERVATIONS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<String, AiLongStreamObservation>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
 #[derive(Debug, serde::Serialize)]
 struct AiCredentialExhaustionObservation {
     service: &'static str,
     credential_generation: &'static str,
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+struct AiLongStreamObservation {
+    chunks_queued: u64,
+    upstream_cancelled: bool,
+    provider_completed: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -536,6 +549,10 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route(
             "/ai-credential-exhaustion/observations/{trace_id}",
             get(ai_credential_exhaustion_observations_handler),
+        )
+        .route(
+            "/ai-long-stream/observation/{trace_id}",
+            get(ai_long_stream_observation_handler),
         )
         // Native Anthropic Messages fixture. Its observation endpoint exposes
         // only a monotonically increasing count, never headers or bodies.
@@ -1216,7 +1233,6 @@ struct AiProviderObservation {
     auth_is_client_key: bool,
     host_is_expected: bool,
     path_has_prefix: bool,
-    path_is_models: bool,
     query_is_preserved: bool,
     model_is_canonical: bool,
     model_is_economy: bool,
@@ -1253,8 +1269,7 @@ fn ai_provider_observation(
             .get(axum::http::header::HOST)
             .and_then(|value| value.to_str().ok())
             .is_some_and(|host| host == "127.0.0.1:30001"),
-        path_has_prefix: matches!(path, "prefix/v1/chat/completions" | "prefix/v1/models"),
-        path_is_models: path == "prefix/v1/models",
+        path_has_prefix: path == "prefix/v1/chat/completions",
         query_is_preserved: query.fixture_query.as_deref() == Some("preserved"),
         model_is_canonical: model == Some("fixture-model"),
         model_is_economy: model == Some("economy-model"),
@@ -1310,11 +1325,6 @@ fn ai_stream_plan(mode: &str, observation: &str) -> AiStreamPlan {
             ],
             interval: Duration::ZERO,
             abort_after_chunks: false,
-        },
-        "abort" => AiStreamPlan {
-            chunks: vec![Bytes::from(first)],
-            interval: Duration::ZERO,
-            abort_after_chunks: true,
         },
         "resilience_abort" => AiStreamPlan {
             chunks: vec![
@@ -1376,8 +1386,13 @@ async fn ai_provider_handler(
     let observation = ai_provider_observation(&path, &query, &parts.headers, &body);
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
     let streaming = json.get("stream").and_then(serde_json::Value::as_bool) == Some(true);
+    let trace_id = parts
+        .headers
+        .get("x-trace-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
 
-    if let Some(trace_id) = parts.headers.get("x-trace-id").and_then(|value| value.to_str().ok()) {
+    if let Some(trace_id) = trace_id.as_deref() {
         let exhaustion_service = if path.starts_with("credential-exhaustion-primary/") {
             Some("primary")
         } else if path.starts_with("credential-exhaustion-secondary/") {
@@ -1493,18 +1508,6 @@ async fn ai_provider_handler(
     }
 
     if !streaming {
-        if path == "prefix/v1/models" {
-            let response = serde_json::json!({
-                "object": "list",
-                "data": [{"id": "model-fixture", "object": "model"}],
-                "mock": observation,
-            });
-            return Response::builder()
-                .status(StatusCode::OK)
-                .header("content-type", "application/json")
-                .body(Body::from(response.to_string()))
-                .unwrap();
-        }
         let response = serde_json::json!({
             "id": "completion-fixture",
             "object": "chat.completion",
@@ -1525,12 +1528,28 @@ async fn ai_provider_handler(
     } else {
         query.mock_mode.as_deref().unwrap_or("paced")
     };
+    let long_trace_id = (mode == "long").then_some(trace_id).flatten();
+    if let Some(trace_id) = long_trace_id.as_ref() {
+        AI_LONG_STREAM_OBSERVATIONS
+            .lock()
+            .insert(trace_id.clone(), AiLongStreamObservation::default());
+    }
     let plan = ai_stream_plan(mode, &observation);
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
     tokio::spawn(async move {
         for chunk in plan.chunks {
             if tx.send(Ok(chunk)).await.is_err() {
+                if let Some(trace_id) = long_trace_id.as_ref() {
+                    if let Some(state) = AI_LONG_STREAM_OBSERVATIONS.lock().get_mut(trace_id) {
+                        state.upstream_cancelled = true;
+                    }
+                }
                 return;
+            }
+            if let Some(trace_id) = long_trace_id.as_ref() {
+                if let Some(state) = AI_LONG_STREAM_OBSERVATIONS.lock().get_mut(trace_id) {
+                    state.chunks_queued = state.chunks_queued.saturating_add(1);
+                }
             }
             if !plan.interval.is_zero() {
                 tokio::time::sleep(plan.interval).await;
@@ -1544,6 +1563,11 @@ async fn ai_provider_handler(
                 )))
                 .await;
         }
+        if let Some(trace_id) = long_trace_id.as_ref() {
+            if let Some(state) = AI_LONG_STREAM_OBSERVATIONS.lock().get_mut(trace_id) {
+                state.provider_completed = true;
+            }
+        }
     });
 
     Response::builder()
@@ -1552,6 +1576,24 @@ async fn ai_provider_handler(
         .header("cache-control", "no-cache")
         .body(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)))
         .unwrap()
+}
+
+async fn ai_long_stream_observation_handler(Path(trace_id): Path<String>) -> impl IntoResponse {
+    let observation = {
+        let mut observations = AI_LONG_STREAM_OBSERVATIONS.lock();
+        let observation = observations.get(&trace_id).cloned();
+        if observation
+            .as_ref()
+            .is_some_and(|state| state.upstream_cancelled || state.provider_completed)
+        {
+            observations.remove(&trace_id);
+        }
+        observation
+    };
+    axum::Json(serde_json::json!({
+        "found": observation.is_some(),
+        "observation": observation,
+    }))
 }
 
 async fn ai_resilience_count_handler(Path(trace_id): Path<String>) -> impl IntoResponse {
@@ -3694,10 +3736,6 @@ mod tests {
         assert!(oversized.chunks[0].len() > 64 * 1024);
         assert!(oversized.chunks[0].ends_with(b"\n\n"));
         assert_eq!(oversized.chunks.len(), 3);
-
-        let abort = ai_stream_plan("abort", observation);
-        assert_eq!(abort.chunks.len(), 1);
-        assert!(abort.abort_after_chunks);
 
         let resilience_abort = ai_stream_plan("resilience_abort", observation);
         assert_eq!(resilience_abort.chunks.len(), 3);

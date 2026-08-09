@@ -9,7 +9,7 @@
 //! - TTL-based expiration to prevent unbounded memory growth
 //! - Capacity limit with oldest-entry eviction
 
-use dashmap::DashMap;
+use dashmap::{mapref::entry::Entry, DashMap};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
@@ -28,6 +28,8 @@ struct StoredEntry {
     json: String,
     /// When this entry was stored
     stored_at: Instant,
+    /// Number of logging-boundary writes observed for this trace ID.
+    store_count: u64,
 }
 
 /// Access Log Store
@@ -67,6 +69,7 @@ pub struct AccessLogListResponse {
 pub struct AccessLogListItem {
     pub trace_id: String,
     pub stored_at_ms_ago: u64,
+    pub store_count: u64,
 }
 
 /// Status response for the access log store
@@ -104,23 +107,41 @@ impl AccessLogStore {
             self.cleanup_expired();
         }
 
+        if let Some(mut entry) = self.entries.get_mut(&trace_id) {
+            Self::update_entry(&mut entry, json);
+            return Ok(());
+        }
+
         // Check capacity
         if self.entries.len() >= self.max_capacity {
             self.cleanup_expired();
+            if let Some(mut entry) = self.entries.get_mut(&trace_id) {
+                Self::update_entry(&mut entry, json);
+                return Ok(());
+            }
             if self.entries.len() >= self.max_capacity {
                 return Err("Access log store at capacity".to_string());
             }
         }
 
-        self.entries.insert(
-            trace_id,
-            StoredEntry {
-                json,
-                stored_at: Instant::now(),
-            },
-        );
+        match self.entries.entry(trace_id) {
+            Entry::Occupied(mut entry) => Self::update_entry(entry.get_mut(), json),
+            Entry::Vacant(entry) => {
+                entry.insert(StoredEntry {
+                    json,
+                    stored_at: Instant::now(),
+                    store_count: 1,
+                });
+            }
+        }
 
         Ok(())
+    }
+
+    fn update_entry(entry: &mut StoredEntry, json: String) {
+        entry.json = json;
+        entry.stored_at = Instant::now();
+        entry.store_count = entry.store_count.saturating_add(1);
     }
 
     /// Get an access log entry by trace_id
@@ -152,6 +173,7 @@ impl AccessLogStore {
             .map(|entry| AccessLogListItem {
                 trace_id: entry.key().clone(),
                 stored_at_ms_ago: now.saturating_duration_since(entry.stored_at).as_millis() as u64,
+                store_count: entry.store_count,
             })
             .collect()
     }
@@ -199,6 +221,7 @@ pub fn get_access_log_store() -> &'static AccessLogStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
 
     #[test]
     fn test_store_and_get() {
@@ -236,6 +259,47 @@ mod tests {
 
         let list = store.list();
         assert_eq!(list.len(), 2);
+        assert!(list.iter().all(|entry| entry.store_count == 1));
+    }
+
+    #[test]
+    fn repeated_trace_counts_logging_boundary_writes() {
+        let store = AccessLogStore::new();
+        store
+            .store("trace-001".to_string(), r#"{"value":1}"#.to_string())
+            .unwrap();
+        store
+            .store("trace-001".to_string(), r#"{"value":2}"#.to_string())
+            .unwrap();
+
+        assert_eq!(store.get("trace-001"), Some(r#"{"value":2}"#.to_string()));
+        let list = store.list();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].store_count, 2);
+    }
+
+    #[test]
+    fn concurrent_first_writes_are_all_counted() {
+        const WRITERS: usize = 32;
+        let store = AccessLogStore::new();
+        let barrier = Arc::new(Barrier::new(WRITERS));
+
+        std::thread::scope(|scope| {
+            for writer in 0..WRITERS {
+                let barrier = Arc::clone(&barrier);
+                let store = &store;
+                scope.spawn(move || {
+                    barrier.wait();
+                    store
+                        .store("shared-trace".to_string(), format!(r#"{{"writer":{writer}}}"#))
+                        .unwrap();
+                });
+            }
+        });
+
+        let list = store.list();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].store_count, WRITERS as u64);
     }
 
     #[test]

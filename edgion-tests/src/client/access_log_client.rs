@@ -166,6 +166,7 @@ pub struct ApiResponse<T> {
 pub struct AccessLogListItem {
     pub trace_id: String,
     pub stored_at_ms_ago: u64,
+    pub store_count: u64,
 }
 
 /// List response

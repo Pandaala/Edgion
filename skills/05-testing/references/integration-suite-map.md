@@ -10,7 +10,7 @@ This file only answers three things:
 
 | Family | YAML directory | Rust entry | `--gateway` | Notes |
 |------|-----------|-----------|-------------|------|
-| `EdgionAIService/SingleProvider` | `edgion-tests/integration/conf/EdgionAIService/SingleProvider/` | `SingleProviderTestSuite` | Yes | OpenAI-compatible proxying, H1/H2 streaming, credentials, usage logs, and optional token metrics |
+| `EdgionAIService/SingleProvider` | `edgion-tests/integration/conf/EdgionAIService/SingleProvider/` | `SingleProviderTestSuite` | Yes | OpenAI-compatible proxying, H1/H2 streaming and downstream cancellation, credentials, usage/quota logs, and optional token metrics |
 | `EdgionAIService/Resilience` | `edgion-tests/integration/conf/EdgionAIService/Resilience/` | `ResilienceTestSuite` | Yes | Provider 429 Priority fallback, committed-SSE no-failover, half-open single-probe recovery |
 | `EdgionAIService/CredentialExhaustion` | `edgion-tests/integration/conf/EdgionAIService/CredentialExhaustion/` | `CredentialExhaustionTestSuite` | Yes | Credential-first rotation then next service; RPM exhaust and TPM reconcile to local 503; needs Redis |
 | `HTTPRoute/Basic` | `edgion-tests/integration/conf/HTTPRoute/Basic/` | `edgion-tests/src/client/suites/http_route/` | No | Direct HTTP basic capability |

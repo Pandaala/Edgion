@@ -202,6 +202,40 @@ async fn quota_bucket_used(ctx: &TestContext, key: &str) -> Result<Option<u64>, 
         .and_then(|value| value.parse::<u64>().ok()))
 }
 
+async fn quota_bucket_used_between(
+    ctx: &TestContext,
+    identity: &str,
+    before_ms: u128,
+    after_ms: u128,
+) -> Result<(String, u64), String> {
+    let mut window_ids = vec![(before_ms / QUOTA_WINDOW_MS) as u64];
+    let after_window = (after_ms / QUOTA_WINDOW_MS) as u64;
+    if window_ids[0] != after_window {
+        window_ids.push(after_window);
+    }
+    for window_id in window_ids {
+        let key = quota_bucket_key(identity, window_id)?;
+        if let Some(used) = quota_bucket_used(ctx, &key).await? {
+            return Ok((key, used));
+        }
+    }
+    Err("the expected Redis quota bucket was not found".to_string())
+}
+
+async fn long_stream_observation(ctx: &TestContext, trace_id: &str) -> Result<Value, String> {
+    ctx.http_client
+        .get(format!(
+            "http://{}:30001/ai-long-stream/observation/{trace_id}",
+            ctx.target_host
+        ))
+        .send()
+        .await
+        .map_err(|error| format!("long-stream observation request failed: {error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("invalid long-stream observation response: {error}"))
+}
+
 fn mock(value: &Value) -> Result<&serde_json::Map<String, Value>, String> {
     value
         .get("mock")
@@ -892,40 +926,15 @@ fn token_quota_reconciliation_and_admission(
             );
         }
 
-        let mut window_ids = vec![(before_ms / QUOTA_WINDOW_MS) as u64];
-        let after_window = (after_ms / QUOTA_WINDOW_MS) as u64;
-        if window_ids[0] != after_window {
-            window_ids.push(after_window);
-        }
-        let mut inspected = None;
-        for window_id in window_ids {
-            let key = match quota_bucket_key(&identity, window_id) {
-                Ok(key) => key,
-                Err(error) => return TestResult::failed(start.elapsed(), error),
-            };
-            match quota_bucket_used(&ctx, &key).await {
-                Ok(Some(used)) => {
-                    inspected = Some((key, used));
-                    break;
-                }
-                Ok(None) => {}
-                Err(error) => return TestResult::failed(start.elapsed(), error),
-            }
-        }
-        match inspected {
-            Some((_, 18)) => {}
-            Some((key, used)) => {
+        match quota_bucket_used_between(&ctx, &identity, before_ms, after_ms).await {
+            Ok((_, 18)) => {}
+            Ok((key, used)) => {
                 return TestResult::failed(
                     start.elapsed(),
                     format!("quota bucket {key} expected exact final usage 18, got {used}"),
                 );
             }
-            None => {
-                return TestResult::failed(
-                    start.elapsed(),
-                    "the expected Redis quota bucket was not found".to_string(),
-                );
-            }
+            Err(error) => return TestResult::failed(start.elapsed(), error),
         }
 
         let denied =
@@ -967,6 +976,172 @@ fn token_quota_reconciliation_and_admission(
         TestResult::passed_with_message(
             start.elapsed(),
             "streaming quota reconciled to 18 tokens in Redis and the next request was rejected".to_string(),
+        )
+    })
+}
+
+fn streaming_client_disconnect_finalizes_once(
+    ctx: TestContext,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
+    Box::pin(async move {
+        let start = Instant::now();
+        let identity = format!("disconnect-{}", uuid::Uuid::new_v4());
+        let trace = format!("ai-stream-disconnect-{}", uuid::Uuid::new_v4());
+        let before_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let response = match client(&ctx, QUOTA_HOST, true, false) {
+            Ok(client) => {
+                client
+                    .post(request_url(&ctx, QUOTA_HOST, PATH, "?mock_mode=long"))
+                    .header("x-quota-user", &identity)
+                    .header("x-trace-id", &trace)
+                    .header("access_log", "test_store")
+                    .json(&json!({"model":"fixture-model","stream":true,"messages":[]}))
+                    .send()
+                    .await
+            }
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => return TestResult::failed(start.elapsed(), format!("disconnect request failed: {error}")),
+        };
+        if response.status() != reqwest::StatusCode::OK {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("disconnect stream expected 200, got {}", response.status()),
+            );
+        }
+
+        let mut body = response.bytes_stream();
+        let mut partial = Vec::new();
+        while partial.windows(2).filter(|window| *window == b"\n\n").count() < 3 {
+            let next = match tokio::time::timeout(Duration::from_secs(2), body.next()).await {
+                Ok(Some(Ok(bytes))) => bytes,
+                Ok(Some(Err(error))) => {
+                    return TestResult::failed(start.elapsed(), format!("disconnect stream read failed: {error}"));
+                }
+                Ok(None) => {
+                    return TestResult::failed(start.elapsed(), "long stream ended before three frames".to_string());
+                }
+                Err(_) => {
+                    return TestResult::failed(start.elapsed(), "long stream did not yield three frames".to_string());
+                }
+            };
+            partial.extend_from_slice(&next);
+            if partial.len() > 64 * 1024 {
+                return TestResult::failed(start.elapsed(), "long stream prefix exceeded 64 KiB".to_string());
+            }
+        }
+        if partial.windows(7).any(|window| window == b"\"usage\"")
+            || partial.windows(6).any(|window| window == b"[DONE]")
+        {
+            return TestResult::failed(
+                start.elapsed(),
+                "long stream reached terminal usage before the client disconnect".to_string(),
+            );
+        }
+        drop(body);
+
+        let mut provider_state = Value::Null;
+        for _ in 0..40 {
+            provider_state = match long_stream_observation(&ctx, &trace).await {
+                Ok(state) => state,
+                Err(error) => return TestResult::failed(start.elapsed(), error),
+            };
+            if provider_state["observation"]["upstream_cancelled"] == true
+                || provider_state["observation"]["provider_completed"] == true
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        if provider_state["found"] != true
+            || provider_state["observation"]["upstream_cancelled"] != true
+            || provider_state["observation"]["provider_completed"] != false
+            || provider_state["observation"]["chunks_queued"]
+                .as_u64()
+                .is_none_or(|chunks| !(3..103).contains(&chunks))
+        {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("gateway did not cancel the long provider stream: {provider_state}"),
+            );
+        }
+
+        let entry = match ctx.access_log_client().get_access_log_with_retry(&trace, 20, 200).await {
+            Ok(entry) => entry,
+            Err(error) => {
+                return TestResult::failed(start.elapsed(), format!("disconnect access log missing: {error}"));
+            }
+        };
+        let genai = &entry.data["genai"];
+        let Some(attempts) = genai["attempts"].as_array() else {
+            return TestResult::failed(start.elapsed(), format!("disconnect attempts missing: {genai}"));
+        };
+        if genai["usage_estimated"] != true
+            || genai["input_tokens"].as_u64().unwrap_or_default() == 0
+            || genai["output_tokens"].as_u64().unwrap_or_default() == 0
+            || genai["attempts_truncated"] == true
+            || attempts.len() != 1
+            || attempts[0]["number"] != 1
+            || attempts[0]["status"] != 200
+            || attempts[0]["failure"] != "incomplete_response"
+            || attempts[0]["usage_source"] != "estimated"
+            || attempts[0]["input_tokens"] != genai["input_tokens"]
+            || attempts[0]["output_tokens"] != genai["output_tokens"]
+        {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("disconnect did not produce one estimated incomplete attempt: {genai}"),
+            );
+        }
+
+        let listed = match ctx.access_log_client().list_access_logs().await {
+            Ok(listed) => listed,
+            Err(error) => return TestResult::failed(start.elapsed(), format!("access-log list failed: {error}")),
+        };
+        let matching = listed
+            .data
+            .iter()
+            .filter(|item| item.trace_id == trace)
+            .collect::<Vec<_>>();
+        if matching.len() != 1 || matching[0].store_count != 1 {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("disconnect logging boundary ran more than once: {matching:?}"),
+            );
+        }
+
+        let after_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let (bucket_key, used) = match quota_bucket_used_between(&ctx, &identity, before_ms, after_ms).await {
+            Ok(used) => used,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        let attempt_total = attempts[0]["input_tokens"]
+            .as_u64()
+            .unwrap_or_default()
+            .saturating_add(attempts[0]["output_tokens"].as_u64().unwrap_or_default());
+        let expected_quota_status = if used > 18 { "over_limit" } else { "charged" };
+        if used != attempt_total || genai["quota_status"] != expected_quota_status {
+            return TestResult::failed(
+                start.elapsed(),
+                format!(
+                    "disconnect quota reconciliation mismatch for {bucket_key}: used={used}, attempt={attempt_total}, genai={genai}"
+                ),
+            );
+        }
+
+        TestResult::passed_with_message(
+            start.elapsed(),
+            format!(
+                "client disconnected after three SSE frames; provider cancelled, one incomplete attempt logged, and {used} estimated tokens reconciled"
+            ),
         )
     })
 }
@@ -1382,6 +1557,11 @@ impl TestSuite for SingleProviderTestSuite {
                 "token_quota_reconciliation_and_admission",
                 "Streaming usage is reconciled exactly in Redis and exhausted admission returns an OpenAI 429",
                 token_quota_reconciliation_and_admission,
+            ),
+            TestCase::new(
+                "streaming_client_disconnect_finalizes_once",
+                "A downstream disconnect cancels the provider stream and finalizes estimated usage exactly once",
+                streaming_client_disconnect_finalizes_once,
             ),
             TestCase::new(
                 "priority_retry_attempt_ledger",
