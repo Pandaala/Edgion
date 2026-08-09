@@ -54,7 +54,7 @@ spec:
     gracefulShutdownTimeoutS: 10            # uint64
     upstreamKeepalivePoolSize: 128          # uint32
     errorLog: ""                            # string, optional
-    enableCompression: false                # bool, downstream response compression
+    enableCompression: false                # bool, gzip known-length downstream responses
     downstreamKeepaliveRequestLimit: 1000   # uint32, 0 = unlimited
 
   # ─── HTTP timeouts ───
@@ -160,7 +160,7 @@ spec:
 | `gracefulShutdownTimeoutS` | `u64` | `10` | Shutdown timeout |
 | `upstreamKeepalivePoolSize` | `u32` | `128` | Upstream connection pool |
 | `errorLog` | `String?` | — | Pingora error log |
-| `enableCompression` | `bool` | `false` | Downstream response compression |
+| `enableCompression` | `bool` | `false` | Gzip eligible downstream responses with a valid `Content-Length` and no `Transfer-Encoding`; unknown-length and SSE responses remain uncompressed |
 | `downstreamKeepaliveRequestLimit` | `u32` | `1000` | Maximum requests per downstream connection |
 
 ### spec.httpTimeout.client

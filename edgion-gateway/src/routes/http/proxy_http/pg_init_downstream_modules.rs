@@ -6,7 +6,7 @@ use pingora_core::modules::http::HttpModules;
 /// Compression level used when downstream compression is enabled. There is no
 /// operator-facing level knob; pingora treats level 0 as "module present but
 /// disabled", which is what a `false` config value must produce so the
-/// per-response adjust in `pg_upstream_response_filter` has a ctx to act on.
+/// final per-response adjust in `pg_response_filter` has a ctx to act on.
 pub(crate) const DEFAULT_COMPRESSION_LEVEL: u32 = 6;
 
 #[inline]
@@ -16,13 +16,13 @@ pub fn init_downstream_modules(edgion_http: &EdgionHttpProxy, modules: &mut Http
         .spec
         .server
         .as_ref()
-        .map(|s| s.enable_compression)
+        .map(|server| server.enable_compression)
         .unwrap_or(false);
 
-    // Always install the module: enabled at the default level or explicitly
-    // disabled (level 0). Installing it unconditionally keeps a
-    // ResponseCompressionCtx in every session so per-response adjustment is
-    // uniform.
+    // An enabled initial level is required for Pingora's request filter to
+    // capture Accept-Encoding. The final response hook, shared by origin and
+    // cache-hit paths, always narrows this to level 0 or the default before the
+    // response module selects an encoder.
     let level = if enable_compression {
         DEFAULT_COMPRESSION_LEVEL
     } else {

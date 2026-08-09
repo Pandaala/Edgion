@@ -112,7 +112,7 @@ spec:
 | `gracefulShutdownTimeoutS` | `Integer` | `10` | Force-terminate after this many seconds during shutdown |
 | `upstreamKeepalivePoolSize` | `Integer` | `128` | Upstream keepalive connection pool size |
 | `errorLog` | `String` | — | Pingora internal error log file path |
-| `enableCompression` | `Boolean` | `false` | Enable response compression for downstream clients |
+| `enableCompression` | `Boolean` | `false` | Gzip eligible downstream responses with a valid `Content-Length` and no `Transfer-Encoding`; unknown-length and SSE responses remain uncompressed to preserve incremental delivery |
 | `downstreamKeepaliveRequestLimit` | `Integer` | `1000` | Max requests per downstream connection; `0` means unlimited |
 
 ### spec.httpTimeout.client

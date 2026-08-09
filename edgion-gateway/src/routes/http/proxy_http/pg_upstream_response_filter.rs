@@ -1,13 +1,9 @@
-use super::content_type::classify_response_stream_kind;
-use super::pg_init_downstream_modules::DEFAULT_COMPRESSION_LEVEL;
 use super::pg_upstream_response_body_filter::{enforce_stream_processor_framing, run_stream_processor_headers};
 use super::EdgionHttpProxy;
-use crate::ctx::ResponseStreamKind;
 use crate::routes::http::session_persistence;
 use crate::{EdgionHttpContext, ResponseStageDenial, SessionPersistenceState};
 use edgion_resources::resources::http_route::SessionPersistenceType;
 use edgion_resources::EdgionStatus;
-use pingora_core::modules::http::compression::ResponseCompression;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
@@ -79,17 +75,6 @@ fn release_late_request_body_view(ctx: &mut EdgionHttpContext) {
     // the lifetime of the response. Retry early returns deliberately occur
     // before this point and keep the view for the next attempt.
     ctx.request_body.release_view();
-}
-
-#[inline]
-fn enable_compression(edgion_http: &EdgionHttpProxy) -> bool {
-    edgion_http
-        .edgion_gateway_config
-        .spec
-        .server
-        .as_ref()
-        .map(|s| s.enable_compression)
-        .unwrap_or(false)
 }
 
 #[inline]
@@ -298,21 +283,6 @@ pub fn upstream_response_filter(
     // the provider's raw status; the request-level status is client-visible.
     run_stream_processor_headers(upstream_response, ctx);
     ctx.request_info.status = Some(upstream_response.status.as_u16());
-
-    // Classify and configure compression from the normalized client-visible
-    // header. A streaming response must never be compressed because the
-    // compressor buffers and stalls event delivery.
-    ctx.response_stream_kind = classify_response_stream_kind(upstream_response);
-    if let Some(compression_ctx) = session.downstream_modules_ctx.get_mut::<ResponseCompression>() {
-        let level = if ctx.response_stream_kind == ResponseStreamKind::Sse {
-            0
-        } else if enable_compression(edgion_http) {
-            DEFAULT_COMPRESSION_LEVEL
-        } else {
-            0
-        };
-        compression_ctx.adjust_level(level);
-    }
 
     // Inject session persistence cookie/header if needed. Runs here, AFTER the
     // retry-on-status decision, so a response about to be discarded for retry

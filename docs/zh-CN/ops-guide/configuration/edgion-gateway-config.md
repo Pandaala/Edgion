@@ -107,7 +107,7 @@ spec:
 | `gracefulShutdownTimeoutS` | `Integer` | `10` | 优雅关闭超时秒数，超过后强制终止 |
 | `upstreamKeepalivePoolSize` | `Integer` | `128` | 上游 keepalive 连接池大小 |
 | `errorLog` | `String` | — | Pingora 内部错误日志文件路径 |
-| `enableCompression` | `Boolean` | `false` | 是否对下游响应启用压缩 |
+| `enableCompression` | `Boolean` | `false` | 对带有效 `Content-Length` 且无 `Transfer-Encoding` 的适用下游响应启用 gzip；未知长度和 SSE 响应保持未压缩，以维持增量传输 |
 | `downstreamKeepaliveRequestLimit` | `Integer` | `1000` | 下游每连接最大请求数，`0` 表示无限 |
 
 ### spec.httpTimeout.client

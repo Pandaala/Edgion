@@ -1,9 +1,50 @@
+use super::content_type::classify_response_stream_kind;
+use super::pg_init_downstream_modules::DEFAULT_COMPRESSION_LEVEL;
 use super::pg_upstream_response_body_filter::enforce_stream_processor_framing;
 use super::pg_upstream_response_filter::{is_interim_informational, response_denial_error, response_stage_settled};
 use super::EdgionHttpProxy;
+use crate::ctx::ResponseStreamKind;
 use crate::EdgionHttpContext;
+use pingora_core::modules::http::compression::ResponseCompression;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
+
+/// Select compression only for a final response whose complete size is known.
+///
+/// Pingora's gzip encoder does not flush after each input chunk, so enabling it
+/// for an unknown-length response can hold a low-rate stream indefinitely.
+/// Multiple or combined `Content-Length` values are rejected conservatively;
+/// any `Transfer-Encoding` also means the response is not known-length. The
+/// compression module removes an accepted length before forwarding.
+#[inline]
+fn response_compression_level(enabled: bool, stream_kind: ResponseStreamKind, response: &ResponseHeader) -> u32 {
+    let mut content_lengths = response.headers.get_all(http::header::CONTENT_LENGTH).iter();
+    let has_one_valid_content_length = content_lengths
+        .next()
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .is_some()
+        && content_lengths.next().is_none();
+
+    let has_transfer_encoding = response.headers.contains_key(http::header::TRANSFER_ENCODING);
+
+    if enabled && stream_kind != ResponseStreamKind::Sse && has_one_valid_content_length && !has_transfer_encoding {
+        DEFAULT_COMPRESSION_LEVEL
+    } else {
+        0
+    }
+}
+
+#[inline]
+fn enable_compression(edgion_http: &EdgionHttpProxy) -> bool {
+    edgion_http
+        .edgion_gateway_config
+        .spec
+        .server
+        .as_ref()
+        .map(|server| server.enable_compression)
+        .unwrap_or(false)
+}
 
 #[inline]
 pub async fn response_filter(
@@ -148,5 +189,119 @@ pub async fn response_filter(
         ));
     }
 
+    // `response_filter` is the one response-header hook shared by origin and
+    // cache-hit paths. Configure compression only here, after every Edgion
+    // response plugin and framing repair, and immediately before Pingora runs
+    // the downstream modules' response-header filters.
+    ctx.response_stream_kind = classify_response_stream_kind(upstream_response);
+    if let Some(compression_ctx) = session.downstream_modules_ctx.get_mut::<ResponseCompression>() {
+        let level = response_compression_level(
+            enable_compression(edgion_http),
+            ctx.response_stream_kind,
+            upstream_response,
+        );
+        compression_ctx.adjust_level(level);
+    }
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{response_compression_level, DEFAULT_COMPRESSION_LEVEL};
+    use crate::ctx::ResponseStreamKind;
+    use pingora_core::protocols::http::compression::ResponseCompressionCtx;
+    use pingora_http::{RequestHeader, ResponseHeader};
+
+    fn response(content_length: Option<&str>) -> ResponseHeader {
+        let mut response = ResponseHeader::build(200, None).unwrap();
+        response.insert_header("content-type", "application/json").unwrap();
+        if let Some(content_length) = content_length {
+            response.insert_header("content-length", content_length).unwrap();
+        }
+        response
+    }
+
+    #[test]
+    fn compression_requires_one_valid_content_length() {
+        assert_eq!(
+            response_compression_level(true, ResponseStreamKind::None, &response(Some("128"))),
+            DEFAULT_COMPRESSION_LEVEL
+        );
+        assert_eq!(
+            response_compression_level(true, ResponseStreamKind::None, &response(None)),
+            0
+        );
+        assert_eq!(
+            response_compression_level(true, ResponseStreamKind::None, &response(Some("invalid"))),
+            0
+        );
+
+        let mut duplicate = response(Some("128"));
+        duplicate.append_header("content-length", "128").unwrap();
+        assert_eq!(
+            response_compression_level(true, ResponseStreamKind::None, &duplicate),
+            0
+        );
+
+        let mut conflicting_framing = response(Some("128"));
+        conflicting_framing
+            .insert_header("transfer-encoding", "chunked")
+            .unwrap();
+        assert_eq!(
+            response_compression_level(true, ResponseStreamKind::None, &conflicting_framing),
+            0
+        );
+    }
+
+    #[test]
+    fn final_header_mutation_can_disable_compression() {
+        let mut response = response(Some("128"));
+        assert_eq!(
+            response_compression_level(true, ResponseStreamKind::None, &response),
+            DEFAULT_COMPRESSION_LEVEL
+        );
+
+        response.remove_header("content-length");
+        assert_eq!(response_compression_level(true, ResponseStreamKind::None, &response), 0);
+    }
+
+    #[test]
+    fn compression_respects_config_and_sse_exemption() {
+        let response = response(Some("128"));
+        assert_eq!(
+            response_compression_level(false, ResponseStreamKind::None, &response),
+            0
+        );
+        assert_eq!(response_compression_level(true, ResponseStreamKind::Sse, &response), 0);
+    }
+
+    #[test]
+    fn enabled_request_negotiation_survives_final_level_selection() {
+        let mut compression = ResponseCompressionCtx::new(DEFAULT_COMPRESSION_LEVEL, false, false);
+        let mut request = RequestHeader::build("GET", b"/", None).unwrap();
+        request.insert_header("accept-encoding", "gzip").unwrap();
+        compression.request_filter(&request);
+
+        let mut response = response(Some("128"));
+        compression.adjust_level(response_compression_level(true, ResponseStreamKind::None, &response));
+        compression.response_header_filter(&mut response, false);
+
+        assert_eq!(response.headers.get("content-encoding").unwrap(), "gzip");
+        assert!(response.headers.get("content-length").is_none());
+    }
+
+    #[test]
+    fn final_unknown_length_selection_disables_negotiated_compression() {
+        let mut compression = ResponseCompressionCtx::new(DEFAULT_COMPRESSION_LEVEL, false, false);
+        let mut request = RequestHeader::build("GET", b"/", None).unwrap();
+        request.insert_header("accept-encoding", "gzip").unwrap();
+        compression.request_filter(&request);
+
+        let mut response = response(None);
+        compression.adjust_level(response_compression_level(true, ResponseStreamKind::None, &response));
+        compression.response_header_filter(&mut response, false);
+
+        assert!(response.headers.get("content-encoding").is_none());
+    }
 }
