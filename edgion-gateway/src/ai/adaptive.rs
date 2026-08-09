@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
-use edgion_resources::resources::edgion_plugins::{AiBackendSelection, EdgionPlugin};
+use edgion_resources::resources::edgion_plugins::{AiBackendSelection, EdgionPlugin, RequestFilterEntry};
 use edgion_resources::resources::http_route::{HTTPBackendRefKind, HTTPRoute, HTTPRouteFilterType};
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
@@ -506,16 +506,40 @@ pub fn reconcile_global_adaptive_telemetry() {
 }
 
 fn retained_keys_for_routes(routes: &[Arc<HTTPRoute>], services: &AiServiceSnapshot) -> HashSet<AdaptiveTelemetryKey> {
-    collect_retained_keys(routes, |target| {
-        let key = format!("{}/{}", target.namespace, target.name);
-        services
-            .get_by_key(&key)
-            .map(|service| service.models.keys().cloned().collect())
+    collect_retained_keys(
+        routes,
+        |plugin_key| {
+            crate::plugins::http::global_plugin_store()
+                .with_plugin(plugin_key, |compiled| {
+                    request_plugins_use_adaptive_selection(compiled.spec.spec.request_plugins.as_deref())
+                })
+                .unwrap_or(false)
+        },
+        |target| {
+            let key = format!("{}/{}", target.namespace, target.name);
+            services
+                .get_by_key(&key)
+                .map(|service| service.models.keys().cloned().collect())
+        },
+    )
+}
+
+fn request_plugins_use_adaptive_selection(entries: Option<&[RequestFilterEntry]>) -> bool {
+    entries.into_iter().flatten().filter(|entry| entry.enable).any(|entry| {
+        matches!(
+            &entry.plugin,
+            EdgionPlugin::AiProxy(config)
+                if matches!(
+                    config.backend_selection.selection_type,
+                    AiBackendSelection::LowestLatency | AiBackendSelection::LowestUsage
+                )
+        )
     })
 }
 
 fn collect_retained_keys(
     routes: &[Arc<HTTPRoute>],
+    mut plugin_uses_adaptive_selection: impl FnMut(&str) -> bool,
     mut logical_models: impl FnMut(&PolicyTargetKey) -> Option<Vec<String>>,
 ) -> HashSet<AdaptiveTelemetryKey> {
     let mut retained = HashSet::new();
@@ -537,27 +561,7 @@ fn collect_retained_keys(
                     }
                     let plugin_namespace = reference.resolved_namespace.as_deref().unwrap_or(route_namespace);
                     let plugin_key = format!("{plugin_namespace}/{}", reference.name);
-                    crate::plugins::http::global_plugin_store()
-                        .with_plugin(&plugin_key, |compiled| {
-                            compiled
-                                .spec
-                                .spec
-                                .request_plugins
-                                .iter()
-                                .flatten()
-                                .filter(|entry| entry.enable)
-                                .any(|entry| {
-                                    matches!(
-                                        &entry.plugin,
-                                        EdgionPlugin::AiProxy(config)
-                                            if matches!(
-                                                config.backend_selection.selection_type,
-                                                AiBackendSelection::LowestLatency | AiBackendSelection::LowestUsage
-                                            )
-                                    )
-                                })
-                        })
-                        .unwrap_or(false)
+                    plugin_uses_adaptive_selection(&plugin_key)
                 })
             });
             if !adaptive_selection {
@@ -597,6 +601,8 @@ fn collect_retained_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_resources::resources::edgion_plugins::{AiBackendSelectionConfig, AiProxyConfig, OnUnknownModel};
+    use edgion_resources::resources::http_route::HTTPRouteFilterType;
 
     fn key(route_uid: &str, model: &str) -> AdaptiveTelemetryKey {
         AdaptiveTelemetryKey::new(
@@ -610,6 +616,58 @@ mod tests {
             model.to_string(),
         )
         .unwrap()
+    }
+
+    fn adaptive_entry(selection_type: AiBackendSelection, enable: bool) -> RequestFilterEntry {
+        RequestFilterEntry::with_enable(
+            EdgionPlugin::AiProxy(AiProxyConfig {
+                backend_selection: AiBackendSelectionConfig { selection_type },
+                inject_usage_tracking: true,
+                on_unknown_model: OnUnknownModel::Reject,
+                token_quota: None,
+            }),
+            enable,
+        )
+    }
+
+    fn adaptive_route() -> HTTPRoute {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {
+                "name": "adaptive-route",
+                "namespace": "route-ns"
+            },
+            "spec": {
+                "rules": [{
+                    "name": "primary",
+                    "filters": [{
+                        "type": "ExtensionRef",
+                        "extensionRef": {
+                            "group": "edgion.io",
+                            "kind": "EdgionPlugins",
+                            "name": "adaptive"
+                        }
+                    }],
+                    "backendRefs": [{
+                        "group": "edgion.io",
+                        "kind": "EdgionAIService",
+                        "name": "provider"
+                    }],
+                    "resolvedTerminalRouteUid": "route-uid",
+                    "resolvedTerminalRuleIdentity": "name:primary"
+                }]
+            }
+        }))
+        .expect("adaptive route fixture must deserialize")
+    }
+
+    fn collect_for_test(route: HTTPRoute, adaptive_plugin_key: &str) -> HashSet<AdaptiveTelemetryKey> {
+        collect_retained_keys(
+            &[Arc::new(route)],
+            |plugin_key| plugin_key == adaptive_plugin_key,
+            |_| Some(vec!["model-a".to_string(), "model-b".to_string()]),
+        )
     }
 
     #[test]
@@ -788,20 +846,181 @@ mod tests {
         let mut other = key("route-c", "model-c");
         other.target.name = "other-provider".to_string();
         let captured = store.get_or_create(first.clone());
-        store.get_or_create(second);
+        store.get_or_create(second.clone());
         store.get_or_create(other.clone());
+
+        captured.tick(10);
+        captured.record_success_ttft(10, 100);
+        captured.record_charged_tokens(10, 3);
+        captured.tick(11);
 
         assert_eq!(store.remove_target(&first.target), 2);
         assert!(store.get(&first).is_none());
+        assert!(store.get(&second).is_none());
         assert!(store.get(&other).is_some());
-        assert_eq!(captured.snapshot(), AdaptiveSnapshot::default());
+        assert_eq!(
+            captured.snapshot(),
+            AdaptiveSnapshot {
+                latency_p50_micros: Some(100),
+                latency_samples: 1,
+                charged_tokens_60s: 3,
+            }
+        );
+
+        captured.record_success_ttft(11, 250);
+        captured.record_charged_tokens(11, 4);
+        captured.tick(12);
+        assert_eq!(captured.snapshot().latency_samples, 2);
+        assert_eq!(captured.snapshot().charged_tokens_60s, 7);
     }
 
     #[test]
     fn key_rejects_non_ai_target_and_empty_identity_parts() {
-        let mut target = key("uid", "model").target;
+        let target = key("uid", "model").target;
+        assert!(AdaptiveTelemetryKey::new("".into(), "rule".into(), target.clone(), "model".into()).is_none());
+        assert!(AdaptiveTelemetryKey::new("uid".into(), "".into(), target.clone(), "model".into()).is_none());
+        assert!(AdaptiveTelemetryKey::new("uid".into(), "rule".into(), target.clone(), "".into()).is_none());
+
+        let mut target = target;
         target.target_kind = PolicyTargetKind::Service;
         assert!(AdaptiveTelemetryKey::new("uid".into(), "rule".into(), target, "model".into()).is_none());
+    }
+
+    #[test]
+    fn adaptive_plugin_predicate_requires_enabled_adaptive_ai_proxy() {
+        assert!(!request_plugins_use_adaptive_selection(None));
+        assert!(!request_plugins_use_adaptive_selection(Some(&[adaptive_entry(
+            AiBackendSelection::LowestLatency,
+            false,
+        )])));
+        for selection_type in [
+            AiBackendSelection::Weighted,
+            AiBackendSelection::Priority,
+            AiBackendSelection::CostWeighted,
+        ] {
+            assert!(!request_plugins_use_adaptive_selection(Some(&[adaptive_entry(
+                selection_type,
+                true,
+            )])));
+        }
+        for selection_type in [AiBackendSelection::LowestLatency, AiBackendSelection::LowestUsage] {
+            assert!(request_plugins_use_adaptive_selection(Some(&[adaptive_entry(
+                selection_type,
+                true,
+            )])));
+        }
+    }
+
+    #[test]
+    fn retained_keys_match_route_plugin_target_and_catalog_models() {
+        let retained = collect_for_test(adaptive_route(), "route-ns/adaptive");
+        let target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionAIService,
+            namespace: "route-ns".to_string(),
+            name: "provider".to_string(),
+        };
+        let expected: HashSet<_> = ["model-a", "model-b"]
+            .into_iter()
+            .map(|model| {
+                AdaptiveTelemetryKey::new(
+                    "route-uid".to_string(),
+                    "name:primary".to_string(),
+                    target.clone(),
+                    model.to_string(),
+                )
+                .unwrap()
+            })
+            .collect();
+        assert_eq!(retained, expected);
+
+        let mut delegated = adaptive_route();
+        delegated.spec.rules.as_mut().unwrap()[0].filters.as_mut().unwrap()[0]
+            .extension_ref
+            .as_mut()
+            .unwrap()
+            .resolved_namespace = Some("child-ns".to_string());
+        assert_eq!(collect_for_test(delegated, "child-ns/adaptive"), expected);
+
+        let mut cross_namespace = adaptive_route();
+        cross_namespace.spec.rules.as_mut().unwrap()[0]
+            .backend_refs
+            .as_mut()
+            .unwrap()[0]
+            .namespace = Some("provider-ns".to_string());
+        let explicit_target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionAIService,
+            namespace: "provider-ns".to_string(),
+            name: "provider".to_string(),
+        };
+        let explicit_retained = collect_retained_keys(
+            &[Arc::new(cross_namespace)],
+            |plugin_key| plugin_key == "route-ns/adaptive",
+            |target| {
+                assert_eq!(target, &explicit_target);
+                Some(vec!["model-a".to_string()])
+            },
+        );
+        assert_eq!(
+            explicit_retained,
+            HashSet::from([AdaptiveTelemetryKey::new(
+                "route-uid".to_string(),
+                "name:primary".to_string(),
+                explicit_target,
+                "model-a".to_string(),
+            )
+            .unwrap(),])
+        );
+    }
+
+    #[test]
+    fn retained_keys_fail_closed_for_ineligible_route_shapes() {
+        let mut cases = Vec::new();
+
+        let mut non_extension = adaptive_route();
+        non_extension.spec.rules.as_mut().unwrap()[0].filters.as_mut().unwrap()[0].filter_type =
+            HTTPRouteFilterType::RequestHeaderModifier;
+        cases.push(non_extension);
+
+        let mut wrong_group = adaptive_route();
+        wrong_group.spec.rules.as_mut().unwrap()[0].filters.as_mut().unwrap()[0]
+            .extension_ref
+            .as_mut()
+            .unwrap()
+            .group = "example.io".to_string();
+        cases.push(wrong_group);
+
+        let mut wrong_kind = adaptive_route();
+        wrong_kind.spec.rules.as_mut().unwrap()[0].filters.as_mut().unwrap()[0]
+            .extension_ref
+            .as_mut()
+            .unwrap()
+            .kind = "OtherPlugins".to_string();
+        cases.push(wrong_kind);
+
+        let mut unresolved_route = adaptive_route();
+        unresolved_route.spec.rules.as_mut().unwrap()[0].resolved_terminal_route_uid = None;
+        cases.push(unresolved_route);
+
+        let mut non_ai_backend = adaptive_route();
+        let backend = &mut non_ai_backend.spec.rules.as_mut().unwrap()[0]
+            .backend_refs
+            .as_mut()
+            .unwrap()[0];
+        backend.group = None;
+        backend.kind = Some("Service".to_string());
+        cases.push(non_ai_backend);
+
+        for route in cases {
+            assert!(collect_for_test(route, "route-ns/adaptive").is_empty());
+        }
+
+        assert!(collect_for_test(adaptive_route(), "route-ns/other-plugin").is_empty());
+        assert!(collect_retained_keys(
+            &[Arc::new(adaptive_route())],
+            |plugin_key| plugin_key == "route-ns/adaptive",
+            |_| None,
+        )
+        .is_empty());
     }
 
     #[test]
