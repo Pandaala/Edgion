@@ -195,10 +195,21 @@ fn backend_traffic_policy_spec_has_no_uncovered_fields() {
 
 #[test]
 fn backend_traffic_policy_target_ref_contract_matches_crd() {
+    let generated = serde_json::to_value(schema_for!(edgion_resources::EdgionBackendTrafficPolicySpec)).unwrap();
+    let generated_target_refs = &generated["properties"]["targetRefs"];
+    assert_eq!(generated_target_refs["minItems"], 1);
+    assert!(
+        generated_target_refs["maxItems"].is_null(),
+        "the generated schema must not cap Service target fan-out"
+    );
+
     let actual = crd_section("edgion_backend_traffic_policy_crd.yaml", "spec");
     let target_refs = &actual["properties"]["targetRefs"];
     assert_eq!(target_refs["minItems"], 1);
-    assert_eq!(target_refs["maxItems"], 16);
+    assert!(
+        target_refs["maxItems"].is_null(),
+        "the shared CRD array must not cap Service target fan-out"
+    );
 
     let groups = string_enum_values(&target_refs["items"]["properties"]["group"]);
     assert_eq!(

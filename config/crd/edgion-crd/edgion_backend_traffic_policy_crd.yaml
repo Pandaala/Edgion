@@ -21,7 +21,6 @@ spec:
                 targetRefs:
                   type: array
                   minItems: 1
-                  maxItems: 16
                   description: "Homogeneous Service or EdgionAIService targets in the policy namespace"
                   items:
                     type: object

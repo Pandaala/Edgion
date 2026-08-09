@@ -29,7 +29,7 @@ use std::fmt;
 #[serde(rename_all = "camelCase")]
 pub struct EdgionBackendTrafficPolicySpec {
     /// Homogeneous Service or EdgionAIService targets in the policy namespace.
-    #[schemars(length(min = 1, max = 16))]
+    #[schemars(length(min = 1))]
     pub target_refs: Vec<PolicyTargetRef>,
     /// Load-balancing algorithm and panic threshold. Service targets only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -295,23 +295,17 @@ impl EdgionBackendTrafficPolicySpec {
         let mut errors = Vec::new();
         if self.target_refs.is_empty() {
             errors.push("targetRefs must not be empty".to_string());
-        } else if self.target_refs.len() > 16 {
-            errors.push("targetRefs must contain at most 16 entries".to_string());
         }
 
         let mut target_kinds = HashSet::new();
         let mut targets = HashSet::new();
+        let mut duplicate_targets = Vec::new();
         for tr in &self.target_refs {
             match tr.target_kind() {
                 Ok(target_kind) => {
                     target_kinds.insert(target_kind);
                     if !targets.insert((target_kind, tr.name.as_str())) {
-                        errors.push(format!(
-                            "targetRefs must not contain duplicate target {}/{} {}",
-                            target_kind.group(),
-                            target_kind.kind(),
-                            tr.name
-                        ));
+                        duplicate_targets.push((target_kind, tr.name.as_str()));
                     }
                 }
                 Err(error) => errors.push(error),
@@ -326,6 +320,17 @@ impl EdgionBackendTrafficPolicySpec {
 
         let targets_ai_service = target_kinds.len() == 1 && target_kinds.contains(&PolicyTargetKind::EdgionAIService);
         if targets_ai_service {
+            if self.target_refs.len() > 16 {
+                errors.push("EdgionAIService targetRefs must contain at most 16 entries".to_string());
+            }
+            for (target_kind, target_name) in duplicate_targets {
+                errors.push(format!(
+                    "EdgionAIService targetRefs must not contain duplicate target {}/{} {}",
+                    target_kind.group(),
+                    target_kind.kind(),
+                    target_name
+                ));
+            }
             if self.load_balancer.is_some() {
                 errors.push("loadBalancer is not supported for EdgionAIService targets".to_string());
             }
@@ -556,29 +561,38 @@ outlierDetection:
     }
 
     #[test]
-    fn target_refs_reject_bounds_duplicates_and_mixed_kinds() {
+    fn target_refs_preserve_service_fanout_and_bound_ai_targets() {
         let empty: EdgionBackendTrafficPolicySpec = serde_yaml::from_str("targetRefs: []").unwrap();
         assert!(empty
             .get_validation_errors()
             .iter()
             .any(|error| error.contains("must not be empty")));
 
-        let too_many_refs = (0..17).map(|index| format!("  - kind: Service\n    name: svc-{index}"));
-        let too_many: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(&format!(
-            "targetRefs:\n{}",
-            too_many_refs.collect::<Vec<_>>().join("\n")
-        ))
+        let service_refs = (0..17).map(|index| format!("  - kind: Service\n    name: svc-{index}"));
+        let many_services: EdgionBackendTrafficPolicySpec =
+            serde_yaml::from_str(&format!("targetRefs:\n{}", service_refs.collect::<Vec<_>>().join("\n"))).unwrap();
+        assert!(many_services.get_validation_errors().is_empty());
+
+        let duplicate_service: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+            "targetRefs:\n  - group: core\n    kind: Service\n    name: shared\n  - group: \"\"\n    kind: Service\n    name: shared",
+        )
         .unwrap();
-        assert!(too_many
+        assert!(duplicate_service.get_validation_errors().is_empty());
+
+        let ai_refs =
+            (0..17).map(|index| format!("  - group: edgion.io\n    kind: EdgionAIService\n    name: ai-{index}"));
+        let too_many_ai: EdgionBackendTrafficPolicySpec =
+            serde_yaml::from_str(&format!("targetRefs:\n{}", ai_refs.collect::<Vec<_>>().join("\n"))).unwrap();
+        assert!(too_many_ai
             .get_validation_errors()
             .iter()
             .any(|error| error.contains("at most 16")));
 
-        let duplicate: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
-            "targetRefs:\n  - group: core\n    kind: Service\n    name: shared\n  - group: \"\"\n    kind: Service\n    name: shared",
+        let duplicate_ai: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+            "targetRefs:\n  - group: edgion.io\n    kind: EdgionAIService\n    name: shared\n  - group: edgion.io\n    kind: EdgionAIService\n    name: shared",
         )
         .unwrap();
-        assert!(duplicate
+        assert!(duplicate_ai
             .get_validation_errors()
             .iter()
             .any(|error| error.contains("duplicate target")));

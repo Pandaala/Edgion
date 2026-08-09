@@ -36,11 +36,12 @@ targetRefs:
 
 Rules:
 
-- A policy has 1–16 `targetRefs`
+- A policy has at least one `targetRef`
+- An EdgionAIService policy has at most 16 `targetRefs`; Service policies have no fixed maximum
 - Every target is in the policy's Namespace; cross-Namespace targets are not supported
 - Accepted target pairs are core-group `Service` and `edgion.io/EdgionAIService`
 - All refs in one policy have the same target kind
-- Duplicate typed targets are rejected
+- Duplicate EdgionAIService targets are rejected; duplicate Service targets are idempotent
 - A Service and EdgionAIService with the same Namespace/name are distinct targets
 - HTTPRoute, GRPCRoute, and other route kinds are not valid targets
 

@@ -23,8 +23,9 @@ Controller and Gateway share the resource-layer parser and typed identity:
 ```
 
 Accepted pairs are core-group `Service` and `edgion.io/EdgionAIService`. A plain
-`namespace/name` key is insufficient because both kinds may have the same name. One policy accepts
-1–16 unique targets, and every target must have the same kind.
+`namespace/name` key is insufficient because both kinds may have the same name. Every target in one
+policy must have the same kind. An EdgionAIService policy accepts 1–16 unique targets; Service
+policies retain unbounded fan-out and treat duplicate references idempotently.
 
 The field matrix is atomic:
 

@@ -303,6 +303,7 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
             }
         }
         new_target_keys.sort();
+        new_target_keys.dedup();
 
         let new_timestamp = p.metadata.creation_timestamp.as_ref().map(|t| t.0);
         state.set_timestamp(&policy_resource_key, new_timestamp);
@@ -883,6 +884,43 @@ mod tests {
             "now-valid older policy wins; newer becomes conflicted"
         );
         assert_eq!(accepted.reason, condition_reasons::POLICY_CONFLICTED);
+    }
+
+    #[tokio::test]
+    async fn duplicate_service_targets_do_not_requeue_unchanged_siblings() {
+        use crate::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
+        use std::sync::atomic::Ordering;
+
+        let (ctx, rt) = make_ctx();
+        let handler = make_handler();
+        let processor = Arc::new(ResourceProcessor::<EdgionBackendTrafficPolicy>::new(
+            "EdgionBackendTrafficPolicy",
+            128,
+            Arc::new(make_handler()),
+            rt.clone(),
+        ));
+        rt.processor_registry.register(processor.clone());
+
+        let duplicate_target = |mut policy: EdgionBackendTrafficPolicy| {
+            policy.spec.target_refs.push(policy.spec.target_refs[0].clone());
+            policy
+        };
+        let older = duplicate_target(make_policy("older", "payments", "2026-01-01T00:00:00Z"));
+        let younger = duplicate_target(make_policy("younger", "payments", "2026-06-01T00:00:00Z"));
+        assert!(older.spec.get_validation_errors().is_empty());
+        assert!(younger.spec.get_validation_errors().is_empty());
+
+        let _ = handler.parse(older.clone(), &ctx).await;
+        let _ = handler.parse(younger, &ctx).await;
+        let scheduled_after_initial_arbitration = processor.workqueue().metrics().delayed_total.load(Ordering::Relaxed);
+
+        let _ = handler.parse(older, &ctx).await;
+
+        assert_eq!(
+            processor.workqueue().metrics().delayed_total.load(Ordering::Relaxed),
+            scheduled_after_initial_arbitration,
+            "an unchanged duplicate Service target set must not requeue its sibling"
+        );
     }
 
     /// ResolvedRefs is `False`/`TargetNotFound` when the target Service is not in

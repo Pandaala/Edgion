@@ -301,9 +301,10 @@ Allowed target kinds and fields are:
 
 Policy identity becomes typed: `(group, kind, namespace, name)`. It must never reuse the existing
 plain `namespace/name` Service key because a Service and EdgionAIService may share a name. Targets
-remain same-namespace. Duplicate targets and mixed target kinds are rejected. `targetRefs` contains
-between one and 16 entries in Rust validation and the structural CRD, bounding dependency edges,
-sibling arbitration, and status work in Kubernetes, filesystem, and etcd modes.
+remain same-namespace, and mixed target kinds are rejected. EdgionAIService policies contain between
+one and 16 unique targets in Rust validation, bounding their new dependency edges and sibling
+arbitration work in Kubernetes, filesystem, and etcd modes. Service policies retain their existing
+unbounded fan-out and idempotent duplicate-reference behavior.
 
 Canonical target parsing is one shared resource-layer function used by Controller and Gateway.
 Structural and field-matrix invalidity rejects the whole policy. Object existence is resolved per
