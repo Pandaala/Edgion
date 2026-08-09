@@ -280,14 +280,12 @@ fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, S
         compiled_query_regexes,
         has_query_matchers,
         specificity,
-        metric_handles: Arc::new(
-            crate::observe::metrics::route_handles::RouteMetricHandles::build_sparse(
-                ctx.attached_gateways,
-                ctx.namespace,
-                ctx.name,
-                &http_backends_from_rule(&ctx.rule, ctx.namespace),
-            ),
-        ),
+        metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
+            ctx.attached_gateways,
+            ctx.namespace,
+            ctx.name,
+            &http_backends_from_rule(&ctx.rule, ctx.namespace),
+        )),
     })
 }
 
@@ -325,14 +323,12 @@ fn build_normal_route_unit(ctx: RouteUnitCtx<'_>) -> HttpRouteRuleUnit {
         compiled_query_regexes,
         has_query_matchers,
         specificity,
-        metric_handles: Arc::new(
-            crate::observe::metrics::route_handles::RouteMetricHandles::build_sparse(
-                ctx.attached_gateways,
-                ctx.namespace,
-                ctx.name,
-                &http_backends_from_rule(&ctx.rule, ctx.namespace),
-            ),
-        ),
+        metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
+            ctx.attached_gateways,
+            ctx.namespace,
+            ctx.name,
+            &http_backends_from_rule(&ctx.rule, ctx.namespace),
+        )),
     }
 }
 
@@ -610,20 +606,19 @@ pub(crate) fn build_domain_route_rules_from_routes(data: &HashMap<String, Arc<HT
     }
 }
 
-/// Build a raw-slot-aligned Service metric view. Non-Service slots stay
-/// `None`, so they register no Service-labelled metric handles.
-fn http_backends_from_rule(rule: &HTTPRouteRule, route_ns: &str) -> Vec<Option<(String, String)>> {
+/// Build a raw-slot-aligned metric identity for every backendRef kind.
+/// Backend metrics label namespace/name but not kind, matching the dynamic
+/// fallback for Service, EdgionAIService, and invalid selected slots.
+fn http_backends_from_rule(rule: &HTTPRouteRule, route_ns: &str) -> Vec<(String, String)> {
     rule.backend_refs
         .as_ref()
         .map(|refs| {
             refs.iter()
-                .map(|b| {
-                    (b.backend_kind() == edgion_resources::HTTPBackendRefKind::Service).then(|| {
-                        (
-                            b.namespace.clone().unwrap_or_else(|| route_ns.to_string()),
-                            b.name.clone(),
-                        )
-                    })
+                .map(|backend| {
+                    (
+                        backend.namespace.clone().unwrap_or_else(|| route_ns.to_string()),
+                        backend.name.clone(),
+                    )
                 })
                 .collect()
         })
@@ -711,6 +706,32 @@ mod tests {
         route.spec.resolved_hostnames = Some(vec![]);
         let result = get_effective_hostnames(&route);
         assert_eq!(result, vec!["fallback.example.com"]);
+    }
+
+    #[test]
+    fn metric_backend_slots_include_service_ai_and_invalid_refs() {
+        let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
+            "backendRefs": [
+                {"name": "service"},
+                {
+                    "group": "edgion.io",
+                    "kind": "EdgionAIService",
+                    "namespace": "models",
+                    "name": "provider"
+                },
+                {"group": "example.io", "kind": "CustomBackend", "name": "invalid"}
+            ]
+        }))
+        .expect("backend metric fixture must deserialize");
+
+        assert_eq!(
+            http_backends_from_rule(&rule, "route-ns"),
+            vec![
+                ("route-ns".to_string(), "service".to_string()),
+                ("models".to_string(), "provider".to_string()),
+                ("route-ns".to_string(), "invalid".to_string()),
+            ]
+        );
     }
 
     #[test]

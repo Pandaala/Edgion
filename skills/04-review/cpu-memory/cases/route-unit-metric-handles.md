@@ -19,16 +19,27 @@ See `docs/superpowers/specs/2026-06-10-observe-f002-route-unit-metric-handles-de
 for the design and `docs/superpowers/plans/2026-06-10-observe-f002-route-unit-metric-handles.md`
 for the landed plan.
 
-Integration-testing-mode, route-miss, bypass paths and unknown protocols
-fall back to a `Vec<Label>` + `Label::new` rewritten version of the original
-functions. The hot path is 0 allocations, 0 hashing, 0 locks (linear scan
-over `attached_gateways` — typically 1-3 entries — plus two atomic ops).
+Integration-testing-mode, route-miss, slotless bypass paths such as
+ExternalJump, and unknown protocols fall back to a `Vec<Label>` + `Label::new`
+rewritten version of the original functions. DirectEndpoint retains the raw
+backendRef slot and can use the handle path. The handle path is 0 allocations,
+0 hashing, 0 locks (linear scan over `attached_gateways` — typically 1-3
+entries — plus two atomic ops).
 
 `attached_gateways` is the list of `(gateway_ns, gateway_name)` tuples
 resolved from `parent_refs` at conf-load time (via
 `gateways_from_parent_refs` in `edgion-gateway/src/routes/common.rs`).
-`backend_ref_idx` is set by the LB selection path in
-`init_backend_context_if_needed` via `backend_refs.iter().position(...)`.
+HTTP Service/invalid selection carries `CompiledBackend.slot`; AI selection
+carries `AiPeerTarget.backend_slot`; DirectEndpoint retains the validated raw
+slot; and the gRPC initialization path derives its slot from the rule refs.
+HTTP route matrices are aligned to every raw backendRef slot, including
+`EdgionAIService` and invalid selected refs. Backend metrics label only the
+resolved namespace/name, not resource kind, so each corresponding handle cell
+has the same label identity as the dynamic fallback. Pre-registration creates
+bounded zero-value protocol/status cells for configured
+gateway/route/backendRef combinations; it does not introduce an unbounded label
+dimension. The AI request path therefore avoids per-request label allocation
+and registry lookup.
 
 ## Why future review should not re-report this
 
