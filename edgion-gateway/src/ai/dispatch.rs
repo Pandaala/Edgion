@@ -76,8 +76,24 @@ pub enum AiDispatchError {
     Rejected,
     Unavailable,
     InvalidConfiguration,
+    RequestDeadlineExceeded,
+    GrpcDeadlineExceeded,
     /// OpenAI-compatible client error; must not become an HTML 500.
     Client(AiProxyError),
+}
+
+/// Resolve the binding end-to-end deadline for an AI predispatch decision.
+/// Request timeout takes precedence when both deadlines expire together,
+/// matching the outer proxy gate and retry-backoff checks.
+#[inline]
+pub(crate) fn ai_predispatch_deadline(ctx: &EdgionHttpContext) -> Option<AiDispatchError> {
+    if ctx.request_timeout_exceeded() {
+        Some(AiDispatchError::RequestDeadlineExceeded)
+    } else if ctx.grpc_deadline_exceeded() {
+        Some(AiDispatchError::GrpcDeadlineExceeded)
+    } else {
+        None
+    }
 }
 
 /// A failure while constructing an AI upstream peer before dispatch starts.
@@ -129,6 +145,13 @@ pub fn prepare_first_attempt(
     route_retry_cap: Option<u32>,
     global_retry_cap: u32,
 ) -> Result<AiPeerTarget, AiDispatchError> {
+    // Every predispatch scan iteration enters through this function. Re-check
+    // both end-to-end deadlines before taking or mutating the plan so slow
+    // admission/endpoint failures cannot keep scanning after the caller's
+    // budget has expired.
+    if let Some(error) = ai_predispatch_deadline(ctx) {
+        return Err(error);
+    }
     let Some(mut plan) = ctx.ai_attempt_plan.take() else {
         return Err(AiDispatchError::InvalidConfiguration);
     };
@@ -843,7 +866,8 @@ mod tests {
     use edgion_resources::resources::edgion_ai_service::AiCredentialLimits;
     use edgion_resources::resources::edgion_backend_traffic_policy::{BudgetDetails, RetryConstraintConfig};
     use edgion_resources::resources::edgion_plugins::{AiBackendSelection, OnRedisFailure};
-    use edgion_resources::{HTTPBackendRef, HTTPRouteMatch, HTTPRouteRule};
+    use edgion_resources::{HTTPBackendRef, HTTPRouteMatch, HTTPRouteRule, ParsedRouteTimeouts, RouteTimeout};
+    use std::time::{Duration, Instant};
     use tokio::io::AsyncWriteExt;
 
     fn candidate_scheduler() -> AttemptScheduler {
@@ -1023,6 +1047,17 @@ mod tests {
         })
     }
 
+    fn request_deadline_route_unit(timeout: Duration) -> Arc<HttpRouteRuleUnit> {
+        let mut unit = (*denied_route_unit()).clone();
+        let mut rule = (*unit.rule).clone();
+        rule.parsed_timeouts = Some(ParsedRouteTimeouts {
+            request_timeout: RouteTimeout::Duration(timeout),
+            backend_request_timeout: RouteTimeout::Unset,
+        });
+        unit.rule = Arc::new(rule);
+        Arc::new(unit)
+    }
+
     async fn test_session() -> Session {
         let (mut client, server) = tokio::io::duplex(4096);
         let stream: pingora_core::protocols::Stream = Box::new(server);
@@ -1062,6 +1097,55 @@ mod tests {
         assert!(ctx.ai_request_baseline.is_none());
         assert!(ctx.request_body.read_all().await.unwrap().is_none());
         assert!(session.req_header().headers.get("authorization").is_none());
+    }
+
+    #[tokio::test]
+    async fn prepare_first_attempt_rechecks_request_deadline_before_plan_mutation() {
+        let credential = RuntimeAiCredential {
+            name: "primary".to_string(),
+            weight: 1,
+            credential: "secret".to_string(),
+            limits: None,
+        };
+        let mut ctx = EdgionHttpContext::new();
+        ctx.route_unit = Some(request_deadline_route_unit(Duration::from_millis(1)));
+        ctx.start_time = Instant::now() - Duration::from_secs(1);
+        ctx.ai_attempt_plan = Some(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
+        let mut session = test_session().await;
+
+        assert!(matches!(
+            prepare_first_attempt(&mut session, &mut ctx, 0, None, 0),
+            Err(AiDispatchError::RequestDeadlineExceeded)
+        ));
+        let Some(AiAttemptPlan::Ready(plan)) = ctx.ai_attempt_plan.as_ref() else {
+            panic!("deadline gate must preserve the ready plan");
+        };
+        assert_eq!(plan.scheduler.dispatch_count(), 0);
+        assert!(matches!(plan.scheduler.next_step(), NextStep::PickService(_)));
+    }
+
+    #[tokio::test]
+    async fn prepare_first_attempt_rechecks_grpc_deadline_before_plan_mutation() {
+        let credential = RuntimeAiCredential {
+            name: "primary".to_string(),
+            weight: 1,
+            credential: "secret".to_string(),
+            limits: None,
+        };
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.grpc_client_deadline = Some(Instant::now() - Duration::from_secs(1));
+        ctx.ai_attempt_plan = Some(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
+        let mut session = test_session().await;
+
+        assert!(matches!(
+            prepare_first_attempt(&mut session, &mut ctx, 0, None, 0),
+            Err(AiDispatchError::GrpcDeadlineExceeded)
+        ));
+        let Some(AiAttemptPlan::Ready(plan)) = ctx.ai_attempt_plan.as_ref() else {
+            panic!("deadline gate must preserve the ready plan");
+        };
+        assert_eq!(plan.scheduler.dispatch_count(), 0);
+        assert!(matches!(plan.scheduler.next_step(), NextStep::PickService(_)));
     }
 
     #[test]

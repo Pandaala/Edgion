@@ -1,6 +1,7 @@
 use super::EdgionHttpProxy;
 use crate::ai::dispatch::{
-    commit_ai_attempt_context, prepare_first_attempt, AiDispatchError, AiPeerPredispatchFailure, AiPeerTarget,
+    ai_predispatch_deadline, commit_ai_attempt_context, prepare_first_attempt, AiDispatchError,
+    AiPeerPredispatchFailure, AiPeerTarget,
 };
 use crate::ai::{render_openai_error, AiProxyError};
 use crate::backends::policy::backend_traffic::authority::{render_authority, AuthorityError};
@@ -26,7 +27,7 @@ use edgion_resources::EdgionStatus;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 use pingora_core::upstreams::peer::Peer;
-use pingora_core::{Error as PingoraError, ErrorType};
+use pingora_core::{BError, Error as PingoraError, ErrorType};
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
@@ -34,8 +35,45 @@ fn ai_predispatch_error(error: AiDispatchError) -> Option<AiProxyError> {
     match error {
         AiDispatchError::Unavailable => Some(AiProxyError::ServiceUnavailable),
         AiDispatchError::Client(error) => Some(error),
-        AiDispatchError::Rejected | AiDispatchError::InvalidConfiguration => None,
+        AiDispatchError::Rejected
+        | AiDispatchError::InvalidConfiguration
+        | AiDispatchError::RequestDeadlineExceeded
+        | AiDispatchError::GrpcDeadlineExceeded => None,
     }
+}
+
+fn ai_predispatch_deadline_mapping(error: &AiDispatchError) -> Option<(EdgionStatus, &'static str)> {
+    match error {
+        AiDispatchError::RequestDeadlineExceeded => Some((
+            EdgionStatus::RequestTimeoutExceeded,
+            "Request timeout exceeded during AI predispatch selection",
+        )),
+        AiDispatchError::GrpcDeadlineExceeded => Some((
+            EdgionStatus::GrpcClientDeadlineExceeded,
+            "gRPC client deadline exceeded during AI predispatch selection",
+        )),
+        _ => None,
+    }
+}
+
+fn ai_predispatch_deadline_response(error: &AiDispatchError, ctx: &mut EdgionHttpContext) -> Option<BError> {
+    let (status, detail) = ai_predispatch_deadline_mapping(error)?;
+    ctx.add_error(status);
+    if let Some(upstream) = ctx.get_current_upstream_mut() {
+        upstream.status = Some(504);
+    }
+    Some(PingoraError::explain(ErrorType::HTTPStatus(504), detail))
+}
+
+/// Stop after an I/O-bearing predispatch step if either end-to-end deadline
+/// expired while it was in flight. An installed admission remains
+/// predispatch, so release and drain it before returning the timeout.
+async fn stop_ai_predispatch_if_expired(ctx: &mut EdgionHttpContext) -> Option<BError> {
+    let error = ai_predispatch_deadline(ctx)?;
+    let response = ai_predispatch_deadline_response(&error, ctx)?;
+    ctx.ai_attempt_runtime.finish_predispatch();
+    ctx.ai_attempt_runtime.drain_pending().await;
+    Some(response)
 }
 
 async fn end_ai_predispatch_error(
@@ -497,6 +535,9 @@ pub async fn upstream_peer_http(
             ) {
                 Ok(target) => target,
                 Err(error) => {
+                    if let Some(response) = ai_predispatch_deadline_response(&error, ctx) {
+                        return Err(response);
+                    }
                     if let Some(error) = ai_predispatch_error(error) {
                         end_ai_predispatch_error(edgion_http, session, ctx, error).await?;
                     } else {
@@ -533,7 +574,14 @@ pub async fn upstream_peer_http(
             match admission {
                 crate::ai::attempt_runtime::AiAttemptAdmission::Ready(runtime) => {
                     ctx.ai_attempt_runtime.install(runtime);
-                    match try_ai_service_peer(edgion_http, ctx, &target).await {
+                    if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
+                        return Err(response);
+                    }
+                    let peer = try_ai_service_peer(edgion_http, ctx, &target).await;
+                    if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
+                        return Err(response);
+                    }
+                    match peer {
                         Ok(peer) => {
                             commit_ai_attempt_context(ctx, &mut target)
                                 .map_err(|_| PingoraError::new(ErrorType::InternalError))?;
@@ -549,18 +597,27 @@ pub async fn upstream_peer_http(
                     }
                 }
                 crate::ai::attempt_runtime::AiAttemptAdmission::Skip => {
+                    if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
+                        return Err(response);
+                    }
                     if !crate::ai::dispatch::handle_ai_predispatch_failure(ctx, true) {
                         end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
                         return Err(PingoraError::new(ErrorType::InternalError));
                     }
                 }
                 crate::ai::attempt_runtime::AiAttemptAdmission::SkipService => {
+                    if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
+                        return Err(response);
+                    }
                     if !crate::ai::dispatch::handle_ai_predispatch_service_failure(ctx) {
                         end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
                         return Err(PingoraError::new(ErrorType::InternalError));
                     }
                 }
                 crate::ai::attempt_runtime::AiAttemptAdmission::DependencyDenied => {
+                    if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
+                        return Err(response);
+                    }
                     if !crate::ai::dispatch::handle_ai_predispatch_failure(ctx, true) {
                         end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
                         return Err(PingoraError::new(ErrorType::InternalError));
@@ -1491,9 +1548,10 @@ fn sp_should_repin_on_strict_retry(
 #[cfg(test)]
 mod tests {
     use super::{
-        ai_predispatch_error, apply_upstream_authority_decision, apply_upstream_read_timeout_override, backoff_action,
-        decide_upstream_authority, decide_want_raw, fold_peer_timeouts, replay_write_floor,
-        sp_should_refresh_on_cross_attempt_retry, sp_should_repin_on_strict_retry, AuthorityDecision, BackoffAction,
+        ai_predispatch_deadline_mapping, ai_predispatch_error, apply_upstream_authority_decision,
+        apply_upstream_read_timeout_override, backoff_action, decide_upstream_authority, decide_want_raw,
+        fold_peer_timeouts, replay_write_floor, sp_should_refresh_on_cross_attempt_retry,
+        sp_should_repin_on_strict_retry, stop_ai_predispatch_if_expired, AuthorityDecision, BackoffAction,
     };
     use crate::ai::dispatch::AiDispatchError;
     use crate::ai::{render_openai_error, AiProxyError};
@@ -1503,7 +1561,8 @@ mod tests {
     use edgion_resources::EdgionStatus;
     use pingora_core::prelude::HttpPeer;
     use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
-    use std::time::Duration;
+    use pingora_core::ErrorType;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn ai_unavailable_maps_to_fixed_openai_service_unavailable() {
@@ -1521,6 +1580,8 @@ mod tests {
         );
         assert_eq!(ai_predispatch_error(AiDispatchError::Rejected), None);
         assert_eq!(ai_predispatch_error(AiDispatchError::InvalidConfiguration), None);
+        assert_eq!(ai_predispatch_error(AiDispatchError::RequestDeadlineExceeded), None);
+        assert_eq!(ai_predispatch_error(AiDispatchError::GrpcDeadlineExceeded), None);
 
         let (status, body) = render_openai_error(AiProxyError::ServiceUnavailable);
         let body: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -1534,6 +1595,38 @@ mod tests {
         assert_eq!(status, 400);
         assert_eq!(body["error"]["type"], "invalid_request_error");
         assert_eq!(body["error"]["code"], "invalid_request_body");
+    }
+
+    #[test]
+    fn ai_predispatch_deadlines_map_to_standard_gateway_statuses() {
+        assert_eq!(
+            ai_predispatch_deadline_mapping(&AiDispatchError::RequestDeadlineExceeded),
+            Some((
+                EdgionStatus::RequestTimeoutExceeded,
+                "Request timeout exceeded during AI predispatch selection",
+            ))
+        );
+        assert_eq!(
+            ai_predispatch_deadline_mapping(&AiDispatchError::GrpcDeadlineExceeded),
+            Some((
+                EdgionStatus::GrpcClientDeadlineExceeded,
+                "gRPC client deadline exceeded during AI predispatch selection",
+            ))
+        );
+        assert_eq!(ai_predispatch_deadline_mapping(&AiDispatchError::Unavailable), None);
+    }
+
+    #[tokio::test]
+    async fn post_io_predispatch_gate_returns_standard_deadline_error() {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.grpc_client_deadline = Some(Instant::now() - Duration::from_secs(1));
+
+        let response = stop_ai_predispatch_if_expired(&mut ctx)
+            .await
+            .expect("expired gRPC deadline must stop predispatch");
+
+        assert_eq!(response.etype(), &ErrorType::HTTPStatus(504));
+        assert_eq!(ctx.edgion_status, vec![EdgionStatus::GrpcClientDeadlineExceeded]);
     }
 
     #[test]
