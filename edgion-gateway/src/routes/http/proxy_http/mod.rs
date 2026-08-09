@@ -4,7 +4,7 @@ use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::Digest;
 use pingora_core::Error;
 use pingora_http::ResponseHeader;
-use pingora_proxy::{FailToProxy, ProxyHttp, Session};
+use pingora_proxy::{FailToProxy, ProxyHttp, ResponseBodySink, Session};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -205,13 +205,17 @@ impl ProxyHttp for EdgionHttpProxy {
     }
 
     /// Returns `Ok(None)` to continue, `Ok(Some(duration))` to rate-limit for the given duration.
-    fn upstream_response_body_filter(
+    async fn upstream_response_body_filter(
         &self,
         session: &mut Session,
         body: &mut Option<bytes::Bytes>,
         end_of_stream: bool,
+        _sink: &mut ResponseBodySink,
         ctx: &mut Self::CTX,
-    ) -> pingora_core::Result<Option<std::time::Duration>> {
+    ) -> pingora_core::Result<Option<std::time::Duration>>
+    where
+        Self::CTX: Send + Sync,
+    {
         pg_upstream_response_body_filter::upstream_response_body_filter(self, session, body, end_of_stream, ctx)
     }
 
