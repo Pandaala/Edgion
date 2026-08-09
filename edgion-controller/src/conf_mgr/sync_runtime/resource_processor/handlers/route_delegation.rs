@@ -7,11 +7,12 @@
 //! `spec.resolved_rules`; the gateway compiles that list and never sees the
 //! nesting.
 //!
-//! Semantics contract: `docs/superpowers/specs/2026-07-11-route-delegation-design.md`.
+//! Canonical semantics: `docs/en/user-guide/http-route/delegation.md`; controller
+//! architecture: `skills/01-architecture/05-resources/04-http-route.md`.
 //! Key locked decisions: child paths are absolute and must be contained in the
 //! delegated prefix; parent filters are mandatory and non-overridable (a child
 //! standard filter of an inherited type invalidates the child rule; ExtensionRef
-//! chains concatenate); child hostnames are forbidden; rule-level attributes
+//! chains concatenate and retain the declaring route's namespace); child hostnames are forbidden; rule-level attributes
 //! are child-first-else-inherited; wildcard (`name: "*"`) selects all routes in
 //! the target namespace; delegation is parent opt-in (children may reverse-lock
 //! via `parentRefs {kind: HTTPRoute}`); cycles and depth > 8 drop the edge.

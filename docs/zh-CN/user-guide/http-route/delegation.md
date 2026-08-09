@@ -98,6 +98,8 @@ spec:
   到每条摊平后的子规则上，且**不可覆盖**：子规则声明了与继承类型相同的标准
   filter 时整条规则被丢弃（经 `PartiallyInvalid` 上报）。
 - `ExtensionRef`（EdgionPlugins）例外，采用串联：父插件链先执行，然后是子插件链。
+- 每个 `ExtensionRef` 仍属于声明它的 HTTPRoute：父 filter 在父路由 namespace 中解析
+  EdgionPlugins，子 filter 摊平后仍在子路由 namespace 中解析。
 - 委派规则 match 里的 `headers` / `queryParams` / `method` 约束会合并进子 match；
   发生矛盾时该子规则被丢弃。
 - `timeouts` / `retry` / `sessionPersistence`：子规则自己写了用子的，否则继承最近

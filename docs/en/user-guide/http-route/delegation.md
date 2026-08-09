@@ -108,6 +108,9 @@ A malformed delegating rule is dropped and reported via the route's
   is dropped (reported via `PartiallyInvalid`).
 - `ExtensionRef` (EdgionPlugins) chains concatenate instead: the parent's
   plugins run first, then the child's.
+- Each `ExtensionRef` remains local to the HTTPRoute that declares it: parent
+  filters resolve EdgionPlugins in the parent Namespace, while child filters
+  resolve them in the child Namespace after flattening.
 - The delegating rule's `headers` / `queryParams` / `method` match constraints
   are merged into child matches; a contradiction drops the child rule.
 - `timeouts` / `retry` / `sessionPersistence`: the child rule's own value

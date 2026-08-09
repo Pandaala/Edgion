@@ -64,7 +64,8 @@ pub struct HTTPRouteSpec {
     /// Present only on routes containing at least one delegating rule. When
     /// present, the gateway compiles these INSTEAD of `rules`, and
     /// `invalid_rule_indices` does not apply (flattening already dropped
-    /// invalid rules). See docs/superpowers/specs/2026-07-11-route-delegation-design.md.
+    /// invalid rules). See docs/en/user-guide/http-route/delegation.md and
+    /// skills/01-architecture/05-resources/04-http-route.md.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_rules: Option<Vec<HTTPRouteRule>>,

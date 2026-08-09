@@ -10,9 +10,9 @@
 //! This mirrors `route_delegation.rs` (HTTPRoute delegation) structurally
 //! (DFS shape, `FlattenCtx`, issue recording), but the "scope" being
 //! delegated is a gRPC service name compared by spec-string equality, not a
-//! path prefix compared by containment. Semantics contract:
-//! `docs/superpowers/specs/2026-07-12-grpcroute-delegation-design.md`
-//! (predecessor: `docs/superpowers/specs/2026-07-11-route-delegation-design.md`).
+//! path prefix compared by containment. Canonical semantics:
+//! `docs/en/user-guide/grpc-route/delegation.md`; controller architecture:
+//! `skills/01-architecture/05-resources/05-grpc-route.md`.
 //!
 //! Security-critical divergences from a literal HTTP mirror (regressions here
 //! are routing-boundary escapes):

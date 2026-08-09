@@ -154,7 +154,7 @@ rules:
         namespace: billing
 ```
 
-Key semantics (canonical user doc: [`docs/en/user-guide/grpc-route/delegation.md`](../../../docs/en/user-guide/grpc-route/delegation.md); design: `docs/superpowers/specs/2026-07-12-grpcroute-delegation-design.md`):
+Key semantics (canonical user doc: [`docs/en/user-guide/grpc-route/delegation.md`](../../../docs/en/user-guide/grpc-route/delegation.md); architecture: [`../../01-architecture/05-resources/05-grpc-route.md`](../../01-architecture/05-resources/05-grpc-route.md)):
 
 - A delegating rule's `matches` must be present and non-empty, and every match
   must carry a `method` matcher with `type` Exact-or-omitted, non-empty

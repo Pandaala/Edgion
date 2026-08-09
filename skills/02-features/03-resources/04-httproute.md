@@ -334,7 +334,7 @@ rules:
         namespace: billing
 ```
 
-Key semantics (canonical user doc: [`docs/en/user-guide/http-route/delegation.md`](../../../docs/en/user-guide/http-route/delegation.md); design: `docs/superpowers/specs/2026-07-11-route-delegation-design.md`):
+Key semantics (canonical user doc: [`docs/en/user-guide/http-route/delegation.md`](../../../docs/en/user-guide/http-route/delegation.md); architecture: [`../../01-architecture/05-resources/04-http-route.md`](../../01-architecture/05-resources/04-http-route.md)):
 
 - Child paths are absolute and must fall inside the delegated prefix (segment
   boundary); out-of-prefix child rules are dropped + reported (`PartiallyInvalid`).
@@ -344,6 +344,8 @@ Key semantics (canonical user doc: [`docs/en/user-guide/http-route/delegation.md
 - Parent standard filters are mandatory (same-type child filter ⇒ rule
   dropped); ExtensionRef chains concatenate (parent first). `timeouts` /
   `retry` / `sessionPersistence`: child-first-else-inherit.
+- Parent and child ExtensionRefs resolve EdgionPlugins in the Namespace of the
+  HTTPRoute that declares each filter; flattening never changes that locality.
 - Child backendRef namespace defaults to the child's namespace; cross-ns
   Service refs are ReferenceGrant-checked with the child as referrer.
 - Additive: `backendRef {kind: HTTPRoute}` was previously invalid config;
