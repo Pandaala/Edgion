@@ -921,7 +921,7 @@ fn valid_tool_name(name: &str) -> bool {
 
 fn map_stop_reason(reason: &str) -> Option<&'static str> {
     match reason {
-        "end_turn" | "stop_sequence" => Some("stop"),
+        "end_turn" | "stop_sequence" | "pause_turn" => Some("stop"),
         "max_tokens" | "model_context_window_exceeded" => Some("length"),
         "tool_use" => Some("tool_calls"),
         "refusal" => Some("content_filter"),
@@ -1432,6 +1432,7 @@ mod tests {
         for (anthropic, openai) in [
             ("end_turn", "stop"),
             ("stop_sequence", "stop"),
+            ("pause_turn", "stop"),
             ("max_tokens", "length"),
             ("model_context_window_exceeded", "length"),
             ("tool_use", "tool_calls"),
@@ -1439,7 +1440,7 @@ mod tests {
         ] {
             assert_eq!(map_stop_reason(anthropic), Some(openai));
         }
-        assert_eq!(map_stop_reason("pause_turn"), None);
+        assert_eq!(map_stop_reason("not_a_real_reason"), None);
         assert!(valid_tool_name("tool-name_1"));
         assert!(!valid_tool_name("bad tool"));
         assert!(!valid_tool_name(&"a".repeat(MAX_TOOL_NAME_BYTES + 1)));

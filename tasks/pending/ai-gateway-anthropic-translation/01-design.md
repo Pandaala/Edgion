@@ -135,9 +135,9 @@ plugins see only the client-visible OpenAI representation.
   pump or backpressure ownership.
 - Concatenate text blocks in order. Convert each `tool_use` block to one OpenAI function tool
   call with compact JSON arguments.
-- Map `end_turn` and `stop_sequence` to `stop`, `max_tokens` and
+- Map `end_turn`, `stop_sequence`, and `pause_turn` to `stop`, `max_tokens` and
   `model_context_window_exceeded` to `length`, `tool_use` to `tool_calls`, and `refusal` to
-  `content_filter`. Reject `pause_turn` and unsupported block types.
+  `content_filter`. Reject unknown stop reasons and unsupported block types.
 - Normalize usage as:
   `prompt_tokens = input_tokens + cache_creation_input_tokens + cache_read_input_tokens`,
   `completion_tokens = output_tokens`, and `total_tokens = prompt_tokens + completion_tokens`.

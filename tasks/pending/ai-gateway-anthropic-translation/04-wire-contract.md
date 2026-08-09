@@ -130,6 +130,10 @@ No `system_fingerprint` or provider-only fields are emitted. A finish reason app
 once. `partial_json` is forwarded as an opaque arguments string; only its enclosing event is
 validated.
 
+Anthropic finish reasons map as follows: `end_turn`, `stop_sequence`, and `pause_turn` to
+OpenAI `stop`; `max_tokens` and `model_context_window_exceeded` to `length`; `tool_use` to
+`tool_calls`; and `refusal` to `content_filter`. Unknown reasons fail translation.
+
 ## Errors
 
 Local request errors use the existing fixed OpenAI envelope. Provider HTTP bodies are never
