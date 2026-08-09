@@ -382,6 +382,24 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_success_does_not_cancel_retry_after_cooldown() {
+        let store = AiCredentialOutlierStore::new();
+        let target = target("svc");
+        store.configure_service(target.clone(), Some(config(60, 100)), ["primary".to_string()]);
+        let service = store.current_handle(&target).expect("service handle");
+        let rate_limited = service.capture("primary").expect("rate-limited request handle");
+        let in_flight_success = service.capture("primary").expect("concurrent request handle");
+
+        assert_eq!(
+            rate_limited.apply_retry_after("60", SystemTime::UNIX_EPOCH),
+            Some(Duration::from_secs(60))
+        );
+        in_flight_success.record_success();
+
+        assert!(matches!(rate_limited.admit(), EjectionAdmission::Rejected));
+    }
+
+    #[test]
     fn zero_past_invalid_and_unknown_alias_do_not_install_cooldown() {
         let store = AiCredentialOutlierStore::new();
         let target = target("svc");

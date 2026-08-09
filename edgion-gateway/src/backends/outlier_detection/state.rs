@@ -40,9 +40,23 @@ struct State {
     app_failures: u32,
     gateway_failures: u32,
     local_origin_failures: u32,
+    /// Consecutive-failure ejection window. An in-flight success may clear it.
     open_until: Option<Instant>,
+    /// Explicit provider cooldown. An unrelated in-flight success must not
+    /// cancel it; only a generation-valid half-open success closes it.
+    explicit_cooldown_until: Option<Instant>,
     num_ejections: u32,
     generation: u64,
+}
+
+impl State {
+    fn effective_open_until(&self) -> Option<Instant> {
+        match (self.open_until, self.explicit_cooldown_until) {
+            (Some(failure), Some(explicit)) => Some(failure.max(explicit)),
+            (Some(until), None) | (None, Some(until)) => Some(until),
+            (None, None) => None,
+        }
+    }
 }
 
 /// Result of recording a failure.
@@ -117,7 +131,7 @@ impl PassiveEjectionState {
     pub fn admit(self: &Arc<Self>) -> EjectionAdmission {
         let (generation, expired) = {
             let state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            match state.open_until {
+            match state.effective_open_until() {
                 None => return EjectionAdmission::Closed,
                 Some(until) => (state.generation, Instant::now() >= until),
             }
@@ -136,7 +150,10 @@ impl PassiveEjectionState {
         // A success, config replacement, or new cooldown may have raced the CAS.
         let valid = {
             let state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.generation == generation && state.open_until.is_some_and(|until| Instant::now() >= until)
+            state.generation == generation
+                && state
+                    .effective_open_until()
+                    .is_some_and(|until| Instant::now() >= until)
         };
         if !valid {
             self.probe_in_flight.store(false, Ordering::Release);
@@ -162,7 +179,7 @@ impl PassiveEjectionState {
             return FailureTransition::None;
         };
         let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state.open_until.is_some() {
+        if state.effective_open_until().is_some() {
             return FailureTransition::None;
         }
         match class {
@@ -188,19 +205,31 @@ impl PassiveEjectionState {
     pub fn open_for(&self, duration: Duration) {
         let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let until = Instant::now() + duration;
-        state.open_until = Some(state.open_until.map_or(until, |current| current.max(until)));
+        state.explicit_cooldown_until = Some(
+            state
+                .explicit_cooldown_until
+                .map_or(until, |current| current.max(until)),
+        );
         state.generation = state.generation.wrapping_add(1);
         self.probe_in_flight.store(false, Ordering::Release);
     }
 
+    /// Clear consecutive-failure state after a normal successful request.
+    /// Explicit cooldowns belong to the provider and survive unrelated
+    /// in-flight successes until their half-open probe completes.
     pub fn record_success(&self) -> bool {
         let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let was_open = state.open_until.take().is_some();
         state.app_failures = 0;
         state.gateway_failures = 0;
         state.local_origin_failures = 0;
-        state.generation = state.generation.wrapping_add(1);
-        self.probe_in_flight.store(false, Ordering::Release);
+        // An explicit cooldown owns its half-open generation. A success from a
+        // request dispatched before that cooldown must neither invalidate the
+        // active probe nor release its exclusive lease.
+        if state.explicit_cooldown_until.is_none() {
+            state.generation = state.generation.wrapping_add(1);
+            self.probe_in_flight.store(false, Ordering::Release);
+        }
         was_open
     }
 
@@ -210,7 +239,7 @@ impl PassiveEjectionState {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .open_until
+            .effective_open_until()
             .is_some()
     }
 
@@ -218,13 +247,14 @@ impl PassiveEjectionState {
     /// historical automatic recovery until Service callsites retain probe guards.
     pub fn legacy_ejection_status(&self) -> (bool, bool) {
         let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(until) = state.open_until else {
+        let Some(until) = state.effective_open_until() else {
             return (false, false);
         };
         if Instant::now() < until {
             return (true, false);
         }
         state.open_until = None;
+        state.explicit_cooldown_until = None;
         state.app_failures = 0;
         state.gateway_failures = 0;
         state.local_origin_failures = 0;
@@ -248,6 +278,7 @@ impl PassiveEjectionState {
         }
         if success {
             state.open_until = None;
+            state.explicit_cooldown_until = None;
             state.app_failures = 0;
             state.gateway_failures = 0;
             state.local_origin_failures = 0;
@@ -370,5 +401,41 @@ mod tests {
         assert!(matches!(state.admit(), EjectionAdmission::Closed));
         state.open_for(Duration::from_secs(1));
         assert!(matches!(state.admit(), EjectionAdmission::Rejected));
+    }
+
+    #[test]
+    fn normal_success_preserves_an_explicit_cooldown() {
+        let state = PassiveEjectionState::new(Some(config()));
+        state.open_for(Duration::from_secs(60));
+
+        assert!(!state.record_success(), "no failure ejection was cleared");
+        assert!(matches!(state.admit(), EjectionAdmission::Rejected));
+    }
+
+    #[test]
+    fn normal_success_does_not_invalidate_an_explicit_half_open_probe() {
+        let state = PassiveEjectionState::new(Some(config()));
+        state.open_for(Duration::ZERO);
+        let EjectionAdmission::Probe(probe) = state.admit() else {
+            panic!("expired explicit cooldown must admit one probe");
+        };
+
+        assert!(!state.record_success(), "no failure ejection was cleared");
+        assert!(matches!(state.admit(), EjectionAdmission::Rejected));
+
+        probe.success();
+        assert!(matches!(state.admit(), EjectionAdmission::Closed));
+    }
+
+    #[test]
+    fn normal_success_still_clears_a_failure_ejection() {
+        let state = PassiveEjectionState::new(Some(config()));
+        assert_eq!(
+            state.record_failure(FailureClass::Gateway, true),
+            FailureTransition::Opened
+        );
+
+        assert!(state.record_success());
+        assert!(matches!(state.admit(), EjectionAdmission::Closed));
     }
 }

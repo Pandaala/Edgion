@@ -37,7 +37,8 @@ when Redis is unavailable.
 
 A provider 429 rotates credentials first. A valid Retry-After value creates a bounded cooldown for
 that credential; it does not eject sibling credentials or make the current request sleep for the
-complete provider interval.
+complete provider interval. A successful request that was already in flight on the same credential
+does not shorten the provider cooldown.
 
 Outlier / half-open behavior for AI destinations is credential-isolated — see
 [Resilience and Failover](./resilience.md).
