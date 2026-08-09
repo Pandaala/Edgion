@@ -24,6 +24,37 @@ use crate::routes::http::match_unit::CompiledBackendTarget;
 
 const DEFAULT_MAXIMUM_REQUEST_DURATION: Duration = Duration::from_secs(300);
 
+fn ai_candidate_spec(backend: &crate::routes::http::match_unit::CompiledBackend) -> Option<(usize, i32, String)> {
+    if !backend.is_permitted_ai_service() {
+        return None;
+    }
+    match &backend.target {
+        CompiledBackendTarget::EdgionAIService { namespace, name } => Some((
+            backend.slot,
+            backend.schema.weight.unwrap_or(1),
+            format!("{namespace}/{name}"),
+        )),
+        CompiledBackendTarget::Service { .. } | CompiledBackendTarget::Invalid { .. } => None,
+    }
+}
+
+fn gate_candidate(
+    order: usize,
+    backend: &crate::routes::http::match_unit::CompiledBackend,
+) -> Result<RouteCandidate, ()> {
+    Ok(RouteCandidate {
+        slot: u8::try_from(backend.slot).map_err(|_| ())?,
+        order: u8::try_from(order).map_err(|_| ())?,
+        weight: backend.schema.weight.unwrap_or(1),
+        eligibility: CandidateEligibility {
+            valid_ref: backend.is_permitted_ai_service(),
+            ..CandidateEligibility::default()
+        },
+        adaptive: Default::default(),
+        cost: None,
+    })
+}
+
 /// Request-stage AI semantics. Provider-specific mutation happens per attempt.
 pub struct AiProxy {
     config: AiProxyConfig,
@@ -102,20 +133,10 @@ impl AiProxy {
 
         let mut gate_candidates = Vec::with_capacity(backends.len());
         for (order, backend) in backends.iter().enumerate() {
-            let (Ok(slot), Ok(order)) = (u8::try_from(backend.slot), u8::try_from(order)) else {
+            let Ok(candidate) = gate_candidate(order, backend) else {
                 return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
             };
-            gate_candidates.push(RouteCandidate {
-                slot,
-                order,
-                weight: backend.schema.weight.unwrap_or(1),
-                eligibility: CandidateEligibility {
-                    valid_ref: matches!(backend.target, CompiledBackendTarget::EdgionAIService { .. }),
-                    ..CandidateEligibility::default()
-                },
-                adaptive: Default::default(),
-                cost: None,
-            });
+            gate_candidates.push(candidate);
         }
         match invalid_weight_gate(&gate_candidates, entropy) {
             Ok(ConformanceGate::Valid) => {}
@@ -148,17 +169,7 @@ impl AiProxy {
         let snapshot = store.snapshot();
         let policy_store = get_backend_traffic_policy_store();
         let adaptive_store = get_adaptive_telemetry_store();
-        let candidate_specs: Vec<_> = backends
-            .iter()
-            .filter_map(|backend| match &backend.target {
-                CompiledBackendTarget::EdgionAIService { namespace, name } => Some((
-                    backend.slot,
-                    backend.schema.weight.unwrap_or(1),
-                    format!("{namespace}/{name}"),
-                )),
-                CompiledBackendTarget::Service { .. } | CompiledBackendTarget::Invalid { .. } => None,
-            })
-            .collect();
+        let candidate_specs: Vec<_> = backends.iter().filter_map(ai_candidate_spec).collect();
         let resolved = snapshot.get_many_by_key(candidate_specs.iter().map(|(_, _, key)| key.as_str()));
         let passthrough_allowed = self.config.on_unknown_model == OnUnknownModel::Passthrough
             && candidate_specs
@@ -675,8 +686,12 @@ mod tests {
 
     use crate::ai::{ResolvedModel, RuntimeAiCredentialPool, RuntimeAiEndpoint, RuntimeAiService};
     use crate::plugins::common::redis_rate_limiter::RedisRateLimiter;
+    use crate::plugins::PluginRuntime;
+    use crate::routes::http::match_unit::CompiledBackend;
+    use edgion_resources::resources::common::RefDenied;
     use edgion_resources::resources::edgion_ai_service::AiProvider;
     use edgion_resources::resources::edgion_plugins::{AiBackendSelection, AiBackendSelectionConfig};
+    use edgion_resources::HTTPBackendRef;
 
     fn config() -> AiProxyConfig {
         AiProxyConfig {
@@ -687,6 +702,45 @@ mod tests {
             on_unknown_model: OnUnknownModel::Reject,
             token_quota: None,
         }
+    }
+
+    fn compiled_ai_backend(ref_denied: Option<RefDenied>) -> CompiledBackend {
+        CompiledBackend::compile(
+            HTTPBackendRef {
+                name: "provider".to_string(),
+                namespace: Some("tenant-b".to_string()),
+                port: None,
+                weight: Some(1),
+                group: Some("edgion.io".to_string()),
+                kind: Some("EdgionAIService".to_string()),
+                filters: None,
+                backend_tls_policy: None,
+                ref_denied,
+            },
+            "tenant-a",
+            0,
+            Arc::new(PluginRuntime::new()),
+        )
+    }
+
+    #[test]
+    fn denied_ai_backend_is_invalid_and_never_materialized() {
+        let denied = compiled_ai_backend(Some(RefDenied {
+            target_namespace: "tenant-b".to_string(),
+            target_name: "provider".to_string(),
+            reason: Some("NoMatchingReferenceGrant".to_string()),
+        }));
+        let allowed = compiled_ai_backend(None);
+
+        assert!(!denied.is_permitted_ai_service());
+        assert!(allowed.is_permitted_ai_service());
+        let gate_candidates = [gate_candidate(0, &denied).unwrap()];
+        assert_eq!(invalid_weight_gate(&gate_candidates, 0), Ok(ConformanceGate::Invalid));
+        assert!(ai_candidate_spec(&denied).is_none());
+        assert_eq!(
+            ai_candidate_spec(&allowed),
+            Some((0, 1, "tenant-b/provider".to_string()))
+        );
     }
 
     #[test]

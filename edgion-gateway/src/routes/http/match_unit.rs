@@ -107,6 +107,15 @@ impl CompiledBackend {
         matches!(self.target, CompiledBackendTarget::Service { .. })
     }
 
+    /// Whether this backend is an authorized EdgionAIService reference.
+    ///
+    /// AI routing bypasses the generic Service selector, so its callers must
+    /// use this predicate rather than kind-only matching to preserve the
+    /// Controller's ReferenceGrant decision.
+    pub fn is_permitted_ai_service(&self) -> bool {
+        self.schema.ref_denied.is_none() && matches!(self.target, CompiledBackendTarget::EdgionAIService { .. })
+    }
+
     pub fn compile(
         schema: HTTPBackendRef,
         route_namespace: &str,

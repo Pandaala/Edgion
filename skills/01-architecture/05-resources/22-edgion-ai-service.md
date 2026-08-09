@@ -91,6 +91,10 @@ AiProxy reads the canonical OpenAI request once, resolves a request-stable logic
 quota, and stores a bounded attempt plan. It does not store backend names or mutate an upstream
 jump slot.
 
+A cross-Namespace backendRef without a matching ReferenceGrant retains its declared weight as an
+invalid Gateway API slot, but it is never materialized as an AI candidate. The dispatch boundary
+rechecks the same `ref_denied` decision by backend slot before any provider request is prepared.
+
 For each upstream attempt the Gateway:
 
 1. selects an eligible route backend with `backendSelection`;

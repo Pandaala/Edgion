@@ -313,6 +313,7 @@ fn prepare_ready_attempt(
         .candidates
         .get(selected.candidate)
         .ok_or(AiDispatchError::InvalidConfiguration)?;
+    let backend = selected_backend(ctx, candidate.slot)?;
     let service = candidate.service.as_ref().ok_or(AiDispatchError::Unavailable)?;
     let model = candidate.model.as_ref().ok_or(AiDispatchError::Unavailable)?;
     let credential = service
@@ -351,7 +352,6 @@ fn prepare_ready_attempt(
     ctx.overwrite_request_body(body)
         .map_err(|_| AiDispatchError::InvalidConfiguration)?;
 
-    let backend = selected_backend(ctx, candidate.slot)?;
     if ctx.ai_request_baseline.is_none() {
         ctx.ai_request_baseline = Some(session.req_header().clone());
     }
@@ -671,6 +671,7 @@ fn selected_backend(ctx: &EdgionHttpContext, slot: usize) -> Result<CompiledBack
     ctx.route_unit
         .as_ref()
         .and_then(|route| route.backends.iter().find(|backend| backend.slot == slot))
+        .filter(|backend| backend.is_permitted_ai_service())
         .cloned()
         .ok_or(AiDispatchError::InvalidConfiguration)
 }
@@ -816,8 +817,14 @@ mod tests {
         AiCandidateModel, AiPlanCandidate, AiServiceStore, ReadyAiAttemptPlan, RuntimeAiCredential,
         RuntimeAiCredentialPool, RuntimeAiEndpoint, RuntimeAiService,
     };
+    use crate::plugins::PluginRuntime;
+    use crate::routes::http::match_unit::{HttpRouteRuleUnit, MatchSpecificity};
+    use crate::{MatchInfo, Rsc};
+    use edgion_resources::resources::common::RefDenied;
     use edgion_resources::resources::edgion_ai_service::AiCredentialLimits;
     use edgion_resources::resources::edgion_plugins::{AiBackendSelection, OnRedisFailure};
+    use edgion_resources::{HTTPBackendRef, HTTPRouteMatch, HTTPRouteRule};
+    use tokio::io::AsyncWriteExt;
 
     fn candidate_scheduler() -> AttemptScheduler {
         let mut scheduler = AttemptScheduler::new(&[ServiceCredentials { weights: &[1] }], 0).unwrap();
@@ -904,6 +911,118 @@ mod tests {
             credential_outliers,
         }];
         plan
+    }
+
+    fn denied_route_unit() -> Arc<HttpRouteRuleUnit> {
+        let schema = HTTPBackendRef {
+            name: "provider".to_string(),
+            namespace: Some("tenant-b".to_string()),
+            port: None,
+            weight: Some(1),
+            group: Some("edgion.io".to_string()),
+            kind: Some("EdgionAIService".to_string()),
+            filters: None,
+            backend_tls_policy: None,
+            ref_denied: Some(RefDenied {
+                target_namespace: "tenant-b".to_string(),
+                target_name: "provider".to_string(),
+                reason: Some("NoMatchingReferenceGrant".to_string()),
+            }),
+        };
+        let backend = CompiledBackend::compile(schema.clone(), "tenant-a", 0, Arc::new(PluginRuntime::new()));
+        Arc::new(HttpRouteRuleUnit {
+            resource_key: "tenant-a/route".to_string(),
+            matched_info: MatchInfo {
+                rsc: Rsc::new("HTTPRoute", "tenant-a", "route"),
+                rule_id: 0,
+                match_id: 0,
+                sv: 0,
+                m: HTTPRouteMatch {
+                    path: None,
+                    headers: None,
+                    query_params: None,
+                    method: None,
+                },
+                labels_meta: None,
+                annotations_meta: None,
+            },
+            rule: Arc::new(HTTPRouteRule {
+                name: None,
+                resolved_terminal_route_uid: None,
+                resolved_terminal_rule_identity: None,
+                matches: None,
+                filters: None,
+                backend_refs: Some(vec![schema]),
+                timeouts: None,
+                retry: None,
+                session_persistence: None,
+                parsed_timeouts: None,
+                parsed_retry: None,
+                parsed_forward_raw_path: None,
+                parsed_allow_non_idempotent_retry: None,
+                parsed_mirror_tuning: None,
+            }),
+            route: None,
+            path_regex: None,
+            parent_refs: None,
+            compiled_header_regexes: Vec::new(),
+            compiled_query_regexes: Vec::new(),
+            has_query_matchers: false,
+            specificity: MatchSpecificity {
+                has_method: false,
+                header_count: 0,
+                query_count: 0,
+                creation_ts_ms: 0,
+                route_key: "tenant-a/route".to_string(),
+                rule_index: 0,
+                match_index: 0,
+            },
+            metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
+            plugin_runtime: Arc::new(PluginRuntime::new()),
+            backends: Arc::new(vec![backend]),
+            backend_finder: Arc::new(crate::lb::BackendSelector::new()),
+        })
+    }
+
+    async fn test_session() -> Session {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: test\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .expect("write request");
+        drop(client);
+        session
+            .read_request()
+            .await
+            .expect("read_request should succeed")
+            .then_some(())
+            .expect("request must be present");
+        session
+    }
+
+    #[tokio::test]
+    async fn dispatch_rejects_denied_backend_before_request_mutation() {
+        let credential = RuntimeAiCredential {
+            name: "primary".to_string(),
+            weight: 1,
+            credential: "must-not-install".to_string(),
+            limits: None,
+        };
+        let mut ctx = EdgionHttpContext::new();
+        ctx.route_unit = Some(denied_route_unit());
+        ctx.ai_attempt_plan = Some(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
+        let mut session = test_session().await;
+
+        assert!(matches!(
+            prepare_first_attempt(&mut session, &mut ctx, 0, None, 0),
+            Err(AiDispatchError::InvalidConfiguration)
+        ));
+        assert!(ctx.selected_backend.is_none());
+        assert!(ctx.ai_request_baseline.is_none());
+        assert!(ctx.request_body.read_all().await.unwrap().is_none());
+        assert!(session.req_header().headers.get("authorization").is_none());
     }
 
     #[test]
