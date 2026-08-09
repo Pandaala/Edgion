@@ -1161,6 +1161,30 @@ mod tests {
     }
 
     #[test]
+    fn non_streaming_tool_only_message_uses_null_content() {
+        let provider = serde_json::to_vec(&json!({
+            "id":"msg_tool","type":"message","role":"assistant","model":"provider",
+            "content":[{"type":"tool_use","id":"toolu_1","name":"lookup","input":{}}],
+            "stop_reason":"tool_use","stop_sequence":null,
+            "usage":{"input_tokens":3,"output_tokens":2}
+        }))
+        .unwrap();
+        let (mut processor, _) = processor(false, false);
+        processor.on_response_header(&mut header(200, "application/json"));
+        let mut session = MockPluginSession::new();
+        let translated = run_chunk(&mut processor, &mut session, Some(&provider), true).unwrap();
+        let translated: Value = serde_json::from_slice(&translated).unwrap();
+        let message = translated["choices"][0]["message"].as_object().unwrap();
+        assert!(message.contains_key("content"));
+        assert_eq!(message["content"], Value::Null);
+        assert_eq!(message["tool_calls"][0]["index"], 0);
+        assert_eq!(message["tool_calls"][0]["id"], "toolu_1");
+        assert_eq!(message["tool_calls"][0]["function"]["name"], "lookup");
+        assert_eq!(message["tool_calls"][0]["function"]["arguments"], "{}");
+        assert_eq!(translated["choices"][0]["finish_reason"], "tool_calls");
+    }
+
+    #[test]
     fn malformed_non_streaming_response_is_fixed_redacted_and_sealed() {
         let (mut processor, _) = processor(false, false);
         processor.on_response_header(&mut header(200, "application/json"));
@@ -1250,6 +1274,101 @@ mod tests {
         assert!(output.contains("\"finish_reason\":\"tool_calls\""));
         assert!(!output.contains("\"usage\":"));
         assert_eq!(usage.reported_tokens(), Some((1, 2)));
+    }
+
+    #[test]
+    fn streaming_tool_indexes_are_independent_of_content_block_indexes() {
+        let fixture = [
+            event(
+                "message_start",
+                json!({"type":"message_start","message":{"type":"message","id":"msg_tools","model":"provider","role":"assistant","content":[],"usage":{"input_tokens":1}}}),
+            ),
+            event(
+                "content_block_start",
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+            ),
+            event(
+                "content_block_delta",
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Checking tools"}}),
+            ),
+            event("content_block_stop", json!({"type":"content_block_stop","index":0})),
+            event(
+                "content_block_start",
+                json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"first","input":{}}}),
+            ),
+            event(
+                "content_block_delta",
+                json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"one\":1}"}}),
+            ),
+            event("content_block_stop", json!({"type":"content_block_stop","index":1})),
+            event(
+                "content_block_start",
+                json!({"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_2","name":"second","input":{}}}),
+            ),
+            event(
+                "content_block_delta",
+                json!({"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"two\":2}"}}),
+            ),
+            event("content_block_stop", json!({"type":"content_block_stop","index":2})),
+            event(
+                "message_delta",
+                json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}),
+            ),
+            event("message_stop", json!({"type":"message_stop"})),
+        ]
+        .concat();
+        let (mut processor, _) = self::processor(true, false);
+        processor.on_response_header(&mut header(200, "text/event-stream"));
+        let mut session = MockPluginSession::new();
+        let output = run_chunk(&mut processor, &mut session, Some(fixture.as_bytes()), true).unwrap();
+        let output = String::from_utf8(output.to_vec()).unwrap();
+        let mut starts = Vec::new();
+        let mut fragments = Vec::new();
+        let mut decoder = SseDecoder::with_default_limit();
+        decoder.feed_each(output.as_bytes(), |event| {
+            let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
+                return;
+            };
+            let Some(call) = value.pointer("/choices/0/delta/tool_calls/0") else {
+                return;
+            };
+            let index = call["index"].as_u64().unwrap();
+            if let Some(id) = call.get("id").and_then(Value::as_str) {
+                starts.push((id.to_string(), index));
+            }
+            if let Some(arguments) = call.pointer("/function/arguments").and_then(Value::as_str) {
+                if !arguments.is_empty() {
+                    fragments.push((arguments.to_string(), index));
+                }
+            }
+        });
+        assert_eq!(starts, [("toolu_1".to_string(), 0), ("toolu_2".to_string(), 1)]);
+        assert_eq!(
+            fragments,
+            [("{\"one\":1}".to_string(), 0), ("{\"two\":2}".to_string(), 1)]
+        );
+
+        let invalid = [
+            event(
+                "message_start",
+                json!({"type":"message_start","message":{"type":"message","id":"msg_bad","model":"provider","role":"assistant","content":[],"usage":{"input_tokens":1}}}),
+            ),
+            event(
+                "content_block_start",
+                json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}),
+            ),
+        ]
+        .concat();
+        let (mut invalid_processor, _) = self::processor(true, false);
+        invalid_processor.on_response_header(&mut header(200, "text/event-stream"));
+        let mut session = MockPluginSession::new();
+        session.expect_add_error().times(1).return_const(());
+        assert_eq!(
+            run_chunk(&mut invalid_processor, &mut session, Some(invalid.as_bytes()), false)
+                .unwrap()
+                .as_ref(),
+            STREAM_ERROR
+        );
     }
 
     #[test]
@@ -1390,6 +1509,33 @@ mod tests {
         let output = run_chunk(&mut second_processor, &mut session, Some(mismatch.as_bytes()), false)
             .expect("known event-name mismatch fails");
         assert_eq!(output.as_ref(), STREAM_ERROR);
+    }
+
+    #[test]
+    fn genuine_midstream_error_is_redacted_and_seals_the_stream() {
+        let fixture = [
+            event(
+                "message_start",
+                json!({"type":"message_start","message":{"type":"message","id":"msg_1","model":"provider","role":"assistant","content":[],"usage":{"input_tokens":1}}}),
+            ),
+            event(
+                "error",
+                json!({"type":"error","error":{"type":"overloaded_error","message":"provider-secret"}}),
+            ),
+        ]
+        .concat();
+        let (mut processor, _) = processor(true, false);
+        processor.on_response_header(&mut header(200, "text/event-stream"));
+        let mut session = MockPluginSession::new();
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
+            .times(1)
+            .return_const(());
+        let output = run_chunk(&mut processor, &mut session, Some(fixture.as_bytes()), false).unwrap();
+        assert_eq!(output.as_ref(), STREAM_ERROR);
+        assert!(!String::from_utf8_lossy(&output).contains("provider-secret"));
+        assert!(run_chunk(&mut processor, &mut session, Some(b"later"), true).is_none());
     }
 
     #[test]

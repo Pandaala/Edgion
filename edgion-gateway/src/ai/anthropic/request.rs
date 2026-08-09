@@ -754,10 +754,14 @@ mod tests {
     #[test]
     fn maps_stops_and_rejects_invalid_shapes() {
         let mut request = base_request();
-        request["stop"] = json!(["one", "two"]);
+        request["stop"] = json!("END");
+        assert_eq!(body(&prepare(request).unwrap())["stop_sequences"], json!(["END"]));
+
+        let mut request = base_request();
+        request["stop"] = json!(["one", "two", "three", "four"]);
         assert_eq!(
             body(&prepare(request).unwrap())["stop_sequences"],
-            json!(["one", "two"])
+            json!(["one", "two", "three", "four"])
         );
 
         for stop in [
@@ -778,7 +782,7 @@ mod tests {
             "model": "alias",
             "messages": [
                 {"role": "user", "content": "Weather?"},
-                {"role": "assistant", "content": null, "tool_calls": [
+                {"role": "assistant", "content": "Checking now", "tool_calls": [
                     {"id": "call-a", "type": "function", "function": {"name": "weather", "arguments": "{\"city\":\"Paris\"}"}},
                     {"id": "call-b", "type": "function", "function": {"name": "clock", "arguments": "{}"}},
                 ]},
@@ -799,10 +803,13 @@ mod tests {
             translated["tool_choice"],
             json!({"type": "tool", "name": "weather", "disable_parallel_tool_use": true})
         );
-        assert_eq!(translated["messages"][1]["content"][0]["type"], "tool_use");
         assert_eq!(
-            translated["messages"][1]["content"][0]["input"],
-            json!({"city": "Paris"})
+            translated["messages"][1]["content"],
+            json!([
+                {"type":"text","text":"Checking now"},
+                {"type":"tool_use","id":"call-a","name":"weather","input":{"city":"Paris"}},
+                {"type":"tool_use","id":"call-b","name":"clock","input":{}},
+            ])
         );
         assert_eq!(translated["messages"][2]["role"], "user");
         assert_eq!(translated["messages"][2]["content"][0]["tool_use_id"], "call-b");
@@ -852,6 +859,23 @@ mod tests {
         request["tool_choice"] = json!("none");
         request["parallel_tool_calls"] = json!(false);
         assert_eq!(body(&prepare(request).unwrap())["tool_choice"], json!({"type": "none"}));
+
+        let mut request = base_request();
+        request["tools"] = json!([{
+            "type": "function",
+            "function": {"name": "lookup", "parameters": {}},
+        }]);
+        request["parallel_tool_calls"] = json!(true);
+        assert!(body(&prepare(request).unwrap()).get("tool_choice").is_none());
+
+        let mut request = base_request();
+        request["tools"] = json!([{
+            "type": "function",
+            "function": {"name": "lookup", "parameters": {}},
+        }]);
+        request["tool_choice"] = json!("auto");
+        request["parallel_tool_calls"] = json!(true);
+        assert_eq!(body(&prepare(request).unwrap())["tool_choice"], json!({"type":"auto"}));
     }
 
     #[test]
@@ -934,6 +958,17 @@ mod tests {
             request["tools"] = tools;
             assert!(prepare(request).is_err());
         }
+
+        let mut invalid_parameters = base_request();
+        invalid_parameters["tools"] = json!([{"type":"function","function":{"name":"x","parameters":[]}}]);
+        assert_eq!(
+            prepare(invalid_parameters),
+            Err(AnthropicRequestError::InvalidRequestBody)
+        );
+
+        let mut strict_tool = base_request();
+        strict_tool["tools"] = json!([{"type":"function","function":{"name":"x","parameters":{},"strict":true}}]);
+        assert_eq!(prepare(strict_tool), Err(AnthropicRequestError::UnsupportedParameter));
 
         for (field, value) in [("tool_choice", json!("auto")), ("parallel_tool_calls", json!(true))] {
             let mut request = base_request();
