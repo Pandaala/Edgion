@@ -80,6 +80,24 @@ pub enum AiDispatchError {
     Client(AiProxyError),
 }
 
+/// A failure while constructing an AI upstream peer before dispatch starts.
+/// Variants encode the scheduler scope so endpoint failures cannot silently
+/// fall back to credential-by-credential retries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiPeerPredispatchFailure {
+    Endpoint,
+}
+
+impl AiPeerPredispatchFailure {
+    /// Release predispatch accounting and advance at the failure's scope.
+    pub fn finish(self, ctx: &mut EdgionHttpContext) -> bool {
+        ctx.ai_attempt_runtime.finish_predispatch();
+        match self {
+            Self::Endpoint => handle_ai_predispatch_service_failure(ctx),
+        }
+    }
+}
+
 fn anthropic_request_error(error: AnthropicRequestError) -> AiDispatchError {
     AiDispatchError::Client(match error {
         AnthropicRequestError::UnsupportedParameter => AiProxyError::UnsupportedParameter,
@@ -1318,6 +1336,41 @@ mod tests {
         initialize_retry_cap(&mut plan, 0).unwrap();
         assert_eq!(plan.scheduler.max_dispatches(), 4);
         assert_eq!(plan.scheduler.dispatch_count(), 1);
+    }
+
+    #[test]
+    fn endpoint_predispatch_failure_releases_and_skips_the_whole_service() {
+        let first_weights = [1, 1];
+        let second_weights = [1];
+        let mut plan = candidate_plan();
+        plan.scheduler = AttemptScheduler::new(
+            &[
+                ServiceCredentials {
+                    weights: &first_weights,
+                },
+                ServiceCredentials {
+                    weights: &second_weights,
+                },
+            ],
+            0,
+        )
+        .unwrap();
+        plan.scheduler.select_service(0).unwrap();
+        plan.scheduler.select_credential(u16::MAX, 0).unwrap();
+        let mut ctx = EdgionHttpContext::new();
+        ctx.ai_attempt_plan = Some(AiAttemptPlan::Ready(plan));
+
+        assert!(AiPeerPredispatchFailure::Endpoint.finish(&mut ctx));
+        let Some(AiAttemptPlan::Ready(ready)) = ctx.ai_attempt_plan.as_mut() else {
+            panic!("ready plan must remain installed");
+        };
+        assert!(matches!(ready.scheduler.next_step(), NextStep::PickService(_)));
+        assert_eq!(
+            ready.scheduler.select_service(0),
+            Err(crate::ai::attempt::SchedulerError::ServiceAlreadyExcluded)
+        );
+        assert!(ready.scheduler.select_service(1).is_ok());
+        assert_eq!(ready.scheduler.dispatch_count(), 0);
     }
 
     #[test]

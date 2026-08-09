@@ -1,5 +1,7 @@
 use super::EdgionHttpProxy;
-use crate::ai::dispatch::{commit_ai_attempt_context, prepare_first_attempt, AiDispatchError, AiPeerTarget};
+use crate::ai::dispatch::{
+    commit_ai_attempt_context, prepare_first_attempt, AiDispatchError, AiPeerPredispatchFailure, AiPeerTarget,
+};
 use crate::ai::{render_openai_error, AiProxyError};
 use crate::backends::policy::backend_traffic::authority::{render_authority, AuthorityError};
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
@@ -537,9 +539,8 @@ pub async fn upstream_peer_http(
                                 .map_err(|_| PingoraError::new(ErrorType::InternalError))?;
                             return Ok(peer);
                         }
-                        Err(_) => {
-                            ctx.ai_attempt_runtime.finish_predispatch();
-                            if !crate::ai::dispatch::handle_ai_predispatch_failure(ctx, true) {
+                        Err(failure) => {
+                            if !failure.finish(ctx) {
                                 end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
                                 return Err(PingoraError::new(ErrorType::InternalError));
                             }
@@ -1148,8 +1149,10 @@ async fn try_ai_service_peer(
     edgion_http: &EdgionHttpProxy,
     ctx: &mut EdgionHttpContext,
     target: &AiPeerTarget,
-) -> pingora_core::Result<Box<HttpPeer>> {
-    let addr = resolve_domain(&target.domain, target.port).await?;
+) -> Result<Box<HttpPeer>, AiPeerPredispatchFailure> {
+    let addr = resolve_domain(&target.domain, target.port)
+        .await
+        .map_err(|_| AiPeerPredispatchFailure::Endpoint)?;
     let (namespace, name) = target
         .service_key
         .split_once('/')
@@ -1168,10 +1171,7 @@ async fn try_ai_service_peer(
     if let Err(status) = validate_resolved_domain_addr(&addr, ctx.allow_loopback_upstream) {
         record_unsafe_resolved_upstream_attempt(ctx, addr, status);
         ctx.add_error(status);
-        return Err(PingoraError::explain(
-            ErrorType::ConnectError,
-            "AI upstream resolved to unsafe address",
-        ));
+        return Err(AiPeerPredispatchFailure::Endpoint);
     }
     let mut peer = Box::new(HttpPeer::new(addr, target.use_tls, target.sni.clone()));
     begin_ai_peer_attempt(ctx);
