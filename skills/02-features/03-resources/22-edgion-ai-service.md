@@ -205,6 +205,11 @@ never contains backend names, backend order, weights, retry attempts, or a provi
 `onMissingKey: Deny`, `onRedisFailure: Deny`, `flushTokens: 100`, `flushInterval: 1s`, and
 `requestTimeout: 500ms`.
 
+`identityModel` partitions by the exact requested logical name. A canonical
+name and each configured alias use different buckets even when they resolve to
+the same provider model (up to 33 declared names per model). Use `identity` for
+a cap shared across names, or avoid aliases on quota-controlled models.
+
 `onExceeded` is one tagged action:
 
 ```yaml

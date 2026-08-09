@@ -92,7 +92,7 @@ pub struct AiTokenQuotaConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AiTokenQuotaLimit {
     /// Whether this limit is shared across all models or partitioned by the
-    /// canonical model selected by EdgionAIService.
+    /// client-requested logical model name.
     #[serde(default)]
     pub scope: AiTokenQuotaScope,
     #[schemars(range(min = 1, max = 9007199254740991_u64))]
@@ -107,7 +107,8 @@ pub enum AiTokenQuotaScope {
     /// One identity bucket shared by every model reached through this AiProxy.
     #[default]
     Identity,
-    /// A separate bucket for each canonical model and identity.
+    /// A separate bucket for each requested logical model name and identity.
+    /// A canonical name and its configured aliases are distinct buckets.
     IdentityModel,
 }
 

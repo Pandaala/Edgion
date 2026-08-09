@@ -30,9 +30,9 @@ flowchart LR
 ## 请求路径（高层）
 
 1. Route 匹配 `/v1/chat/completions`（或你配置的路径）并运行 Rule 级 AiProxy。
-2. AiProxy 把客户端模型/别名解析为逻辑模型，并做可选的 token 配额准入。
+2. AiProxy 保留客户端请求中的原始模型名/别名作为逻辑模型，并做可选的 token 配额准入。
 3. `backendSelection` 在支持该模型、权重为正的 EdgionAIService 中选择一个。
-4. 在该 Service 内按权重选择可用凭据（跳过 RPM/TPM/冷却）。
+4. 选中的 Service 把逻辑名映射为 provider model，再按权重选择可用凭据（跳过 RPM/TPM/冷却）。
 5. Edgion 安装 Secret 凭据、拨号提供商，并流式返回响应。
 6. 在响应承诺之前若发生可重试失败，优先换同 Service 的其他凭据，再换其他 Route 后端，且共用
    一个尝试上限。

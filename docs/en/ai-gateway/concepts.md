@@ -30,9 +30,10 @@ flowchart LR
 ## Request path (high level)
 
 1. The route matches `/v1/chat/completions` (or your configured path) and runs rule-level AiProxy.
-2. AiProxy resolves the client model/alias to a logical model and admits optional token quota.
+2. AiProxy preserves the exact requested model/alias as the logical model and admits optional token quota.
 3. `backendSelection` picks an eligible positive-weight EdgionAIService that supports that model.
-4. Within the service, Edgion picks an eligible credential by weight (skipping RPM/TPM/cooldown).
+4. The selected service maps the logical name to its provider model, then Edgion picks an eligible
+   credential by weight (skipping RPM/TPM/cooldown).
 5. Edgion installs the Secret credential, dials the provider, and streams the response.
 6. On a retryable failure before response commitment, Edgion prefers another credential in the
    same service, then another route backend, within one shared attempt ceiling.

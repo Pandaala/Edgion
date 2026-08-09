@@ -98,7 +98,7 @@ impl CompiledAiQuotaPlan {
         &self,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
-        canonical_model: &str,
+        logical_model: &str,
         maximum_request_duration: Duration,
     ) -> QuotaAdmission {
         let identity = match resolve_rate_limit_key(session, &self.key, None, &self.on_missing_key, log).await {
@@ -117,7 +117,7 @@ impl CompiledAiQuotaPlan {
         let targets = build_targets(
             &self.entry_scope,
             &identity,
-            canonical_model,
+            logical_model,
             &request_id,
             &self.limits,
             maximum_request_duration,
@@ -260,7 +260,7 @@ impl QuotaSink for RedisQuotaSink {
 fn build_targets(
     entry_scope: &str,
     identity: &str,
-    canonical_model: &str,
+    logical_model: &str,
     request_id: &str,
     limits: &[CompiledLimit],
     maximum_request_duration: Duration,
@@ -285,14 +285,13 @@ fn build_targets(
             let bucket_retention_deadline = now_instant
                 .checked_add(duration_from_millis_saturating(remaining_ms).saturating_add(RECONCILIATION_GRACE))
                 .unwrap_or(now_instant);
-            let mut quota_identity =
-                Vec::with_capacity(entry_scope.len() + identity.len() + canonical_model.len() + 32);
+            let mut quota_identity = Vec::with_capacity(entry_scope.len() + identity.len() + logical_model.len() + 32);
             append_identity_part(&mut quota_identity, entry_scope.as_bytes());
             append_identity_part(&mut quota_identity, identity.as_bytes());
             append_identity_part(&mut quota_identity, &window_ms.to_be_bytes());
             append_identity_part(&mut quota_identity, quota_scope_identity(limit.scope));
             if limit.scope == AiTokenQuotaScope::IdentityModel {
-                append_identity_part(&mut quota_identity, canonical_model.as_bytes());
+                append_identity_part(&mut quota_identity, logical_model.as_bytes());
             }
             let keys =
                 build_cumulative_quota_keys(KEY_PREFIX, &quota_identity, window_id as u64, request_id.as_bytes())
@@ -407,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn identity_model_scope_separates_models_but_identity_scope_does_not() {
+    fn identity_model_scope_separates_requested_names_but_identity_scope_does_not() {
         let identity_limits = vec![CompiledLimit {
             tokens: 100,
             window: Duration::from_secs(60),

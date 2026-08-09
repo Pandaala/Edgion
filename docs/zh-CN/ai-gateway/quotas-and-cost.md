@@ -9,6 +9,12 @@
 `onMissingKey: Deny`、`onRedisFailure: Deny`、`flushTokens: 100`、`flushInterval: 1s`、
 `requestTimeout: 500ms`。
 
+`identityModel` 使用客户端请求中的原始逻辑模型名。即使同一个 EdgionAIService 将 canonical
+名称及其 alias 映射到同一个 provider model，它们仍使用不同的配额桶。一个模型最多可有 32
+个 alias，因此同一身份最多可按 33 个已声明名称分别消耗一次所配置的额度。如需所有名称共享
+一个总额度，请使用 `identity`，或不要为受配额控制的模型配置 alias。`Downgrade` 要求使用
+`identityModel`，因此设置其 limit 时必须计入 alias 集合。
+
 选择一种带标签的 `onExceeded` 动作：
 
 ```yaml

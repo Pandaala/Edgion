@@ -10,6 +10,14 @@ quota Redis work.
 `onMissingKey: Deny`, `onRedisFailure: Deny`, `flushTokens: 100`, `flushInterval: 1s`, and
 `requestTimeout: 500ms`.
 
+`identityModel` uses the exact client-requested logical model name. The
+canonical name and every configured alias therefore have separate buckets,
+even when one EdgionAIService maps them to the same provider model. A model can
+have up to 32 aliases, so one identity can consume the configured limit once
+for each of up to 33 declared names. Use `identity` for one cap shared across
+all names, or avoid aliases on quota-controlled models. `Downgrade` requires
+`identityModel`, so alias sets must be included when sizing its limits.
+
 Choose one tagged `onExceeded` action:
 
 ```yaml
