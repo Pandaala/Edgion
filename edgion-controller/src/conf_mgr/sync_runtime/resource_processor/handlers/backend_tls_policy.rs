@@ -19,7 +19,26 @@ use edgion_resources::resources::backend_tls_policy::{
     BackendTLSPolicyCACertificateRef, BackendTLSPolicyStatus, BackendTLSPolicyTargetRef, BtpSpecView,
 };
 use edgion_resources::resources::common::{is_core_api_group, ParentReference, PolicyAncestorStatus};
+use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::ResourceKind;
+
+fn ebtp_service_target_key(namespace: &str, name: &str) -> String {
+    PolicyTargetKey {
+        target_kind: PolicyTargetKind::Service,
+        namespace: namespace.to_string(),
+        name: name.to_string(),
+    }
+    .to_string()
+}
+
+fn btp_target_base_key(key: &str) -> &str {
+    key.split("::").next().unwrap_or(key)
+}
+
+fn ebtp_service_target_key_from_btp_key(key: &str) -> Option<String> {
+    let (namespace, name) = btp_target_base_key(key).split_once('/')?;
+    Some(ebtp_service_target_key(namespace, name))
+}
 
 /// Decide whether sibling BackendTLSPolicies (those targeting the same
 /// resource) must be requeued after this policy was processed.
@@ -60,10 +79,9 @@ fn should_requeue_siblings(
 ///
 /// `EdgionBackendTrafficPolicyHandler::parse` registers each EBTP into
 /// `ctx.runtime().edgion_backend_traffic_policy.target_mgr()` under
-/// `make_target_conflict_key(ns, svc, None)` — the bare `"ns/svc"` key, since v1 EBTP targets are
-/// same-namespace core Services with no sectionName. This function looks up that same key per
-/// targetRef (section names on the BackendTLSPolicy side are irrelevant to the EBTP index) and
-/// requeues every dependent ref found.
+/// its typed `PolicyTargetKey` identity (`"/Service/ns/svc"` for a core Service). This function
+/// looks up that same key per targetRef; section names on the BackendTLSPolicy side are irrelevant
+/// to the EBTP index.
 ///
 /// Note: an EBTP only enters that index when its own spec is locally valid (see `spec_valid` in
 /// `edgion_backend_traffic_policy.rs::parse`) — a spec-invalid EBTP is already `Accepted=False`
@@ -71,7 +89,7 @@ fn should_requeue_siblings(
 async fn requeue_dependent_ebtps(meta: &ObjectMeta, target_refs: &[BackendTLSPolicyTargetRef], ctx: &HandlerContext) {
     let ns = meta.namespace.as_deref().unwrap_or("default");
     for target_ref in target_refs {
-        let target_key = make_target_conflict_key(ns, &target_ref.name, None);
+        let target_key = ebtp_service_target_key(ns, &target_ref.name);
         for ebtp_ref in ctx
             .runtime()
             .edgion_backend_traffic_policy
@@ -203,19 +221,22 @@ impl BackendTlsPolicyHandler {
         // rule conflicted with this policy on a dropped target would keep a stale
         // Accepted=False — a coalesced delete->recreate skips `on_delete_policy`,
         // and a plain retarget never notifies the old target's EBTPs otherwise.
-        // The EBTP conflict index is keyed by the bare "ns/name" (section-less),
-        // so reduce both target-key sets to that form before diffing.
+        // Diff BackendTLSPolicy's section-aware keys first, then translate each
+        // dropped Service to the typed key used by the EBTP conflict index.
         {
-            let base_key = |k: &str| k.split("::").next().unwrap_or(k).to_string();
-            let new_base: std::collections::HashSet<String> = new_target_keys.iter().map(|k| base_key(k)).collect();
+            let new_base: std::collections::HashSet<&str> =
+                new_target_keys.iter().map(|k| btp_target_base_key(k)).collect();
             let ebtp_target_mgr = ctx.runtime().edgion_backend_traffic_policy.target_mgr();
             for dropped_base in old_target_keys
                 .iter()
-                .map(|k| base_key(k))
+                .map(|k| btp_target_base_key(k))
                 .filter(|k| !new_base.contains(k))
-                .collect::<std::collections::HashSet<String>>()
+                .collect::<std::collections::HashSet<&str>>()
             {
-                for ebtp_ref in ebtp_target_mgr.get_refs(&dropped_base) {
+                let Some(target_key) = ebtp_service_target_key_from_btp_key(dropped_base) else {
+                    continue;
+                };
+                for ebtp_ref in ebtp_target_mgr.get_refs(&target_key) {
                     ctx.requeue(ebtp_ref.kind_str(), ebtp_ref.resource_key()).await;
                 }
             }
@@ -951,8 +972,7 @@ mod tests {
         ));
         runtime.processor_registry.register(ebtp_processor.clone());
 
-        // An EBTP depends on ns/svc-a (registered in the EBTP conflict/target index,
-        // keyed by the bare "ns/name").
+        // An EBTP depends on ns/svc-a, registered under its typed Service key.
         let ebtp_ref = ResourceRef::new(
             ResourceKind::EdgionBackendTrafficPolicy,
             Some("ns".to_string()),
@@ -961,7 +981,7 @@ mod tests {
         runtime
             .edgion_backend_traffic_policy
             .target_mgr()
-            .add_ref(make_target_conflict_key("ns", "svc-a", None), ebtp_ref.clone());
+            .add_ref(ebtp_service_target_key("ns", "svc-a"), ebtp_ref.clone());
 
         let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
         let handler = BackendTlsPolicyHandler::default();
@@ -1040,9 +1060,8 @@ mod tests {
     /// Build a minimal, spec-locally-valid EdgionBackendTrafficPolicy targeting
     /// `namespace/service` and register it into the target-conflict index via
     /// `EdgionBackendTrafficPolicyHandler::parse` — mirroring what a real EBTP reconcile does
-    /// (`edgion_backend_traffic_policy.rs::parse` registers into
-    /// `ctx.runtime().edgion_backend_traffic_policy.target_mgr()` under
-    /// `make_target_conflict_key(ns, svc, None)` for a valid spec).
+    /// (`edgion_backend_traffic_policy.rs::parse` registers a valid spec under
+    /// the typed `PolicyTargetKey` identity).
     async fn register_ebtp_target(namespace: &str, name: &str, service: &str, ctx: &HandlerContext) {
         use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendTrafficPolicyHandler;
         use edgion_resources::prelude_resources::EdgionBackendTrafficPolicy;
