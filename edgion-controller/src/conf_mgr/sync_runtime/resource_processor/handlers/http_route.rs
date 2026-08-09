@@ -25,6 +25,7 @@ use edgion_resources::resources::http_route::{
     DelegationIssue, HTTPBackendRefKind, HTTPRouteFilterType, HTTPRouteRule, HTTPRouteStatus, RouteParentStatus,
     GATEWAY_API_GROUP,
 };
+use edgion_resources::resources::plugin_policy::PluginPolicyAction;
 use edgion_resources::ResourceKind;
 
 /// True for parentRef entries that attach the route to a Gateway listener
@@ -385,7 +386,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             let mut resolved_index = 0usize;
             rules.retain(|rule| {
                 let reason = ai_rule_invalid_reason(rule, route_ns, |namespace, name| {
-                    enabled_ai_proxy_count(_ctx.runtime(), namespace, name)
+                    ai_proxy_admission_state(_ctx.runtime(), namespace, name)
                 });
                 let keep = reason.is_none();
                 if let Some(reason) = reason {
@@ -622,7 +623,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             .enumerate()
             .filter_map(|(index, rule)| {
                 ai_rule_invalid_reason(rule, route_ns, |namespace, name| {
-                    enabled_ai_proxy_count(_ctx.runtime(), namespace, name)
+                    ai_proxy_admission_state(_ctx.runtime(), namespace, name)
                 })
                 .map(|message| (index, message))
             })
@@ -1040,31 +1041,55 @@ fn invalid_session_persistence_reason(rule: &edgion_resources::resources::http_r
         .map(|e| format!("sessionPersistence: {e}"))
 }
 
-fn enabled_ai_proxy_count(runtime: &ControllerRuntime, namespace: &str, name: &str) -> Option<usize> {
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct AiProxyAdmissionState {
+    active_count: usize,
+    policy_blocked: bool,
+}
+
+fn ai_proxy_admission_state(runtime: &ControllerRuntime, namespace: &str, name: &str) -> Option<AiProxyAdmissionState> {
     let processor = runtime.processor_registry.get("EdgionPlugins")?;
     let key = format!("{namespace}/{name}");
-    if !processor.contains_key(&key) {
-        return None;
+    let plugins = processor.get_cached_any(&key)?.downcast::<EdgionPlugins>().ok()?;
+    let mut state = AiProxyAdmissionState::default();
+    for entry in plugins.spec.request_plugins.iter().flatten() {
+        if !entry.is_enabled() || !matches!(entry.plugin, EdgionPlugin::AiProxy(_)) {
+            if entry.is_enabled() && matches!(entry.policy_action.as_ref(), Some(PluginPolicyAction::Block { .. })) {
+                state.policy_blocked = true;
+            }
+            continue;
+        }
+        match entry.policy_action.as_ref() {
+            None => state.active_count += 1,
+            Some(PluginPolicyAction::Bypass) => {}
+            Some(PluginPolicyAction::Block { .. }) => state.policy_blocked = true,
+        }
     }
-    let plugins = processor.get_raw_any(&key)?.downcast::<EdgionPlugins>().ok()?;
-    Some(
-        plugins
-            .spec
-            .request_plugins
-            .iter()
-            .flatten()
-            .filter(|entry| entry.enable && matches!(entry.plugin, EdgionPlugin::AiProxy(_)))
-            .count(),
-    )
+    macro_rules! stage_has_policy_block {
+        ($entries:expr) => {
+            $entries.iter().flatten().any(|entry| {
+                entry.is_enabled()
+                    && matches!(
+                        entry.policy_action.as_ref(),
+                        Some(PluginPolicyAction::Block { .. })
+                    )
+            })
+        };
+    }
+    state.policy_blocked |= stage_has_policy_block!(plugins.spec.upstream_response_filter_plugins);
+    state.policy_blocked |= stage_has_policy_block!(plugins.spec.upstream_response_body_filter_plugins);
+    state.policy_blocked |= stage_has_policy_block!(plugins.spec.upstream_response_plugins);
+    Some(state)
 }
 
 /// Enforce the Controller-owned AI routing contract for one effective rule.
-/// The lookup returns the number of enabled request-stage AiProxy entries in a
-/// referenced EdgionPlugins object, or `None` when that object is unavailable.
+/// The lookup returns the active request-stage AiProxy count plus whether any
+/// enabled entry in the referenced EdgionPlugins chain is policy-blocked, or
+/// `None` when that object is unavailable.
 fn ai_rule_invalid_reason(
     rule: &HTTPRouteRule,
     route_namespace: &str,
-    mut lookup: impl FnMut(&str, &str) -> Option<usize>,
+    mut lookup: impl FnMut(&str, &str) -> Option<AiProxyAdmissionState>,
 ) -> Option<String> {
     let backend_refs: Vec<_> = rule.backend_refs.iter().flatten().collect();
     let ai_backends: Vec<_> = backend_refs
@@ -1072,6 +1097,38 @@ fn ai_rule_invalid_reason(
         .copied()
         .filter(|backend_ref| backend_ref.backend_kind() == HTTPBackendRefKind::EdgionAIService)
         .collect();
+
+    let mut ai_proxy_count = 0usize;
+    let mut ai_proxy_policy_blocked = false;
+    let mut missing_plugin = None;
+    for filter in rule.filters.iter().flatten() {
+        if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
+            continue;
+        }
+        let Some(extension_ref) = &filter.extension_ref else {
+            continue;
+        };
+        if !(extension_ref.group.is_empty() || extension_ref.group == "edgion.io")
+            || extension_ref.kind != "EdgionPlugins"
+        {
+            continue;
+        }
+        let namespace = extension_ref.resolved_namespace.as_deref().unwrap_or(route_namespace);
+        match lookup(namespace, &extension_ref.name) {
+            Some(state) => {
+                ai_proxy_count += state.active_count;
+                ai_proxy_policy_blocked |= state.policy_blocked;
+            }
+            None => missing_plugin = Some(format!("{namespace}/{}", extension_ref.name)),
+        }
+    }
+
+    if ai_proxy_policy_blocked {
+        // PluginPolicy Block is an unconditional request-stage gate for any
+        // enabled entry in the referenced EdgionPlugins chain. Preserve the
+        // rule before any AI admission return can remove that fail-close gate.
+        return None;
+    }
 
     if !ai_backends.is_empty() {
         if rule
@@ -1105,27 +1162,6 @@ fn ai_rule_invalid_reason(
         }
     }
 
-    let mut ai_proxy_count = 0usize;
-    let mut missing_plugin = None;
-    for filter in rule.filters.iter().flatten() {
-        if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
-            continue;
-        }
-        let Some(extension_ref) = &filter.extension_ref else {
-            continue;
-        };
-        if !(extension_ref.group.is_empty() || extension_ref.group == "edgion.io")
-            || extension_ref.kind != "EdgionPlugins"
-        {
-            continue;
-        }
-        let namespace = extension_ref.resolved_namespace.as_deref().unwrap_or(route_namespace);
-        match lookup(namespace, &extension_ref.name) {
-            Some(count) => ai_proxy_count += count,
-            None => missing_plugin = Some(format!("{namespace}/{}", extension_ref.name)),
-        }
-    }
-
     if ai_backends.is_empty() {
         return (ai_proxy_count > 0)
             .then(|| "AiProxy requires a rule whose forwarding backends are all EdgionAIService".to_string());
@@ -1150,7 +1186,7 @@ fn find_controller_invalid_rule_details(
             continue;
         }
         if let Some(reason) = ai_rule_invalid_reason(rule, route_ns, |namespace, name| {
-            enabled_ai_proxy_count(runtime, namespace, name)
+            ai_proxy_admission_state(runtime, namespace, name)
         }) {
             details.push((index, reason));
         }
@@ -1419,6 +1455,13 @@ spec:
         .expect("AI rule must parse")
     }
 
+    fn active_ai_proxies(active_count: usize) -> AiProxyAdmissionState {
+        AiProxyAdmissionState {
+            active_count,
+            policy_blocked: false,
+        }
+    }
+
     #[test]
     fn ai_rule_requires_homogeneous_backends_and_exactly_one_ai_proxy() {
         let extension_ref = serde_json::json!([{
@@ -1439,12 +1482,12 @@ spec:
         assert_eq!(
             ai_rule_invalid_reason(&pure_ai, "parent", |namespace, name| {
                 assert_eq!((namespace, name), ("child", "ai"));
-                Some(1)
+                Some(active_ai_proxies(1))
             }),
             None
         );
 
-        let missing = ai_rule_invalid_reason(&pure_ai, "parent", |_, _| Some(0)).unwrap();
+        let missing = ai_rule_invalid_reason(&pure_ai, "parent", |_, _| Some(active_ai_proxies(0))).unwrap();
         assert!(missing.contains("exactly one enabled AiProxy"), "{missing}");
 
         let mixed = ai_rule(
@@ -1454,8 +1497,201 @@ spec:
             ]),
             extension_ref,
         );
-        let reason = ai_rule_invalid_reason(&mixed, "parent", |_, _| Some(1)).unwrap();
+        let reason = ai_rule_invalid_reason(&mixed, "parent", |_, _| Some(active_ai_proxies(1))).unwrap();
         assert!(reason.contains("must not be mixed"), "{reason}");
+    }
+
+    #[tokio::test]
+    async fn ai_proxy_admission_uses_policy_stamped_cache_and_preserves_block_gate() {
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::raw_store::LocalRawStore;
+        use crate::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
+        use edgion_resources::resources::edgion_plugins::{
+            AiProxyConfig, EdgionPluginsSpec, MockConfig, RequestFilterEntry, UpstreamResponseEntry,
+        };
+        use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+            "EdgionPlugins",
+            16,
+            Arc::new(EdgionPluginsHandler::default()),
+            runtime.clone(),
+        ));
+
+        let mut raw_plugins = EdgionPlugins::new(
+            "ai",
+            EdgionPluginsSpec {
+                request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::AiProxy(
+                    serde_json::from_value::<AiProxyConfig>(serde_json::json!({}))
+                        .expect("empty AiProxy config must use stable defaults"),
+                ))]),
+                ..Default::default()
+            },
+        );
+        raw_plugins.metadata.namespace = Some("apps".to_string());
+
+        let mut bypassed_plugins = raw_plugins.clone();
+        bypassed_plugins
+            .spec
+            .request_plugins
+            .as_mut()
+            .expect("requestPlugins set by fixture")[0]
+            .policy_action = Some(PluginPolicyAction::Bypass);
+        let mut blocked_ai_plugins = raw_plugins.clone();
+        blocked_ai_plugins
+            .spec
+            .request_plugins
+            .as_mut()
+            .expect("requestPlugins set by fixture")[0]
+            .policy_action = Some(PluginPolicyAction::Block { status: 451 });
+        let mut blocked_response = UpstreamResponseEntry::new(EdgionPlugin::Mock(MockConfig::default()));
+        blocked_response.policy_action = Some(PluginPolicyAction::Block { status: 452 });
+        let mut blocked_other_plugin = bypassed_plugins.clone();
+        blocked_other_plugin.spec.upstream_response_plugins = Some(vec![blocked_response]);
+
+        let raw_store = Arc::new(LocalRawStore::new());
+        raw_store.upsert("apps/ai".to_string(), Arc::new(raw_plugins));
+        processor.set_raw_store(raw_store);
+        processor.save(bypassed_plugins, None);
+        runtime.processor_registry.register(processor.clone());
+
+        assert_eq!(
+            ai_proxy_admission_state(&runtime, "apps", "ai"),
+            Some(AiProxyAdmissionState::default()),
+            "Bypass in the processed cache must suppress the active raw entry"
+        );
+
+        let rule = ai_rule(
+            serde_json::json!([{
+                "group": "edgion.io", "kind": "EdgionAIService", "name": "models"
+            }]),
+            serde_json::json!([{
+                "type": "ExtensionRef",
+                "extensionRef": {
+                    "group": "edgion.io", "kind": "EdgionPlugins", "name": "ai"
+                }
+            }]),
+        );
+        assert!(
+            ai_rule_invalid_reason(&rule, "apps", |namespace, name| {
+                ai_proxy_admission_state(&runtime, namespace, name)
+            })
+            .is_some(),
+            "Bypass must leave the AI rule without an active AiProxy"
+        );
+
+        processor.save(blocked_ai_plugins, None);
+        assert_eq!(
+            ai_proxy_admission_state(&runtime, "apps", "ai"),
+            Some(AiProxyAdmissionState {
+                active_count: 0,
+                policy_blocked: true,
+            }),
+            "Block must remain distinct from Bypass"
+        );
+        assert!(
+            ai_rule_invalid_reason(&rule, "apps", |namespace, name| {
+                ai_proxy_admission_state(&runtime, namespace, name)
+            })
+            .is_none(),
+            "Block must preserve the rule so the Gateway compiles PluginPolicyBlock"
+        );
+
+        processor.save(blocked_other_plugin, None);
+        assert_eq!(
+            ai_proxy_admission_state(&runtime, "apps", "ai"),
+            Some(AiProxyAdmissionState {
+                active_count: 0,
+                policy_blocked: true,
+            }),
+            "a Block on another stage/plugin must preserve the chain even when AiProxy is Bypass"
+        );
+    }
+
+    #[test]
+    fn plugin_policy_block_precedes_every_ai_admission_drop() {
+        let extension_ref = serde_json::json!([{
+            "type": "ExtensionRef",
+            "extensionRef": {
+                "group": "edgion.io", "kind": "EdgionPlugins", "name": "blocked"
+            }
+        }]);
+        let blocked = AiProxyAdmissionState {
+            active_count: 0,
+            policy_blocked: true,
+        };
+        let cases = [
+            (
+                "mixed backends",
+                ai_rule(
+                    serde_json::json!([
+                        {"group": "edgion.io", "kind": "EdgionAIService", "name": "models"},
+                        {"name": "ordinary", "port": 80}
+                    ]),
+                    extension_ref.clone(),
+                ),
+            ),
+            (
+                "AI backend port",
+                ai_rule(
+                    serde_json::json!([{
+                        "group": "edgion.io", "kind": "EdgionAIService", "name": "models", "port": 443
+                    }]),
+                    extension_ref.clone(),
+                ),
+            ),
+            (
+                "AI backend filter",
+                ai_rule(
+                    serde_json::json!([{
+                        "group": "edgion.io", "kind": "EdgionAIService", "name": "models",
+                        "filters": [{"type": "URLRewrite", "urlRewrite": {
+                            "path": {"type": "ReplaceFullPath", "replaceFullPath": "/v2"}
+                        }}]
+                    }]),
+                    extension_ref.clone(),
+                ),
+            ),
+            (
+                "retry cap",
+                serde_json::from_value(serde_json::json!({
+                    "backendRefs": [{
+                        "group": "edgion.io", "kind": "EdgionAIService", "name": "models"
+                    }],
+                    "filters": extension_ref,
+                    "retry": {"attempts": 8}
+                }))
+                .expect("blocked retry fixture must parse"),
+            ),
+        ];
+        for (case, rule) in cases {
+            assert!(
+                ai_rule_invalid_reason(&rule, "apps", |_, _| Some(blocked)).is_none(),
+                "PluginPolicyBlock must preserve the rule before {case} can drop its gate"
+            );
+        }
+
+        let block_and_missing = ai_rule(
+            serde_json::json!([{
+                "group": "edgion.io", "kind": "EdgionAIService", "name": "models"
+            }]),
+            serde_json::json!([
+                {"type": "ExtensionRef", "extensionRef": {
+                    "group": "edgion.io", "kind": "EdgionPlugins", "name": "blocked"
+                }},
+                {"type": "ExtensionRef", "extensionRef": {
+                    "group": "edgion.io", "kind": "EdgionPlugins", "name": "missing"
+                }}
+            ]),
+        );
+        assert!(
+            ai_rule_invalid_reason(&block_and_missing, "apps", |_, name| {
+                (name == "blocked").then_some(blocked)
+            })
+            .is_none(),
+            "a sibling missing ExtensionRef must not remove an unconditional policy block gate"
+        );
     }
 
     #[test]
@@ -1476,7 +1712,7 @@ spec:
             }]),
             extension_ref.clone(),
         );
-        assert!(ai_rule_invalid_reason(&allowed, "default", |_, _| Some(1)).is_none());
+        assert!(ai_rule_invalid_reason(&allowed, "default", |_, _| Some(active_ai_proxies(1))).is_none());
 
         let rejected = ai_rule(
             serde_json::json!([{
@@ -1485,7 +1721,7 @@ spec:
             }]),
             extension_ref,
         );
-        let reason = ai_rule_invalid_reason(&rejected, "default", |_, _| Some(1)).unwrap();
+        let reason = ai_rule_invalid_reason(&rejected, "default", |_, _| Some(active_ai_proxies(1))).unwrap();
         assert!(reason.contains("URLRewrite"), "{reason}");
     }
 
@@ -1505,7 +1741,7 @@ spec:
         }))
         .expect("AI rule must parse");
 
-        let reason = ai_rule_invalid_reason(&rule, "default", |_, _| Some(1)).unwrap();
+        let reason = ai_rule_invalid_reason(&rule, "default", |_, _| Some(active_ai_proxies(1))).unwrap();
         assert!(reason.contains("must not exceed 7"), "{reason}");
     }
 

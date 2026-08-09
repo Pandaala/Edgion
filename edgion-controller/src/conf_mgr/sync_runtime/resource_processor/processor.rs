@@ -196,6 +196,19 @@ pub trait ProcessorObj: Send + Sync {
     /// ```
     fn get_raw_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>>;
 
+    /// Look up a processed resource from `ServerCache` by key.
+    ///
+    /// Unlike `get_raw_any`, this returns the handler-filtered object after
+    /// `preparse`, `parse`, and status resolution. Use it for cross-kind reads
+    /// that must observe Controller-derived fields such as PluginPolicy stamps.
+    /// Do not use it for an `on_change` self-lookup: the current object is saved
+    /// only after `on_change` returns.
+    ///
+    /// The returned object may contain resolved secret material. Downcast and
+    /// project only the required fields; never serialize it directly to an
+    /// external response.
+    fn get_cached_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>>;
+
     /// Enqueue a key for immediate processing (original events, init revalidation)
     async fn requeue(&self, key: String);
 
@@ -836,6 +849,12 @@ where
         let raw_store = self.raw_store.read();
         let arc_k = raw_store.as_ref()?.get(key)?;
         Some(arc_k as Arc<dyn Any + Send + Sync>)
+    }
+
+    fn get_cached_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.cache
+            .get_by_key(key)
+            .map(|resource| Arc::new(resource) as Arc<dyn Any + Send + Sync>)
     }
 }
 

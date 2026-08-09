@@ -193,7 +193,7 @@ Error types: `AcceptedError`, `ResolvedRefsError` are used to build failure cond
 
 Semantic change detection: when comparing new and old status, ignores non-semantic fields like `lastTransitionTime` to avoid unnecessary K8s API writes. Use `status_semantically_changed(kind, old_json, new_json)` to decide whether to persist.
 
-## RawStore — Cross-resource O(1) Key Lookup
+## RawStore and ServerCache — Choose the Correct Cross-resource View
 
 `ServerCache` only stores resources that pass `handler.filter()` (e.g., `GatewayHandler` filters by `gatewayClassName`). When a Route needs to look up a Gateway that does not belong to this controller (parentRef can point to any Gateway), `ServerCache` cannot find it, leading to incorrect Route status calculations.
 
@@ -212,16 +212,20 @@ pub trait RawStore<K>: Send + Sync {
 | `KubeRawStore<K>` | Wraps `reflector::Store<K>` | Maintained automatically by the reflector, in real-time sync with the K8s API | Injected in `run_with_api` immediately after `reflector::store()` |
 | `LocalRawStore<K>` | `RwLock<HashMap<String, Arc<K>>>` | Maintained by FileSystem and Etcd controllers during init/apply/delete and worker processing | Injected by the non-Kubernetes resource controllers |
 
-### ProcessorObj Exposed Interface
+### ProcessorObj Exposed Interfaces
 
-`ProcessorObj` trait (object-safe) adds:
+`ProcessorObj` exposes both views through object-safe, typed-erased getters:
 
 ```rust
 fn get_raw_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>>;
+fn get_cached_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>>;
 ```
 
-Implementation: takes `Arc<K>` from `raw_store`, coerces directly to `Arc<dyn Any + Send + Sync>` and returns it — **zero serialization overhead**.
-The caller restores the concrete type via `downcast::<ConcreteType>()`:
+`get_raw_any` takes `Arc<K>` from `raw_store` and coerces it directly to
+`Arc<dyn Any + Send + Sync>`. `get_cached_any` clones the processed resource
+from `ServerCache` and wraps it in the same typed-erased form. Neither path
+serializes the object. The caller restores the concrete type with
+`downcast::<ConcreteType>()`:
 
 ```rust
 let arc: Arc<Gateway> = processor.get_raw_any(&key)?.downcast::<Gateway>().ok()?;
@@ -229,12 +233,27 @@ let arc: Arc<Gateway> = processor.get_raw_any(&key)?.downcast::<Gateway>().ok()?
 
 When `raw_store` has not been injected (before the init phase), it returns `None`, behaving the same as before — no regression.
 
+Choose the view by the field being consumed:
+
+- Use `get_raw_any` when handler-filtered resources must remain visible, or for
+  the current resource inside `on_change` because cache save happens afterward.
+- Use `get_cached_any` when the decision must match the object sent through
+  conf_sync or must observe Controller-derived fields populated by `preparse`
+  or `parse` (for example, PluginPolicy stamps or resolved references).
+- Never combine a ServerCache existence check with RawStore content. That can
+  validate one generation/view while the Gateway consumes another.
+
+Processed objects can contain resolved secrets. Callers must downcast and
+project only the required fields, never serialize the returned object directly
+to an external response.
+
 ### Callers
 
 | Function | Location | Lookup target |
 |---|---|---|
 | `lookup_gateway` | `route_utils.rs` | `runtime.processor_registry.get("Gateway")?...downcast::<Gateway>()` |
 | `lookup_service_cluster_ip` | `gateway.rs` | `runtime.processor_registry.get("Service")?...downcast::<Service>()` |
+| `ai_proxy_admission_state` | `http_route.rs` | Processed `EdgionPlugins` with Controller-stamped `policy_action` |
 
 ### Key Files
 
