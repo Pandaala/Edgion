@@ -56,6 +56,16 @@ pub enum QuotaAdmission {
     DependencyFailed,
 }
 
+trait QuotaAdmissionSource {
+    async fn admit_once(
+        &self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+        logical_model: &str,
+        maximum_request_duration: Duration,
+    ) -> QuotaAdmission;
+}
+
 impl CompiledAiQuotaPlan {
     pub fn compile(config: &AiTokenQuotaConfig, entry_scope: &str) -> Option<Self> {
         let windows = config.parsed_windows().ok()?;
@@ -95,6 +105,24 @@ impl CompiledAiQuotaPlan {
     }
 
     pub async fn admit(
+        &self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+        logical_model: &str,
+        maximum_request_duration: Duration,
+    ) -> QuotaAdmission {
+        admit_with_one_shot_throttle(
+            self,
+            &self.on_exceeded,
+            session,
+            log,
+            logical_model,
+            maximum_request_duration,
+        )
+        .await
+    }
+
+    async fn admit_once(
         &self,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
@@ -157,6 +185,71 @@ impl CompiledAiQuotaPlan {
             OnRedisFailure::Deny => QuotaAdmission::DependencyFailed,
         }
     }
+}
+
+impl QuotaAdmissionSource for CompiledAiQuotaPlan {
+    async fn admit_once(
+        &self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+        logical_model: &str,
+        maximum_request_duration: Duration,
+    ) -> QuotaAdmission {
+        CompiledAiQuotaPlan::admit_once(self, session, log, logical_model, maximum_request_duration).await
+    }
+}
+
+async fn admit_with_one_shot_throttle<S: QuotaAdmissionSource + ?Sized>(
+    source: &S,
+    action: &QuotaExceededAction,
+    session: &mut dyn PluginSession,
+    log: &mut PluginLog,
+    logical_model: &str,
+    maximum_request_duration: Duration,
+) -> QuotaAdmission {
+    let first = source
+        .admit_once(session, log, logical_model, maximum_request_duration)
+        .await;
+    let QuotaAdmission::Exhausted(retry_after) = first else {
+        return first;
+    };
+    let QuotaExceededAction::Throttle { max_delay } = action else {
+        return QuotaAdmission::Exhausted(retry_after);
+    };
+
+    let action_budget = throttle_action_budget(*max_delay, remaining_request_timeout(session));
+    let action_started = Instant::now();
+    let delay = retry_after.min(action_budget);
+    if !delay.is_zero() {
+        tokio::time::sleep(delay).await;
+    }
+    let remaining_action_budget = remaining_throttle_budget(action_budget, action_started.elapsed());
+    if remaining_action_budget.is_zero() || session.ctx().request_timeout_exceeded() {
+        return QuotaAdmission::Exhausted(retry_after);
+    }
+    match tokio::time::timeout(
+        remaining_action_budget,
+        source.admit_once(session, log, logical_model, maximum_request_duration),
+    )
+    .await
+    {
+        Ok(admission) => admission,
+        Err(_) => QuotaAdmission::Exhausted(retry_after),
+    }
+}
+
+fn remaining_request_timeout(session: &dyn PluginSession) -> Option<Duration> {
+    let ctx = session.ctx();
+    ctx.request_timeout()
+        .map(|timeout| timeout.saturating_sub(ctx.start_time.elapsed()))
+}
+
+fn throttle_action_budget(max_delay: Duration, remaining_request_timeout: Option<Duration>) -> Duration {
+    remaining_request_timeout.map_or(max_delay, |remaining| max_delay.min(remaining))
+}
+
+fn remaining_throttle_budget(action_budget: Duration, elapsed: Duration) -> Duration {
+    action_budget.saturating_sub(elapsed)
 }
 
 struct QuotaTarget {
@@ -343,7 +436,9 @@ fn lease_refresh_interval(lease_ttl: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
     use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn quota_config(on_exceeded: serde_json::Value) -> AiTokenQuotaConfig {
         serde_json::from_value(json!({
@@ -396,6 +491,113 @@ mod tests {
             &QuotaExceededAction::Downgrade {
                 model: "economy".to_string()
             }
+        );
+    }
+
+    struct ScriptedThrottleAdmission {
+        calls: AtomicUsize,
+        second_is_exhausted: bool,
+    }
+
+    impl QuotaAdmissionSource for ScriptedThrottleAdmission {
+        async fn admit_once(
+            &self,
+            _session: &mut dyn PluginSession,
+            _log: &mut PluginLog,
+            _logical_model: &str,
+            _maximum_request_duration: Duration,
+        ) -> QuotaAdmission {
+            match self.calls.fetch_add(1, Ordering::Relaxed) {
+                0 => QuotaAdmission::Exhausted(Duration::from_millis(40)),
+                1 if self.second_is_exhausted => QuotaAdmission::Exhausted(Duration::from_millis(25)),
+                1 => QuotaAdmission::Bypass,
+                call => panic!("one-shot throttle made unexpected admission call {call}"),
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn throttle_waits_then_readmits_exactly_once() {
+        let source = ScriptedThrottleAdmission {
+            calls: AtomicUsize::new(0),
+            second_is_exhausted: false,
+        };
+        let mut session = MockPluginSession::new();
+        session
+            .expect_ctx()
+            .times(2)
+            .return_const(crate::EdgionHttpContext::new());
+        let mut log = PluginLog::new("AiProxy");
+        let started = tokio::time::Instant::now();
+
+        let admission = admit_with_one_shot_throttle(
+            &source,
+            &QuotaExceededAction::Throttle {
+                max_delay: Duration::from_millis(100),
+            },
+            &mut session,
+            &mut log,
+            "model",
+            Duration::from_secs(30),
+        )
+        .await;
+
+        assert!(matches!(admission, QuotaAdmission::Bypass));
+        assert_eq!(source.calls.load(Ordering::Relaxed), 2);
+        assert_eq!(started.elapsed(), Duration::from_millis(40));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn throttle_returns_second_exhaustion_without_looping() {
+        let source = ScriptedThrottleAdmission {
+            calls: AtomicUsize::new(0),
+            second_is_exhausted: true,
+        };
+        let mut session = MockPluginSession::new();
+        session
+            .expect_ctx()
+            .times(2)
+            .return_const(crate::EdgionHttpContext::new());
+        let mut log = PluginLog::new("AiProxy");
+        let started = tokio::time::Instant::now();
+
+        let admission = admit_with_one_shot_throttle(
+            &source,
+            &QuotaExceededAction::Throttle {
+                max_delay: Duration::from_millis(100),
+            },
+            &mut session,
+            &mut log,
+            "model",
+            Duration::from_secs(30),
+        )
+        .await;
+
+        let QuotaAdmission::Exhausted(retry_after) = admission else {
+            panic!("second exhausted admission must be returned");
+        };
+        assert_eq!(retry_after, Duration::from_millis(25));
+        assert_eq!(source.calls.load(Ordering::Relaxed), 2);
+        assert_eq!(started.elapsed(), Duration::from_millis(40));
+    }
+
+    #[test]
+    fn throttle_action_uses_one_absolute_policy_and_route_budget() {
+        assert_eq!(
+            throttle_action_budget(Duration::from_millis(250), Some(Duration::from_secs(1))),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            throttle_action_budget(Duration::from_secs(3), Some(Duration::from_millis(40))),
+            Duration::from_millis(40)
+        );
+        assert_eq!(
+            remaining_throttle_budget(Duration::from_millis(250), Duration::from_millis(200)),
+            Duration::from_millis(50)
+        );
+        assert_eq!(
+            remaining_throttle_budget(Duration::from_millis(250), Duration::from_millis(300)),
+            Duration::ZERO
         );
     }
 

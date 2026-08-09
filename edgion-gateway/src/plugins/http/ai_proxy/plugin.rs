@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -319,56 +319,8 @@ impl AiProxy {
                     QuotaExceededAction::Reject => {
                         return reject_quota_exhausted(session, log, retry_after);
                     }
-                    QuotaExceededAction::Throttle { max_delay } => {
-                        let action_budget = throttle_action_budget(*max_delay, remaining_request_timeout(session));
-                        let action_started = Instant::now();
-                        let delay = retry_after.min(action_budget);
-                        if !delay.is_zero() {
-                            tokio::time::sleep(delay).await;
-                        }
-                        let remaining_action_budget =
-                            remaining_throttle_budget(action_budget, action_started.elapsed());
-                        if remaining_action_budget.is_zero() || session.ctx().request_timeout_exceeded() {
-                            return reject_quota_exhausted(session, log, retry_after);
-                        }
-                        let second_admission = match tokio::time::timeout(
-                            remaining_action_budget,
-                            quota.admit(session, log, &canonical.logical_model, maximum_request_duration),
-                        )
-                        .await
-                        {
-                            Ok(admission) => admission,
-                            Err(_) => return reject_quota_exhausted(session, log, retry_after),
-                        };
-                        match second_admission {
-                            QuotaAdmission::Ready(request) => Some(request),
-                            QuotaAdmission::Bypass => {
-                                quota_status = Some("bypassed");
-                                None
-                            }
-                            QuotaAdmission::DependencyBypass => {
-                                session.record_outcome(DyeOutcome::FailOpen, "quota-redis-unreachable");
-                                log.push_err("quota-redis-fail-open");
-                                quota_status = Some("fail_open");
-                                None
-                            }
-                            QuotaAdmission::IdentityMissing => {
-                                session.record_outcome(DyeOutcome::FailClose, "quota-identity-missing");
-                                return Self::reject(
-                                    session,
-                                    log,
-                                    "quota-identity-missing",
-                                    AiProxyError::QuotaUnavailable,
-                                );
-                            }
-                            QuotaAdmission::Exhausted(second_retry_after) => {
-                                return reject_quota_exhausted(session, log, second_retry_after);
-                            }
-                            QuotaAdmission::DependencyFailed => {
-                                session.record_outcome(DyeOutcome::FailClose, "quota-redis-unreachable");
-                                return Self::reject(session, log, "quota-unavailable", AiProxyError::QuotaUnavailable);
-                            }
-                        }
+                    QuotaExceededAction::Throttle { .. } => {
+                        return reject_quota_exhausted(session, log, retry_after);
                     }
                     QuotaExceededAction::Downgrade { model } => {
                         if !resolve_candidate_models(&mut candidates, model, canonical.requested_streaming, false) {
@@ -595,21 +547,6 @@ fn capture_adaptive_states(
     }
 }
 
-fn remaining_request_timeout(session: &dyn PluginSession) -> Option<Duration> {
-    session
-        .ctx()
-        .request_timeout()
-        .map(|timeout| timeout.saturating_sub(session.ctx().start_time.elapsed()))
-}
-
-fn throttle_action_budget(max_delay: Duration, remaining_request_timeout: Option<Duration>) -> Duration {
-    remaining_request_timeout.map_or(max_delay, |remaining| max_delay.min(remaining))
-}
-
-fn remaining_throttle_budget(action_budget: Duration, elapsed: Duration) -> Duration {
-    action_budget.saturating_sub(elapsed)
-}
-
 fn reject_quota_exhausted(
     session: &mut dyn PluginSession,
     log: &mut PluginLog,
@@ -827,26 +764,6 @@ mod tests {
             u64::try_from(std::str::from_utf8(&with_injection.body).unwrap().chars().count()).unwrap()
         );
         assert!(with_injection.input_chars > without_injection.input_chars);
-    }
-
-    #[test]
-    fn throttle_action_uses_one_absolute_policy_and_route_budget() {
-        assert_eq!(
-            throttle_action_budget(Duration::from_millis(250), Some(Duration::from_secs(1))),
-            Duration::from_millis(250)
-        );
-        assert_eq!(
-            throttle_action_budget(Duration::from_secs(3), Some(Duration::from_millis(40))),
-            Duration::from_millis(40)
-        );
-        assert_eq!(
-            remaining_throttle_budget(Duration::from_millis(250), Duration::from_millis(200)),
-            Duration::from_millis(50)
-        );
-        assert_eq!(
-            remaining_throttle_budget(Duration::from_millis(250), Duration::from_millis(300)),
-            Duration::ZERO
-        );
     }
 
     #[test]
