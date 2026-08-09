@@ -331,7 +331,11 @@ fn parse_tool_choice(
             .as_mut()
             .and_then(Value::as_object_mut)
             .ok_or(AnthropicRequestError::SerializationFailed)?;
-        choice.insert("disable_parallel_tool_use".to_string(), Value::Bool(true));
+        // Anthropic's `none` variant accepts only `type`; parallel tool use is
+        // already impossible, so the OpenAI false flag is a no-op there.
+        if choice.get("type").and_then(Value::as_str) != Some("none") {
+            choice.insert("disable_parallel_tool_use".to_string(), Value::Bool(true));
+        }
     }
     Ok(translated)
 }
@@ -827,6 +831,27 @@ mod tests {
             body(&prepare(request).unwrap())["tool_choice"],
             json!({"type": "auto", "disable_parallel_tool_use": true})
         );
+
+        let mut request = base_request();
+        request["tools"] = json!([{
+            "type": "function",
+            "function": {"name": "lookup", "parameters": {}},
+        }]);
+        request["tool_choice"] = json!("required");
+        request["parallel_tool_calls"] = json!(false);
+        assert_eq!(
+            body(&prepare(request).unwrap())["tool_choice"],
+            json!({"type": "any", "disable_parallel_tool_use": true})
+        );
+
+        let mut request = base_request();
+        request["tools"] = json!([{
+            "type": "function",
+            "function": {"name": "lookup", "parameters": {}},
+        }]);
+        request["tool_choice"] = json!("none");
+        request["parallel_tool_calls"] = json!(false);
+        assert_eq!(body(&prepare(request).unwrap())["tool_choice"], json!({"type": "none"}));
     }
 
     #[test]

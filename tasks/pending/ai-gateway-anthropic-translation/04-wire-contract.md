@@ -16,7 +16,7 @@ rules as golden behavior.
 | `stop` | non-empty string or array of 1..=4 non-empty strings | null means absent | `stop_sequences` |
 | `tools` | non-empty array of strict function tools | null means absent | Anthropic client tools |
 | `tool_choice` | `auto`, `required`, `none`, or strict named-function object | null means absent | `auto`, `any`, `none`, or `tool` |
-| `parallel_tool_calls` | boolean; legal only with tools | null means absent/true | false sets `disable_parallel_tool_use: true` in tool choice |
+| `parallel_tool_calls` | boolean; legal only with tools | null means absent/true | false sets `disable_parallel_tool_use: true` unless tool choice is `none` |
 | `n` | exactly integer `1` | null means `1` | omitted |
 | `temperature` | exactly numeric `1` | null means absent | omitted |
 | `top_p` | exactly numeric `1` | null means absent | omitted |
@@ -64,7 +64,8 @@ complete grouped tool-result turn).
   `parallel_tool_calls` without tools is rejected.
 - `auto` maps to `{type:"auto"}`, `required` to `{type:"any"}`, `none` to `{type:"none"}`, and
   a named choice to `{type:"tool",name:"..."}`. A false parallel flag adds
-  `disable_parallel_tool_use:true` to that object; absent/true adds nothing.
+  `disable_parallel_tool_use:true` to `auto`, `any`, and `tool`; `none` already
+  disables tool use and accepts no extra member. An absent/true flag adds nothing.
 
 All structural/type/range failures return fixed 400 `invalid_request_body`; recognized but
 unsupported semantics return fixed 400 `unsupported_parameter`; an absent provider-required
@@ -153,4 +154,3 @@ data: {"error":{"message":"The AI service stream could not be processed.","type"
 The processor then records `AiResponseTranslationFailed` once and drains/drops all remaining
 upstream bytes. A non-stream failure discovered after status commit emits the corresponding fixed
 JSON envelope under that committed status, records the same bounded status, and drains/drops.
-
