@@ -52,5 +52,5 @@ description: Bidirectional gRPC sync architecture between Controller and Gateway
 ## Testing infrastructure
 
 - **Wipe-all test path**: `POST controller /api/v1/admin/wipe-all` (testing-mode only) deletes
-  every current `ResourceKind` in tier order; the coverage test currently asserts all 21 concrete
+  every current `ResourceKind` in tier order; the coverage test currently asserts all 22 concrete
   kinds. See [05-testing/02-cache-residue-detection.md](../../05-testing/02-cache-residue-detection.md).

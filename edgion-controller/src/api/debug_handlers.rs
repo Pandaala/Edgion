@@ -8,6 +8,7 @@ use crate::api::ApiResponse;
 use crate::conf_mgr::sync_runtime::resource_processor::ref_manager::RefManagerStats;
 use crate::conf_mgr::CenterLifeCycle;
 use axum::{extract::State, response::Json};
+use edgion_resources::resource_defs::ALL_RESOURCE_INFOS;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -74,33 +75,10 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
 }
 
 async fn collect_conf_center_counts(state: &AdminState) -> BTreeMap<String, usize> {
-    use edgion_resources::ResourceKind;
-
-    let kinds = [
-        ResourceKind::HTTPRoute,
-        ResourceKind::GRPCRoute,
-        ResourceKind::TCPRoute,
-        ResourceKind::UDPRoute,
-        ResourceKind::TLSRoute,
-        ResourceKind::EdgionPlugins,
-        ResourceKind::EdgionStreamPlugins,
-        ResourceKind::BackendTLSPolicy,
-        ResourceKind::Gateway,
-        ResourceKind::GatewayClass,
-        ResourceKind::EdgionGatewayConfig,
-        ResourceKind::EdgionTls,
-        ResourceKind::EdgionConfigData,
-        ResourceKind::LinkSys,
-        ResourceKind::ReferenceGrant,
-        ResourceKind::Service,
-        ResourceKind::EndpointSlice,
-        ResourceKind::Secret,
-        ResourceKind::ConfigMap,
-    ];
-
     let writer = state.conf_center();
     let mut out = BTreeMap::new();
-    for kind in kinds {
+    for info in ALL_RESOURCE_INFOS {
+        let kind = info.kind;
         let count = writer
             .get_list_by_kind(kind.as_str(), None)
             .await
@@ -114,6 +92,44 @@ async fn collect_conf_center_counts(state: &AdminState) -> BTreeMap<String, usiz
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn make_test_state(tmp_dir: &std::path::Path) -> Arc<AdminState> {
+        use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig, SchemaValidator};
+
+        let conf_mgr = Arc::new(
+            ConfMgr::create(ConfCenterConfig::FileSystem(FileSystemConfig::new(
+                tmp_dir.to_path_buf(),
+            )))
+            .await
+            .expect("ConfMgr::create failed"),
+        );
+        let (center_reload_tx, _rx) = tokio::sync::watch::channel(crate::config::CenterClientConfig::default());
+        Arc::new(AdminState {
+            conf_mgr,
+            schema_validator: Arc::new(SchemaValidator::empty()),
+            config_file: None,
+            authorizer: Arc::new(crate::authz::Authorizer::new(crate::authz::CenterPolicy::deny_all())),
+            center_reload_tx,
+        })
+    }
+
+    #[tokio::test]
+    async fn empty_conf_center_reports_every_resource_kind_as_zero() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = make_test_state(tmp.path()).await;
+
+        let counts = collect_conf_center_counts(&state).await;
+
+        assert_eq!(counts.len(), ALL_RESOURCE_INFOS.len());
+        for info in ALL_RESOURCE_INFOS {
+            assert_eq!(
+                counts.get(info.kind.as_str()),
+                Some(&0),
+                "missing kind: {:?}",
+                info.kind
+            );
+        }
+    }
 
     #[test]
     fn response_serializes_with_expected_keys() {

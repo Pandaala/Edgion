@@ -298,15 +298,22 @@ mod tests {
 
     #[test]
     fn tiers_cover_all_kinds() {
+        use edgion_resources::resource_defs::ALL_RESOURCE_INFOS;
+
         let mut all: Vec<ResourceKind> = Vec::new();
         all.extend(TIER_1);
         all.extend(TIER_2);
         all.extend(TIER_3);
-        assert_eq!(all.len(), 22, "tiers must cover all 22 ResourceKind variants");
-        // Verify no duplicates
-        let mut seen = std::collections::HashSet::new();
-        for k in &all {
-            assert!(seen.insert(*k), "duplicate kind in tiers: {:?}", k);
-        }
+        let actual = all.into_iter().collect::<std::collections::HashSet<_>>();
+        let expected = ALL_RESOURCE_INFOS
+            .iter()
+            .map(|info| info.kind)
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            actual.len(),
+            TIER_1.len() + TIER_2.len() + TIER_3.len(),
+            "duplicate kind in tiers"
+        );
+        assert_eq!(actual, expected, "wipe tiers must cover every registered resource kind");
     }
 }

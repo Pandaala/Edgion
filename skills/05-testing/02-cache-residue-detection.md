@@ -10,7 +10,7 @@ description: Cache residue detection — wipe-all + store-stats based leak detec
 ## Workflow
 
 1. `run_integration.sh` invokes the `cache_residue` binary after all test loops finish and before `cleanup`.
-2. `cache_residue` calls `POST controller /api/v1/admin/wipe-all` (registered only in testing mode), which deletes all 21 kinds in tier order.
+2. `cache_residue` calls `POST controller /api/v1/admin/wipe-all` (registered only in testing mode), which deletes all 22 kinds in tier order.
 3. It calls `DELETE gateway /api/v1/testing/access-logs` to clear the access log (eliminates TTL false positives).
 4. It polls (default 500ms interval, up to 30s):
    - `GET controller /api/v1/debug/store-stats`
@@ -33,6 +33,10 @@ When adding any in-memory store / cache, it must be wired into store-stats, othe
 1. Add the same methods on the store.
 2. Add a field in `ControllerStoreStats` of `edgion-controller/src/api/debug_handlers.rs` and populate it.
 3. Add a unit test.
+
+ConfCenter resource counts are derived from `ALL_RESOURCE_INFOS`; never add a second kind list to
+the store-stats handler. The wipe-tier coverage test compares its tier union with the same canonical
+inventory, so adding a resource fails the test until its deletion order is chosen.
 
 ### When **not** to add it
 
