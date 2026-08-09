@@ -63,9 +63,26 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             "Controller and Gateway started from different config-server generations"
         );
 
-        ctx.assert_phase(scenario, "initial").await?;
-        ctx.apply_dir("updates/Secret_ai-provider.yaml").await?;
-        ctx.wait_phase(scenario, "updated", Duration::from_secs(15)).await?;
+        // Establish the phase explicitly because dynamic sweeps may run more
+        // than once against the same Controller and Gateway processes.
+        ctx.apply_dir("initial/00_Secret_ai-provider.yaml").await?;
+        ctx.wait_phase(scenario, "initial", Duration::from_secs(15)).await?;
+
+        let rotation_result = async {
+            ctx.apply_dir("updates/00_Secret_ai-provider.yaml").await?;
+            ctx.wait_phase(scenario, "updated", Duration::from_secs(15)).await
+        }
+        .await;
+
+        // Restore the shared suite fixture even when the rotation assertion
+        // fails, so later suites and a second --with-reload sweep start at A.
+        let restore_result = async {
+            ctx.apply_dir("initial/00_Secret_ai-provider.yaml").await?;
+            ctx.wait_phase(scenario, "initial", Duration::from_secs(15)).await
+        }
+        .await;
+        restore_result?;
+        rotation_result?;
 
         let controller_after = server_id(
             &ctx.test_ctx.http_client,
@@ -88,3 +105,28 @@ pub static SCENARIO: &Scenario = &Scenario {
     run,
     phases: PHASES,
 };
+
+#[cfg(test)]
+mod tests {
+    use serde_yaml::Value;
+
+    const INITIAL_SECRET: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/integration/conf/EdgionAIService/SingleProvider/DynamicTest/initial/00_Secret_ai-provider.yaml"
+    ));
+    const UPDATED_SECRET: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/integration/conf/EdgionAIService/SingleProvider/DynamicTest/updates/00_Secret_ai-provider.yaml"
+    ));
+
+    fn api_key(manifest: &str) -> String {
+        let value: Value = serde_yaml::from_str(manifest).unwrap();
+        value["stringData"]["api-key"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn tracked_rotation_fixtures_use_distinct_credentials() {
+        assert_eq!(api_key(INITIAL_SECRET), "ai-provider-test-key");
+        assert_eq!(api_key(UPDATED_SECRET), "ai-provider-rotated-test-key");
+    }
+}
