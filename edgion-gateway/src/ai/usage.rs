@@ -33,8 +33,10 @@ impl AiProviderLabel {
     }
 }
 
-/// Request-level AI metadata. The model is either declared by the selected
-/// service or the fixed `other` bucket; it never contains prompt text.
+/// Request-level AI metadata. The model is the effective logical model used
+/// for dispatch after any quota downgrade. Under unknown-model passthrough it
+/// is client-controlled but bounded to 512 UTF-8 bytes; it never contains
+/// prompt text.
 pub struct AiRequestContext {
     pub provider: AiProviderLabel,
     pub model: String,
@@ -49,9 +51,9 @@ pub struct AiRequestContext {
 
 /// Final per-request GenAI usage committed by the logging phase.
 ///
-/// The selected model is already constrained to a declared name/alias or the
-/// fixed `other` bucket. No prompt, completion, body, header, or credential is
-/// retained here.
+/// The effective model is a declared name/alias unless unknown-model
+/// passthrough retained the bounded client value. No prompt, completion, body,
+/// header, or credential is retained here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GenAiSummary {
     pub provider: &'static str,

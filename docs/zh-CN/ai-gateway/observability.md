@@ -9,6 +9,12 @@ AI 请求会在结构化 access log 中增加顶层 `genai` 对象；非 AI 请�
 `estimated_cost_usd`、`streaming`、`usage_estimated`、可选 `quota_status` 与 `ttft_ms`，以及有界的
 `attempts` 数组。
 
+`model` 是实际用于上游派发的有效逻辑模型。它通常与客户端请求的已声明模型名称或别名一致；quota
+`Downgrade` 动作会将其替换为配置的回退模型。启用未知模型透传后，它也可能是最长 512 UTF-8 字节
+的客户端可控字符串。应把它视为潜在的高基数 access-log 字段：不要直接提升为 Prometheus 标签，
+也不要在下游分面中假设它来自固定目录。如需有界聚合维度，请在下游进行分桶。下文可选的 GenAI
+计数器特意不包含模型标签。
+
 | 边界 | 值 |
 |------|----|
 | 最大 attempt 条目 | 8 |

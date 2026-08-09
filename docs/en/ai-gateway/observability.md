@@ -9,6 +9,14 @@ The final summary includes `provider`, `model`, `input_tokens`, `output_tokens`,
 token counts and `estimated_cost_usd`, `streaming`, `usage_estimated`, optional `quota_status` and
 `ttft_ms`, plus a bounded `attempts` array.
 
+`model` is the effective logical model used for upstream dispatch. It normally matches the client's
+declared model name or alias; a quota `Downgrade` action replaces it with the configured fallback.
+With unknown-model passthrough enabled it can instead be a client-controlled string of up to 512
+UTF-8 bytes. Treat it as a potentially high-cardinality access-log field: do not promote it directly
+to a Prometheus label or assume a fixed catalog in downstream facets. Apply downstream bucketing
+when a bounded aggregation dimension is required. The optional GenAI counter below deliberately
+omits a model label.
+
 | Bound | Value |
 |-------|-------|
 | Max attempt entries | 8 |
