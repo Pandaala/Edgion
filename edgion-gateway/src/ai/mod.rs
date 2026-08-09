@@ -18,8 +18,12 @@ pub(crate) use error::render_openai_error;
 pub use error::{openai_error_response, AiProxyError};
 
 pub use adaptive::{
-    get_adaptive_telemetry_store, reconcile_global_adaptive_telemetry, run_adaptive_telemetry_ticker,
-    AdaptiveTelemetryKey, AdaptiveTelemetryState, AdaptiveTelemetryStore,
+    get_adaptive_telemetry_store, run_adaptive_telemetry_ticker, AdaptiveTelemetryKey, AdaptiveTelemetryState,
+    AdaptiveTelemetryStore,
+};
+pub(crate) use adaptive::{
+    reconcile_adaptive_plugin_keys, reconcile_adaptive_targets, reconcile_all_adaptive_plugin_dependents,
+    replace_adaptive_route_contributions, update_adaptive_route_contributions,
 };
 
 pub use credential_outlier::{

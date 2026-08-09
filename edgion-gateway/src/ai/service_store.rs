@@ -259,10 +259,10 @@ impl AiServiceStore {
         }));
         if std::ptr::eq(self, GLOBAL_AI_SERVICE_STORE.as_ref()) {
             let adaptive_store = super::get_adaptive_telemetry_store();
-            for target in adaptive_targets {
-                adaptive_store.remove_target(&target);
+            for target in &adaptive_targets {
+                adaptive_store.remove_target(target);
             }
-            super::reconcile_global_adaptive_telemetry();
+            super::reconcile_adaptive_targets(&adaptive_targets);
         }
     }
 
@@ -293,22 +293,26 @@ impl AiServiceStore {
         }));
         if std::ptr::eq(self, GLOBAL_AI_SERVICE_STORE.as_ref()) {
             let adaptive_store = super::get_adaptive_telemetry_store();
-            for target in adaptive_targets {
-                adaptive_store.remove_target(&target);
+            for target in &adaptive_targets {
+                adaptive_store.remove_target(target);
             }
-            super::reconcile_global_adaptive_telemetry();
+            super::reconcile_adaptive_targets(&adaptive_targets);
         }
     }
 }
 
 fn changed_service_targets(current: &RuntimeMap, next: &RuntimeMap) -> Vec<PolicyTargetKey> {
     current
-        .iter()
-        .filter(|(key, previous)| match next.get(*key) {
-            Some(updated) => !Arc::ptr_eq(previous, updated),
-            None => true,
+        .keys()
+        .chain(next.keys())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .filter(|key| match (current.get(*key), next.get(*key)) {
+            (Some(previous), Some(updated)) => !Arc::ptr_eq(previous, updated),
+            (None, None) => false,
+            _ => true,
         })
-        .filter_map(|(key, _)| AiServiceStore::target_key(key))
+        .filter_map(|key| AiServiceStore::target_key(key))
         .collect()
 }
 
@@ -880,6 +884,22 @@ mod tests {
                 name: "provider".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn adaptive_target_changes_include_service_additions_and_removals() {
+        let resource = resource("provider", "https://ai.example.com/v1", Some(b"key"));
+        let service = Arc::new(compile_service("default/provider", &resource).expect("service fixture must compile"));
+        let empty = RuntimeMap::new();
+        let populated = RuntimeMap::from([("default/provider".to_string(), service)]);
+        let target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionAIService,
+            namespace: "default".to_string(),
+            name: "provider".to_string(),
+        };
+
+        assert_eq!(changed_service_targets(&empty, &populated), vec![target.clone()]);
+        assert_eq!(changed_service_targets(&populated, &empty), vec![target]);
     }
 
     #[test]

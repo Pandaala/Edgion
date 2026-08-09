@@ -12,12 +12,11 @@ use arc_swap::ArcSwap;
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::resources::edgion_plugins::{AiBackendSelection, EdgionPlugin, RequestFilterEntry};
 use edgion_resources::resources::http_route::{HTTPBackendRefKind, HTTPRoute, HTTPRouteFilterType};
+use parking_lot::Mutex as ParkingMutex;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 
 use super::routing::{AdaptiveSnapshot, LATENCY_EXPLORATION_INTERVAL};
-use super::AiServiceSnapshot;
-
 const LATENCY_WINDOW_SECONDS: u64 = 30;
 const USAGE_WINDOW_SECONDS: u64 = 60;
 const RING_BUCKETS: usize = USAGE_WINDOW_SECONDS as usize + 1;
@@ -61,6 +60,8 @@ const ROTATING_EPOCH: u64 = u64::MAX;
 
 static GLOBAL_ADAPTIVE_TELEMETRY_STORE: LazyLock<Arc<AdaptiveTelemetryStore>> =
     LazyLock::new(|| Arc::new(AdaptiveTelemetryStore::new()));
+static GLOBAL_ADAPTIVE_CONTRIBUTIONS: LazyLock<ParkingMutex<AdaptiveContributionIndex>> =
+    LazyLock::new(|| ParkingMutex::new(AdaptiveContributionIndex::default()));
 
 pub fn get_adaptive_telemetry_store() -> Arc<AdaptiveTelemetryStore> {
     Arc::clone(&GLOBAL_ADAPTIVE_TELEMETRY_STORE)
@@ -491,37 +492,255 @@ pub async fn run_adaptive_telemetry_ticker(store: Arc<AdaptiveTelemetryStore>, m
     }
 }
 
-/// Rebuild global discoverability from the current HTTPRoute and AI-service
-/// generations. Existing equivalent keys retain their Arc state; removed route
-/// UIDs, targets, and model names disappear while captured request Arcs live on.
-pub fn reconcile_global_adaptive_telemetry() {
-    let routes: Vec<Arc<HTTPRoute>> = crate::routes::http::get_global_http_route_managers()
-        .route_cache
-        .iter()
-        .map(|entry| Arc::clone(entry.value()))
-        .collect();
+#[derive(Clone)]
+struct AdaptiveRuleFacts {
+    terminal_route_uid: String,
+    rule_identity: String,
+    plugin_keys: Vec<String>,
+    targets: Vec<PolicyTargetKey>,
+}
+
+#[derive(Clone, Default)]
+struct RouteAdaptiveFacts {
+    rules: Vec<AdaptiveRuleFacts>,
+    plugin_keys: HashSet<String>,
+    targets: HashSet<PolicyTargetKey>,
+}
+
+impl RouteAdaptiveFacts {
+    fn from_route(route: &HTTPRoute) -> Self {
+        let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+        let mut facts = Self::default();
+        for rule in route.effective_rules().into_iter().flatten() {
+            let (Some(route_uid), Some(rule_identity)) = (
+                rule.resolved_terminal_route_uid.as_ref(),
+                rule.resolved_terminal_rule_identity.as_ref(),
+            ) else {
+                continue;
+            };
+            let plugin_keys: Vec<_> = rule
+                .filters
+                .iter()
+                .flatten()
+                .filter_map(|filter| {
+                    if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
+                        return None;
+                    }
+                    let reference = filter.extension_ref.as_ref()?;
+                    if reference.kind != "EdgionPlugins"
+                        || (!reference.group.is_empty() && reference.group != "edgion.io")
+                    {
+                        return None;
+                    }
+                    let namespace = reference.resolved_namespace.as_deref().unwrap_or(route_namespace);
+                    Some(format!("{namespace}/{}", reference.name))
+                })
+                .collect();
+            let targets: Vec<_> = rule
+                .backend_refs
+                .iter()
+                .flatten()
+                .filter(|backend| backend.backend_kind() == HTTPBackendRefKind::EdgionAIService)
+                .map(|backend| PolicyTargetKey {
+                    target_kind: PolicyTargetKind::EdgionAIService,
+                    namespace: backend.namespace.as_deref().unwrap_or(route_namespace).to_string(),
+                    name: backend.name.clone(),
+                })
+                .collect();
+            if plugin_keys.is_empty() || targets.is_empty() {
+                continue;
+            }
+            facts.plugin_keys.extend(plugin_keys.iter().cloned());
+            facts.targets.extend(targets.iter().cloned());
+            facts.rules.push(AdaptiveRuleFacts {
+                terminal_route_uid: route_uid.clone(),
+                rule_identity: rule_identity.clone(),
+                plugin_keys,
+                targets,
+            });
+        }
+        facts
+    }
+}
+
+#[derive(Default)]
+struct AdaptiveContributionIndex {
+    routes: HashMap<String, RouteAdaptiveFacts>,
+    plugin_routes: HashMap<String, HashSet<String>>,
+    target_routes: HashMap<PolicyTargetKey, HashSet<String>>,
+    route_contributions: HashMap<String, HashSet<AdaptiveTelemetryKey>>,
+}
+
+impl AdaptiveContributionIndex {
+    fn detach_route(&mut self, route_key: &str) {
+        let Some(facts) = self.routes.remove(route_key) else {
+            self.route_contributions.remove(route_key);
+            return;
+        };
+        for plugin_key in facts.plugin_keys {
+            if let Some(routes) = self.plugin_routes.get_mut(&plugin_key) {
+                routes.remove(route_key);
+                if routes.is_empty() {
+                    self.plugin_routes.remove(&plugin_key);
+                }
+            }
+        }
+        for target in facts.targets {
+            if let Some(routes) = self.target_routes.get_mut(&target) {
+                routes.remove(route_key);
+                if routes.is_empty() {
+                    self.target_routes.remove(&target);
+                }
+            }
+        }
+        self.route_contributions.remove(route_key);
+    }
+
+    fn attach_route(&mut self, route_key: String, facts: RouteAdaptiveFacts) {
+        for plugin_key in &facts.plugin_keys {
+            self.plugin_routes
+                .entry(plugin_key.clone())
+                .or_default()
+                .insert(route_key.clone());
+        }
+        for target in &facts.targets {
+            self.target_routes
+                .entry(target.clone())
+                .or_default()
+                .insert(route_key.clone());
+        }
+        self.routes.insert(route_key, facts);
+    }
+
+    fn recompute_route(
+        &mut self,
+        route_key: &str,
+        plugin_uses_adaptive_selection: &mut impl FnMut(&str) -> bool,
+        logical_models: &mut impl FnMut(&PolicyTargetKey) -> Option<Vec<String>>,
+    ) {
+        let Some(facts) = self.routes.get(route_key) else {
+            self.route_contributions.remove(route_key);
+            return;
+        };
+        let mut retained = HashSet::new();
+        for rule in &facts.rules {
+            if !rule
+                .plugin_keys
+                .iter()
+                .any(|plugin_key| plugin_uses_adaptive_selection(plugin_key))
+            {
+                continue;
+            }
+            for target in &rule.targets {
+                for logical_model in logical_models(target).into_iter().flatten() {
+                    if let Some(key) = AdaptiveTelemetryKey::new(
+                        rule.terminal_route_uid.clone(),
+                        rule.rule_identity.clone(),
+                        target.clone(),
+                        logical_model,
+                    ) {
+                        retained.insert(key);
+                    }
+                }
+            }
+        }
+        if retained.is_empty() {
+            self.route_contributions.remove(route_key);
+        } else {
+            self.route_contributions.insert(route_key.to_string(), retained);
+        }
+    }
+
+    fn retained_keys(&self) -> HashSet<AdaptiveTelemetryKey> {
+        self.route_contributions
+            .values()
+            .flat_map(|keys| keys.iter().cloned())
+            .collect()
+    }
+}
+
+fn with_global_sources(
+    index: &mut AdaptiveContributionIndex,
+    route_keys: impl IntoIterator<Item = String>,
+) -> HashSet<AdaptiveTelemetryKey> {
     let services = super::global_ai_service_store().snapshot();
-    let retained = retained_keys_for_routes(&routes, &services);
+    let mut plugin_uses_adaptive = |plugin_key: &str| {
+        crate::plugins::http::global_plugin_store()
+            .with_plugin(plugin_key, |compiled| {
+                request_plugins_use_adaptive_selection(compiled.spec.spec.request_plugins.as_deref())
+            })
+            .unwrap_or(false)
+    };
+    let mut logical_models = |target: &PolicyTargetKey| {
+        let key = format!("{}/{}", target.namespace, target.name);
+        services
+            .get_by_key(&key)
+            .map(|service| service.models.keys().cloned().collect())
+    };
+    for route_key in route_keys {
+        index.recompute_route(&route_key, &mut plugin_uses_adaptive, &mut logical_models);
+    }
+    index.retained_keys()
+}
+
+/// Replace the process-wide route contribution set after an HTTPRoute full sync.
+pub(crate) fn replace_adaptive_route_contributions(data: &HashMap<String, Arc<HTTPRoute>>) {
+    let mut index = GLOBAL_ADAPTIVE_CONTRIBUTIONS.lock();
+    *index = AdaptiveContributionIndex::default();
+    for (route_key, route) in data {
+        index.attach_route(route_key.clone(), RouteAdaptiveFacts::from_route(route));
+    }
+    let route_keys: Vec<_> = index.routes.keys().cloned().collect();
+    let retained = with_global_sources(&mut index, route_keys);
     GLOBAL_ADAPTIVE_TELEMETRY_STORE.reconcile_keys(&retained);
 }
 
-fn retained_keys_for_routes(routes: &[Arc<HTTPRoute>], services: &AiServiceSnapshot) -> HashSet<AdaptiveTelemetryKey> {
-    collect_retained_keys(
-        routes,
-        |plugin_key| {
-            crate::plugins::http::global_plugin_store()
-                .with_plugin(plugin_key, |compiled| {
-                    request_plugins_use_adaptive_selection(compiled.spec.spec.request_plugins.as_deref())
-                })
-                .unwrap_or(false)
-        },
-        |target| {
-            let key = format!("{}/{}", target.namespace, target.name);
-            services
-                .get_by_key(&key)
-                .map(|service| service.models.keys().cloned().collect())
-        },
-    )
+/// Apply an HTTPRoute delta without scanning unrelated cached routes.
+pub(crate) fn update_adaptive_route_contributions(
+    add_or_update: &HashMap<String, Arc<HTTPRoute>>,
+    remove: &HashSet<String>,
+) {
+    let mut index = GLOBAL_ADAPTIVE_CONTRIBUTIONS.lock();
+    for route_key in remove {
+        index.detach_route(route_key);
+    }
+    for (route_key, route) in add_or_update {
+        index.detach_route(route_key);
+        index.attach_route(route_key.clone(), RouteAdaptiveFacts::from_route(route));
+    }
+    let route_keys: Vec<_> = add_or_update.keys().cloned().collect();
+    let retained = with_global_sources(&mut index, route_keys);
+    GLOBAL_ADAPTIVE_TELEMETRY_STORE.reconcile_keys(&retained);
+}
+
+/// Re-evaluate routes that reference any changed EdgionPlugins resource.
+pub(crate) fn reconcile_adaptive_plugin_keys(plugin_keys: &HashSet<String>) {
+    let mut index = GLOBAL_ADAPTIVE_CONTRIBUTIONS.lock();
+    let route_keys: HashSet<_> = plugin_keys
+        .iter()
+        .flat_map(|key| index.plugin_routes.get(key).into_iter().flatten().cloned())
+        .collect();
+    let retained = with_global_sources(&mut index, route_keys);
+    GLOBAL_ADAPTIVE_TELEMETRY_STORE.reconcile_keys(&retained);
+}
+
+/// Re-evaluate every indexed route after an EdgionPlugins full sync.
+pub(crate) fn reconcile_all_adaptive_plugin_dependents() {
+    let mut index = GLOBAL_ADAPTIVE_CONTRIBUTIONS.lock();
+    let route_keys: Vec<_> = index.routes.keys().cloned().collect();
+    let retained = with_global_sources(&mut index, route_keys);
+    GLOBAL_ADAPTIVE_TELEMETRY_STORE.reconcile_keys(&retained);
+}
+
+/// Re-evaluate routes that reference any changed EdgionAIService target.
+pub(crate) fn reconcile_adaptive_targets(targets: &[PolicyTargetKey]) {
+    let mut index = GLOBAL_ADAPTIVE_CONTRIBUTIONS.lock();
+    let route_keys: HashSet<_> = targets
+        .iter()
+        .flat_map(|target| index.target_routes.get(target).into_iter().flatten().cloned())
+        .collect();
+    let retained = with_global_sources(&mut index, route_keys);
+    GLOBAL_ADAPTIVE_TELEMETRY_STORE.reconcile_keys(&retained);
 }
 
 fn request_plugins_use_adaptive_selection(entries: Option<&[RequestFilterEntry]>) -> bool {
@@ -537,65 +756,19 @@ fn request_plugins_use_adaptive_selection(entries: Option<&[RequestFilterEntry]>
     })
 }
 
+#[cfg(test)]
 fn collect_retained_keys(
     routes: &[Arc<HTTPRoute>],
     mut plugin_uses_adaptive_selection: impl FnMut(&str) -> bool,
     mut logical_models: impl FnMut(&PolicyTargetKey) -> Option<Vec<String>>,
 ) -> HashSet<AdaptiveTelemetryKey> {
-    let mut retained = HashSet::new();
-    for route in routes {
-        let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-        for rule in route.effective_rules().into_iter().flatten() {
-            let adaptive_selection = rule.filters.as_ref().is_some_and(|filters| {
-                filters.iter().any(|filter| {
-                    if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
-                        return false;
-                    }
-                    let Some(reference) = filter.extension_ref.as_ref() else {
-                        return false;
-                    };
-                    if reference.kind != "EdgionPlugins"
-                        || (!reference.group.is_empty() && reference.group != "edgion.io")
-                    {
-                        return false;
-                    }
-                    let plugin_namespace = reference.resolved_namespace.as_deref().unwrap_or(route_namespace);
-                    let plugin_key = format!("{plugin_namespace}/{}", reference.name);
-                    plugin_uses_adaptive_selection(&plugin_key)
-                })
-            });
-            if !adaptive_selection {
-                continue;
-            }
-            let (Some(route_uid), Some(rule_identity)) = (
-                rule.resolved_terminal_route_uid.as_ref(),
-                rule.resolved_terminal_rule_identity.as_ref(),
-            ) else {
-                continue;
-            };
-            for backend in rule.backend_refs.iter().flatten() {
-                if backend.backend_kind() != HTTPBackendRefKind::EdgionAIService {
-                    continue;
-                }
-                let target = PolicyTargetKey {
-                    target_kind: PolicyTargetKind::EdgionAIService,
-                    namespace: backend.namespace.as_deref().unwrap_or(route_namespace).to_string(),
-                    name: backend.name.clone(),
-                };
-                for logical_model in logical_models(&target).into_iter().flatten() {
-                    if let Some(key) = AdaptiveTelemetryKey::new(
-                        route_uid.clone(),
-                        rule_identity.clone(),
-                        target.clone(),
-                        logical_model,
-                    ) {
-                        retained.insert(key);
-                    }
-                }
-            }
-        }
+    let mut index = AdaptiveContributionIndex::default();
+    for (position, route) in routes.iter().enumerate() {
+        let route_key = position.to_string();
+        index.attach_route(route_key.clone(), RouteAdaptiveFacts::from_route(route));
+        index.recompute_route(&route_key, &mut plugin_uses_adaptive_selection, &mut logical_models);
     }
-    retained
+    index.retained_keys()
 }
 
 #[cfg(test)]
@@ -668,6 +841,28 @@ mod tests {
             |plugin_key| plugin_key == adaptive_plugin_key,
             |_| Some(vec!["model-a".to_string(), "model-b".to_string()]),
         )
+    }
+
+    fn route_with_dependencies(route_uid: &str, plugin_name: &str, target_name: &str) -> HTTPRoute {
+        let mut route = adaptive_route();
+        let rule = &mut route.spec.rules.as_mut().unwrap()[0];
+        rule.resolved_terminal_route_uid = Some(route_uid.to_string());
+        rule.filters.as_mut().unwrap()[0].extension_ref.as_mut().unwrap().name = plugin_name.to_string();
+        rule.backend_refs.as_mut().unwrap()[0].name = target_name.to_string();
+        route
+    }
+
+    fn recompute_test_routes(
+        index: &mut AdaptiveContributionIndex,
+        route_keys: impl IntoIterator<Item = String>,
+        adaptive_plugins: &HashSet<String>,
+        models: &HashMap<PolicyTargetKey, Vec<String>>,
+    ) {
+        let mut plugin_uses_adaptive = |key: &str| adaptive_plugins.contains(key);
+        let mut logical_models = |target: &PolicyTargetKey| models.get(target).cloned();
+        for route_key in route_keys {
+            index.recompute_route(&route_key, &mut plugin_uses_adaptive, &mut logical_models);
+        }
     }
 
     #[test]
@@ -1021,6 +1216,109 @@ mod tests {
             |_| None,
         )
         .is_empty());
+    }
+
+    #[test]
+    fn contribution_index_self_heals_when_route_arrives_before_dependencies() {
+        let route = route_with_dependencies("uid-a", "adaptive", "provider");
+        let facts = RouteAdaptiveFacts::from_route(&route);
+        let target = facts.targets.iter().next().unwrap().clone();
+        let mut index = AdaptiveContributionIndex::default();
+        index.attach_route("route-a".to_string(), facts);
+        for position in 0..64 {
+            index.attach_route(format!("ordinary-{position}"), RouteAdaptiveFacts::default());
+        }
+
+        let mut adaptive_plugins = HashSet::new();
+        let mut models = HashMap::new();
+        let all_routes: Vec<_> = index.routes.keys().cloned().collect();
+        recompute_test_routes(&mut index, all_routes, &adaptive_plugins, &models);
+        assert!(index.retained_keys().is_empty());
+        assert!(index.route_contributions.is_empty());
+        assert_eq!(
+            index.plugin_routes["route-ns/adaptive"],
+            HashSet::from(["route-a".to_string()])
+        );
+        assert_eq!(index.target_routes[&target], HashSet::from(["route-a".to_string()]));
+
+        adaptive_plugins.insert("route-ns/adaptive".to_string());
+        let plugin_routes = index.plugin_routes["route-ns/adaptive"].clone();
+        recompute_test_routes(&mut index, plugin_routes, &adaptive_plugins, &models);
+        assert!(index.retained_keys().is_empty());
+        assert!(index.route_contributions.is_empty());
+
+        models.insert(target, vec!["model-a".to_string(), "model-b".to_string()]);
+        recompute_test_routes(&mut index, ["route-a".to_string()], &adaptive_plugins, &models);
+        assert_eq!(index.retained_keys().len(), 2);
+    }
+
+    #[test]
+    fn contribution_index_updates_only_changed_route_and_removes_stale_facts() {
+        let route_a = route_with_dependencies("uid-a", "adaptive-a", "provider-a");
+        let route_b = route_with_dependencies("uid-b", "adaptive-b", "provider-b");
+        let facts_a = RouteAdaptiveFacts::from_route(&route_a);
+        let facts_b = RouteAdaptiveFacts::from_route(&route_b);
+        let models: HashMap<_, _> = facts_a
+            .targets
+            .iter()
+            .chain(facts_b.targets.iter())
+            .cloned()
+            .map(|target| (target, vec!["model".to_string()]))
+            .collect();
+        let adaptive_plugins = HashSet::from(["route-ns/adaptive-a".to_string(), "route-ns/adaptive-b".to_string()]);
+        let mut index = AdaptiveContributionIndex::default();
+        index.attach_route("route-a".to_string(), facts_a);
+        index.attach_route("route-b".to_string(), facts_b);
+        recompute_test_routes(
+            &mut index,
+            ["route-a".to_string(), "route-b".to_string()],
+            &adaptive_plugins,
+            &models,
+        );
+        let route_b_keys = index.route_contributions["route-b"].clone();
+
+        index.detach_route("route-a");
+        index.attach_route(
+            "route-a".to_string(),
+            RouteAdaptiveFacts::from_route(&route_with_dependencies("uid-a-next", "adaptive-a", "provider-a")),
+        );
+        recompute_test_routes(&mut index, ["route-a".to_string()], &adaptive_plugins, &models);
+        assert_eq!(index.route_contributions["route-b"], route_b_keys);
+        assert!(index
+            .retained_keys()
+            .iter()
+            .any(|key| key.terminal_route_uid == "uid-a-next"));
+        assert!(!index
+            .retained_keys()
+            .iter()
+            .any(|key| key.terminal_route_uid == "uid-a"));
+
+        index.detach_route("route-a");
+        assert_eq!(index.retained_keys(), route_b_keys);
+        assert!(!index.plugin_routes.contains_key("route-ns/adaptive-a"));
+    }
+
+    #[test]
+    fn duplicate_route_contributions_survive_until_last_source_is_removed() {
+        let facts = RouteAdaptiveFacts::from_route(&adaptive_route());
+        let target = facts.targets.iter().next().unwrap().clone();
+        let adaptive_plugins = HashSet::from(["route-ns/adaptive".to_string()]);
+        let models = HashMap::from([(target, vec!["model-a".to_string()])]);
+        let mut index = AdaptiveContributionIndex::default();
+        index.attach_route("parent-a".to_string(), facts.clone());
+        index.attach_route("parent-b".to_string(), facts);
+        recompute_test_routes(
+            &mut index,
+            ["parent-a".to_string(), "parent-b".to_string()],
+            &adaptive_plugins,
+            &models,
+        );
+        assert_eq!(index.retained_keys().len(), 1);
+
+        index.detach_route("parent-a");
+        assert_eq!(index.retained_keys().len(), 1);
+        index.detach_route("parent-b");
+        assert!(index.retained_keys().is_empty());
     }
 
     #[test]

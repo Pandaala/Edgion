@@ -58,21 +58,23 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
     // Regression tests in this file pin the end-state for full_set / partial_update /
     // mixed scenarios.
     fn full_set(&self, data: &HashMap<String, Arc<HTTPRoute>>) {
-        let _guard = self.lock_rebuild();
-
         let start_time = Instant::now();
         tracing::info!(component = "http_route_manager", cnt = data.len(), "full set start");
 
-        // Step 1: Replace route cache with shared Arcs (no deep clone).
-        self.route_cache.clear();
-        for (key, route) in data {
-            self.route_cache.insert(key.clone(), route.clone()); // Arc clone
-        }
+        {
+            let _guard = self.lock_rebuild();
 
-        // Step 2: Rebuild all per-listener managers (lock already held above).
-        self.rebuild_all_listener_managers_locked();
+            // Step 1: Replace route cache with shared Arcs (no deep clone).
+            self.route_cache.clear();
+            for (key, route) in data {
+                self.route_cache.insert(key.clone(), route.clone()); // Arc clone
+            }
+
+            // Step 2: Rebuild all per-listener managers (lock already held above).
+            self.rebuild_all_listener_managers_locked();
+        }
         if std::ptr::eq(self, get_global_http_route_managers()) {
-            crate::ai::reconcile_global_adaptive_telemetry();
+            crate::ai::replace_adaptive_route_contributions(data);
         }
 
         let elapsed = Instant::now().saturating_duration_since(start_time);
@@ -92,7 +94,6 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
         // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
         // Covers the affected-set computation, route_cache mutation, and rebuild as one
         // critical section so rebuild_all cannot interleave on a stale snapshot.
-        let _guard = self.lock_rebuild();
         let mut add_or_update: HashMap<String, Arc<HTTPRoute>> = add;
         add_or_update.extend(update);
 
@@ -104,46 +105,49 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             "partial update start"
         );
 
-        // Compute affected listeners BEFORE updating cache.
-        let mut affected_listeners: HashSet<ListenerKey> = HashSet::new();
+        {
+            let _guard = self.lock_rebuild();
+            // Compute affected listeners BEFORE updating cache.
+            let mut affected_listeners: HashSet<ListenerKey> = HashSet::new();
 
-        for (key, route) in &add_or_update {
-            let listeners = resolved_listeners_for_route(route); // &Arc coerces to &HTTPRoute
-            if listeners.is_empty() {
-                tracing::warn!(route = %key, "HTTPRoute has no resolved_listeners during partial_update");
-            } else {
-                for lk in listeners {
-                    affected_listeners.insert(lk.clone());
-                }
-            }
-            if let Some(old) = self.route_cache.get(key) {
-                for lk in resolved_listeners_for_route(old.value()) {
-                    affected_listeners.insert(lk.clone());
-                }
-            }
-        }
-        for key in &remove {
-            if let Some(old) = self.route_cache.get(key) {
-                let listeners = resolved_listeners_for_route(old.value());
-                if !listeners.is_empty() {
+            for (key, route) in &add_or_update {
+                let listeners = resolved_listeners_for_route(route); // &Arc coerces to &HTTPRoute
+                if listeners.is_empty() {
+                    tracing::warn!(route = %key, "HTTPRoute has no resolved_listeners during partial_update");
+                } else {
                     for lk in listeners {
                         affected_listeners.insert(lk.clone());
                     }
                 }
+                if let Some(old) = self.route_cache.get(key) {
+                    for lk in resolved_listeners_for_route(old.value()) {
+                        affected_listeners.insert(lk.clone());
+                    }
+                }
             }
-        }
+            for key in &remove {
+                if let Some(old) = self.route_cache.get(key) {
+                    let listeners = resolved_listeners_for_route(old.value());
+                    if !listeners.is_empty() {
+                        for lk in listeners {
+                            affected_listeners.insert(lk.clone());
+                        }
+                    }
+                }
+            }
 
-        // Update route cache (store shared Arcs)
-        for (key, route) in add_or_update {
-            self.route_cache.insert(key, route); // moves the Arc
-        }
-        for key in &remove {
-            self.route_cache.remove(key);
-        }
+            // Update route cache (store shared Arcs)
+            for (key, route) in &add_or_update {
+                self.route_cache.insert(key.clone(), Arc::clone(route));
+            }
+            for key in &remove {
+                self.route_cache.remove(key);
+            }
 
-        self.rebuild_affected_listener_managers(&affected_listeners);
+            self.rebuild_affected_listener_managers(&affected_listeners);
+        }
         if std::ptr::eq(self, get_global_http_route_managers()) {
-            crate::ai::reconcile_global_adaptive_telemetry();
+            crate::ai::update_adaptive_route_contributions(&add_or_update, &remove);
         }
 
         tracing::info!(

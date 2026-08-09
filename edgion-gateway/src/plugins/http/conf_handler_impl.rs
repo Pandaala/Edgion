@@ -24,7 +24,7 @@ impl ConfHandler<EdgionPlugins> for PluginStore {
         let compiled = data.iter().map(|(k, v)| (k.clone(), compile_plugins(v))).collect();
         self.replace_all(compiled);
         if std::ptr::eq(self, super::global_plugin_store()) {
-            crate::ai::reconcile_global_adaptive_telemetry();
+            crate::ai::reconcile_all_adaptive_plugin_dependents();
         }
     }
 
@@ -42,12 +42,13 @@ impl ConfHandler<EdgionPlugins> for PluginStore {
             "partial update"
         );
 
+        let changed_keys: HashSet<_> = add.keys().chain(update.keys()).chain(remove.iter()).cloned().collect();
         let mut add_or_update = compile_map(add);
         add_or_update.extend(compile_map(update));
 
         self.update(add_or_update, &remove);
         if std::ptr::eq(self, super::global_plugin_store()) {
-            crate::ai::reconcile_global_adaptive_telemetry();
+            crate::ai::reconcile_adaptive_plugin_keys(&changed_keys);
         }
     }
 }
