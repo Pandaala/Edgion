@@ -762,7 +762,7 @@ mod genai_tests {
         let mut ctx = ai_context(AiProviderLabel::OpenAi, "model-a", false);
         let ai = ctx.ai.as_mut().unwrap();
         ai.quota_status = Some("fail_open");
-        ai.usage.publish_reported_usage(2, 3, 0, 0);
+        ai.usage.observe_reported_usage(2, 3, 0, 0);
 
         finalize_ai_usage_with_metrics_enabled(&mut ctx, false);
 

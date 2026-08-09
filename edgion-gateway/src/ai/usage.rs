@@ -3,6 +3,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use arc_swap::ArcSwapOption;
 use bytes::Bytes;
 use edgion_resources::resources::edgion_ai_service::ParsedAiModelPricing;
 use serde::Serialize;
@@ -149,11 +150,7 @@ impl ReportedAiUsage {
 pub struct AiUsageShared {
     input_chars: AtomicU64,
     output_chars: AtomicU64,
-    input_tokens: AtomicU64,
-    output_tokens: AtomicU64,
-    cache_read_input_tokens: AtomicU64,
-    cache_write_input_tokens: AtomicU64,
-    reported_usage: AtomicBool,
+    reported_usage: ArcSwapOption<ReportedAiUsage>,
     sse_degraded: AtomicBool,
     non_streaming_overflowed: AtomicBool,
 }
@@ -177,16 +174,7 @@ impl AiUsageShared {
     }
 
     pub fn reported_usage(&self) -> Option<ReportedAiUsage> {
-        if self.reported_usage.load(Ordering::Acquire) {
-            Some(ReportedAiUsage {
-                input_tokens: self.input_tokens.load(Ordering::Relaxed),
-                output_tokens: self.output_tokens.load(Ordering::Relaxed),
-                cache_read_input_tokens: self.cache_read_input_tokens.load(Ordering::Relaxed),
-                cache_write_input_tokens: self.cache_write_input_tokens.load(Ordering::Relaxed),
-            })
-        } else {
-            None
-        }
+        self.reported_usage.load_full().map(|usage| *usage)
     }
 
     pub fn sse_degraded(&self) -> bool {
@@ -210,20 +198,26 @@ impl AiUsageShared {
         self.add_output_chars(delta);
     }
 
-    pub(crate) fn publish_reported_usage(
+    pub(crate) fn observe_reported_usage(
         &self,
         input: u64,
         output: u64,
         cache_read_input: u64,
         cache_write_input: u64,
     ) {
-        // One processor owns publication. Release the flag only after both
-        // values are visible so logging never observes a half-published pair.
-        if self.reported_usage.load(Ordering::Relaxed) {
-            return;
-        }
-        self.input_tokens.store(input, Ordering::Relaxed);
-        self.output_tokens.store(output, Ordering::Relaxed);
+        // One processor owns updates. Provider usage frames are cumulative,
+        // so every component keeps a high-water mark and never refunds an
+        // earlier observation. ArcSwap publishes the immutable multi-field
+        // snapshot atomically to concurrent logging readers.
+        let current = self.reported_usage();
+        let input = current.map_or(input, |usage| usage.input_tokens.max(input));
+        let output = current.map_or(output, |usage| usage.output_tokens.max(output));
+        let cache_read_input = current.map_or(cache_read_input, |usage| {
+            usage.cache_read_input_tokens.max(cache_read_input)
+        });
+        let cache_write_input = current.map_or(cache_write_input, |usage| {
+            usage.cache_write_input_tokens.max(cache_write_input)
+        });
         let cache_total = cache_read_input.saturating_add(cache_write_input);
         let (cache_read_input, cache_write_input) = if cache_total <= input {
             (cache_read_input, cache_write_input)
@@ -232,10 +226,12 @@ impl AiUsageShared {
             // detail so cost cannot exceed the provider-reported input total.
             (0, 0)
         };
-        self.cache_read_input_tokens.store(cache_read_input, Ordering::Relaxed);
-        self.cache_write_input_tokens
-            .store(cache_write_input, Ordering::Relaxed);
-        self.reported_usage.store(true, Ordering::Release);
+        self.reported_usage.store(Some(Arc::new(ReportedAiUsage {
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_input_tokens: cache_read_input,
+            cache_write_input_tokens: cache_write_input,
+        })));
     }
 }
 
@@ -660,7 +656,7 @@ fn try_publish_usage_value(shared: &AiUsageShared, value: &serde_json::Value) {
         .get("cache_creation_input_tokens")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
-    shared.publish_reported_usage(input, output, cache_read, cache_write);
+    shared.observe_reported_usage(input, output, cache_read, cache_write);
 }
 
 #[cfg(test)]
@@ -866,6 +862,23 @@ mod tests {
     }
 
     #[test]
+    fn reported_usage_keeps_component_high_water_marks() {
+        let shared = AiUsageShared::default();
+        shared.observe_reported_usage(10, 0, 2, 0);
+        shared.observe_reported_usage(10, 7, 3, 1);
+        shared.observe_reported_usage(9, 3, 1, 0);
+        assert_eq!(
+            shared.reported_usage(),
+            Some(ReportedAiUsage {
+                input_tokens: 10,
+                output_tokens: 7,
+                cache_read_input_tokens: 3,
+                cache_write_input_tokens: 1,
+            })
+        );
+    }
+
+    #[test]
     fn shared_state_never_retains_request_response_or_event_text() {
         let shared = Arc::new(AiUsageShared::default());
         shared.set_input_chars("INPUT-FIXTURE".chars().count() as u64);
@@ -903,5 +916,36 @@ mod tests {
             ),
             0
         );
+    }
+
+    #[test]
+    fn openai_streaming_processor_updates_quota_only_for_semantic_deltas() {
+        let shared = Arc::new(AiUsageShared::default());
+        let quota = Arc::new(QuotaAccumulator::new_for_test(100));
+        let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota.clone()));
+
+        for (event, expected) in [
+            (r#"{"choices":[{"delta":{"role":"assistant"}}]}"#, 0),
+            (r#"{"choices":[{"delta":{"content":""}}]}"#, 0),
+            (r#"{"choices":[{"delta":{"content":"hello"}}]}"#, 1),
+            (
+                r#"{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":""}}]}}]}"#,
+                1,
+            ),
+            (
+                r#"{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"x"}}]}}]}"#,
+                2,
+            ),
+            (
+                r#"{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":7,"total_tokens":17}}"#,
+                2,
+            ),
+        ] {
+            let framed = format!("data: {event}\n\n");
+            feed(&mut processor, &[(framed.as_bytes(), false)], ResponseStreamKind::Sse);
+            assert_eq!(quota.observed_output_for_test(), expected);
+        }
+        feed(&mut processor, &[(b"data: [DONE]\n\n", true)], ResponseStreamKind::Sse);
+        assert_eq!(shared.reported_tokens(), Some((10, 7)));
     }
 }

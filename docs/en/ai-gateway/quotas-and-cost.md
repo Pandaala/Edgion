@@ -46,6 +46,11 @@ onExceeded:
 Quota uses fixed windows selected from each gateway instance's wall clock when a request starts.
 Keep gateway nodes time-synchronized.
 
+Streaming provider usage objects are treated as cumulative snapshots. When an OpenAI-compatible
+provider emits usage on multiple chunks, Edgion keeps the highest observed value for each token
+component; a later lower or out-of-order snapshot cannot reduce quota reconciliation, access-log
+usage, or estimated cost. OpenAI's usual final-only usage frame is unchanged.
+
 ## Estimated cost
 
 Configure optional `models[].pricing` on EdgionAIService:

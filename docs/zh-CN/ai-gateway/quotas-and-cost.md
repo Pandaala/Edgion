@@ -40,6 +40,10 @@ onExceeded:
 
 配额使用固定窗口，窗口在请求开始时按各 Gateway 实例墙钟选定。请保持 Gateway 节点时钟同步。
 
+流式 provider usage 对象按累计快照处理。当 OpenAI-compatible provider 在多个 chunk 中提供
+usage 时，Edgion 会保留各 token 分量观察到的最高值；后续较低或乱序的快照不会降低最终配额
+结算、access log 用量或估算成本。OpenAI 通常只在最终 chunk 提供 usage 的行为不受影响。
+
 ## 估算成本
 
 在 EdgionAIService 上配置可选的 `models[].pricing`：

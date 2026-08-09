@@ -942,7 +942,7 @@ mod tests {
         let mut state = AiAttemptRuntimeState::default();
         let mut failed = attempt(5, 0, false);
         failed.provider = AiProviderLabel::OpenAi;
-        failed.usage.publish_reported_usage(3, 4, 0, 0);
+        failed.usage.observe_reported_usage(3, 4, 0, 0);
         state.install(failed);
         state.mark_dispatched();
         state.finish_failure(AiAttemptFailure::Known(FailureClass::Gateway));
@@ -1047,7 +1047,7 @@ mod tests {
 
         let mut overflow = AiAttemptRuntimeState::default();
         let overflowed = attempt(1, 0, true);
-        overflowed.usage.publish_reported_usage(u64::MAX, 1, 0, 0);
+        overflowed.usage.observe_reported_usage(u64::MAX, 1, 0, 0);
         overflow.install(overflowed);
         overflow.finalize(None).await;
         assert_eq!(overflow.settlement_decisions_for_test(), [SettlementOperation::Retain]);
@@ -1112,7 +1112,7 @@ mod tests {
     #[test]
     fn reported_usage_overflow_is_explicit() {
         let attempt = attempt(1, 0, true);
-        attempt.usage.publish_reported_usage(u64::MAX, 1, 0, 0);
+        attempt.usage.observe_reported_usage(u64::MAX, 1, 0, 0);
         assert_eq!(attempt.final_charged_tokens(), None);
     }
 

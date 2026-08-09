@@ -360,6 +360,23 @@ mod tests {
     }
 
     #[test]
+    fn redis_failure_policy_maps_explicit_allow_and_deny() {
+        for (policy, expected_bypass) in [(OnRedisFailure::Allow, true), (OnRedisFailure::Deny, false)] {
+            let mut config = quota_config(json!({"type": "Reject"}));
+            config.on_redis_failure = policy;
+            let plan = CompiledAiQuotaPlan::compile(&config, "scope").unwrap();
+            assert_eq!(
+                matches!(plan.redis_failure(), QuotaAdmission::DependencyBypass),
+                expected_bypass
+            );
+            assert_eq!(
+                matches!(plan.redis_failure(), QuotaAdmission::DependencyFailed),
+                !expected_bypass
+            );
+        }
+    }
+
+    #[test]
     fn quota_actions_are_frozen_during_compile() {
         let throttle =
             CompiledAiQuotaPlan::compile(&quota_config(json!({"type": "Throttle", "maxDelay": "250ms"})), "scope")

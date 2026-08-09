@@ -86,6 +86,16 @@ impl QuotaAccumulator {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_for_test(flush_tokens: u64) -> Self {
+        Self::new(flush_tokens)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observed_output_for_test(&self) -> u64 {
+        self.observed_output.load(Ordering::Relaxed)
+    }
+
     /// Add an approximate semantic output unit. The notification happens only
     /// when a configured batch boundary is crossed; atomics retain the full
     /// cumulative value when notifications coalesce.
@@ -278,7 +288,7 @@ mod tests {
 
     struct RecordingSink {
         calls: Mutex<Vec<(u64, u64, bool)>>,
-        final_failures_remaining: AtomicU64,
+        failures_remaining: AtomicU64,
         notify: Notify,
     }
 
@@ -286,13 +296,13 @@ mod tests {
         fn new() -> Self {
             Self {
                 calls: Mutex::new(Vec::new()),
-                final_failures_remaining: AtomicU64::new(0),
+                failures_remaining: AtomicU64::new(0),
                 notify: Notify::new(),
             }
         }
 
-        fn fail_next_final_calls(&self, count: u64) {
-            self.final_failures_remaining.store(count, Ordering::Relaxed);
+        fn fail_next_calls(&self, count: u64) {
+            self.failures_remaining.store(count, Ordering::Relaxed);
         }
 
         async fn wait_for_calls(&self, count: usize) {
@@ -311,19 +321,63 @@ mod tests {
             Box::pin(async move {
                 self.calls.lock().push((revision, total, final_update));
                 self.notify.notify_waiters();
-                if final_update
-                    && self
-                        .final_failures_remaining
-                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
-                            remaining.checked_sub(1)
-                        })
-                        .is_ok()
+                if self
+                    .failures_remaining
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+                        remaining.checked_sub(1)
+                    })
+                    .is_ok()
                 {
                     return Err(());
                 }
                 Ok(QuotaApplyResult {
                     over_limit: total > 100,
                 })
+            })
+        }
+    }
+
+    struct HangingSink {
+        calls: AtomicU64,
+        cancelled: AtomicU64,
+        notify: Notify,
+    }
+
+    impl HangingSink {
+        fn new() -> Self {
+            Self {
+                calls: AtomicU64::new(0),
+                cancelled: AtomicU64::new(0),
+                notify: Notify::new(),
+            }
+        }
+
+        async fn wait_for_call(&self) {
+            loop {
+                let notified = self.notify.notified();
+                if self.calls.load(Ordering::Acquire) > 0 {
+                    return;
+                }
+                notified.await;
+            }
+        }
+    }
+
+    struct CancellationGuard<'a>(&'a AtomicU64);
+
+    impl Drop for CancellationGuard<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Release);
+        }
+    }
+
+    impl QuotaSink for HangingSink {
+        fn apply_cumulative(&self, _revision: u64, _total: u64, _final_update: bool) -> QuotaFuture<'_> {
+            Box::pin(async move {
+                let _guard = CancellationGuard(&self.cancelled);
+                self.calls.fetch_add(1, Ordering::Release);
+                self.notify.notify_waiters();
+                std::future::pending().await
             })
         }
     }
@@ -369,6 +423,90 @@ mod tests {
         assert_eq!(request.finalize(3).await, QuotaFinalStatus::Charged);
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn failed_incremental_flush_retries_the_same_watermark() {
+        let sink = Arc::new(RecordingSink::new());
+        sink.fail_next_calls(1);
+        let sink_trait: Arc<dyn QuotaSink> = sink.clone();
+        let mut request = AiQuotaRequest::start(
+            sink_trait,
+            10,
+            Duration::from_secs(1),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        request.accumulator().add_output_units(20);
+        sink.wait_for_calls(1).await;
+        assert_eq!(sink.calls.lock()[0], (1, 20, false));
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        sink.wait_for_calls(2).await;
+        assert_eq!(sink.calls.lock()[1], (2, 20, false));
+        assert_eq!(request.finalize(20).await, QuotaFinalStatus::Charged);
+    }
+
+    #[tokio::test]
+    async fn provider_output_total_is_monotonic() {
+        let sink = Arc::new(RecordingSink::new());
+        let sink_trait: Arc<dyn QuotaSink> = sink.clone();
+        let mut request = AiQuotaRequest::start(
+            sink_trait,
+            10,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let accumulator = request.accumulator();
+        accumulator.observe_output_total(20);
+        assert_eq!(accumulator.observed_output_for_test(), 20);
+        sink.wait_for_calls(1).await;
+        accumulator.observe_output_total(12);
+        assert_eq!(accumulator.observed_output_for_test(), 20);
+        tokio::task::yield_now().await;
+        assert_eq!(sink.calls.lock().as_slice(), &[(1, 20, false)]);
+
+        accumulator.observe_output_total(35);
+        assert_eq!(accumulator.observed_output_for_test(), 35);
+        sink.wait_for_calls(2).await;
+        assert_eq!(sink.calls.lock()[1], (2, 35, false));
+        assert_eq!(request.finalize(35).await, QuotaFinalStatus::Charged);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn hanging_finalization_times_out_and_aborts_the_worker() {
+        let sink = Arc::new(HangingSink::new());
+        let sink_trait: Arc<dyn QuotaSink> = sink.clone();
+        let mut request = AiQuotaRequest::start(
+            sink_trait,
+            1,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_millis(10),
+        );
+        assert_eq!(request.finalize(1).await, QuotaFinalStatus::TimedOut);
+        tokio::task::yield_now().await;
+        assert_eq!(sink.calls.load(Ordering::Acquire), 1);
+        assert_eq!(sink.cancelled.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn dropping_a_request_aborts_its_hanging_worker() {
+        let sink = Arc::new(HangingSink::new());
+        let sink_trait: Arc<dyn QuotaSink> = sink.clone();
+        let request = AiQuotaRequest::start(
+            sink_trait,
+            1,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        request.accumulator().add_output_units(1);
+        sink.wait_for_call().await;
+        drop(request);
+        tokio::task::yield_now().await;
+        assert_eq!(sink.cancelled.load(Ordering::Acquire), 1);
+    }
+
     #[tokio::test]
     async fn final_over_limit_is_reported() {
         let sink = Arc::new(RecordingSink::new());
@@ -386,7 +524,7 @@ mod tests {
     #[tokio::test]
     async fn final_reconciliation_retries_within_one_total_deadline() {
         let sink = Arc::new(RecordingSink::new());
-        sink.fail_next_final_calls(1);
+        sink.fail_next_calls(1);
         let sink_trait: Arc<dyn QuotaSink> = sink.clone();
         let mut request = AiQuotaRequest::start(
             sink_trait,
@@ -403,7 +541,7 @@ mod tests {
     #[tokio::test]
     async fn final_reconciliation_reports_failure_after_retry_budget() {
         let sink = Arc::new(RecordingSink::new());
-        sink.fail_next_final_calls(u64::MAX);
+        sink.fail_next_calls(u64::MAX);
         let sink_trait: Arc<dyn QuotaSink> = sink.clone();
         let mut request = AiQuotaRequest::start(
             sink_trait,

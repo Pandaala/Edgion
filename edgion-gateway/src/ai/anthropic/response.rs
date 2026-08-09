@@ -311,7 +311,7 @@ impl AnthropicResponseProcessor {
             MAX_BODY_BYTES,
         ) {
             Ok((body, input_tokens, output_tokens, cache_read_input_tokens, cache_write_input_tokens)) => {
-                self.usage_shared.publish_reported_usage(
+                self.usage_shared.observe_reported_usage(
                     input_tokens,
                     output_tokens,
                     cache_read_input_tokens,
@@ -562,7 +562,7 @@ impl AnthropicResponseProcessor {
         }
         self.message_stopped = true;
         let (input, output_tokens) = self.usage.normalized();
-        self.usage_shared.publish_reported_usage(
+        self.usage_shared.observe_reported_usage(
             input,
             output_tokens,
             self.usage.cache_read,
@@ -898,14 +898,14 @@ fn required_index(object: &Map<String, Value>, field: &str) -> Result<usize, ()>
 
 fn update_u64(object: &Map<String, Value>, field: &str, target: &mut u64) -> Result<(), ()> {
     if let Some(value) = object.get(field) {
-        *target = value.as_u64().ok_or(())?;
+        *target = (*target).max(value.as_u64().ok_or(())?);
     }
     Ok(())
 }
 
 fn update_u64_seen(object: &Map<String, Value>, field: &str, target: &mut u64, seen: &mut bool) -> Result<(), ()> {
     if let Some(value) = object.get(field) {
-        *target = value.as_u64().ok_or(())?;
+        *target = (*target).max(value.as_u64().ok_or(())?);
         *seen = true;
     }
     Ok(())
@@ -1250,6 +1250,83 @@ mod tests {
         assert!(output.contains("\"finish_reason\":\"tool_calls\""));
         assert!(!output.contains("\"usage\":"));
         assert_eq!(usage.reported_tokens(), Some((1, 2)));
+    }
+
+    #[test]
+    fn streaming_quota_tracks_semantic_deltas_and_cumulative_usage_monotonically() {
+        let usage = Arc::new(AiUsageShared::default());
+        let quota = Arc::new(QuotaAccumulator::new_for_test(100));
+        let mut processor = AnthropicResponseProcessor::new_with_quota(
+            "claude-canonical".to_string(),
+            true,
+            false,
+            1_785_772_800,
+            usage.clone(),
+            Some(quota.clone()),
+        );
+        processor.on_response_header(&mut header(200, "text/event-stream"));
+        let mut session = MockPluginSession::new();
+        let mut send = |type_: &str, value: Value, expected: u64| {
+            let framed = event(type_, value);
+            run_chunk(&mut processor, &mut session, Some(framed.as_bytes()), false);
+            assert_eq!(quota.observed_output_for_test(), expected);
+        };
+
+        send(
+            "message_start",
+            json!({"type":"message_start","message":{"type":"message","id":"msg_quota","model":"provider","role":"assistant","content":[],"usage":{"input_tokens":10}}}),
+            0,
+        );
+        send(
+            "content_block_start",
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+            0,
+        );
+        send(
+            "content_block_delta",
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}),
+            0,
+        );
+        send(
+            "content_block_delta",
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}),
+            1,
+        );
+        send("content_block_stop", json!({"type":"content_block_stop","index":0}), 1);
+        send(
+            "content_block_start",
+            json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"lookup","input":{}}}),
+            1,
+        );
+        send(
+            "content_block_delta",
+            json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":""}}),
+            1,
+        );
+        send(
+            "content_block_delta",
+            json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}),
+            2,
+        );
+        send("content_block_stop", json!({"type":"content_block_stop","index":1}), 2);
+        send(
+            "message_delta",
+            json!({"type":"message_delta","delta":{"stop_reason":null},"usage":{"output_tokens":5}}),
+            5,
+        );
+        send(
+            "message_delta",
+            json!({"type":"message_delta","delta":{"stop_reason":null},"usage":{"output_tokens":3}}),
+            5,
+        );
+        send(
+            "message_delta",
+            json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":11}}),
+            11,
+        );
+        let stop = event("message_stop", json!({"type":"message_stop"}));
+        run_chunk(&mut processor, &mut session, Some(stop.as_bytes()), true);
+        assert_eq!(usage.reported_tokens(), Some((10, 11)));
     }
 
     #[test]

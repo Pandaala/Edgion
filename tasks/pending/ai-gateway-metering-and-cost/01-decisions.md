@@ -30,6 +30,9 @@
   Anthropic uses the same bounded delta estimate until its cumulative provider output usage arrives.
   Final access-log usage always uses provider totals when available and otherwise the existing marked
   estimate.
+- Streaming provider usage objects are cumulative snapshots. Repeated snapshots merge by monotonic
+  component high-water marks, so continuous-usage compatible providers can refine an early zero and
+  a lower or out-of-order frame cannot refund usage already observed.
 - Every Redis mutation names an internal UUID, monotonically increasing revision, and cumulative
   target. Retries are idempotent; final usage may apply a signed correction.
 - The quota window is frozen at request start. A constant-size bucket and per-request marker share
