@@ -14,6 +14,7 @@ const HOST: &str = "ai-credential-exhaustion.example.com";
 const PATH: &str = "/v1/chat/completions";
 const KEY_PREFIX: &str = "edgion:aic:";
 const REDIS_NAME: &str = "default_credential-exhaustion-redis";
+const MIN_QUOTA_WINDOW_REMAINING: Duration = Duration::from_secs(25);
 const SAFE_ATTEMPT_FIELDS: [&str; 12] = [
     "number",
     "service",
@@ -194,6 +195,18 @@ async fn prepare_buckets(ctx: &TestContext) -> Result<Vec<CredentialBucket>, Str
     Ok(buckets)
 }
 
+async fn wait_for_stable_quota_window() -> Result<(), String> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("system clock is before the Unix epoch: {error}"))?;
+    let elapsed_in_window = Duration::new(now.as_secs() % 60, now.subsec_nanos());
+    let remaining = Duration::from_secs(60).saturating_sub(elapsed_in_window);
+    if remaining < MIN_QUOTA_WINDOW_REMAINING {
+        tokio::time::sleep(remaining.saturating_add(Duration::from_millis(100))).await;
+    }
+    Ok(())
+}
+
 async fn bucket_usage(ctx: &TestContext, bucket: &CredentialBucket) -> Result<(u64, u64), String> {
     for key in &bucket.keys {
         let encoded = utf8_percent_encode(key, NON_ALPHANUMERIC);
@@ -284,6 +297,9 @@ fn credential_first_then_service_next(
             Ok(buckets) => buckets,
             Err(error) => return TestResult::failed(start.elapsed(), error),
         };
+        if let Err(error) = wait_for_stable_quota_window().await {
+            return TestResult::failed(start.elapsed(), error);
+        }
         let first_trace = even_trace_id();
         let (status, first_body) = match post(&ctx, &first_trace).await {
             Ok(result) => result,
@@ -295,6 +311,11 @@ fn credential_first_then_service_next(
                 format!("expected final provider 503, got {status}: {first_body}"),
             );
         }
+        let second_trace = even_trace_id();
+        let (second_status, second_body) = match post(&ctx, &second_trace).await {
+            Ok(result) => result,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
         let observations = match provider_observations(&ctx, &first_trace).await {
             Ok(value) => value,
             Err(error) => return TestResult::failed(start.elapsed(), error),
@@ -364,11 +385,6 @@ fn credential_first_then_service_next(
             }
         }
 
-        let second_trace = even_trace_id();
-        let (second_status, second_body) = match post(&ctx, &second_trace).await {
-            Ok(result) => result,
-            Err(error) => return TestResult::failed(start.elapsed(), error),
-        };
         if second_status != reqwest::StatusCode::SERVICE_UNAVAILABLE
             || second_body["error"]["type"] != "api_error"
             || second_body["error"]["code"] != "service_unavailable"
@@ -415,6 +431,7 @@ impl TestSuite for CredentialExhaustionTestSuite {
             "credential_first_then_service_next",
             "Credential exhaustion rotates within one AI service before advancing to the next service",
             credential_first_then_service_next,
-        )]
+        )
+        .with_timeout(Duration::from_secs(90))]
     }
 }

@@ -521,7 +521,7 @@ mod tests {
         assert_eq!(request.finalize(101).await, QuotaFinalStatus::OverLimit);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn final_reconciliation_retries_within_one_total_deadline() {
         let sink = Arc::new(RecordingSink::new());
         sink.fail_next_calls(1);
@@ -538,7 +538,7 @@ mod tests {
         assert_eq!(sink.calls.lock().as_slice(), &[(1, 17, true), (2, 17, true)]);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn final_reconciliation_reports_failure_after_retry_budget() {
         let sink = Arc::new(RecordingSink::new());
         sink.fail_next_calls(u64::MAX);
@@ -552,7 +552,10 @@ mod tests {
         );
 
         assert_eq!(request.finalize(17).await, QuotaFinalStatus::Failed);
-        assert!(sink.calls.lock().len() >= 2);
+        assert_eq!(
+            sink.calls.lock().as_slice(),
+            &[(1, 17, true), (2, 17, true), (3, 17, true), (4, 17, true)]
+        );
     }
 
     #[tokio::test(start_paused = true)]

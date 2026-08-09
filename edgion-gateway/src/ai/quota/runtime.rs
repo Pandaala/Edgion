@@ -150,6 +150,7 @@ impl CompiledAiQuotaPlan {
             &self.limits,
             maximum_request_duration,
             self.request_timeout,
+            current_unix_millis(),
         );
         let lease_refresh_interval = targets
             .iter()
@@ -358,11 +359,8 @@ fn build_targets(
     limits: &[CompiledLimit],
     maximum_request_duration: Duration,
     request_timeout: Duration,
+    now_ms: u128,
 ) -> Vec<QuotaTarget> {
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
     let active_lease_ttl = maximum_request_duration
         .saturating_add(request_timeout)
         .saturating_add(RECONCILIATION_GRACE);
@@ -402,6 +400,13 @@ fn build_targets(
         .collect()
 }
 
+fn current_unix_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
 fn append_identity_part(output: &mut Vec<u8>, value: &[u8]) {
     output.extend_from_slice(&(value.len() as u64).to_be_bytes());
     output.extend_from_slice(value);
@@ -439,6 +444,8 @@ mod tests {
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TEST_NOW_MS: u128 = 1_700_000_000_000;
 
     fn quota_config(on_exceeded: serde_json::Value) -> AiTokenQuotaConfig {
         serde_json::from_value(json!({
@@ -616,6 +623,7 @@ mod tests {
             &limits,
             Duration::from_secs(300),
             Duration::from_millis(500),
+            TEST_NOW_MS,
         );
         assert_eq!(targets.len(), 1);
         assert!(!targets[0].bucket_key.contains("sensitive-consumer"));
@@ -643,6 +651,7 @@ mod tests {
             &identity_limits,
             Duration::ZERO,
             Duration::from_secs(1),
+            TEST_NOW_MS,
         );
         let identity_b = build_targets(
             "scope",
@@ -652,6 +661,7 @@ mod tests {
             &identity_limits,
             Duration::ZERO,
             Duration::from_secs(1),
+            TEST_NOW_MS,
         );
         assert_eq!(identity_a[0].bucket_key, identity_b[0].bucket_key);
         let model_a = build_targets(
@@ -662,6 +672,7 @@ mod tests {
             &model_limits,
             Duration::ZERO,
             Duration::from_secs(1),
+            TEST_NOW_MS,
         );
         let model_b = build_targets(
             "scope",
@@ -671,6 +682,7 @@ mod tests {
             &model_limits,
             Duration::ZERO,
             Duration::from_secs(1),
+            TEST_NOW_MS,
         );
         assert_ne!(model_a[0].bucket_key, model_b[0].bucket_key);
     }
@@ -707,6 +719,7 @@ mod tests {
             &[first.clone(), second.clone()],
             Duration::from_secs(300),
             Duration::from_millis(500),
+            TEST_NOW_MS,
         );
         let mut changed_limit = first.clone();
         changed_limit.tokens = 999;
@@ -718,12 +731,43 @@ mod tests {
             &[second, changed_limit],
             Duration::from_secs(300),
             Duration::from_millis(500),
+            TEST_NOW_MS,
         );
 
         assert_eq!(original[0].bucket_key, reordered[1].bucket_key);
         assert_eq!(original[0].request_key, reordered[1].request_key);
         assert_eq!(original[1].bucket_key, reordered[0].bucket_key);
         assert_ne!(original[0].bucket_key, original[1].bucket_key);
+    }
+
+    #[test]
+    fn quota_window_boundary_rotates_bucket_and_retry_after() {
+        let limits = [CompiledLimit {
+            tokens: 100,
+            window: Duration::from_secs(60),
+            scope: AiTokenQuotaScope::Identity,
+        }];
+        let build_at = |now_ms| {
+            build_targets(
+                "scope",
+                "consumer",
+                "model-a",
+                "r1",
+                &limits,
+                Duration::ZERO,
+                Duration::from_secs(1),
+                now_ms,
+            )
+        };
+
+        let before = build_at(59_999);
+        let boundary = build_at(60_000);
+        let same_window = build_at(60_001);
+
+        assert_ne!(before[0].bucket_key, boundary[0].bucket_key);
+        assert_eq!(boundary[0].bucket_key, same_window[0].bucket_key);
+        assert_eq!(before[0].retry_after, Duration::from_millis(1));
+        assert_eq!(boundary[0].retry_after, Duration::from_secs(60));
     }
 
     #[test]

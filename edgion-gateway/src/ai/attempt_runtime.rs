@@ -927,8 +927,9 @@ mod tests {
             assert_eq!(runtime.charged_request_tokens(), Ok(7));
         }
 
+        let after_settlement = current_unix_second();
         for state in [&success, &failed_status, &incomplete] {
-            state.tick(second + 1);
+            state.tick(after_settlement + 1);
             assert_eq!(state.snapshot().charged_tokens_60s, 7);
         }
         assert_eq!(success.snapshot().latency_samples, 1);

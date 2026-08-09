@@ -372,6 +372,7 @@ pub struct TestCase {
     #[allow(dead_code)]
     pub description: String,
     pub test_fn: TestFn,
+    timeout: Duration,
 }
 
 impl TestCase {
@@ -388,16 +389,24 @@ impl TestCase {
             name: name.into(),
             description: description.into(),
             test_fn: Arc::new(test_fn),
+            timeout: Duration::from_secs(30),
         }
+    }
+
+    /// Override the default 30-second case timeout for a test whose protocol
+    /// deliberately waits on a longer bounded transition.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     pub async fn run(&self, ctx: &TestContext) -> TestResult {
         let start = Instant::now();
 
         // Timeout control
-        match tokio::time::timeout(Duration::from_secs(30), (self.test_fn)(ctx.clone())).await {
+        match tokio::time::timeout(self.timeout, (self.test_fn)(ctx.clone())).await {
             Ok(result) => result,
-            Err(_) => TestResult::failed(start.elapsed(), "Test timed out after 30 seconds".to_string()),
+            Err(_) => TestResult::failed(start.elapsed(), format!("Test timed out after {:?}", self.timeout)),
         }
     }
 }

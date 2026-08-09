@@ -12,6 +12,6 @@ spec:
     consecutiveErrors: 2
     consecutiveGatewayErrors: 2
     consecutiveLocalOriginFailures: 2
-    ejectionTime: 1s
-    maxEjectionTime: 1s
+    ejectionTime: 10s
+    maxEjectionTime: 10s
     maxEjectionPercent: 100

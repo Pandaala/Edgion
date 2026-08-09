@@ -431,7 +431,7 @@ fn half_open_single_probe_recovers_primary(
         if let Err(error) = set_half_open_mode(&ctx, &fixture_id, "probe-success").await {
             return TestResult::failed(start.elapsed(), error);
         }
-        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        tokio::time::sleep(Duration::from_millis(10_200)).await;
 
         let concurrent = (0..8)
             .map(|sequence| {
@@ -571,7 +571,8 @@ impl TestSuite for ResilienceTestSuite {
                 "half_open_single_probe_recovers_primary",
                 "Only one concurrent request probes a half-open primary before recovery",
                 half_open_single_probe_recovers_primary,
-            ),
+            )
+            .with_timeout(Duration::from_secs(120)),
         ]
     }
 }
