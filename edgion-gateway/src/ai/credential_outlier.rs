@@ -106,12 +106,23 @@ impl AiCredentialOutlierHandle {
     }
 
     pub fn record_failure(&self, class: FailureClass) -> FailureTransition {
+        let Some(candidate) = self.state.record_failure_candidate(class) else {
+            return FailureTransition::None;
+        };
+        if self
+            .service
+            .config
+            .as_ref()
+            .is_some_and(|config| config.max_ejection_percent == 0)
+        {
+            return self.state.finish_failure(candidate, true);
+        }
         let _guard = self
             .service
             .eject_lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.state.record_failure(class, self.service.failure_allowed())
+        self.state.finish_failure(candidate, self.service.failure_allowed())
     }
 
     pub fn record_success(&self) {

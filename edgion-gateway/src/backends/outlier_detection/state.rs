@@ -66,6 +66,14 @@ pub enum FailureTransition {
     Opened,
 }
 
+/// Opaque proof that a recorded failure reached an ejection threshold in one
+/// state generation. Wrappers use it to defer shared percent arbitration until
+/// an endpoint is actually eligible to open.
+#[derive(Debug)]
+pub(crate) struct FailureCandidate {
+    generation: u64,
+}
+
 /// Admission result for a target using half-open recovery.
 pub enum EjectionAdmission {
     Closed,
@@ -175,12 +183,21 @@ impl PassiveEjectionState {
     /// max-ejection-percent arbitration. Counters still advance when opening is
     /// denied, matching the existing Service behavior.
     pub fn record_failure(&self, class: FailureClass, allow_open: bool) -> FailureTransition {
-        let Some(config) = self.config.as_ref() else {
+        let Some(candidate) = self.record_failure_candidate(class) else {
             return FailureTransition::None;
+        };
+        self.finish_failure(candidate, allow_open)
+    }
+
+    /// Advance the endpoint-local counter and return a generation-bound
+    /// candidate only when an ejection threshold is reached.
+    pub(crate) fn record_failure_candidate(&self, class: FailureClass) -> Option<FailureCandidate> {
+        let Some(config) = self.config.as_ref() else {
+            return None;
         };
         let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if state.effective_open_until().is_some() {
-            return FailureTransition::None;
+            return None;
         }
         match class {
             FailureClass::Application => state.app_failures = state.app_failures.saturating_add(1),
@@ -190,7 +207,26 @@ impl PassiveEjectionState {
         let threshold_reached = state.app_failures >= config.consecutive_errors
             || state.gateway_failures >= config.consecutive_gateway_errors
             || state.local_origin_failures >= config.consecutive_local_origin_failures;
-        if !threshold_reached || !allow_open {
+        threshold_reached.then_some(FailureCandidate {
+            generation: state.generation,
+        })
+    }
+
+    /// Open a previously identified failure candidate after the wrapper has
+    /// completed shared percent arbitration. Revalidation prevents a stale
+    /// candidate from reopening state cleared by a concurrent success.
+    pub(crate) fn finish_failure(&self, candidate: FailureCandidate, allow_open: bool) -> FailureTransition {
+        if !allow_open {
+            return FailureTransition::None;
+        }
+        let Some(config) = self.config.as_ref() else {
+            return FailureTransition::None;
+        };
+        let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let threshold_reached = state.app_failures >= config.consecutive_errors
+            || state.gateway_failures >= config.consecutive_gateway_errors
+            || state.local_origin_failures >= config.consecutive_local_origin_failures;
+        if state.generation != candidate.generation || state.effective_open_until().is_some() || !threshold_reached {
             return FailureTransition::None;
         }
         state.num_ejections = state.num_ejections.saturating_add(1);
@@ -436,6 +472,18 @@ mod tests {
         );
 
         assert!(state.record_success());
+        assert!(matches!(state.admit(), EjectionAdmission::Closed));
+    }
+
+    #[test]
+    fn stale_failure_candidate_cannot_reopen_after_success() {
+        let state = PassiveEjectionState::new(Some(config()));
+        let candidate = state
+            .record_failure_candidate(FailureClass::Gateway)
+            .expect("threshold-one failure must become a candidate");
+
+        assert!(!state.record_success());
+        assert_eq!(state.finish_failure(candidate, true), FailureTransition::None);
         assert!(matches!(state.admit(), EjectionAdmission::Closed));
     }
 }

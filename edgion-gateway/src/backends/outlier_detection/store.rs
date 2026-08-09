@@ -3,6 +3,8 @@ use super::config::OutlierDetectionResolved;
 use super::state::ejection_duration;
 use super::state::{FailureClass, FailureTransition, PassiveEjectionState};
 use dashmap::DashMap;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 
 static OD_STORE: LazyLock<Arc<OutlierDetectionStore>> = LazyLock::new(|| Arc::new(OutlierDetectionStore::new()));
@@ -18,6 +20,8 @@ struct ServiceCbState {
     /// concurrent calls for distinct backends from both passing the max-ejection-percent
     /// guard simultaneously and over-ejecting beyond the configured limit.
     eject_lock: std::sync::Mutex<()>,
+    #[cfg(test)]
+    percent_arbitrations: AtomicUsize,
 }
 
 impl ServiceCbState {
@@ -28,6 +32,8 @@ impl ServiceCbState {
             config,
             endpoints: DashMap::new(),
             eject_lock: std::sync::Mutex::new(()),
+            #[cfg(test)]
+            percent_arbitrations: AtomicUsize::new(0),
         })
     }
 }
@@ -126,24 +132,32 @@ impl OutlierDetectionStore {
                 .value(),
         );
 
-        // Steps 2+3 under eject_lock so concurrent failures for distinct backends
-        // cannot both pass the percent check and exceed max_ejection_percent.
-        let _eject_guard = svc.eject_lock.lock().unwrap_or_else(|e| e.into_inner());
-
-        let allow_ejection = if svc.config.max_ejection_percent > 0 {
-            let effective_total = if total_endpoints > 0 {
-                total_endpoints
-            } else {
-                svc.endpoints.len().max(1)
-            };
-            let currently_ejected = svc.endpoints.iter().filter(|entry| entry.value().is_open()).count();
-            let max_ejectable = (effective_total as u64 * svc.config.max_ejection_percent as u64 / 100) as usize;
-            currently_ejected < max_ejectable.max(1)
-        } else {
-            true
+        let Some(candidate) = endpoint.record_failure_candidate(class) else {
+            return;
         };
 
-        if endpoint.record_failure(class, allow_ejection) == FailureTransition::Opened {
+        if svc.config.max_ejection_percent == 0 {
+            if endpoint.finish_failure(candidate, true) == FailureTransition::Opened {
+                crate::observe::metrics::record_cb_ejection(service_key, class.metric_label());
+            }
+            return;
+        }
+
+        // Percent check + open stay under eject_lock so concurrent candidates
+        // for distinct backends cannot exceed max_ejection_percent.
+        let _eject_guard = svc.eject_lock.lock().unwrap_or_else(|e| e.into_inner());
+        #[cfg(test)]
+        svc.percent_arbitrations.fetch_add(1, Ordering::Relaxed);
+        let effective_total = if total_endpoints > 0 {
+            total_endpoints
+        } else {
+            svc.endpoints.len().max(1)
+        };
+        let currently_ejected = svc.endpoints.iter().filter(|entry| entry.value().is_open()).count();
+        let max_ejectable = (effective_total as u64 * svc.config.max_ejection_percent as u64 / 100) as usize;
+        let allow_ejection = currently_ejected < max_ejectable.max(1);
+
+        if endpoint.finish_failure(candidate, allow_ejection) == FailureTransition::Opened {
             crate::observe::metrics::record_cb_ejection(service_key, class.metric_label());
         }
     }
@@ -327,6 +341,24 @@ mod tests {
 
         store.record_failure("default/svc1", 222, 2, FailureClass::Gateway);
         assert!(!store.is_ejected("default/svc1", 222));
+    }
+
+    #[test]
+    fn percent_arbitration_runs_only_for_ejection_candidates() {
+        let store = OutlierDetectionStore::new();
+        store.set_service_config("default/svc1", Some(make_config(3, 3, 30, 300, 50)));
+        let service = Arc::clone(store.services.get("default/svc1").unwrap().value());
+
+        store.record_failure("default/svc1", 111, 2, FailureClass::Gateway);
+        store.record_failure("default/svc1", 111, 2, FailureClass::Gateway);
+        assert_eq!(service.percent_arbitrations.load(Ordering::Relaxed), 0);
+
+        store.record_failure("default/svc1", 111, 2, FailureClass::Gateway);
+        assert_eq!(service.percent_arbitrations.load(Ordering::Relaxed), 1);
+        assert!(store.is_ejected("default/svc1", 111));
+
+        store.record_failure("default/svc1", 111, 2, FailureClass::Gateway);
+        assert_eq!(service.percent_arbitrations.load(Ordering::Relaxed), 1);
     }
 
     #[test]
