@@ -15,6 +15,26 @@ pub mod edgion {
     /// Value: "v2" to enable PP2.
     pub const PROXY_PROTOCOL: &str = "edgion.io/proxy-protocol";
 
+    /// Expect an inbound PROXY protocol header (v1 and v2 are auto-detected) on
+    /// every connection accepted by this Gateway's listeners, as sent by an L4
+    /// load balancer such as AWS NLB. The addresses it carries replace the peer
+    /// address seen by the whole request path.
+    ///
+    /// Lives on `Gateway.metadata.annotations`; value `"true"` enables it. A
+    /// per-listener form `edgion.io/accept-proxy-protocol.<listener-name>`
+    /// overrides the Gateway-wide value for one listener, since a Gateway API
+    /// `Listener` carries no annotations of its own.
+    ///
+    /// This is the **inbound** direction and is unrelated to [`PROXY_PROTOCOL`]
+    /// above, which makes Edgion *send* a header to the upstream.
+    ///
+    /// The header is unauthenticated: anything able to reach the listener
+    /// directly can claim any source address, so only enable this where the
+    /// listener is reachable exclusively through the trusted load balancer.
+    /// A listener with it enabled rejects connections that do not start with a
+    /// valid header (HAProxy `accept-proxy` semantics).
+    pub const ACCEPT_PROXY_PROTOCOL: &str = "edgion.io/accept-proxy-protocol";
+
     /// Per-route opt-out / opt-in for upstream path forwarding view.
     /// Three-state on HTTPRoute.metadata.annotations:
     ///   "true"  — force raw forward (overrides global forward_normalized_path / region_route default)

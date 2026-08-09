@@ -31,10 +31,16 @@ These are read from `Gateway.metadata.annotations`, not per-listener metadata.
 | `edgion.io/dns-resolver` | `ip[:port]` list (comma/space-separated) | inherits `EdgionGatewayConfig.spec.dnsResolver` | Per-Gateway inline standard-DNS resolver for `ServiceExternalName` backends. **Data-plane only** (D3a): overrides the EGC default but not control-plane resolution. Mutually exclusive with `dns-resolver-ref`. |
 | `edgion.io/dns-resolver-ref` | `namespace/name` | inherits `EdgionGatewayConfig.spec.dnsResolver` | Per-Gateway httpdns LinkSys resolver reference. Explicit namespace required (bare names rejected). **Data-plane only**. A cross-namespace ref is ReferenceGrant-gated (from-kind `Gateway`, to-kind `edgion.io/LinkSys`); a denied ref is reported via `ResolvedRefs=False` and stripped before it reaches the data plane. Mutually exclusive with `dns-resolver`. |
 
+| `edgion.io/accept-proxy-protocol` | `"true"` / `"false"` | disabled | **Inbound** PROXY protocol. Only case-insensitive `true` enables. Every listener of the Gateway then requires a PROXY header (v1 and v2 auto-detected) at the start of each connection, as sent by an L4 load balancer such as AWS NLB; the addresses it carries replace the peer address for the whole request path. Connections without a valid header are rejected (HAProxy `accept-proxy` semantics). Applies to HTTP, HTTPS, TCP, and TLS listeners — the header is consumed before the TLS handshake. Not applicable to UDP. Read once at listener-bind time, so changing it needs a gateway restart. Runtime path is in `listener_builder.rs`. |
+| `edgion.io/accept-proxy-protocol.<listener-name>` | `"true"` / `"false"` | inherits the Gateway-wide key | Overrides `accept-proxy-protocol` for the single listener with that `spec.listeners[].name`. Exists because a Gateway API `Listener` carries no annotations of its own. |
+
 Important:
 
 - `metrics-test-*` keys are meant for integration testing and diagnostics, not normal production config.
 - `edgion.io/edgion-stream-plugins` is the current key used by the runtime path. Older docs used `edgion.io/stream-plugins`.
+- `edgion.io/accept-proxy-protocol` (inbound, on `Gateway`) and `edgion.io/proxy-protocol` (outbound, on `TLSRoute`) are opposite directions and unrelated. Do not confuse them.
+- A PROXY header is unauthenticated, so anything that can reach the listener directly can claim any source address. Enable `accept-proxy-protocol` only where the listener is reachable exclusively through the trusted load balancer, enforced at the network layer, and never on a listener that also serves kubelet probes — those reach the pod directly and carry no header.
+- `edgion.io/edgion-stream-plugins` runs at accept time, **before** the PROXY header is parsed, so its IP rules match the load balancer rather than the real client. The gateway logs a warning when both are enabled on one listener.
 - Gateway-level StreamPlugins attachments are intentionally same-namespace. To reuse centrally managed lists or selectors across per-namespace policies, reference a shared `EdgionConfigData` from each local `EdgionStreamPlugins`; those cross-namespace data references use the existing `ReferenceGrant` and `visibility` controls.
 
 ## Log Projection Annotations

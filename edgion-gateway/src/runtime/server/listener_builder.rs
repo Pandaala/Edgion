@@ -8,7 +8,7 @@ use crate::runtime::ServerHeaderOpts;
 use anyhow::{Context, Result};
 use pingora_core::apps::HttpServerOptions;
 use pingora_core::connectors::TransportConnector;
-use pingora_core::listeners::Listeners;
+use pingora_core::listeners::{Listeners, TcpSocketOptions};
 use pingora_core::server::configuration::ServerConf;
 use pingora_core::server::Server;
 use pingora_core::services::listening::Service;
@@ -73,6 +73,54 @@ fn probe_tcp_bind(addr: &str, gateway_key: &str, listener_name: &str) -> Result<
     Ok(())
 }
 
+/// Whether this listener must expect an inbound PROXY protocol header.
+///
+/// A Gateway API `Listener` carries no annotations of its own, so the
+/// per-listener key `edgion.io/accept-proxy-protocol.<listener-name>` is
+/// consulted first and falls back to the Gateway-wide key.
+fn accept_proxy_protocol(context: &ListenerContext) -> bool {
+    let per_listener = format!("{}.{}", edgion::ACCEPT_PROXY_PROTOCOL, context.listener.name);
+    context
+        .gateway_annotations
+        .get(&per_listener)
+        .or_else(|| context.gateway_annotations.get(edgion::ACCEPT_PROXY_PROTOCOL))
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Socket options for this listener, or `None` when there is nothing to set.
+///
+/// Returning `None` rather than a defaulted struct keeps the bind path
+/// byte-for-byte what it was before PROXY protocol support existed.
+fn tcp_sock_opts(context: &ListenerContext) -> Option<TcpSocketOptions> {
+    accept_proxy_protocol(context).then(|| {
+        // `TcpSocketOptions` is `#[non_exhaustive]`, so a struct expression is
+        // rejected across crates even with `..Default::default()`.
+        let mut opts = TcpSocketOptions::default();
+        opts.proxy_protocol = true;
+        opts
+    })
+}
+
+/// Bind a plain TCP endpoint on a service, honouring the PROXY protocol flag.
+fn add_tcp_endpoint<A>(service: &mut Service<A>, addr: &str, context: &ListenerContext) {
+    match tcp_sock_opts(context) {
+        Some(opts) => service.add_tcp_with_settings(addr, opts),
+        None => service.add_tcp(addr),
+    }
+}
+
+/// Build a single-endpoint [`Listeners`] for the services that construct their
+/// own listener set instead of using [`Service::add_tcp`].
+fn tcp_listeners(addr: &str, context: &ListenerContext) -> Listeners {
+    let mut listeners = Listeners::new();
+    match tcp_sock_opts(context) {
+        Some(opts) => listeners.add_tcp_with_settings(addr, opts),
+        None => listeners.add_tcp(addr),
+    }
+    listeners
+}
+
 /// Add an HTTP or HTTPS listener to the Pingora server
 ///
 /// This function creates an HTTP proxy service and adds it to the server
@@ -114,7 +162,7 @@ pub fn add_http_listener(
         let mut http_service = http_proxy_service(&context.server_conf, redirect_handler);
         apply_connection_filter(&mut http_service, context);
         probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
-        http_service.add_tcp(&addr);
+        add_tcp_endpoint(&mut http_service, &addr, context);
 
         tracing::info!(
             gateway=%context.gateway_key,
@@ -236,7 +284,7 @@ pub fn add_http_listener(
                 tls_settings.enable_h2();
             }
             probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
-            http_service.add_tls_with_settings(&addr, None, tls_settings);
+            http_service.add_tls_with_settings(&addr, tcp_sock_opts(context), tls_settings);
             let protocol = if enable_http2 {
                 "HTTPS (HTTP/2 enabled)"
             } else {
@@ -257,7 +305,7 @@ pub fn add_http_listener(
         }
     } else {
         probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
-        http_service.add_tcp(&addr);
+        add_tcp_endpoint(&mut http_service, &addr, context);
         let protocol = if enable_http2 { "HTTP (h2c enabled)" } else { "HTTP" };
         tracing::info!(
             gateway=%context.gateway_key,
@@ -291,7 +339,11 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
     };
 
     probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
-    let mut tcp_service = Service::with_listeners(format!("TCP-{}", listener_name), Listeners::tcp(&addr), edgion_tcp);
+    let mut tcp_service = Service::with_listeners(
+        format!("TCP-{}", listener_name),
+        tcp_listeners(&addr, context),
+        edgion_tcp,
+    );
 
     apply_connection_filter(&mut tcp_service, context);
 
@@ -388,7 +440,7 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
     probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
     // Only bind the TLS endpoint; Listeners::tcp() would bind a plain TCP socket
     // on the same port, causing EEXIST when add_tls_with_settings tries to bind again.
-    tls_service.add_tls_with_settings(&addr, None, tls_settings);
+    tls_service.add_tls_with_settings(&addr, tcp_sock_opts(context), tls_settings);
 
     server.add_service(tls_service);
 
@@ -427,7 +479,7 @@ pub fn add_tls_passthrough_listener(server: &mut Server, context: &ListenerConte
     probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
     let mut service = Service::with_listeners(
         format!("TLS-Passthrough-{}", listener_name),
-        Listeners::tcp(&addr),
+        tcp_listeners(&addr, context),
         proxy,
     );
 
@@ -451,6 +503,24 @@ pub fn add_tls_passthrough_listener(server: &mut Server, context: &ListenerConte
 /// This function dispatches to the appropriate listener builder based on the
 /// protocol specified in the listener configuration.
 pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()> {
+    if accept_proxy_protocol(&context) {
+        tracing::info!(
+            gateway=%context.gateway_key,
+            listener=%context.listener.name,
+            port=%context.listener.port,
+            "Inbound PROXY protocol enabled; connections not starting with a valid header are rejected"
+        );
+        // The connection filter runs at accept time, before the PROXY header is
+        // parsed, so its IP rules match the load balancer rather than the client.
+        if context.gateway_annotations.contains_key(edgion::EDGION_STREAM_PLUGINS) {
+            tracing::warn!(
+                gateway=%context.gateway_key,
+                listener=%context.listener.name,
+                "edgion-stream-plugins runs before the PROXY header is read, so its IP rules see the load balancer address, not the real client"
+            );
+        }
+    }
+
     match context.listener.protocol.to_uppercase().as_str() {
         "HTTP" => add_http_listener(server, &context, false, context.enable_http2),
         "HTTPS" => add_http_listener(server, &context, true, context.enable_http2),

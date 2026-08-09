@@ -401,9 +401,16 @@ refs and enforces the cross-resource exactly-one rule. HTTPRoute reconcile clear
 and registers every rule-level EdgionPlugins ExtensionRef. EdgionPlugins apply/delete requeues only
 referencing HTTPRoutes through their serialized workqueue, so missing/create, content changes, and
 delete self-heal the route status.
-Violations set the route `Accepted=False` with `UnsupportedValue` and a bounded reason covering
-missing AiProxy, duplicate AiProxy, mixed forwarding kinds, unsupported AI backendRef filters, or
-invalid CostWeighted structural attachment. Request-specific model/price coverage is checked at runtime
+Violations always drop the offending rule from the gateway runtime and carry a bounded reason
+covering missing AiProxy, duplicate AiProxy, mixed forwarding kinds, unsupported AI backendRef
+filters, or invalid CostWeighted structural attachment. The status condition follows the HTTPRoute
+per-rule precedent: while any rule of the route still serves, the reason rides
+`PartiallyInvalid=True/RuleInvalid` with `(N of M rules active)` and `Accepted` is untouched; only
+when no rule serves any more is the route set `Accepted=False` with `UnsupportedValue` listing every
+reason (and `PartiallyInvalid` is then never `True` — an earlier `True` is cleared to `False` — so
+the two conditions never contradict each other).
+Route-level `Accepted=False` drops the whole route from the data plane, so it must not be triggered
+by a per-rule finding while valid sibling rules remain. Request-specific model/price coverage is checked at runtime
 because the logical model is not known during reconciliation. Under the project's lenient CRD
 admission policy, "rejected" means this
 status plus omission from the gateway runtime, not Kubernetes API admission rejection. Gateway
@@ -465,10 +472,12 @@ loop.
 - Minimum delay: existing `HTTPRoute.retry.backoff`.
 
 `HTTPRoute.retry.attempts` means retries, so total attempts are `1 + attempts`. Edgion supports at
-most seven retries and eight total attempts. A route above seven becomes `Accepted=False` with
-`UnsupportedValue`; the gateway also rejects it defensively. The global fallback is capped to the
-same value. One exclusive AI retry branch consumes this shared ceiling, so route retry, provider
-failover, and credential rotation cannot each create their own attempt budget.
+most seven retries and eight total attempts. A rule above seven is dropped from the gateway runtime
+and reported through the per-rule status escalation described under AiProxy attachment above
+(`PartiallyInvalid` while sibling rules serve, `Accepted=False/UnsupportedValue` once none do); the
+gateway also rejects it defensively. The global fallback is capped to the same value. One exclusive
+AI retry branch consumes this shared ceiling, so route retry, provider failover, and credential
+rotation cannot each create their own attempt budget.
 
 Selection uses bounded rounds. Within a round, the AiProxy picker chooses an untried service;
 credentials rotate by weight within that service before the service is excluded and the picker runs

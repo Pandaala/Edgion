@@ -92,6 +92,19 @@ adds its own targeted tests before the next layer starts.
 - Final project checks in AGENTS.md order, plus CRD coverage, gateway no-tracing, English-only, and
   targeted AI integration suites.
 
+### Execution record (2026-08-04)
+
+| Gate | Command / suite | Result |
+|------|-----------------|--------|
+| CRD coverage | `cargo test -p edgion-resources --test crd_coverage` | 10 passed |
+| Gateway AI unit | `cargo test -p edgion-gateway -- ai::` | 139 passed |
+| Redis reservation | `cargo test -p edgion-tests --test credential_reservation_redis -- --ignored` | 1 passed |
+| Resilience integ | `run_integration.sh -r EdgionAIService -i Resilience` | 3/3 passed |
+| CredentialExhaustion integ | `run_integration.sh --no-prepare -r EdgionAIService -i CredentialExhaustion` | 2/2 passed |
+| Pre-commit | fmt, check, clippy, validate_agent_docs, check_ssa_force, check_metrics_inventory, check_pingora_source_policy | all exit 0 |
+
+Hot reload: no dedicated AI-3 dynamic suite; covered by existing SingleProvider DynamicTest secret rotation only.
+
 ## Commit boundaries
 
 1. Shared schema and CRD changes.
@@ -101,3 +114,4 @@ adds its own targeted tests before the next layer starts.
 5. Integration tests and documentation.
 
 Every boundary must build and pass its targeted tests. Commits stay local and are never pushed.
+Awaiting explicit user instruction before any `git commit`.

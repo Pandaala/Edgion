@@ -5,7 +5,7 @@
 | Key | Value |
 |-----|-------|
 | Created | 2026-08-04 |
-| Status | in-progress |
+| Status | in-progress (verification done; awaiting local commit) |
 | Type | feature |
 | Priority | P0 |
 | Issue | N/A |
@@ -56,9 +56,11 @@ and stop permanently once a final downstream response is committed.
 |----------|--------|-------|
 | `00-context.md` | done | Skills and code entry points |
 | `01-design.md` | done | Approved architecture and schema |
-| `02-implementation.md` | done | Phased implementation and verification plan |
+| `02-implementation.md` | done | Phased implementation and verification plan + execution record |
 | `03-subtasks.md` | active | Ordered implementation checklist |
 | `06-decisions.md` | done | Agent findings and approved decisions |
+| `07-changelog.md` | done | Verification milestone |
+| `HANDOFF.md` | active | Session base / takeover entry — read first |
 
 ## Affected modules
 

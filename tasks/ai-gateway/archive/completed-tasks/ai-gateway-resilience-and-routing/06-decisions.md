@@ -85,8 +85,11 @@ The following points are frozen for implementation:
 7. Credential TPM is strict reservation-based admission using the request/service maximum-output
    bound. A credential with TPM configured but no resolvable bound is invalid; ambiguous dispatched
    outcomes and crashes retain the full conservative reservation until its Redis window expires.
-8. AI routes support at most seven retries/eight total attempts. Higher HTTPRoute values are
-   `Accepted=False`, and the gateway enforces the same ceiling defensively.
+8. AI routes support at most seven retries/eight total attempts. A rule above the ceiling is always
+   dropped from the data plane, and the gateway enforces the same ceiling defensively. Its status
+   condition follows the HTTPRoute per-rule precedent: `PartiallyInvalid` while sibling rules still
+   serve, escalating to `Accepted=False/UnsupportedValue` only when the route serves nothing —
+   `Accepted=False` removes the entire route, so a per-rule finding must not raise it on its own.
 9. Unknown-model passthrough is limited to stateless `Weighted` and `Priority`; adaptive and
    price-based pickers require a bounded declared model catalog.
 10. `tokenQuota.onExceeded` is an explicit tagged action: default `Reject`, bounded one-shot

@@ -37,6 +37,17 @@ If the placement is wrong, the code path and the documentation usually drift wit
 | `edgion.io/metrics-test-key` | Integration-test metrics correlation key |
 | `edgion.io/metrics-test-type` | Integration-test metrics mode |
 | `edgion.io/edgion-stream-plugins` | Gateway-level connection-filter entry |
+| `edgion.io/accept-proxy-protocol` | Expect an inbound PROXY protocol header (v1/v2 auto-detected) on every listener of this Gateway, as sent by an L4 load balancer such as AWS NLB. The addresses it carries replace the peer address the whole request path sees. Connections without a valid header are rejected. **Inbound only** — unrelated to `edgion.io/proxy-protocol` below, which *sends* a header upstream |
+| `edgion.io/accept-proxy-protocol.<listener-name>` | Overrides the Gateway-wide value for one listener (a Gateway API `Listener` has no annotations of its own) |
+
+> **Trust:** a PROXY protocol header is unauthenticated, so anything that can
+> reach the listener directly can claim any source address. Only enable
+> `accept-proxy-protocol` where the listener is reachable exclusively through the
+> trusted load balancer, and enforce that at the network layer. Never enable it on
+> a listener that also serves kubelet probes — those hit the pod directly and
+> carry no header. Note also that `edgion.io/edgion-stream-plugins` runs before
+> the header is parsed, so its IP rules match the load balancer, not the client.
+> See `tasks/proxy-protocol-inbound.md`.
 
 ### Route / TLS / Backend
 
