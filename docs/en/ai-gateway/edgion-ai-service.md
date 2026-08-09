@@ -62,11 +62,12 @@ at most six decimal places, and cannot exceed 1,000,000 USD per million tokens.
 | Condition | Meaning |
 |-----------|---------|
 | `Accepted=False/Invalid` | Invalid endpoint, pool, model, pricing, or default |
-| `ResolvedRefs=False` | Zero usable credentials |
+| `ResolvedRefs=False` | At least one credential Secret is missing, denied, or invalid |
 | `PartiallyInvalid=True/InvalidCredentials` | Usable subset is active; omitted aliases appear in a bounded reason |
 
 Secret resolution is partial-good: if some credentials resolve, Edgion serves with those entries.
-If none resolve, the service is inactive and requests fail closed with 503.
+`ResolvedRefs` remains false until every reference resolves. If none resolve, the service is
+inactive and requests fail closed with 503.
 
 ## Related
 

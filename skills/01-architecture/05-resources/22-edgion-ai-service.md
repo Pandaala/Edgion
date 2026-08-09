@@ -52,10 +52,12 @@ real value over its trusted channel.
 ## Status
 
 - `Accepted=False/Invalid` reports structural validation errors.
-- `ResolvedRefs=True` means at least one credential is usable.
+- `ResolvedRefs=True` means every credential reference resolved successfully.
 - `PartiallyInvalid=True/InvalidCredentials` reports a bounded count plus credential aliases and
-  fixed reason enums for omitted credentials.
-- `ResolvedRefs=False` means no credential is usable, so the Gateway deactivates the service.
+  fixed reason enums for omitted credentials. It can coexist with `ResolvedRefs=False` while the
+  remaining usable credentials keep the service active.
+- `ResolvedRefs=False` means one or more credential references failed. The Gateway deactivates the
+  service only when no credential remains usable.
 
 Route `ResolvedRefs` is intentionally separate: an existing and authorized EdgionAIService is a
 resolved backendRef even when its own credentials are unresolved. Requests then fail closed with a

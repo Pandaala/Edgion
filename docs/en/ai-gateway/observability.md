@@ -49,5 +49,5 @@ Details: [Metrics](../ops-guide/observability/metrics.md) ·
 | HTTPRoute `PartiallyInvalid=True/RuleInvalid` | The same AI attachment errors, but other rules of the route still serve; the message reports `(N of M rules active)` |
 | HTTPRoute `ResolvedRefs=False` | Missing, unauthorized, or unsupported backendRef |
 | EdgionAIService `Accepted=False/Invalid` | Invalid endpoint, pool, model, or default |
-| EdgionAIService `ResolvedRefs=False` | Zero usable credentials |
+| EdgionAIService `ResolvedRefs=False` | At least one credential Secret is missing, denied, or invalid; the service stays active if another credential is usable |
 | EdgionAIService `PartiallyInvalid=True` | Usable subset is active; check bounded invalid credential aliases |

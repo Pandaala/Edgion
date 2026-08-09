@@ -174,9 +174,7 @@ impl ProcessorHandler<EdgionAIService> for EdgionAIServiceHandler {
         let generation = service.metadata.generation;
         let status = service.status.get_or_insert_with(EdgionAIServiceStatus::default);
         let resolved_errors = errors.iter().map(|(_, error)| error.clone()).collect::<Vec<_>>();
-        let resolved_refs = if resolved_count > 0 {
-            resolved_refs_condition(&[], generation)
-        } else if resolved_errors.is_empty() {
+        let resolved_refs = if resolved_errors.is_empty() && resolved_count == 0 {
             condition_false(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::INVALID,
@@ -393,7 +391,9 @@ mod tests {
 
         assert!(parsed.spec.credential_pool.credentials[0].credential.secret.is_some());
         assert!(parsed.spec.credential_pool.credentials[1].credential.secret.is_none());
-        assert_eq!(condition(&parsed, condition_types::RESOLVED_REFS).status, "True");
+        let resolved = condition(&parsed, condition_types::RESOLVED_REFS);
+        assert_eq!(resolved.status, "False");
+        assert_eq!(resolved.reason, condition_reasons::SECRET_NOT_FOUND);
         let partially_invalid = condition(&parsed, condition_types::PARTIALLY_INVALID);
         assert_eq!(partially_invalid.status, "True");
         assert_eq!(partially_invalid.reason, condition_reasons::INVALID_CREDENTIALS);
@@ -405,6 +405,36 @@ mod tests {
         assert!(!partially_invalid.message.contains("private-value"));
         assert_eq!(ctx.secret_ref_manager().get_refs("tenant-a/primary-key").len(), 1);
         assert_eq!(ctx.secret_ref_manager().get_refs("tenant-a/missing-key").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn partially_resolved_pool_reports_cross_namespace_denial() {
+        let (local_key, local_secret) = secret("tenant-a", "primary-key", Some("Opaque"), Some(b"private-value"));
+        let (shared_key, shared_secret) = secret("shared", "standby-key", Some("Opaque"), Some(b"standby-value"));
+        let (ctx, _) = context(HashMap::from([(local_key, local_secret), (shared_key, shared_secret)]));
+        let parsed = parse(
+            &EdgionAIServiceHandler::new(),
+            service_with_credentials(vec![
+                credential("primary", "primary-key", None),
+                credential("standby", "standby-key", Some("shared")),
+            ]),
+            &ctx,
+        )
+        .await;
+
+        assert!(parsed.spec.credential_pool.credentials[0].credential.secret.is_some());
+        assert!(parsed.spec.credential_pool.credentials[1].credential.secret.is_none());
+        let resolved = condition(&parsed, condition_types::RESOLVED_REFS);
+        assert_eq!(resolved.status, "False");
+        assert_eq!(resolved.reason, condition_reasons::REF_NOT_PERMITTED);
+        let partially_invalid = condition(&parsed, condition_types::PARTIALLY_INVALID);
+        assert_eq!(partially_invalid.status, "True");
+        assert_eq!(partially_invalid.reason, condition_reasons::INVALID_CREDENTIALS);
+        assert_eq!(
+            partially_invalid.message,
+            "Omitted credentials (1): standby(RefNotPermitted)"
+        );
+        assert_eq!(ctx.secret_ref_manager().get_refs("shared/standby-key").len(), 1);
     }
 
     #[tokio::test]

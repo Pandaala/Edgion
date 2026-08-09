@@ -233,8 +233,8 @@ logical model, and repeats eligibility and quota admission.
 | Condition | Meaning |
 |-----------|---------|
 | `Accepted` | Static provider, endpoint, pool, model, pricing, and default validation |
-| `ResolvedRefs` | At least one credential Secret is usable |
-| `PartiallyInvalid` | Some credentials were omitted; reason `InvalidCredentials` contains bounded aliases and fixed reason enums |
+| `ResolvedRefs` | Every credential Secret reference resolved; any missing, denied, or invalid Secret makes this condition false |
+| `PartiallyInvalid` | Some credentials were omitted while a usable subset remains active; reason `InvalidCredentials` contains bounded aliases and fixed reason enums |
 
 All conditions carry `observedGeneration`. Secret rotation and corrected refs affect fresh requests
 after normal Controller-to-Gateway synchronization without restarting either binary.
