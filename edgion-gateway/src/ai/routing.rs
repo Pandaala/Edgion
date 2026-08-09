@@ -456,6 +456,28 @@ mod tests {
     }
 
     #[test]
+    fn lowest_latency_selects_the_fastest_mature_candidate() {
+        let mut candidates = [candidate(0, 0, 100), candidate(1, 1, 1)];
+        candidates[0].adaptive = AdaptiveSnapshot {
+            latency_p50_micros: Some(50),
+            latency_samples: 8,
+            charged_tokens_60s: 0,
+        };
+        candidates[1].adaptive = AdaptiveSnapshot {
+            latency_p50_micros: Some(10),
+            latency_samples: 8,
+            charged_tokens_60s: 0,
+        };
+
+        assert!((0..128).all(|entropy| {
+            pick(input(&candidates, entropy), AiBackendSelection::LowestLatency)
+                .expect("a mature candidate must be selected")
+                .slot
+                == 1
+        }));
+    }
+
+    #[test]
     fn lowest_usage_uses_weighted_capacity_score_and_order_tie() {
         let mut candidates = [candidate(0, 5, 1), candidate(1, 1, 2), candidate(2, 0, 1)];
         candidates[0].adaptive.charged_tokens_60s = 100;
