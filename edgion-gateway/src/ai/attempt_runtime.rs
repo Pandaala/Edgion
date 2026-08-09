@@ -218,6 +218,7 @@ struct CredentialReservationLease {
     ttl: Duration,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettlementOperation {
     Release,
     Reconcile(u64),
@@ -239,6 +240,8 @@ pub struct AiAttemptRuntimeState {
     metric_totals: Vec<AiAttemptTokenTotals>,
     attempts: Vec<GenAiAttempt>,
     attempts_truncated: bool,
+    #[cfg(test)]
+    settlement_decisions: Vec<SettlementOperation>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -352,6 +355,11 @@ impl AiAttemptRuntimeState {
     pub(crate) fn record_test_attempt(&mut self, entry: GenAiAttempt, provider: AiProviderLabel) {
         self.ever_dispatched = true;
         self.commit_ledger(Some(entry), provider, None, None);
+    }
+
+    #[cfg(test)]
+    fn settlement_decisions_for_test(&self) -> &[SettlementOperation] {
+        &self.settlement_decisions
     }
 
     pub fn finish_predispatch(&mut self) {
@@ -521,6 +529,8 @@ impl AiAttemptRuntimeState {
     }
 
     fn push(&mut self, reservation: Option<CredentialReservationLease>, operation: SettlementOperation) {
+        #[cfg(test)]
+        self.settlement_decisions.push(operation);
         if reservation.is_none() {
             return;
         }
@@ -621,10 +631,8 @@ async fn settle(pending: PendingSettlement) {
     let Some(lease) = pending.reservation else {
         return;
     };
-    let operation = match pending.operation {
-        SettlementOperation::Release => CredentialReservationOperation::ReleasePredispatch,
-        SettlementOperation::Reconcile(charged_tokens) => CredentialReservationOperation::Reconcile { charged_tokens },
-        SettlementOperation::Retain => return,
+    let Some(operation) = redis_settlement_operation(pending.operation) else {
+        return;
     };
     let _ = tokio::time::timeout(
         REDIS_OPERATION_TIMEOUT,
@@ -633,6 +641,16 @@ async fn settle(pending: PendingSettlement) {
             .apply_credential_reservation(&lease.client, &lease.keys, lease.limits, lease.ttl, operation),
     )
     .await;
+}
+
+fn redis_settlement_operation(operation: SettlementOperation) -> Option<CredentialReservationOperation> {
+    match operation {
+        SettlementOperation::Release => Some(CredentialReservationOperation::ReleasePredispatch),
+        SettlementOperation::Reconcile(charged_tokens) => {
+            Some(CredentialReservationOperation::Reconcile { charged_tokens })
+        }
+        SettlementOperation::Retain => None,
+    }
 }
 
 pub fn new_eos_latch() -> Arc<AtomicBool> {
@@ -646,6 +664,48 @@ pub fn mark_eos(latch: &AtomicBool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn closed_outlier_handle() -> AiCredentialOutlierHandle {
+        use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+
+        let store = crate::ai::credential_outlier::AiCredentialOutlierStore::new();
+        let target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionAIService,
+            namespace: "default".to_string(),
+            name: "provider".to_string(),
+        };
+        store.configure_service(target.clone(), None, ["primary".to_string()]);
+        store
+            .current_handle(&target)
+            .and_then(|service| service.capture("primary"))
+            .expect("credential handle")
+    }
+
+    fn admission_input(
+        outlier: Option<AiCredentialOutlierHandle>,
+        limits: Option<AiCredentialLimits>,
+        on_redis_failure: OnRedisFailure,
+    ) -> AiAttemptAdmissionInput {
+        AiAttemptAdmissionInput {
+            namespace: "default".to_string(),
+            service_uid: "service-uid".to_string(),
+            credential_alias: "primary".to_string(),
+            service_name: "default/provider".to_string(),
+            provider: AiProviderLabel::OpenAiCompatible,
+            pricing: None,
+            redis_ref: None,
+            on_redis_failure,
+            limits,
+            estimated_input_tokens: 5,
+            max_output_tokens: 10,
+            usage: Arc::new(AiUsageShared::default()),
+            eos: new_eos_latch(),
+            outlier,
+            adaptive: None,
+            circuit_breaker: None,
+            limiter_core: Arc::new(RedisRateLimiter::new()),
+        }
+    }
 
     fn attempt(input: u64, output_chars: u64, eos: bool) -> AiAttemptRuntime {
         let usage = Arc::new(AiUsageShared::default());
@@ -735,6 +795,75 @@ mod tests {
         assert!(current.outlier.as_ref().is_some_and(|outlier| outlier.probe.is_some()));
         assert!(current.record_failure_once(FailureClass::LocalOrigin));
         assert!(matches!(handle.admit(), EjectionAdmission::Rejected));
+    }
+
+    #[tokio::test]
+    async fn successful_eos_completes_the_half_open_probe() {
+        let handle = closed_outlier_handle();
+        handle.force_expired_cooldown_for_test();
+        let EjectionAdmission::Probe(probe) = handle.admit() else {
+            panic!("expired credential must admit one half-open probe");
+        };
+        let mut current = attempt(1, 0, true);
+        current.status = Some(200);
+        current.outlier = Some(OutlierLease {
+            handle: handle.clone(),
+            probe: Some(probe),
+        });
+        let mut state = AiAttemptRuntimeState::default();
+        state.install(current);
+        state.finalize(None).await;
+        assert!(matches!(handle.admit(), EjectionAdmission::Closed));
+    }
+
+    #[tokio::test]
+    async fn admission_guards_active_overflow_outlier_and_redis_policy() {
+        let mut missing_outlier = AiAttemptRuntimeState::default();
+        assert!(matches!(
+            missing_outlier
+                .admit(admission_input(None, None, OnRedisFailure::Deny))
+                .await,
+            AiAttemptAdmission::Skip
+        ));
+
+        let handle = closed_outlier_handle();
+        let mut active = AiAttemptRuntimeState::default();
+        let AiAttemptAdmission::Ready(runtime) = active
+            .admit(admission_input(Some(handle.clone()), None, OnRedisFailure::Deny))
+            .await
+        else {
+            panic!("a closed credential without limits must be admitted");
+        };
+        active.install(runtime);
+        assert!(matches!(
+            active
+                .admit(admission_input(Some(handle.clone()), None, OnRedisFailure::Deny))
+                .await,
+            AiAttemptAdmission::DependencyDenied
+        ));
+
+        let limits = Some(AiCredentialLimits {
+            requests_per_minute: Some(1),
+            tokens_per_minute: None,
+        });
+        let mut fail_open = AiAttemptRuntimeState::default();
+        assert!(matches!(
+            fail_open
+                .admit(admission_input(
+                    Some(handle.clone()),
+                    limits.clone(),
+                    OnRedisFailure::Allow,
+                ))
+                .await,
+            AiAttemptAdmission::Ready(_)
+        ));
+        let mut fail_closed = AiAttemptRuntimeState::default();
+        assert!(matches!(
+            fail_closed
+                .admit(admission_input(Some(handle), limits, OnRedisFailure::Deny))
+                .await,
+            AiAttemptAdmission::DependencyDenied
+        ));
     }
 
     #[tokio::test]
@@ -862,6 +991,82 @@ mod tests {
         assert!(state.attempts().iter().all(|entry| entry.output_tokens == 0));
     }
 
+    #[tokio::test]
+    async fn attempt_outcomes_choose_the_expected_settlement_operation() {
+        let mut predispatch = AiAttemptRuntimeState::default();
+        predispatch.install(attempt(5, 0, false));
+        predispatch.finish_predispatch();
+        assert_eq!(
+            predispatch.settlement_decisions_for_test(),
+            [SettlementOperation::Release]
+        );
+
+        let mut known = AiAttemptRuntimeState::default();
+        known.install(attempt(5, 0, false));
+        known.finish_failure(AiAttemptFailure::Known(FailureClass::Gateway));
+        assert_eq!(
+            known.settlement_decisions_for_test(),
+            [SettlementOperation::Reconcile(5)]
+        );
+
+        for failure in [
+            AiAttemptFailure::Ambiguous(FailureClass::LocalOrigin),
+            AiAttemptFailure::BackendRequestTimeout,
+        ] {
+            let mut state = AiAttemptRuntimeState::default();
+            state.install(attempt(5, 0, false));
+            state.finish_failure(failure);
+            assert_eq!(state.settlement_decisions_for_test(), [SettlementOperation::Retain]);
+        }
+
+        let mut undispatched = AiAttemptRuntimeState::default();
+        let mut current = attempt(5, 0, false);
+        current.dispatched = false;
+        undispatched.install(current);
+        undispatched.finalize(None).await;
+        assert_eq!(
+            undispatched.settlement_decisions_for_test(),
+            [SettlementOperation::Release]
+        );
+
+        let mut complete = AiAttemptRuntimeState::default();
+        complete.install(attempt(5, 9, true));
+        complete.finalize(None).await;
+        assert_eq!(
+            complete.settlement_decisions_for_test(),
+            [SettlementOperation::Reconcile(8)]
+        );
+
+        let mut incomplete = AiAttemptRuntimeState::default();
+        incomplete.install(attempt(5, 9, false));
+        incomplete.finalize(None).await;
+        assert_eq!(
+            incomplete.settlement_decisions_for_test(),
+            [SettlementOperation::Retain]
+        );
+
+        let mut overflow = AiAttemptRuntimeState::default();
+        let overflowed = attempt(1, 0, true);
+        overflowed.usage.publish_reported_usage(u64::MAX, 1, 0, 0);
+        overflow.install(overflowed);
+        overflow.finalize(None).await;
+        assert_eq!(overflow.settlement_decisions_for_test(), [SettlementOperation::Retain]);
+        assert_eq!(overflow.charged_request_tokens(), Err(()));
+    }
+
+    #[test]
+    fn settlement_decisions_map_to_redis_operations() {
+        assert_eq!(
+            redis_settlement_operation(SettlementOperation::Release),
+            Some(CredentialReservationOperation::ReleasePredispatch)
+        );
+        assert_eq!(
+            redis_settlement_operation(SettlementOperation::Reconcile(7)),
+            Some(CredentialReservationOperation::Reconcile { charged_tokens: 7 })
+        );
+        assert_eq!(redis_settlement_operation(SettlementOperation::Retain), None);
+    }
+
     #[test]
     fn serialized_attempt_has_only_the_safe_bounded_schema() {
         let entry = GenAiAttempt {
@@ -935,8 +1140,8 @@ mod tests {
         assert!(state.attempts_truncated());
     }
 
-    #[test]
-    fn accounting_overflow_fails_closed_without_wrapping() {
+    #[tokio::test]
+    async fn accounting_overflow_fails_closed_without_wrapping() {
         let mut state = AiAttemptRuntimeState::default();
         state.install(attempt(u64::MAX, 0, false));
         state.mark_dispatched();
@@ -945,5 +1150,15 @@ mod tests {
         state.mark_dispatched();
         state.finish_failure(AiAttemptFailure::Ambiguous(FailureClass::LocalOrigin));
         assert_eq!(state.charged_request_tokens(), Err(()));
+        assert!(matches!(
+            state
+                .admit(admission_input(
+                    Some(closed_outlier_handle()),
+                    None,
+                    OnRedisFailure::Deny,
+                ))
+                .await,
+            AiAttemptAdmission::DependencyDenied
+        ));
     }
 }

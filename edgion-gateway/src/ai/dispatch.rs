@@ -817,11 +817,13 @@ mod tests {
         AiCandidateModel, AiPlanCandidate, AiServiceStore, ReadyAiAttemptPlan, RuntimeAiCredential,
         RuntimeAiCredentialPool, RuntimeAiEndpoint, RuntimeAiService,
     };
+    use crate::backends::policy::backend_traffic::RetryBudget;
     use crate::plugins::PluginRuntime;
     use crate::routes::http::match_unit::{HttpRouteRuleUnit, MatchSpecificity};
     use crate::{MatchInfo, Rsc};
     use edgion_resources::resources::common::RefDenied;
     use edgion_resources::resources::edgion_ai_service::AiCredentialLimits;
+    use edgion_resources::resources::edgion_backend_traffic_policy::{BudgetDetails, RetryConstraintConfig};
     use edgion_resources::resources::edgion_plugins::{AiBackendSelection, OnRedisFailure};
     use edgion_resources::{HTTPBackendRef, HTTPRouteMatch, HTTPRouteRule};
     use tokio::io::AsyncWriteExt;
@@ -859,6 +861,25 @@ mod tests {
         plan.scheduler.select_service(0).unwrap();
         plan.scheduler.select_credential(u16::MAX, 0).unwrap();
         plan
+    }
+
+    fn retry_policy(percent: u8) -> (Arc<EffectiveBackendTrafficPolicy>, Arc<RetryBudget>) {
+        let budget = Arc::new(RetryBudget::from_config(&RetryConstraintConfig {
+            budget: BudgetDetails {
+                percent,
+                interval: "1h".to_string(),
+            },
+            min_retry_rate: None,
+        }));
+        let policy = Arc::new(EffectiveBackendTrafficPolicy {
+            retry_budget: Some(Arc::clone(&budget)),
+            circuit_breaker_limit: None,
+            connect_timeout: None,
+            outlier_detection: None,
+            ai_credential_outlier: None,
+            ai_circuit_breaker: None,
+        });
+        (policy, budget)
     }
 
     fn selectable_plan(credentials: Vec<RuntimeAiCredential>) -> ReadyAiAttemptPlan {
@@ -1141,6 +1162,37 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_retry_budget_denies_and_counts_each_dispatch_once() {
+        let mut denied = EdgionHttpContext::new();
+        denied.ai_attempt_plan = Some(AiAttemptPlan::Ready(candidate_plan_with_retries(1)));
+        denied.ai_effective_policy = Some(retry_policy(0).0);
+        mark_ai_dispatch_started(&mut denied).unwrap();
+        assert_eq!(
+            handle_ai_transport_failure(&mut denied, true, true, false),
+            Ok(AiRetryDecision::BudgetDenied)
+        );
+        let Some(AiAttemptPlan::Ready(plan)) = denied.ai_attempt_plan.as_ref() else {
+            panic!("ready plan must remain installed");
+        };
+        assert_eq!(
+            plan.scheduler.next_step(),
+            NextStep::Stop(crate::ai::attempt::StopReason::RetryDenied)
+        );
+
+        let mut sampled_once = EdgionHttpContext::new();
+        sampled_once.ai_attempt_plan = Some(AiAttemptPlan::Ready(candidate_plan()));
+        let (policy, budget) = retry_policy(51);
+        sampled_once.ai_effective_policy = Some(policy);
+        mark_ai_dispatch_started(&mut sampled_once).unwrap();
+        mark_ai_dispatch_started(&mut sampled_once).unwrap();
+        assert!(budget.try_retry(), "one sampled dispatch permits the first retry");
+        assert!(
+            !budget.try_retry(),
+            "an idempotent dispatch mark must not enlarge the denominator"
+        );
+    }
+
+    #[test]
     fn rejected_plan_never_crosses_dispatch_boundary() {
         let mut ctx = EdgionHttpContext::new();
         ctx.ai_attempt_plan = Some(AiAttemptPlan::Rejected(crate::ai::AiPlanError::InvalidBackend));
@@ -1209,6 +1261,34 @@ mod tests {
     }
 
     #[test]
+    fn target_selection_reports_unavailable_when_every_candidate_is_exhausted() {
+        let credential = || RuntimeAiCredential {
+            name: "primary".to_string(),
+            weight: 1,
+            credential: "secret-primary".to_string(),
+            limits: None,
+        };
+        let mut no_credentials = selectable_plan(vec![credential()]);
+        no_credentials.candidates[0].credential_outliers = vec![None];
+        assert!(matches!(
+            select_target(&mut no_credentials, 0),
+            Err(AiDispatchError::Unavailable)
+        ));
+        assert_eq!(
+            no_credentials.scheduler.next_step(),
+            NextStep::Stop(crate::ai::attempt::StopReason::Unavailable)
+        );
+        assert_eq!(no_credentials.scheduler.dispatch_count(), 0);
+
+        let mut incompatible_model = selectable_plan(vec![credential()]);
+        incompatible_model.candidates[0].model = None;
+        assert!(matches!(
+            select_target(&mut incompatible_model, 0),
+            Err(AiDispatchError::Unavailable)
+        ));
+    }
+
+    #[test]
     fn explicit_retry_cap_is_strict_but_global_fallback_is_bounded() {
         assert_eq!(resolve_ai_retry_cap(Some(7), 99), Ok(7));
         assert_eq!(
@@ -1217,6 +1297,27 @@ mod tests {
         );
         assert_eq!(resolve_ai_retry_cap(None, 99), Ok(7));
         assert_eq!(resolve_ai_retry_cap(None, 3), Ok(3));
+    }
+
+    #[test]
+    fn retry_cap_initialization_is_once_only_and_preserves_progress() {
+        let credential = RuntimeAiCredential {
+            name: "primary".to_string(),
+            weight: 1,
+            credential: "secret-primary".to_string(),
+            limits: None,
+        };
+        let mut plan = selectable_plan(vec![credential]);
+        plan.retry_cap_initialized = false;
+        initialize_retry_cap(&mut plan, 3).unwrap();
+        assert_eq!(plan.scheduler.max_dispatches(), 4);
+        plan.scheduler.select_service(0).unwrap();
+        plan.scheduler.select_credential(1, 0).unwrap();
+        plan.scheduler.start_dispatch().unwrap();
+
+        initialize_retry_cap(&mut plan, 0).unwrap();
+        assert_eq!(plan.scheduler.max_dispatches(), 4);
+        assert_eq!(plan.scheduler.dispatch_count(), 1);
     }
 
     #[test]

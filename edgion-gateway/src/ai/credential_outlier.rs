@@ -389,6 +389,53 @@ mod tests {
     }
 
     #[test]
+    fn credential_success_resets_failures_and_releases_ejection_capacity() {
+        let store = AiCredentialOutlierStore::new();
+        let target = target("svc");
+        let mut threshold_three = config(10, 50);
+        threshold_three.consecutive_gateway_errors = 3;
+        store.configure_service(
+            target.clone(),
+            Some(threshold_three),
+            ["one".to_string(), "two".to_string()],
+        );
+
+        assert_eq!(
+            store.record_failure(&target, "one", FailureClass::Gateway),
+            FailureTransition::None
+        );
+        store.record_success(&target, "one");
+        for _ in 0..2 {
+            assert_eq!(
+                store.record_failure(&target, "one", FailureClass::Gateway),
+                FailureTransition::None
+            );
+        }
+        assert_eq!(
+            store.record_failure(&target, "one", FailureClass::Gateway),
+            FailureTransition::Opened
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                store.record_failure(&target, "two", FailureClass::Gateway),
+                FailureTransition::None
+            );
+        }
+        assert_eq!(
+            store.record_failure(&target, "two", FailureClass::Gateway),
+            FailureTransition::None,
+            "the first open credential consumes the 50% ejection capacity"
+        );
+
+        store.record_success(&target, "one");
+        assert_eq!(
+            store.record_failure(&target, "two", FailureClass::Gateway),
+            FailureTransition::Opened,
+            "recovery must release ejection capacity for another alias"
+        );
+    }
+
+    #[test]
     fn equivalent_config_preserves_state_and_changed_config_resets() {
         let store = AiCredentialOutlierStore::new();
         let target = target("svc");
