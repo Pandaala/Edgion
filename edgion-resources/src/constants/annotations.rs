@@ -35,6 +35,27 @@ pub mod edgion {
     /// valid header (HAProxy `accept-proxy` semantics).
     pub const ACCEPT_PROXY_PROTOCOL: &str = "edgion.io/accept-proxy-protocol";
 
+    /// Restrict [`ACCEPT_PROXY_PROTOCOL`] to connections from these sources.
+    ///
+    /// Comma- or space-separated IP/CIDR list on `Gateway.metadata.annotations`,
+    /// e.g. `"10.0.0.0/8, 192.168.1.5"` (a bare address is taken as /32 or /128).
+    /// When present, a connection from any other address is served as an
+    /// ordinary direct connection and its bytes are never parsed as a PROXY
+    /// header — that is what lets one listener serve both load-balanced and
+    /// direct traffic safely. When absent, every connection must carry a header.
+    ///
+    /// An unparseable entry, or one matching every address, falls back to
+    /// requiring a header rather than building a partial or wide-open matcher.
+    ///
+    /// This list says who may SPEAK proxy protocol (the load balancer). It is
+    /// unrelated to `EdgionGatewayConfig.spec.realIp.trustedIps`, which says
+    /// which addresses count as proxy hops when walking X-Forwarded-For. The two
+    /// normally hold different addresses; do not conflate them.
+    ///
+    /// Only the Gateway-wide key is read: there is no per-listener suffix, so
+    /// all PROXY-enabled listeners of a Gateway share one trust list.
+    pub const PROXY_PROTOCOL_TRUSTED_CIDRS: &str = "edgion.io/proxy-protocol-trusted-cidrs";
+
     /// Per-route opt-out / opt-in for upstream path forwarding view.
     /// Three-state on HTTPRoute.metadata.annotations:
     ///   "true"  — force raw forward (overrides global forward_normalized_path / region_route default)

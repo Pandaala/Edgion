@@ -26,6 +26,9 @@ use crate::routes::udp::{get_global_udp_route_managers, get_udp_listener_registr
 #[cfg(feature = "boringssl")]
 use crate::tls::runtime::gateway::tls_pingora::TlsCallback;
 use edgion_resources::constants::annotations::edgion;
+use edgion_resources::matcher::ip_cidr_helpers::to_cidr_format;
+use edgion_resources::matcher::ip_radix_tree::{IpCidr, IpRadixMatcher};
+use pingora_core::protocols::l4::proxy_protocol::ProxyProtocolTrust;
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 use edgion_resources::resources::gateway::{GatewayTlsMode, Listener};
 use edgion_resources::ListenerKey;
@@ -98,8 +101,98 @@ fn tcp_sock_opts(context: &ListenerContext) -> Option<TcpSocketOptions> {
         // rejected across crates even with `..Default::default()`.
         let mut opts = TcpSocketOptions::default();
         opts.proxy_protocol = true;
+        opts.proxy_protocol_trusted_sources = proxy_protocol_trusted_sources(context);
         opts
     })
+}
+
+/// CIDR-backed [`ProxyProtocolTrust`], reusing Edgion's radix matcher so
+/// pingora needs no CIDR parser of its own.
+#[derive(Debug)]
+struct CidrProxyProtocolTrust(IpRadixMatcher);
+
+impl ProxyProtocolTrust for CidrProxyProtocolTrust {
+    fn is_trusted(&self, addr: &std::net::SocketAddr) -> bool {
+        self.0.contains(&addr.ip())
+    }
+}
+
+/// Build the trusted-source matcher from a raw annotation value.
+///
+/// Returns `None` — meaning mandatory mode, a header required on every
+/// connection — for an empty value, an unparseable entry, or a match-all
+/// prefix. Falling back rather than building a partial matcher is deliberate: a
+/// partial list would silently treat the ranges it dropped as untrusted and
+/// mis-attribute their client addresses, which is far harder to notice than a
+/// listener that plainly requires a header.
+fn build_trusted_sources(
+    raw: &str,
+    gateway_key: &str,
+    listener_name: &str,
+) -> Option<Arc<dyn ProxyProtocolTrust>> {
+    let mut builder = IpRadixMatcher::builder();
+    // Split on commas and any whitespace: a YAML block scalar yields newlines,
+    // which would otherwise arrive as one unparseable entry.
+    for entry in raw
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        // A bare address needs a /32 or /128 before the matcher will take it.
+        let normalized = match to_cidr_format(entry) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(
+                    gateway=%gateway_key, listener=%listener_name, entry=%entry, error=%e,
+                    "invalid proxy-protocol-trusted-cidrs entry; requiring a header on every connection"
+                );
+                return None;
+            }
+        };
+        // Reject match-all on the PARSED prefix, never on the string. A suffix
+        // test lets `0.0.0.0/00`, `::/00`, `1.2.3.4/00` and `0.0.0.0/+0` through
+        // — the prefix parse accepts all of them as 0 — and each silently yields
+        // a matcher that trusts every peer, defeating the one invariant this
+        // list exists to enforce.
+        match IpCidr::parse(&normalized) {
+            Ok(IpCidr::V4 { prefix_len: 0, .. }) | Ok(IpCidr::V6 { prefix_len: 0, .. }) => {
+                tracing::warn!(
+                    gateway=%gateway_key, listener=%listener_name, entry=%entry,
+                    "proxy-protocol-trusted-cidrs must not match every address; requiring a header on every connection"
+                );
+                return None;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    gateway=%gateway_key, listener=%listener_name, entry=%entry, error=%e,
+                    "unparseable proxy-protocol-trusted-cidrs entry; requiring a header on every connection"
+                );
+                return None;
+            }
+        }
+        if let Err(e) = builder.insert(&normalized, "proxy-protocol-trusted") {
+            tracing::warn!(
+                gateway=%gateway_key, listener=%listener_name, entry=%entry, error=%e,
+                "could not index proxy-protocol-trusted-cidrs entry; requiring a header on every connection"
+            );
+            return None;
+        }
+    }
+    match builder.build() {
+        Ok(matcher) => Some(Arc::new(CidrProxyProtocolTrust(matcher))),
+        // An all-empty list yields EmptyTree; mandatory mode is the right answer.
+        Err(_) => None,
+    }
+}
+
+/// Peers allowed to speak PROXY protocol to this listener, or `None` for
+/// mandatory mode.
+fn proxy_protocol_trusted_sources(context: &ListenerContext) -> Option<Arc<dyn ProxyProtocolTrust>> {
+    let raw = context
+        .gateway_annotations
+        .get(edgion::PROXY_PROTOCOL_TRUSTED_CIDRS)?;
+    build_trusted_sources(raw, &context.gateway_key, &context.listener.name)
 }
 
 /// Bind a plain TCP endpoint on a service, honouring the PROXY protocol flag.
@@ -504,12 +597,29 @@ pub fn add_tls_passthrough_listener(server: &mut Server, context: &ListenerConte
 /// protocol specified in the listener configuration.
 pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()> {
     if accept_proxy_protocol(&context) {
-        tracing::info!(
-            gateway=%context.gateway_key,
-            listener=%context.listener.name,
-            port=%context.listener.port,
-            "Inbound PROXY protocol enabled; connections not starting with a valid header are rejected"
-        );
+        // Log the EFFECTIVE mode, not the raw annotation. A rejected trust list
+        // silently falls back to mandatory mode, so echoing the annotation here
+        // could claim `trusted_sources=0.0.0.0/0` on a listener that actually
+        // requires a header from everyone.
+        match proxy_protocol_trusted_sources(&context) {
+            Some(_) => tracing::info!(
+                gateway=%context.gateway_key,
+                listener=%context.listener.name,
+                port=%context.listener.port,
+                trusted_sources=%context
+                    .gateway_annotations
+                    .get(edgion::PROXY_PROTOCOL_TRUSTED_CIDRS)
+                    .map(String::as_str)
+                    .unwrap_or(""),
+                "Inbound PROXY protocol enabled for trusted sources; other peers are served as direct connections"
+            ),
+            None => tracing::info!(
+                gateway=%context.gateway_key,
+                listener=%context.listener.name,
+                port=%context.listener.port,
+                "Inbound PROXY protocol enabled; connections not starting with a valid header are rejected"
+            ),
+        }
         // The connection filter runs at accept time, before the PROXY header is
         // parsed, so its IP rules match the load balancer rather than the client.
         if context.gateway_annotations.contains_key(edgion::EDGION_STREAM_PLUGINS) {
@@ -639,5 +749,82 @@ mod tests {
     #[test]
     fn gateway_stream_plugin_store_key_rejects_qualified_name() {
         assert!(resolve_gateway_stream_plugin_store_key("shared/policy", "app").is_err());
+    }
+}
+
+#[cfg(test)]
+mod proxy_protocol_trust_tests {
+    use super::*;
+
+    fn build(raw: &str) -> Option<Arc<dyn ProxyProtocolTrust>> {
+        build_trusted_sources(raw, "edgion-test/gw", "pp")
+    }
+
+    #[test]
+    fn cidr_and_bare_addresses_both_work() {
+        let trust = build("10.0.0.0/8, 192.168.1.5").expect("matcher built");
+        assert!(trust.is_trusted(&"10.1.2.3:1".parse().unwrap()));
+        assert!(trust.is_trusted(&"192.168.1.5:1".parse().unwrap()));
+        assert!(!trust.is_trusted(&"172.16.0.1:1".parse().unwrap()));
+    }
+
+    #[test]
+    fn invalid_entry_fails_closed_to_mandatory_mode() {
+        // A typo must not silently widen trust, and must not build a partial
+        // matcher that would mis-attribute the ranges it dropped.
+        assert!(build("10.0.0.0/8, not-an-ip").is_none());
+    }
+
+    #[test]
+    fn empty_value_falls_back_to_mandatory_mode() {
+        assert!(build("").is_none());
+        assert!(build("  , ,").is_none());
+    }
+
+    #[test]
+    fn ipv6_entries_work() {
+        // The matcher keeps separate v4 and v6 trees, so a v6 insert needs its
+        // own coverage rather than riding on the v4 cases.
+        let trust = build("2001:db8::/32, 2001:db8:cafe::1").expect("matcher built");
+        assert!(trust.is_trusted(&"[2001:db8::5]:1".parse().unwrap()));
+        assert!(trust.is_trusted(&"[2001:db8:cafe::1]:1".parse().unwrap()));
+        assert!(!trust.is_trusted(&"[2001:db9::1]:1".parse().unwrap()));
+    }
+
+    #[test]
+    fn match_all_prefixes_are_refused() {
+        // 0.0.0.0/0 would trust every peer, reinstating the sniff-everything
+        // mode the design rejects. Refusing keeps mandatory mode instead.
+        assert!(build("0.0.0.0/0").is_none());
+        assert!(build("::/0").is_none());
+    }
+
+    #[test]
+    fn match_all_cannot_be_smuggled_past_the_guard() {
+        // The prefix parse accepts these as 0, so a string-suffix test would
+        // let every one of them through and silently trust every peer. Note
+        // `1.2.3.4/00` in particular: it reads as one specific host.
+        for smuggled in ["0.0.0.0/00", "0.0.0.0/000", "0.0.0.0/+0", "::/00", "1.2.3.4/00"] {
+            assert!(
+                build(smuggled).is_none(),
+                "{smuggled} must not produce a matcher"
+            );
+        }
+    }
+
+    #[test]
+    fn slash_bearing_garbage_fails_closed() {
+        // to_cidr_format passes anything containing a slash through untouched,
+        // so these reach the CIDR parser rather than the bare-address path.
+        assert!(build("10.0.0.0/99").is_none());
+        assert!(build("foo/bar").is_none());
+    }
+
+    #[test]
+    fn newline_separated_entries_are_accepted() {
+        // A YAML block scalar arrives with newlines, not commas.
+        let trust = build("10.0.0.0/8\n192.168.1.5\n").expect("matcher built");
+        assert!(trust.is_trusted(&"10.1.2.3:1".parse().unwrap()));
+        assert!(trust.is_trusted(&"192.168.1.5:1".parse().unwrap()));
     }
 }
