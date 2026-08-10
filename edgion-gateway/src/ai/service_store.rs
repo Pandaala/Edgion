@@ -204,13 +204,26 @@ impl AiServiceStore {
         })
     }
 
+    /// Mirror the service's credential pool into the outlier store.
+    ///
+    /// `None` means the service is no longer activatable — removed, or an
+    /// update that failed to compile. The entry is dropped rather than emptied:
+    /// it is only reachable through a live service, so an emptied one is
+    /// unreachable state that accumulates for the process lifetime. Requests
+    /// already holding a captured generation keep it alive through their own
+    /// `Arc`, which is what preserves in-flight ejection state.
     fn publish_credentials(&self, key: &str, service: Option<&RuntimeAiService>) {
         let Some(target) = Self::target_key(key) else {
             return;
         };
+        let Some(service) = service else {
+            self.credential_outliers.remove_service(&target);
+            return;
+        };
         let aliases = service
-            .into_iter()
-            .flat_map(|service| service.credential_pool.credentials.iter())
+            .credential_pool
+            .credentials
+            .iter()
             .map(|credential| credential.name.clone());
         self.credential_outliers.set_credentials(target, aliases);
     }
@@ -903,6 +916,50 @@ mod tests {
     }
 
     #[test]
+    fn removing_a_service_drops_its_credential_outlier_entry() {
+        // The entry is only reachable through a live service, so leaving one
+        // behind is a pure leak — and it is what the integration suite's
+        // post-wipe-all residue check catches.
+        let store = AiServiceStore::new();
+        let key = "default/provider";
+        store.full_set(&HashMap::from([(
+            key.to_string(),
+            resource("provider", "https://ai.example.com", Some(b"key")),
+        )]));
+        assert_eq!(store.credential_outliers.count(), 1);
+
+        store.full_set(&HashMap::new());
+        assert_eq!(
+            store.credential_outliers.count(),
+            0,
+            "credential outlier entries survived their service: {:?}",
+            store.credential_outliers.keys()
+        );
+    }
+
+    #[test]
+    fn an_invalid_update_also_drops_the_entry() {
+        // A resource that fails to compile is removed from the runtime map, so
+        // its outlier entry must go too — otherwise a permanently broken
+        // resource leaks one forever.
+        let store = AiServiceStore::new();
+        let key = "default/provider";
+        store.full_set(&HashMap::from([(
+            key.to_string(),
+            resource("provider", "https://ai.example.com", Some(b"key")),
+        )]));
+        assert_eq!(store.credential_outliers.count(), 1);
+
+        // No credential material => compile fails => deactivated.
+        store.full_set(&HashMap::from([(
+            key.to_string(),
+            resource("provider", "https://ai.example.com", None),
+        )]));
+        assert!(store.get_by_key(key).is_none());
+        assert_eq!(store.credential_outliers.count(), 0);
+    }
+
+    #[test]
     fn credential_publish_remove_hides_new_capture_but_keeps_old_handle_alive() {
         let store = AiServiceStore::new();
         let key = "default/provider";
@@ -919,10 +976,13 @@ mod tests {
 
         store.full_set(&HashMap::new());
         assert!(store.get_by_key(key).is_none());
-        assert!(store
-            .credential_outliers
-            .current_handle(&target)
-            .is_some_and(|current| current.capture("primary").is_none()));
+        // No new capture is possible: the generation is gone entirely rather
+        // than lingering with an empty alias set, which is what kept these
+        // entries accumulating for the process lifetime.
+        assert!(store.credential_outliers.current_handle(&target).is_none());
+        // The contract this test exists for: a request that already captured a
+        // generation keeps it alive through its own Arc and still sees the
+        // ejection state.
         assert!(matches!(
             captured.admit(),
             crate::backends::outlier_detection::EjectionAdmission::Closed

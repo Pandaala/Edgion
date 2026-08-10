@@ -107,7 +107,7 @@ release 本就合法）；④Provider 只做 GPT/Claude/Gemini；⑤不做对照
   skills/05-testing/references/test-server-capabilities.md
 - 任务文档规范：skills/07-tasks/SKILL.md（feature profile 的文件集）
 
-【产出】在 tasks/ai-gateway/archive/completed-tasks/a2a-gateway/ 下建 feature 任务包（全英文）：
+【产出】在 tasks/ai-gateway/pending/a2a-gateway/ 下建 feature 任务包（全英文）：
 a2a-gateway.md（主文件）、00-context.md、01-design.md、02-implementation.md、
 03-subtasks.md。01-design.md 必须含：三种卡片版本的字段级重写规则、externalUrl
 推导（listener host/proto + X-Forwarded-Proto，可被配置覆盖）、
@@ -132,7 +132,7 @@ JSON-RPC echo）。
 feature-06-24）。Gateway 只构建于 Edgion 定制的 Pingora fork（Pandaala/pingora 的 edgion 分支）；
 本仓库 Cargo.toml 直接依赖远端 fork。若需联调 fork 本地改动，自行加 [patch]。
 
-【任务】按 tasks/ai-gateway/archive/completed-tasks/a2a-gateway/ 任务包实施 WS-04。设计已评审
+【任务】按 tasks/ai-gateway/pending/a2a-gateway/ 任务包实施 WS-04。设计已评审
 通过，不要改设计；若发现设计问题，先停下来汇报。
 
 【必读】
@@ -209,7 +209,7 @@ edgion-gateway/src/ai/anthropic/response.rs:351 用 chunk.take() 跨 chunk 暂�
   与 proxy_trait.rs:584-596
 - 任务文档规范：skills/07-tasks/SKILL.md
 
-【产出】tasks/ai-gateway/archive/completed-tasks/sse-decoder-v2/ 任务包（全英文），01-design.md
+【产出】tasks/ai-gateway/pending/sse-decoder-v2/ 任务包（全英文），01-design.md
 必须含：chain.rs 的切片链数据结构、window.rs 的接口与契约、惰性提取方案、事件
 管线改造、D1b 阈值选项、迁移策略（公开 API 名不变）、以及分阶段的验收方式。
 验收无 benchmark 门槛，改为结构性标准：解码器核心不得有逐字节 push/push_str
@@ -229,7 +229,7 @@ edgion-gateway/src/ai/anthropic/response.rs:351 用 chunk.take() 跨 chunk 暂�
 feature-06-24）。Gateway 只构建于 Edgion 定制的 Pingora fork（Pandaala/pingora 的 edgion 分支）；
 本仓库 Cargo.toml 直接依赖远端 fork。若需联调 fork 本地改动，自行加 [patch]。
 
-【任务】按 tasks/ai-gateway/archive/completed-tasks/sse-decoder-v2/ 实施，严格按其 01-design.md
+【任务】按 tasks/ai-gateway/pending/sse-decoder-v2/ 实施，严格按其 01-design.md
 的阶段顺序，每个阶段独立可回归、逐阶段停下来汇报：
   阶段 1 解码器核心 + 现有单测 1:1 平移 —— 结束时必须**行为零变化**；
   阶段 2 usage.rs 惰性 JSON 提取；
@@ -318,7 +318,7 @@ skills/03-coding/ 下的日志与可观测性规范；analysis/01 §4.4-§4.6 �
 - SSE 解码器：edgion-gateway/src/sse/（若 WS-06 已完成，用新版接口）
 - 任务文档规范：skills/07-tasks/SKILL.md
 
-【产出】tasks/ai-gateway/archive/completed-tasks/mcp-gateway/ 任务包（全英文）。01-design.md 必须
+【产出】tasks/ai-gateway/pending/mcp-gateway/ 任务包（全英文）。01-design.md 必须
 含：EdgionMCPService 的 CRD schema、mcp_gateway 插件 schema、会话存储设计
 （TTL + reaper + 后端固定 + 无状态包装）、联邦路由与 list 合并语义、通知 fan-in
 的有界策略、错误映射表、以及上面那份加固清单的落点。03-subtasks.md 按 roadmap 的
@@ -338,7 +338,7 @@ skills/03-coding/ 下的日志与可观测性规范；analysis/01 §4.4-§4.6 �
 feature-06-24）。Gateway 只构建于 Edgion 定制的 Pingora fork（Pandaala/pingora 的 edgion 分支）；
 本仓库 Cargo.toml 直接依赖远端 fork。若需联调 fork 本地改动，自行加 [patch]。
 
-【任务】实施 tasks/ai-gateway/archive/completed-tasks/mcp-gateway/ 的 Phase 1（单上游代理），
+【任务】实施 tasks/ai-gateway/pending/mcp-gateway/ 的 Phase 1（单上游代理），
 按其 03-subtasks.md 顺序推进。设计已评审通过，不要改设计；发现问题先停下汇报。
 范围：EdgionMCPService CRD + ArcSwap store → mcp_gateway 插件 + 路由终结分发 →
 Streamable HTTP 客户端腿 + 有界上游交换 + 协议版本协商 → 会话存储
@@ -370,7 +370,7 @@ git push。
 feature-06-24）。Gateway 只构建于 Edgion 定制的 Pingora fork（Pandaala/pingora 的 edgion 分支）；
 本仓库 Cargo.toml 直接依赖远端 fork。若需联调 fork 本地改动，自行加 [patch]。
 
-【任务】实施 tasks/ai-gateway/archive/completed-tasks/mcp-gateway/ 的 Phase 2（联邦聚合）：
+【任务】实施 tasks/ai-gateway/pending/mcp-gateway/ 的 Phase 2（联邦聚合）：
 多成员路由（tools/prompts/resources 名称前缀、list 合并 fanout、per-member
 failOpen/failClosed，默认 FailClosed）、静态 per-member tool 允许/屏蔽列表
 （不涉身份，纯配置层过滤）、通知 fan-in（各成员 SSE 流 → 客户端流，用有界
@@ -392,7 +392,7 @@ Phase 1 并贴原始输出；不要 git commit / git push。
 你在 /Volumes/ExtStore/ws4/Edgion 工作（Rust + Pingora 的 K8s 网关；分支
 feature-06-24）。
 
-【任务】实施 tasks/ai-gateway/archive/completed-tasks/mcp-gateway/ 的 Phase 3（打磨）：
+【任务】实施 tasks/ai-gateway/pending/mcp-gateway/ 的 Phase 3（打磨）：
 旧版 SSE 客户端腿；WS-03 护栏的挂载点预留（本步不实现具体护栏）；观测字段
 （按项目克制策略：access log + EdgionStatus 为主，任何新 metric 必须先过
 python3 cicd/checks/check_metrics_inventory.py 并同步
@@ -455,7 +455,7 @@ feature-06-24）。Gateway 只构建于 Edgion 定制的 Pingora fork（Pandaala
 - 资源 schema：edgion-resources/src/resources/edgion_ai_service.rs
 - 任务文档规范：skills/07-tasks/SKILL.md
 
-【产出】tasks/ai-gateway/archive/completed-tasks/llm-ingress-breadth/ 任务包（全英文），含每个新
+【产出】tasks/ai-gateway/pending/llm-ingress-breadth/ 任务包（全英文），含每个新
 方言/新 provider 的 wire-contract 文档骨架，以及三个 Phase 的子任务切分。
 
 【硬性规则】落盘内容一律英文；只写文档不改代码；不要 git commit / git push。
@@ -470,7 +470,7 @@ feature-06-24）。Gateway 只构建于 Edgion 定制的 Pingora fork（Pandaala
 feature-06-24）。Gateway 只构建于 Edgion 定制的 Pingora fork（Pandaala/pingora 的 edgion 分支）；
 本仓库 Cargo.toml 直接依赖远端 fork。若需联调 fork 本地改动，自行加 [patch]。
 
-【任务】实施 tasks/ai-gateway/archive/completed-tasks/llm-ingress-breadth/ 的 Phase N（见其
+【任务】实施 tasks/ai-gateway/pending/llm-ingress-breadth/ 的 Phase N（见其
 03-subtasks.md）。设计已评审通过，不要改设计；发现问题先停下汇报。
 
 【必读】任务包全部文档；已上线翻译器范本
@@ -539,7 +539,7 @@ feature-06-24）。Gateway 只构建于 Edgion 定制的 Pingora fork（Pandaala
 - edgion-gateway/src/sse/window.rs 的契约文档（WS-06 产出）
 - 任务文档规范：skills/07-tasks/SKILL.md
 
-【产出】tasks/ai-gateway/archive/completed-tasks/ai-guard/ 任务包（全英文）。01-design.md 含：
+【产出】tasks/ai-gateway/pending/ai-guard/ 任务包（全英文）。01-design.md 含：
 规则 schema（匹配器种类 / 作用域 / 动作 / 每规则失败策略）、内置 PII 规则集清单、
 窗口参数的校验上限、三个 phase 切分（①请求侧 ②响应侧 Reject ③响应侧 Mask +
 moderation 适配器）、以及延迟代价的说明（窗口会给流增加最多一个窗口的延迟，
@@ -555,7 +555,7 @@ moderation 适配器）、以及延迟代价的说明（窗口会给流增加最
 feature-06-24）。Gateway 只构建于 Edgion 定制的 Pingora fork（Pandaala/pingora 的 edgion 分支）；
 本仓库 Cargo.toml 直接依赖远端 fork。若需联调 fork 本地改动，自行加 [patch]。
 
-【任务】实施 tasks/ai-gateway/archive/completed-tasks/ai-guard/ 的 Phase N（1=请求侧、
+【任务】实施 tasks/ai-gateway/pending/ai-guard/ 的 Phase N（1=请求侧、
 2=响应侧 Reject、3=响应侧 Mask + moderation 适配器），按其 03-subtasks.md。
 设计已评审通过，不要改设计；发现问题先停下汇报。
 
@@ -608,7 +608,7 @@ feature-06-24）。Gateway 只构建于 Edgion 定制的 Pingora fork（Pandaala
 必须用改写后的模型，否则 LowestLatency 数据会碎片化；③onUnknownModel:
 Passthrough 只在没有任何规则命中时才生效，命中后改写的模型要正常再解析。
 
-【任务】先在 tasks/ai-gateway/archive/completed-tasks/model-routing/ 建 feature 任务包（全英文，
+【任务】先在 tasks/ai-gateway/pending/model-routing/ 建 feature 任务包（全英文，
 含 01-design.md 与 03-subtasks.md），把设计给我过目确认后，再按 phase 实施：
 ①ModelRouteTable + rewrite + 通配别名（纯请求侧）②候选过滤/加权覆盖打通
 routing.rs ③/v1/models 可见性集成 + 文档。

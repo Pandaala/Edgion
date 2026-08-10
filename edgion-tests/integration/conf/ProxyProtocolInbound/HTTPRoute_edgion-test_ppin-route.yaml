@@ -22,4 +22,4 @@ spec:
             value: /
       backendRefs:
         - name: ppin-http
-          port: 30001
+          port: 30061

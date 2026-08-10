@@ -8,7 +8,7 @@ metadata:
 addressType: IPv4
 ports:
   - name: http
-    port: 30002
+    port: 30062
     protocol: TCP
 endpoints:
   - addresses:

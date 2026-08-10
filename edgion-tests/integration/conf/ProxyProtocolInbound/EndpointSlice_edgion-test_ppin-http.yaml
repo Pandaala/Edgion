@@ -1,4 +1,4 @@
-# Endpoints for the ppin-http Service (local test_server HTTP echo on 30001).
+# Endpoints for the ppin-http Service (local test_server HTTP echo on 30061).
 apiVersion: discovery.k8s.io/v1
 kind: EndpointSlice
 metadata:
@@ -9,7 +9,7 @@ metadata:
 addressType: IPv4
 ports:
   - name: http
-    port: 30001
+    port: 30061
     protocol: TCP
 endpoints:
   - addresses:

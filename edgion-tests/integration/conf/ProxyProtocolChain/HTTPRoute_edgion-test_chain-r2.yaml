@@ -15,4 +15,4 @@ spec:
             value: /
       backendRefs:
         - name: chain-backend
-          port: 30002
+          port: 30062

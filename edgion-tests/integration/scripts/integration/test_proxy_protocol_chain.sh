@@ -11,7 +11,7 @@
 #
 #   client 172.29.0.100 → haproxy (send-proxy-v2) → gw1 :58530 → gw2 :58531
 #                                                                    ↓
-#                                                     test_server :30002 /headers
+#                                                     test_server :30062 /headers
 #
 # gw1 gets the client from the PROXY header and appends it to X-Forwarded-For.
 # gw2 has NO proxy-protocol annotation — nothing sends it a header — and resolves
@@ -60,7 +60,9 @@ LB_V2_PORT=58540
 # the real leg emits.
 LB_V2_PROBE_PORT=58542
 V2_DUMP_PORT=58544
-TS_HTTP_PORT=30002
+# Backend port: stays in the 3xxxx test_server range by convention, but off
+# the shared stack's numbers so the two can run in any order.
+TS_HTTP_PORT=30062
 
 # Private docker network. The client's pinned address is the assertion anchor.
 DOCKER_NET="edgion-ppchain-test"

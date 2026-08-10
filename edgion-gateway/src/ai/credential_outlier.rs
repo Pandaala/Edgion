@@ -228,6 +228,12 @@ impl AiCredentialOutlierStore {
                 Arc::clone(occupied.get())
             }
             dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                // An absent policy for a target that has never published
+                // credentials creates nothing usable: cooldowns and ejections
+                // are recorded per credential alias, so a generation with no
+                // aliases can never be captured. Inserting one here left an
+                // entry per target for the process lifetime.
+                config.as_ref()?;
                 Arc::clone(&vacant.insert(AiCredentialOutlierServiceHandle::new(config, HashSet::new())))
             }
         };
@@ -592,5 +598,39 @@ mod tests {
             Some(DEFAULT_COOLDOWN_CAP)
         );
         assert!(matches!(credential.admit(), EjectionAdmission::Rejected));
+    }
+
+    #[test]
+    fn absent_policy_for_an_unknown_target_creates_nothing() {
+        // Publishing "no policy" for a target that never had credentials used
+        // to insert an entry that no request could ever capture from, so every
+        // such target leaked one for the process lifetime.
+        let store = AiCredentialOutlierStore::new();
+        let target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionAIService,
+            namespace: "default".to_string(),
+            name: "ghost".to_string(),
+        };
+        assert!(store.publish_policy(target.clone(), None).is_none());
+        assert_eq!(store.count(), 0, "leaked: {:?}", store.keys());
+        assert!(store.current_handle(&target).is_none());
+    }
+
+    #[test]
+    fn absent_policy_still_keeps_a_live_credential_generation() {
+        // The documented reason the no-policy generation exists: a service with
+        // credentials but no EBTP still needs somewhere to record Retry-After
+        // cooldowns. That must survive.
+        let store = AiCredentialOutlierStore::new();
+        let target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionAIService,
+            namespace: "default".to_string(),
+            name: "live".to_string(),
+        };
+        store.set_credentials(target.clone(), ["primary".to_string()]);
+        assert!(store.publish_policy(target.clone(), None).is_some());
+        assert_eq!(store.count(), 1);
+        let handle = store.current_handle(&target).expect("default generation");
+        assert!(handle.capture("primary").is_some());
     }
 }

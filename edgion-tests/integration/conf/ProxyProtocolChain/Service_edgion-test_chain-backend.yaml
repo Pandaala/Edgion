@@ -6,7 +6,7 @@ metadata:
 spec:
   ports:
     - name: http
-      port: 30002
-      targetPort: 30002
+      port: 30062
+      targetPort: 30062
       protocol: TCP
   type: ClusterIP

@@ -33,7 +33,7 @@
 #                                                        ↓
 #                                   host.docker.internal:58430  (gateway, PP on)
 #                                                        ↓
-#                                          test_server :30001 /headers
+#                                          test_server :30061 /headers
 #
 #   The client's address is pinned to 172.28.0.100, an address the gateway can
 #   never observe as a raw TCP peer (the proxies reach the host through NAT). So
@@ -85,7 +85,9 @@ LB_V2_PROBE_PORT=58442
 LB_V1_PROBE_PORT=58443
 V2_DUMP_PORT=58444
 V1_DUMP_PORT=58445
-TS_HTTP_PORT=30001
+# Backend port: stays in the 3xxxx test_server range by convention, but off
+# the shared stack's numbers so the two can run in any order.
+TS_HTTP_PORT=30061
 
 # Private docker network. The client's pinned address is the assertion anchor.
 DOCKER_NET="edgion-ppin-test"
