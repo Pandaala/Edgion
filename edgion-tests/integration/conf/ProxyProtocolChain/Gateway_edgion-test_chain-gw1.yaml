@@ -1,0 +1,19 @@
+# Hop 1: fronted by HAProxy speaking PPv2. Mandatory mode — source-conditional
+# mode is covered by unit tests, and using it here would make the fixture depend
+# on whichever NAT address docker gives HAProxy.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: chain-gw1
+  namespace: edgion-test
+  annotations:
+    edgion.io/accept-proxy-protocol: "true"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: hop1
+      protocol: HTTP
+      port: 58530
+      allowedRoutes:
+        namespaces:
+          from: All

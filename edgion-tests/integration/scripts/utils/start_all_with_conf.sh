@@ -740,7 +740,15 @@ get_suites_to_load() {
                 # controller, stripping the EdgionGatewayConfig — silently breaking every
                 # GatewayConfig-driven suite: RealIP/XFF, Security XFF-length, TLS fallback_sni,
                 # TCP idle timeout, GlobalConnectionIpRestriction).
-                if [ "$resource_name" = "base" ] || [ "$resource_name" = "Services" ] || [ "$resource_name" = "conf-sync-leak-test" ] || [ "$resource_name" = "PluginPolicy" ]; then
+                # ProxyProtocolInbound / ProxyProtocolChain are excluded for the same
+                # GatewayClass reason described above, plus one of their own: their listeners
+                # demand a PROXY header on every connection, so loading them into the shared
+                # stack would make those ports unusable by every other suite. Both boot their
+                # own stack from their own conf dir. ProxyProtocolChain's GatewayClass is the
+                # more dangerous of the two — it carries a parametersRef to `chain-egc`, so
+                # loading it here would replace base/GatewayClass.yaml's pointer to
+                # `example-gateway` and silently repoint every GatewayConfig-driven suite.
+                if [ "$resource_name" = "base" ] || [ "$resource_name" = "Services" ] || [ "$resource_name" = "conf-sync-leak-test" ] || [ "$resource_name" = "PluginPolicy" ] || [ "$resource_name" = "ProxyProtocolInbound" ] || [ "$resource_name" = "ProxyProtocolChain" ]; then
                     continue
                 fi
                 

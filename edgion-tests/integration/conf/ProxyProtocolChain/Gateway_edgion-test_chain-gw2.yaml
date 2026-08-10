@@ -1,0 +1,16 @@
+# Hop 2: reached from hop 1 over plain HTTP, so no PROXY protocol here. The
+# client address arrives in X-Forwarded-For and is resolved via realIp.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: chain-gw2
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: hop2
+      protocol: HTTP
+      port: 58531
+      allowedRoutes:
+        namespaces:
+          from: All

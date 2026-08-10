@@ -1,0 +1,18 @@
+# Hop 2 forwards to the test_server, whose /headers echoes what it received.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chain-r2
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: chain-gw2
+      namespace: edgion-test
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: chain-backend
+          port: 30002

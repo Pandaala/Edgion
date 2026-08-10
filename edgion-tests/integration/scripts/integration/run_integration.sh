@@ -1897,6 +1897,38 @@ main() {
         log_success "Controller plugin policy passed"
     fi
 
+    # Inbound PROXY protocol (standalone, boots its own stack on isolated 584xx
+    # ports; the chain suite uses 585xx). Isolated on purpose: a listener with
+    # `edgion.io/accept-proxy-protocol` rejects every connection that does not
+    # begin with a header, so it is unusable by any suite sharing the stack, and
+    # the flag is read once at bind time so it cannot be toggled between phases.
+    #
+    # Both drive a real HAProxy over docker rather than hand-assembled bytes and
+    # first verify on the wire which version is actually being emitted, so a
+    # misconfigured leg cannot silently cover the wrong parser path. The inbound
+    # suite drives both v1 and v2; the chain suite drives v2 only, since what it
+    # tests is address propagation across hops, not the parsers. Skipped where
+    # docker is unavailable rather than failing.
+    if [ -z "$G_RESOURCE" ]; then
+        if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+            log_section "Inbound PROXY protocol"
+            if ! "${SCRIPT_DIR}/test_proxy_protocol_inbound.sh"; then
+                log_error "FAIL: Inbound PROXY protocol"
+                exit 1
+            fi
+            log_success "Inbound PROXY protocol passed"
+
+            log_section "PROXY protocol gateway chain"
+            if ! "${SCRIPT_DIR}/test_proxy_protocol_chain.sh"; then
+                log_error "FAIL: PROXY protocol gateway chain"
+                exit 1
+            fi
+            log_success "PROXY protocol gateway chain passed"
+        else
+            log_warn "docker unavailable; skipping PROXY protocol suites"
+        fi
+    fi
+
     # Admin token for the main suite (token-only model).
     #
     # The Controller authenticates the Admin API with a single pre-shared bearer

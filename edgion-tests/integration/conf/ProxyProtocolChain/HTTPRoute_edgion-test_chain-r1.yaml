@@ -1,0 +1,18 @@
+# Hop 1 forwards to hop 2. No `hostnames`: the BusyBox probe sends Host: <ip>:<port>.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chain-r1
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: chain-gw1
+      namespace: edgion-test
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: chain-hop2
+          port: 58531

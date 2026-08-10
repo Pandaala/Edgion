@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: chain-backend
+  namespace: edgion-test
+spec:
+  ports:
+    - name: http
+      port: 30002
+      targetPort: 30002
+      protocol: TCP
+  type: ClusterIP
