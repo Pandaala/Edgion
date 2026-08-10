@@ -89,7 +89,7 @@ for bin in "$GATEWAY_BIN" "$CONTROLLER_BIN" "$TEST_SERVER_BIN"; do
         exit 1
     fi
 done
-for tool in docker curl python3; do
+for tool in docker curl python3 nc lsof; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         log_err "$tool not found (required)"
         exit 1
@@ -262,6 +262,7 @@ EOF
     precheck_port "$GW_METRICS_PORT" "gateway metrics" || return 1
     precheck_port "$GW_PP_PORT"      "gateway pp http" || return 1
     precheck_port "$GW_HOP2_PORT"    "gateway hop2 http" || return 1
+    precheck_port "$V2_DUMP_PORT" "byte dumper" || return 1
 
     # Bind on 0.0.0.0 (the gateway always does) so the docker proxies can reach
     # the listeners through host.docker.internal.

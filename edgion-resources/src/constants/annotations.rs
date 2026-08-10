@@ -37,8 +37,9 @@ pub mod edgion {
 
     /// Restrict [`ACCEPT_PROXY_PROTOCOL`] to connections from these sources.
     ///
-    /// Comma- or space-separated IP/CIDR list on `Gateway.metadata.annotations`,
-    /// e.g. `"10.0.0.0/8, 192.168.1.5"` (a bare address is taken as /32 or /128).
+    /// IP/CIDR list on `Gateway.metadata.annotations`, separated by commas or any
+    /// whitespace (so a YAML block scalar works), e.g. `"10.0.0.0/8, 192.168.1.5"`.
+    /// A bare address is taken as /32 or /128.
     /// When present, a connection from any other address is served as an
     /// ordinary direct connection and its bytes are never parsed as a PROXY
     /// header — that is what lets one listener serve both load-balanced and
@@ -46,6 +47,10 @@ pub mod edgion {
     ///
     /// An unparseable entry, or one matching every address, falls back to
     /// requiring a header rather than building a partial or wide-open matcher.
+    /// Match-all is judged on the parsed prefix, not the text, so `0.0.0.0/00`
+    /// and `0.0.0.0/+0` are refused alongside `0.0.0.0/0`. Note a pair such as
+    /// `0.0.0.0/1, 128.0.0.0/1` still covers all of IPv4 and is accepted — the
+    /// check rejects an accidental wildcard, not a deliberate one.
     ///
     /// This list says who may SPEAK proxy protocol (the load balancer). It is
     /// unrelated to `EdgionGatewayConfig.spec.realIp.trustedIps`, which says
