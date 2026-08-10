@@ -111,30 +111,94 @@ enabled on the same listener. Fixing it properly means moving the filter after
 the handshake, which changes when connections are shed and is out of scope here.
 
 Also out of scope: UDP listeners (no PROXY protocol), v2 TLV parsing (AWS VPC
-endpoint IDs; note Istio's ambient mesh has claimed `0xD0`/`0xD1`), and
-recovering the balancer's own address after the swap (nginx's
-`$realip_remote_addr` analog — the fd still holds it if ever needed).
+endpoint IDs; note Istio's ambient mesh has claimed `0xD0`/`0xD1`), and preserving the original destination across hops (each hop rewrites
+`local_addr` to its own upstream address). The balancer's own address is no
+longer a non-goal: it is available as `SocketDigest::raw_peer_addr` and appears
+in the L4 access logs as `transport_peer`.
 
 ## Operational notes
 
-- **Trust.** The header is unauthenticated; anything that can reach the listener
-  directly can claim any source address. The listener must be reachable only
-  through the balancer, enforced by security groups / private subnets. This
-  matches Envoy, Istio, nginx, and HAProxy, none of which do CIDR checks by
-  default. A trusted-CIDR allowlist (Traefik's model) is a natural later
-  hardening step: the real fd peer is still available before the swap.
+- **Trust.** The header is unauthenticated. Without
+  `edgion.io/proxy-protocol-trusted-cidrs` the listener must be reachable only
+  through the balancer, enforced by security groups / private subnets. With it,
+  only peers in the list are examined and everything else is served as an
+  ordinary direct connection — that is how one listener safely serves both
+  load-balanced and direct traffic.
 - **Health checks.** kubelet liveness/readiness probes hit the pod directly and
-  carry no header, so never enable this on a listener that also serves probes.
+  carry no header. Under mandatory mode never enable this on a listener that
+  also serves probes; under source-conditional mode the probe's address simply
+  falls outside the trusted list and is served normally, which is the main
+  reason to use that mode.
   Edgion's admin/probe ports are separate listeners and are unaffected. Istio hit
   exactly this (istio/istio#39868) and scoped its exception to the status port
   rather than adding a global permissive mode.
 - **Listener merging.** Listeners are deduplicated globally by
   `(ip:port, protocol)`, first one wins. Two Gateway listeners collapsing onto
-  one physical port cannot disagree about the flag; whichever binds first
-  decides. A controller-side consistency check in `listener_port_manager.rs`
+  one physical port cannot disagree about the flag *or the trusted-CIDR list*;
+  whichever binds first decides both. A controller-side consistency check in `listener_port_manager.rs`
   would be the place to reject that up front.
 - **No hot rebind.** The flag is read once when listeners bind, so changing it
   requires a gateway restart.
+
+## Client address resolution
+
+1. `raw_peer` — the transport peer. Always known; the load balancer on a
+   proxy-protocol listener.
+2. PROXY protocol (L4). If enabled, the peer is trusted and a header is present,
+   `peer_addr` becomes the header's source. Otherwise `peer_addr` stays
+   `raw_peer`.
+3. X-Forwarded-For (L7), i.e. `realIp`. If `peer_addr` is in
+   `realIp.trustedIps`, the XFF chain is walked right-to-left from it under
+   `recursive` / `maxTrustedHops`. Otherwise `peer_addr` is the answer.
+
+XFF wins when it is trustworthy, the PROXY address is the fallback, the
+transport peer is the last resort. Every tier is gated, so a client cannot
+promote itself: a forged XFF is only consulted when the peer is already a
+trusted proxy, and a forged PROXY header is only parsed when the peer is in the
+listener's trusted sources.
+
+Note tier 3 is inactive in the plain load-balancer deployment. Once a header is
+applied the anchor is the real client, who is not a trusted proxy, so the XFF
+walk stops immediately. It matters in a gateway chain, where the PROXY source is
+a peer gateway the operator has listed in `realIp.trustedIps`.
+
+Two trust lists, never to be conflated:
+
+- `edgion.io/proxy-protocol-trusted-cidrs` (L4) — who may SPEAK proxy protocol.
+  Holds the load balancer.
+- `EdgionGatewayConfig.spec.realIp.trustedIps` (L7) — which addresses count as
+  proxy hops when walking XFF. Holds CDN egress ranges and peer gateways.
+
+Forcing modes need no extra configuration: force-PROXY by keeping the PROXY
+address out of `realIp.trustedIps`; force-XFF by not enabling proxy protocol on
+that listener.
+
+## Only reachable through something that writes the header
+
+A PROXY-accepting listener must be reachable only via a component that writes
+the header **itself**. A transparent L4 relay does not qualify: it forwards the
+client's first bytes verbatim, so a client can author the header and the relay
+launders it into a trusted position. This applies to mandatory mode as much as
+to source-conditional mode, and equally to HAProxy and nginx relays — it is a
+property of transparent relaying, not of this implementation.
+
+Concretely, do not put a gateway whose TCPRoutes are plain relays in front of a
+PROXY-accepting listener, and do not list such a gateway in
+`proxy-protocol-trusted-cidrs`. HTTPRoute hops are safe (they reparse the
+request) and TLSRoute hops are safe (they parse the ClientHello and can emit
+their own header via `edgion.io/proxy-protocol: v2`).
+
+## Known limitations
+
+- **Source-conditional mode waits for 12 bytes.** Deciding whether a trusted
+  peer sent a header requires reading the signature, so a trusted peer that
+  connects and says nothing is held until the 60s downstream handshake timeout.
+  Mandatory mode does not share this: there a silent peer is meant to be
+  rejected. Do not use source-conditional mode on listeners fronting
+  server-speaks-first protocols (SMTP, MySQL, Postgres).
+- **One trust list per Gateway.** `accept-proxy-protocol` has a per-listener
+  suffix; `proxy-protocol-trusted-cidrs` does not, so all PROXY-enabled
+  listeners of a Gateway share one list.
 
 ## Testing
 
@@ -178,3 +242,31 @@ since HAProxy reaches the host through NAT. Phases:
 
 Startup also asserts the gateway logged the enablement line, so a silently
 ignored annotation fails the test rather than passing vacuously.
+
+### Two-hop chain suite
+
+`edgion-tests/integration/scripts/integration/test_proxy_protocol_chain.sh`,
+fixtures in `edgion-tests/integration/conf/ProxyProtocolChain/`, ports 585xx and
+docker subnet `172.29.0.0/16` (the single-hop suite holds 584xx and
+`172.28.0.0/16`; docker refuses overlapping pools, so the two must differ).
+
+HAProxy sends PPv2 to hop 1, hop 1 routes to hop 2 over plain HTTP, hop 2 routes
+to the test server. Hop 1 derives the client from the PROXY header and appends it
+to X-Forwarded-For; hop 2 has no PROXY annotation — nothing sends it a header —
+and resolves the client by walking XFF, which works only because the GatewayClass
+carries a `parametersRef` to an `EdgionGatewayConfig` listing hop 1 in
+`realIp.trustedIps`.
+
+**The assertion is on X-Real-IP, not X-Forwarded-For.** XFF is appended
+unconditionally by every hop, so it carries the client whether or not hop 2
+resolved anything; asserting on it alone passes green while every IP-based plugin
+at hop 2 still sees hop 1. X-Real-IP is written from the resolved address.
+Confirmed by deleting `realIp` from the fixture: X-Real-IP degrades to
+`127.0.0.1` and the suite fails, while both XFF assertions still pass.
+
+Only the v2 leg is driven here — what this suite tests is propagation across
+hops, not the parsers, which the single-hop suite covers for both versions.
+
+Both suites are registered in `run_integration.sh` behind a docker-availability
+guard, and both are excluded from the shared conf loader in
+`start_all_with_conf.sh`.
