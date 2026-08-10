@@ -23,6 +23,10 @@ pub struct TcpContext {
     pub listener_port: u16,
     pub client_addr: String,
     pub client_port: u16,
+    /// Transport peer, before any inbound PROXY protocol override. Equals
+    /// `client_addr` on an ordinary connection; on a proxy-protocol listener it
+    /// stays the load balancer, which is how a chain is traced hop by hop.
+    pub transport_peer: String,
     pub upstream_addr: Option<String>,
     pub start_time: Instant,
     pub bytes_sent: u64,
@@ -99,11 +103,17 @@ impl ServerApp for EdgionTcpProxy {
             .and_then(|d| d.peer_addr().cloned())
             .and_then(|addr| addr.as_inet().map(|inet| (inet.ip().to_string(), inet.port())))
             .unwrap_or_else(|| ("unknown".to_string(), 0));
+        let transport_peer = downstream
+            .get_socket_digest()
+            .and_then(|d| d.raw_peer_addr().cloned())
+            .and_then(|addr| addr.as_inet().map(|inet| inet.ip().to_string()))
+            .unwrap_or_else(|| "unknown".to_string());
 
         let mut ctx = TcpContext {
             listener_port: self.listener_port,
             client_addr,
             client_port,
+            transport_peer,
             upstream_addr: None,
             start_time: Instant::now(),
             bytes_sent: 0,

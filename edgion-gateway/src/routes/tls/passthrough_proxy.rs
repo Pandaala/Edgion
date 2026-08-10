@@ -68,7 +68,12 @@ impl ServerApp for EdgionTlsPassthroughProxy {
             .and_then(|addr| addr.as_inet().map(|inet| (inet.ip().to_string(), inet.port())))
             .unwrap_or_else(|| ("unknown".to_string(), 0));
 
-        let mut ctx = TlsContext::new(self.listener_port, client_addr, client_port);
+        let transport_peer = downstream
+            .get_socket_digest()
+            .and_then(|d| d.raw_peer_addr().cloned())
+            .and_then(|addr| addr.as_inet().map(|inet| inet.ip().to_string()))
+            .unwrap_or_else(|| "unknown".to_string());
+        let mut ctx = TlsContext::new(self.listener_port, client_addr, client_port, transport_peer);
 
         if *shutdown.borrow() {
             ctx.err_log = Some("shutdown".to_string());
@@ -457,6 +462,7 @@ impl EdgionTlsPassthroughProxy {
             "mode": "passthrough",
             "listener_port": ctx.listener_port,
             "client_addr": &ctx.client_addr,
+            "transport_peer": &ctx.transport_peer,
             "client_port": ctx.client_port,
             "sni": &ctx.sni,
             "end_time": ctx.end_time,

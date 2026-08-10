@@ -16,6 +16,9 @@ pub struct TcpLogEntry {
     pub listener_port: u16,
     pub client_addr: String,
     pub client_port: u16,
+    /// The transport peer, which differs from `client_addr` only when an
+    /// inbound PROXY header replaced it.
+    pub transport_peer: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream_addr: Option<String>,
     pub duration_ms: u64,
@@ -39,6 +42,7 @@ impl TcpLogEntry {
             listener_port: ctx.listener_port,
             client_addr: ctx.client_addr.clone(),
             client_port: ctx.client_port,
+            transport_peer: ctx.transport_peer.clone(),
             upstream_addr: ctx.upstream_addr.clone(),
             duration_ms,
             bytes_sent: ctx.bytes_sent,
@@ -83,6 +87,7 @@ mod tests {
             listener_port: 9000,
             client_addr: "127.0.0.1".to_string(),
             client_port: 50000,
+            transport_peer: "127.0.0.1".to_string(),
             upstream_addr: None,
             start_time: Instant::now(),
             bytes_sent: 0,
@@ -141,5 +146,24 @@ mod tests {
         for (variant, expected) in cases {
             assert_eq!(variant.as_str(), *expected);
         }
+    }
+
+    #[test]
+    fn transport_peer_is_carried_separately_from_client_addr() {
+        // The whole point of the field: on a proxy-protocol listener client_addr
+        // is the real client while the transport peer stays the load balancer.
+        // A wiring mistake reading peer_addr() twice would make them equal and
+        // no other test would notice.
+        let mut ctx = denied_ctx(None);
+        ctx.client_addr = "203.0.113.9".to_string();
+        ctx.transport_peer = "10.0.0.7".to_string();
+
+        let entry = TcpLogEntry::from_context(&ctx);
+        assert_eq!(entry.client_addr, "203.0.113.9");
+        assert_eq!(entry.transport_peer, "10.0.0.7");
+
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"transport_peer\":\"10.0.0.7\""), "{json}");
+        assert!(json.contains("\"client_addr\":\"203.0.113.9\""), "{json}");
     }
 }

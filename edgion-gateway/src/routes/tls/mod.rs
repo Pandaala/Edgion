@@ -190,7 +190,7 @@ mod fail_close_tests {
         let key = "default/__fail_close_missing__".to_string();
         assert!(store.get(&key).is_none(), "test precondition: key must not be in store");
 
-        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000);
+        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string());
 
         let allowed = run_tls_route_plugins(Some(key.as_str()), &mut ctx, "example.com", 443, None, false).await;
         assert!(!allowed, "missing ESP must fail-close");
@@ -208,7 +208,7 @@ mod fail_close_tests {
     #[tokio::test]
     async fn admit_when_store_key_is_none() {
         // No ESP attached to the rule — intentional pass-through, must allow.
-        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000);
+        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string());
         let allowed = run_tls_route_plugins(None, &mut ctx, "example.com", 443, None, false).await;
         assert!(allowed, "rule with no store_key must pass through");
         assert!(ctx.err_log.is_none());
@@ -220,7 +220,7 @@ mod fail_close_tests {
         // literal "unknown" set when Pingora cannot extract the peer addr).
         // Without a parseable client IP we cannot evaluate an IP-allowlist
         // policy, so the connection must be rejected (fail-close).
-        let mut ctx = TlsContext::new(443, "unknown".to_string(), 0);
+        let mut ctx = TlsContext::new(443, "unknown".to_string(), 0, "unknown".to_string());
         let allowed = run_tls_route_plugins(Some("default/anything"), &mut ctx, "example.com", 443, None, false).await;
         assert!(!allowed, "unparseable client_addr must fail-close");
         let err = ctx.err_log.as_deref().unwrap_or("");

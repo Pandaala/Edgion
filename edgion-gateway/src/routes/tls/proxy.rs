@@ -61,6 +61,10 @@ pub struct TlsContext {
     pub start_at: Instant,
     pub listener_port: u16,
     pub client_addr: String,
+    /// Transport peer, before any inbound PROXY protocol override. Equals
+    /// `client_addr` on an ordinary connection; on a proxy-protocol listener it
+    /// stays the load balancer, which is how a chain is traced hop by hop.
+    pub transport_peer: String,
     pub client_port: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_id: Option<String>,
@@ -81,7 +85,7 @@ pub struct TlsContext {
 }
 
 impl TlsContext {
-    pub(super) fn new(listener_port: u16, client_addr: String, client_port: u16) -> Self {
+    pub(super) fn new(listener_port: u16, client_addr: String, client_port: u16, transport_peer: String) -> Self {
         Self {
             ts: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -90,6 +94,7 @@ impl TlsContext {
             start_at: Instant::now(),
             listener_port,
             client_addr,
+            transport_peer,
             client_port,
             tls_id: None,
             sni: None,
@@ -133,8 +138,13 @@ impl ServerApp for EdgionTlsTcpProxy {
             .and_then(|d| d.peer_addr().cloned())
             .and_then(|addr| addr.as_inet().map(|inet| (inet.ip().to_string(), inet.port())))
             .unwrap_or_else(|| ("unknown".to_string(), 0));
+        let transport_peer = downstream
+            .get_socket_digest()
+            .and_then(|d| d.raw_peer_addr().cloned())
+            .and_then(|addr| addr.as_inet().map(|inet| inet.ip().to_string()))
+            .unwrap_or_else(|| "unknown".to_string());
 
-        let mut ctx = TlsContext::new(self.listener_port, client_addr, client_port);
+        let mut ctx = TlsContext::new(self.listener_port, client_addr, client_port, transport_peer);
 
         if *shutdown.borrow() {
             ctx.err_log = Some("shutdown".to_string());
@@ -454,6 +464,7 @@ impl EdgionTlsTcpProxy {
             "ts": ctx.ts,
             "listener_port": ctx.listener_port,
             "client_addr": &ctx.client_addr,
+            "transport_peer": &ctx.transport_peer,
             "client_port": ctx.client_port,
             "tls_id": &ctx.tls_id,
             "sni": &ctx.sni,
