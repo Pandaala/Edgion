@@ -4377,7 +4377,6 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "pingora-boringssl"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#1258f5090af6542c6bf0580460ef330c7547d4d2"
 dependencies = [
  "boring",
  "boring-sys",
@@ -4390,7 +4389,6 @@ dependencies = [
 [[package]]
 name = "pingora-cache"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#1258f5090af6542c6bf0580460ef330c7547d4d2"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
@@ -4426,7 +4424,6 @@ dependencies = [
 [[package]]
 name = "pingora-core"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#1258f5090af6542c6bf0580460ef330c7547d4d2"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
@@ -4480,12 +4477,10 @@ dependencies = [
 [[package]]
 name = "pingora-error"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#1258f5090af6542c6bf0580460ef330c7547d4d2"
 
 [[package]]
 name = "pingora-header-serde"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#1258f5090af6542c6bf0580460ef330c7547d4d2"
 dependencies = [
  "bytes",
  "http",
@@ -4500,7 +4495,6 @@ dependencies = [
 [[package]]
 name = "pingora-http"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#1258f5090af6542c6bf0580460ef330c7547d4d2"
 dependencies = [
  "bytes",
  "http",
@@ -4510,7 +4504,6 @@ dependencies = [
 [[package]]
 name = "pingora-ketama"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#1258f5090af6542c6bf0580460ef330c7547d4d2"
 dependencies = [
  "crc32fast",
 ]
@@ -4518,7 +4511,6 @@ dependencies = [
 [[package]]
 name = "pingora-limits"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#1258f5090af6542c6bf0580460ef330c7547d4d2"
 dependencies = [
  "ahash 0.8.12",
 ]
@@ -4526,7 +4518,6 @@ dependencies = [
 [[package]]
 name = "pingora-load-balancing"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#1258f5090af6542c6bf0580460ef330c7547d4d2"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -4547,7 +4538,6 @@ dependencies = [
 [[package]]
 name = "pingora-lru"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#1258f5090af6542c6bf0580460ef330c7547d4d2"
 dependencies = [
  "arrayvec",
  "hashbrown 0.12.3",
@@ -4558,7 +4548,6 @@ dependencies = [
 [[package]]
 name = "pingora-pool"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#1258f5090af6542c6bf0580460ef330c7547d4d2"
 dependencies = [
  "crossbeam-queue",
  "log",
@@ -4572,7 +4561,6 @@ dependencies = [
 [[package]]
 name = "pingora-proxy"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#1258f5090af6542c6bf0580460ef330c7547d4d2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4594,7 +4582,6 @@ dependencies = [
 [[package]]
 name = "pingora-runtime"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#1258f5090af6542c6bf0580460ef330c7547d4d2"
 dependencies = [
  "once_cell",
  "rand 0.8.7",
@@ -4605,7 +4592,6 @@ dependencies = [
 [[package]]
 name = "pingora-rustls"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#1258f5090af6542c6bf0580460ef330c7547d4d2"
 dependencies = [
  "log",
  "no_debug",
@@ -4621,7 +4607,6 @@ dependencies = [
 [[package]]
 name = "pingora-timeout"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?branch=edgion#1258f5090af6542c6bf0580460ef330c7547d4d2"
 dependencies = [
  "once_cell",
  "parking_lot",

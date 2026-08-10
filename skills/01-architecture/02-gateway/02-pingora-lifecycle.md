@@ -124,7 +124,48 @@ Called when the upstream response headers are received:
 **File**: `pg_upstream_response_body_filter.rs`
 **Signature**: `fn upstream_response_body_filter(session, body, end_of_stream, ctx) -> Result<Option<Duration>>`
 
-Called once per upstream response body chunk; returning `Some(Duration)` enables bandwidth limiting:
+Called once per upstream response body chunk; returning `Some(Duration)` enables bandwidth limiting.
+When Phase 7 accepts the final header, the Edgion Pingora fork also calls this hook exactly once
+with `body = None` and `end_of_stream = true` when that upstream header task already ends the response. This terminal
+call is driven by the transport's actual end-of-stream state for H1, H2, and custom upstreams; a
+`Content-Length: 0` header alone is not sufficient on H2. It lets streaming processors finalize or
+replace a bodyless upstream response without a provider-specific header-stage workaround.
+Unlike an ordinary body task, the terminal event is initially carried by the header. Pingora
+therefore defers this synthetic call until that header's Phase 7 `response_filter` has completed.
+This preserves the ordinary lifecycle invariant that final response classification, async plugins,
+local replies, and denials run before the body hook. If `response_filter` rejects or writes a local
+reply, the synthetic body hook is not called.
+
+If that synthetic call emits bytes, Pingora rewrites the task sequence to
+`Header(..., false)` followed by emitted body chunks with EOS only on the last chunk. The same
+sequence is used for cache admission and downstream delivery. Both the live sequence and cache-hit
+replay pass through the same downstream `response_body_filter`; cache hits do not invoke the
+upstream hook again. Output is discarded for `HEAD`, 1xx,
+204, and 304 responses, including when the final `response_filter` creates that bodyless status;
+cache hits then end on the header instead of replaying the stored body. 101/informational upstream
+headers do not trigger the synthetic call.
+
+Cache policy evaluation still runs on the upstream-filtered header before Phase 7. Admission waits
+for terminal body synthesis so the stored metadata can reconcile `Content-Length` with the actual
+cached representation. Internal cache-control responses consumed by revalidation or stale serving
+(for example, an origin 304 merged into an existing cached response) are not forwarded response
+representations and do not enter this body lifecycle.
+
+Even when no hook emits bytes, Pingora materializes the terminal body boundary so the downstream
+`response_body_filter` receives one EOS call. Streaming miss readback and cache hits preserve this
+same EOS callback. If terminal synthesis changes the body length, Pingora removes a stale upstream
+`Content-Length` and selects consistent downstream framing; it never relies on `Content-Length: 0`
+as the bodyless detector.
+
+Downstream completion is independent from upstream completion. If the final header filter changes
+a bodyful response to 204/304, Pingora may finish the downstream response at the header but keeps
+draining and caching the upstream body until the source's real EOS. Suppressed follow-up tasks are
+dropped and never converted into a second `Done` terminal event. A source failure after the
+downstream terminal boundary prevents upstream reuse without replacing the already-complete
+downstream response. It also aborts any incomplete cache admission so the miss writer and cache
+lock cannot survive a swallowed post-terminal source error.
+
+The normal processing order remains:
 
 1. **Body time recording**: compute `bt` (body time) on the first chunk.
 2. **Route-level body filter plugins**: bandwidth limiting, etc.

@@ -544,6 +544,143 @@ fn fixed_errors_and_local_reject(
     })
 }
 
+fn bodyless_responses(ctx: TestContext) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
+    Box::pin(async move {
+        let start = Instant::now();
+        for h2 in [false, true] {
+            for (mode, expected_status, expected_code, expect_translation_failure) in [
+                ("bodyless_200", 200, "response_translation_failed", true),
+                ("bodyless_503", 503, "service_unavailable", false),
+            ] {
+                let trace = format!("anthropic-{mode}-h2-{h2}-{}", uuid::Uuid::new_v4());
+                let response = match post(&ctx, base_body(false), mode, h2, Some(&trace), false).await {
+                    Ok(response) => response,
+                    Err(error) => return TestResult::failed(start.elapsed(), error),
+                };
+                if response.status().as_u16() != expected_status
+                    || response.headers().contains_key(reqwest::header::CONTENT_LENGTH)
+                    || response.headers().contains_key("request-id")
+                    || response.headers().contains_key("x-provider-private")
+                    || response
+                        .headers()
+                        .get("cache-control")
+                        .and_then(|value| value.to_str().ok())
+                        != Some("no-store")
+                {
+                    return TestResult::failed(
+                        start.elapsed(),
+                        format!("unexpected bodyless response headers/status for {mode} over h2={h2}"),
+                    );
+                }
+                let body = response.text().await.unwrap_or_default();
+                let envelope: Value = match serde_json::from_str(&body) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("bodyless {mode} over h2={h2} returned invalid JSON: {error}; body={body:?}"),
+                        )
+                    }
+                };
+                if envelope.pointer("/error/code").and_then(Value::as_str) != Some(expected_code)
+                    || body.contains("bodyless-private-detail")
+                {
+                    return TestResult::failed(
+                        start.elapsed(),
+                        format!("unexpected bodyless envelope for {mode} over h2={h2}: {body}"),
+                    );
+                }
+
+                let entry = match ctx.access_log_client().get_access_log_with_retry(&trace, 15, 200).await {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("bodyless {mode} access log missing: {error}"),
+                        )
+                    }
+                };
+                let recorded_translation_failure = entry
+                    .errors()
+                    .iter()
+                    .any(|error| error == "AiResponseTranslationFailed");
+                if recorded_translation_failure != expect_translation_failure {
+                    return TestResult::failed(
+                        start.elapsed(),
+                        format!("bodyless {mode} translation-failure signal mismatch: {}", entry.data),
+                    );
+                }
+            }
+
+            let mode = "bodyless_sse_200";
+            let trace = format!("anthropic-{mode}-h2-{h2}-{}", uuid::Uuid::new_v4());
+            let response = match post(&ctx, base_body(true), mode, h2, Some(&trace), false).await {
+                Ok(response) => response,
+                Err(error) => return TestResult::failed(start.elapsed(), error),
+            };
+            if response.status() != reqwest::StatusCode::OK
+                || response
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .is_none_or(|value| !value.starts_with("text/event-stream"))
+            {
+                return TestResult::failed(
+                    start.elapsed(),
+                    format!("unexpected bodyless SSE headers/status over h2={h2}"),
+                );
+            }
+            let (frames, _) = match collect_sse(response).await {
+                Ok(frames) => frames,
+                Err(error) => return TestResult::failed(start.elapsed(), error),
+            };
+            let event = match frames.as_slice() {
+                [frame] => match sse_json(frame) {
+                    Ok(Some(event)) => event,
+                    Ok(None) => {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "bodyless SSE emitted only a done marker".to_string(),
+                        )
+                    }
+                    Err(error) => return TestResult::failed(start.elapsed(), error),
+                },
+                _ => {
+                    return TestResult::failed(
+                        start.elapsed(),
+                        format!("bodyless SSE emitted {} frames over h2={h2}", frames.len()),
+                    )
+                }
+            };
+            if event.pointer("/error/code").and_then(Value::as_str) != Some("response_translation_failed") {
+                return TestResult::failed(
+                    start.elapsed(),
+                    format!("unexpected bodyless SSE event over h2={h2}: {event}"),
+                );
+            }
+            let entry = match ctx.access_log_client().get_access_log_with_retry(&trace, 15, 200).await {
+                Ok(entry) => entry,
+                Err(error) => return TestResult::failed(start.elapsed(), error.to_string()),
+            };
+            if !entry
+                .errors()
+                .iter()
+                .any(|error| error == "AiResponseTranslationFailed")
+                || entry.data.pointer("/genai/streaming").and_then(Value::as_bool) != Some(true)
+            {
+                return TestResult::failed(
+                    start.elapsed(),
+                    format!("bodyless SSE lifecycle signals missing or inconsistent: {}", entry.data),
+                );
+            }
+        }
+        TestResult::passed_with_message(
+            start.elapsed(),
+            "Bodyless Anthropic fixed and SSE responses produced bounded OpenAI envelopes over H1 and H2".to_string(),
+        )
+    })
+}
+
 fn malformed_and_oversized(
     ctx: TestContext,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
@@ -625,6 +762,11 @@ impl TestSuite for AnthropicProviderTestSuite {
                 "malformed_and_oversized",
                 "Malformed and oversized provider streams seal safely",
                 malformed_and_oversized,
+            ),
+            TestCase::new(
+                "bodyless_responses",
+                "Bodyless provider responses still emit OpenAI envelopes over H1 and H2",
+                bodyless_responses,
             ),
             TestCase::new(
                 "fixed_errors_and_local_reject",

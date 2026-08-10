@@ -28,10 +28,10 @@ use crate::tls::runtime::gateway::tls_pingora::TlsCallback;
 use edgion_resources::constants::annotations::edgion;
 use edgion_resources::matcher::ip_cidr_helpers::to_cidr_format;
 use edgion_resources::matcher::ip_radix_tree::{IpCidr, IpRadixMatcher};
-use pingora_core::protocols::l4::proxy_protocol::ProxyProtocolTrust;
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 use edgion_resources::resources::gateway::{GatewayTlsMode, Listener};
 use edgion_resources::ListenerKey;
+use pingora_core::protocols::l4::proxy_protocol::ProxyProtocolTrust;
 use tokio_util::sync::CancellationToken;
 
 /// Context passed to listener builders containing gateway-level information and listener config
@@ -125,11 +125,7 @@ impl ProxyProtocolTrust for CidrProxyProtocolTrust {
 /// partial list would silently treat the ranges it dropped as untrusted and
 /// mis-attribute their client addresses, which is far harder to notice than a
 /// listener that plainly requires a header.
-fn build_trusted_sources(
-    raw: &str,
-    gateway_key: &str,
-    listener_name: &str,
-) -> Option<Arc<dyn ProxyProtocolTrust>> {
+fn build_trusted_sources(raw: &str, gateway_key: &str, listener_name: &str) -> Option<Arc<dyn ProxyProtocolTrust>> {
     let mut builder = IpRadixMatcher::builder();
     // Split on commas and any whitespace: a YAML block scalar yields newlines,
     // which would otherwise arrive as one unparseable entry.
@@ -189,9 +185,7 @@ fn build_trusted_sources(
 /// Peers allowed to speak PROXY protocol to this listener, or `None` for
 /// mandatory mode.
 fn proxy_protocol_trusted_sources(context: &ListenerContext) -> Option<Arc<dyn ProxyProtocolTrust>> {
-    let raw = context
-        .gateway_annotations
-        .get(edgion::PROXY_PROTOCOL_TRUSTED_CIDRS)?;
+    let raw = context.gateway_annotations.get(edgion::PROXY_PROTOCOL_TRUSTED_CIDRS)?;
     build_trusted_sources(raw, &context.gateway_key, &context.listener.name)
 }
 
@@ -805,10 +799,7 @@ mod proxy_protocol_trust_tests {
         // let every one of them through and silently trust every peer. Note
         // `1.2.3.4/00` in particular: it reads as one specific host.
         for smuggled in ["0.0.0.0/00", "0.0.0.0/000", "0.0.0.0/+0", "::/00", "1.2.3.4/00"] {
-            assert!(
-                build(smuggled).is_none(),
-                "{smuggled} must not produce a matcher"
-            );
+            assert!(build(smuggled).is_none(), "{smuggled} must not produce a matcher");
         }
     }
 

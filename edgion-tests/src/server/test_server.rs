@@ -1994,6 +1994,27 @@ async fn anthropic_provider_handler(Path(path): Path<String>, request: AxumReque
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
     let observation = anthropic_provider_observation(&path, &parts.uri, &parts.headers, &json);
 
+    let bodyless_status = match mode.as_str() {
+        "bodyless_200" => Some(axum::http::StatusCode::OK),
+        "bodyless_sse_200" => Some(axum::http::StatusCode::OK),
+        "bodyless_503" => Some(axum::http::StatusCode::SERVICE_UNAVAILABLE),
+        _ => None,
+    };
+    if let Some(status) = bodyless_status {
+        let content_type = if mode == "bodyless_sse_200" {
+            "text/event-stream"
+        } else {
+            "application/json"
+        };
+        return axum::response::Response::builder()
+            .status(status)
+            .header("content-type", content_type)
+            .header("request-id", "bodyless-provider-id-must-be-stripped")
+            .header("x-provider-private", "bodyless-private-detail")
+            .body(Body::empty())
+            .unwrap();
+    }
+
     let fixed_status = match mode.as_str() {
         "status_400" => Some(axum::http::StatusCode::BAD_REQUEST),
         "status_401" => Some(axum::http::StatusCode::UNAUTHORIZED),
