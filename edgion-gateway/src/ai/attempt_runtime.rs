@@ -1217,7 +1217,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ledger_is_bounded_to_eight_entries_and_eight_kib() {
+    async fn ledger_is_bounded_to_eight_entries_and_field_bounds_fit_byte_budget() {
         let mut state = AiAttemptRuntimeState::default();
         for _ in 0..MAX_PENDING_SETTLEMENTS {
             let mut current = attempt(1, 0, false);
@@ -1228,6 +1228,9 @@ mod tests {
             state.finish_failure(AiAttemptFailure::Ambiguous(FailureClass::LocalOrigin));
         }
         assert_eq!(state.attempts().len(), MAX_PENDING_SETTLEMENTS);
+        // With eight entries and the production service/credential field
+        // bounds, the 8 KiB cap is currently defense-in-depth against future
+        // schema growth rather than a separately reachable branch.
         assert!(serde_json::to_vec(state.attempts()).unwrap().len() <= MAX_AI_ATTEMPT_LOG_BYTES);
         assert!(state.attempts().iter().all(|entry| {
             entry.service.len() <= MAX_SERVICE_KEY_BYTES && entry.credential.len() <= MAX_CREDENTIAL_ALIAS_BYTES

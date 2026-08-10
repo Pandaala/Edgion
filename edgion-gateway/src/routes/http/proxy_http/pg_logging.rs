@@ -933,6 +933,23 @@ mod genai_tests {
             .set_input_chars(prompt.chars().count() as u64);
         let event = format!("data: {completion}");
         observe_response(&ctx, event.as_bytes(), false, ResponseStreamKind::Sse).await;
+        ctx.ai_attempt_runtime.record_test_attempt(
+            GenAiAttempt {
+                number: 1,
+                service: "default/service-a".to_string(),
+                provider: "openai",
+                credential: "primary".to_string(),
+                status: Some(200),
+                failure: None,
+                retry_after_seconds: Some(3),
+                ttft_ms: Some(11),
+                usage_source: GenAiAttemptUsageSource::Estimated,
+                input_tokens: 4,
+                output_tokens: 5,
+                estimated_cost_usd: Some("0.00001".to_string()),
+            },
+            AiProviderLabel::OpenAi,
+        );
         finalize_ai_usage_with_metrics_enabled(&mut ctx, false);
 
         let json = crate::observe::AccessLogEntry::from_context(&ctx).to_json();
@@ -956,6 +973,33 @@ mod genai_tests {
                 "provider",
                 "streaming",
                 "usage_estimated",
+                "attempts",
+            ]
+            .into_iter()
+            .collect()
+        );
+        let attempts = genai["attempts"].as_array().expect("attempt array");
+        assert_eq!(attempts.len(), 1);
+        let attempt = attempts[0].as_object().expect("attempt object");
+        assert_eq!(attempt["service"], "default/service-a");
+        assert_eq!(attempt["credential"], "primary");
+        assert_eq!(
+            attempt
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            [
+                "credential",
+                "estimated_cost_usd",
+                "input_tokens",
+                "number",
+                "output_tokens",
+                "provider",
+                "retry_after_seconds",
+                "service",
+                "status",
+                "ttft_ms",
+                "usage_source",
             ]
             .into_iter()
             .collect()

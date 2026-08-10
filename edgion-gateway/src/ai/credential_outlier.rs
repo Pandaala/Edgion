@@ -383,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn parsed_reset_cooldown_uses_the_retry_after_cap() {
+    fn parsed_reset_cooldown_uses_the_retry_after_floor_and_cap() {
         let store = AiCredentialOutlierStore::new();
         let target = target("svc");
         store.configure_service(target.clone(), Some(config(10, 100)), ["primary".to_string()]);
@@ -391,6 +391,11 @@ mod tests {
             .current_handle(&target)
             .and_then(|service| service.capture("primary"))
             .expect("credential");
+        assert_eq!(
+            credential.apply_cooldown(Duration::from_millis(1)),
+            Some(Duration::from_secs(1))
+        );
+        assert!(matches!(credential.admit(), EjectionAdmission::Rejected));
         assert_eq!(
             credential.apply_cooldown(Duration::from_secs(999)),
             Some(Duration::from_secs(10))

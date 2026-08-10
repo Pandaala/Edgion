@@ -104,9 +104,10 @@ pending header operations and response plugins.
 - A 200 success must have identity/no `Content-Encoding` and the expected media type:
   `text/event-stream` for a streaming request or `application/json` for non-streaming. A
   mismatch becomes fixed 503. Never attempt to transform encoded bytes.
-- Strip provider request IDs, `Location`, `Set-Cookie`, `Content-Encoding`, validators tied to
-  the original body, and framing headers. Preserve a syntactically valid `Retry-After` only on
-  the fixed 429 response. Provider messages and IDs never pass through.
+- Rebuild the translated response header from an empty provider-header set. Emit only the
+  synthesized `Content-Type`, `Cache-Control: no-store`, and a syntactically valid `Retry-After`
+  on the fixed 429 response; gateway-owned headers and response-plugin mutations run after translation. Provider
+  messages, IDs, CDN metadata, cookies, redirects, and representation headers never pass through.
 - After the callback mutates the status/header, overwrite `ctx.request_info.status`, reclassify
   the response kind, and make the compression decision from the normalized header.
 - For a processor whose `changes_body_length()` is true, remove `Content-Length` at the end of

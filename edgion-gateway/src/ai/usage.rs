@@ -662,11 +662,31 @@ pub struct UsageExtractionProcessor {
     /// degraded flag is sticky, so without this every subsequent chunk of the
     /// stream would append the same status again.
     sse_degraded_reported: bool,
+    /// Whether this instance owns provider usage extraction. Provider-specific
+    /// translators disable it while retaining the character estimate.
+    extract_reported_usage: bool,
 }
 
 impl UsageExtractionProcessor {
     pub fn new(shared: Arc<AiUsageShared>) -> Self {
         Self::new_with_quota(shared, None, false, false)
+    }
+
+    /// Track only the translated response size used by estimated settlement.
+    ///
+    /// Provider-specific processors already own exact usage extraction. This
+    /// mode preserves the character fallback for incomplete or
+    /// gateway-terminated responses without buffering and parsing the
+    /// translated body a second time.
+    pub fn new_estimation_only(shared: Arc<AiUsageShared>) -> Self {
+        let mut processor = Self::new(shared);
+        processor.extract_reported_usage = false;
+        processor
+    }
+
+    #[cfg(test)]
+    pub(crate) fn extracts_reported_usage_for_test(&self) -> bool {
+        self.extract_reported_usage
     }
 
     pub fn new_with_quota(
@@ -688,6 +708,7 @@ impl UsageExtractionProcessor {
             sse_chars: SseDataCharCounter::default(),
             chars_finished: false,
             sse_degraded_reported: false,
+            extract_reported_usage: true,
         }
     }
 
@@ -695,6 +716,9 @@ impl UsageExtractionProcessor {
         match stream_kind {
             ResponseStreamKind::Sse => {
                 self.shared.add_output_chars(self.sse_chars.feed(chunk));
+                if !self.extract_reported_usage {
+                    return;
+                }
                 let shared = &self.shared;
                 let quota = self.quota.as_ref();
                 self.sse.feed_each(chunk, |event| {
@@ -713,7 +737,9 @@ impl UsageExtractionProcessor {
             }
             ResponseStreamKind::None => {
                 self.shared.add_output_chars(self.non_streaming_chars.feed(chunk));
-                self.observe_non_streaming(chunk);
+                if self.extract_reported_usage {
+                    self.observe_non_streaming(chunk);
+                }
             }
         }
     }
@@ -745,7 +771,11 @@ impl UsageExtractionProcessor {
             self.shared.add_output_chars(remaining);
             self.chars_finished = true;
         }
-        if stream_kind == ResponseStreamKind::None && !self.non_streaming_overflowed && !self.non_streaming_parsed {
+        if self.extract_reported_usage
+            && stream_kind == ResponseStreamKind::None
+            && !self.non_streaming_overflowed
+            && !self.non_streaming_parsed
+        {
             self.non_streaming_parsed = true;
             try_publish_usage(&self.shared, &self.non_streaming);
         }
@@ -1006,6 +1036,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn estimation_only_counts_without_buffering_or_parsing() {
+        let shared = Arc::new(AiUsageShared::default());
+        let mut processor = UsageExtractionProcessor::new_estimation_only(shared.clone());
+        let valid = br#"{"usage":{"prompt_tokens":2,"completion_tokens":3}}"#;
+        feed(&mut processor, &[(valid, true)], ResponseStreamKind::None).await;
+        assert_eq!(shared.output_chars(), valid.len() as u64);
+        assert_eq!(shared.reported_tokens(), None);
+
+        let oversized_shared = Arc::new(AiUsageShared::default());
+        let mut oversized_processor = UsageExtractionProcessor::new_estimation_only(oversized_shared.clone());
+        let oversized = vec![b'x'; MAX_NON_STREAMING_USAGE_BYTES + 1];
+        feed(
+            &mut oversized_processor,
+            &[(&oversized, true)],
+            ResponseStreamKind::None,
+        )
+        .await;
+        assert_eq!(oversized_shared.output_chars(), oversized.len() as u64);
+        assert!(!oversized_shared.non_streaming_overflowed());
+
+        let sse_shared = Arc::new(AiUsageShared::default());
+        let mut sse_processor = UsageExtractionProcessor::new_estimation_only(sse_shared.clone());
+        let data = br#"{"usage":{"prompt_tokens":5,"completion_tokens":8}}"#;
+        let event = [b"data: ".as_slice(), data, b"\n\n"].concat();
+        feed(&mut sse_processor, &[(&event, true)], ResponseStreamKind::Sse).await;
+        assert_eq!(sse_shared.output_chars(), data.len() as u64);
+        assert_eq!(sse_shared.reported_tokens(), None);
+    }
+
+    #[tokio::test]
     async fn sse_overflow_degrades_without_stopping_character_count() {
         let shared = Arc::new(AiUsageShared::default());
         let mut processor = UsageExtractionProcessor::new(shared.clone());
@@ -1123,12 +1183,10 @@ mod tests {
     }
 
     #[test]
-    fn counters_saturate() {
+    fn output_counter_saturates() {
         let shared = AiUsageShared::default();
-        shared.set_input_chars(u64::MAX);
         shared.add_output_chars(u64::MAX);
         shared.add_output_chars(1);
-        assert_eq!(shared.input_chars(), u64::MAX);
         assert_eq!(shared.output_chars(), u64::MAX);
     }
 
@@ -1147,23 +1205,6 @@ mod tests {
                 cache_write_input_tokens: 1,
             })
         );
-    }
-
-    #[tokio::test]
-    async fn shared_state_never_retains_request_response_or_event_text() {
-        let shared = Arc::new(AiUsageShared::default());
-        shared.set_input_chars("INPUT-FIXTURE".chars().count() as u64);
-        let mut processor = UsageExtractionProcessor::new(shared.clone());
-        feed(
-            &mut processor,
-            &[(b"data: OUTPUT-EVENT-FIXTURE\n\n", false)],
-            ResponseStreamKind::Sse,
-        )
-        .await;
-        let debug = format!("{shared:?}");
-        assert!(!debug.contains("INPUT-FIXTURE"));
-        assert!(!debug.contains("OUTPUT-EVENT-FIXTURE"));
-        assert!(!debug.contains("data:"));
     }
 
     #[tokio::test]

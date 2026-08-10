@@ -146,34 +146,76 @@ mod tests {
     }
 
     #[test]
-    fn model_not_found_shape_is_stable() {
-        let (status, body) = render(AiProxyError::ModelNotFound);
-        assert_eq!(status, 404);
-        assert_eq!(body["error"]["type"], "invalid_request_error");
-        assert_eq!(body["error"]["code"], "model_not_found");
-        assert!(body["error"]["message"].is_string());
-        assert_eq!(body["error"].as_object().unwrap().len(), 3);
-    }
-
-    #[test]
-    fn fixed_error_mappings_do_not_expose_internal_detail() {
-        for (error, expected_status) in [
-            (AiProxyError::StreamingDisabled, 400),
-            (AiProxyError::ServiceUnavailable, 503),
-            (AiProxyError::MalformedBody, 400),
-            (AiProxyError::UnsupportedParameter, 400),
-            (AiProxyError::MissingRequiredParameter, 400),
-            (AiProxyError::UnsupportedEndpoint, 404),
-            (AiProxyError::RequestTooLarge, 413),
-            (AiProxyError::QuotaExceeded, 429),
-            (AiProxyError::QuotaUnavailable, 503),
+    fn fixed_error_mappings_have_stable_public_shapes() {
+        for (error, expected_status, expected_type, expected_code) in [
+            (
+                AiProxyError::ModelNotFound,
+                404,
+                "invalid_request_error",
+                "model_not_found",
+            ),
+            (
+                AiProxyError::StreamingDisabled,
+                400,
+                "invalid_request_error",
+                "streaming_not_supported",
+            ),
+            (
+                AiProxyError::ServiceUnavailable,
+                503,
+                "api_error",
+                "service_unavailable",
+            ),
+            (
+                AiProxyError::MalformedBody,
+                400,
+                "invalid_request_error",
+                "invalid_request_body",
+            ),
+            (
+                AiProxyError::UnsupportedParameter,
+                400,
+                "invalid_request_error",
+                "unsupported_parameter",
+            ),
+            (
+                AiProxyError::MissingRequiredParameter,
+                400,
+                "invalid_request_error",
+                "missing_required_parameter",
+            ),
+            (
+                AiProxyError::UnsupportedEndpoint,
+                404,
+                "invalid_request_error",
+                "unsupported_endpoint",
+            ),
+            (
+                AiProxyError::RequestTooLarge,
+                413,
+                "invalid_request_error",
+                "request_too_large",
+            ),
+            (
+                AiProxyError::QuotaExceeded,
+                429,
+                "rate_limit_error",
+                "token_quota_exceeded",
+            ),
+            (
+                AiProxyError::QuotaUnavailable,
+                503,
+                "api_error",
+                "token_quota_unavailable",
+            ),
         ] {
             let (status, body) = render(error);
             assert_eq!(status, expected_status);
-            let rendered = body.to_string();
-            assert!(!rendered.contains("Secret"));
-            assert!(!rendered.contains("provider.example"));
-            assert!(!rendered.contains("api-key"));
+            let detail = body["error"].as_object().expect("error detail object");
+            assert_eq!(detail.len(), 3);
+            assert!(detail["message"].is_string());
+            assert_eq!(detail["type"], expected_type);
+            assert_eq!(detail["code"], expected_code);
         }
     }
 }

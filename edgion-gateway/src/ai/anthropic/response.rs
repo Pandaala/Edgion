@@ -227,7 +227,8 @@ impl AnthropicResponseProcessor {
             _ => Some(SERVICE_UNAVAILABLE),
         };
 
-        strip_provider_headers(response);
+        clear_provider_headers(response);
+        let _ = response.insert_header("cache-control", "no-store");
         if let Some(error) = error {
             response.status = StatusCode::from_u16(error.status).unwrap_or(StatusCode::SERVICE_UNAVAILABLE);
             let _ = response.insert_header("content-type", "application/json");
@@ -846,42 +847,14 @@ fn render_fixed_error(error: FixedError) -> Vec<u8> {
     .unwrap_or_else(|_| b"{\"error\":{\"message\":\"The request could not be processed.\",\"type\":\"api_error\",\"code\":\"internal_error\"}}".to_vec())
 }
 
-fn strip_provider_headers(response: &mut ResponseHeader) {
-    for name in [
-        "request-id",
-        "x-request-id",
-        "anthropic-request-id",
-        "location",
-        "set-cookie",
-        "content-encoding",
-        "etag",
-        "last-modified",
-        "content-md5",
-        "digest",
-        "content-range",
-        "accept-ranges",
-        "content-length",
-        "transfer-encoding",
-        "retry-after",
-    ] {
-        let _ = response.remove_header(name);
-    }
-    let provider_headers: Vec<_> = response
-        .headers
-        .keys()
-        .filter(|name| {
-            let name = name.as_str();
-            name.starts_with("anthropic-")
-                || name.starts_with("x-anthropic-")
-                || matches!(
-                    name,
-                    "x-amzn-requestid" | "x-amzn-request-id" | "x-amz-request-id" | "x-amzn-trace-id"
-                )
-        })
-        .cloned()
-        .collect();
-    for name in provider_headers {
-        response.headers.remove(name);
+fn clear_provider_headers(response: &mut ResponseHeader) {
+    // The translated body has a gateway-owned representation, so none of the
+    // provider's metadata or representation headers remain authoritative.
+    // Normalization restores the small public contract below, while Edgion's
+    // own response headers and response-plugin mutations run after this hook.
+    let names: Vec<_> = response.headers.keys().cloned().collect();
+    for name in names {
+        response.remove_header(&name);
     }
 }
 
@@ -1098,6 +1071,22 @@ mod tests {
             response
                 .insert_header("x-amzn-requestid", "provider-request")
                 .expect("valid header");
+            response.insert_header("cf-ray", "edge-request").expect("valid header");
+            response
+                .insert_header("cf-cache-status", "DYNAMIC")
+                .expect("valid header");
+            response.insert_header("via", "provider-edge").expect("valid header");
+            response.insert_header("alt-svc", "h3=\":443\"").expect("valid header");
+            response.insert_header("server", "provider").expect("valid header");
+            response
+                .insert_header("access-control-allow-origin", "*")
+                .expect("valid header");
+            response
+                .insert_header("cache-control", "public, max-age=86400")
+                .expect("valid header");
+            response
+                .insert_header("x-compatible-private", "opaque")
+                .expect("valid header");
             response.insert_header("retry-after", "12").expect("valid header");
             processor.on_response_header(&mut response);
             assert_eq!(response.status.as_u16(), expected);
@@ -1106,7 +1095,23 @@ mod tests {
             assert!(response.headers.get("etag").is_none());
             assert!(response.headers.get("anthropic-ratelimit-tokens-limit").is_none());
             assert!(response.headers.get("x-amzn-requestid").is_none());
+            for name in [
+                "cf-ray",
+                "cf-cache-status",
+                "via",
+                "alt-svc",
+                "server",
+                "access-control-allow-origin",
+                "x-compatible-private",
+            ] {
+                assert!(response.headers.get(name).is_none(), "provider header {name} survived");
+            }
+            assert_eq!(response.headers["cache-control"], "no-store");
             assert_eq!(response.headers.get("retry-after").is_some(), expected == 429);
+            assert!(response
+                .headers
+                .keys()
+                .all(|name| matches!(name.as_str(), "content-type" | "cache-control" | "retry-after")));
 
             let mut session = MockPluginSession::new();
             let body = run_chunk(&mut processor, &mut session, Some(b"provider secret body"), false)

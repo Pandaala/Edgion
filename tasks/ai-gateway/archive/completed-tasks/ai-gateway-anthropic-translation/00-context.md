@@ -66,6 +66,5 @@ Official sources:
 - `skills/01-architecture/05-resources/SKILL.md`
 - `skills/03-coding/observability/00-access-log.md`
 - `skills/05-testing/01-integration-testing.md`
-- `skills/06-documentation/SKILL.md`
+- `skills/11-doc/SKILL.md`
 - `skills/07-tasks/new_feature_work_flow.skill`
-

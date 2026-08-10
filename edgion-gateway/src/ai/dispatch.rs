@@ -481,15 +481,14 @@ fn prepare_ready_attempt(
             plan.terminate_on_over_limit,
         )));
     }
-    let usage_quota = (service.provider != AiProvider::Anthropic)
-        .then_some(quota_accumulator)
-        .flatten();
-    response_processors.push(Box::new(UsageExtractionProcessor::new_with_quota(
+    let usage_processor = usage_processor_for_provider(
+        service.provider,
         Arc::clone(&usage),
-        usage_quota,
+        quota_accumulator,
         requested_streaming,
         plan.terminate_on_over_limit,
-    )));
+    );
+    response_processors.push(Box::new(usage_processor));
     let response_processor: Box<dyn StreamingResponseProcessor> = Box::new(AiAttemptResponseProcessor {
         processors: response_processors,
         eos: Arc::clone(&eos),
@@ -860,6 +859,21 @@ fn provider_label(provider: AiProvider) -> AiProviderLabel {
     }
 }
 
+fn usage_processor_for_provider(
+    provider: AiProvider,
+    usage: Arc<AiUsageShared>,
+    quota: Option<Arc<crate::ai::quota::QuotaAccumulator>>,
+    requested_streaming: bool,
+    terminate_on_over_limit: bool,
+) -> UsageExtractionProcessor {
+    match provider {
+        AiProvider::Anthropic => UsageExtractionProcessor::new_estimation_only(usage),
+        AiProvider::OpenAI | AiProvider::OpenAICompatible => {
+            UsageExtractionProcessor::new_with_quota(usage, quota, requested_streaming, terminate_on_over_limit)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1182,6 +1196,22 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_uses_estimation_only_after_provider_translation() {
+        let anthropic = usage_processor_for_provider(
+            AiProvider::Anthropic,
+            Arc::new(AiUsageShared::default()),
+            None,
+            true,
+            true,
+        );
+        assert!(!anthropic.extracts_reported_usage_for_test());
+
+        let openai =
+            usage_processor_for_provider(AiProvider::OpenAI, Arc::new(AiUsageShared::default()), None, true, true);
+        assert!(openai.extracts_reported_usage_for_test());
+    }
+
+    #[test]
     fn request_max_tokens_prefers_max_completion_tokens() {
         assert_eq!(request_max_tokens(br#"{"max_completion_tokens":128}"#), Some(128));
         assert_eq!(request_max_tokens(br#"{"max_tokens":64}"#), Some(64));
@@ -1340,6 +1370,12 @@ mod tests {
 
     #[test]
     fn limited_credentials_participate_in_weighted_selection() {
+        let unlimited = RuntimeAiCredential {
+            name: "unlimited".to_string(),
+            weight: 1,
+            credential: "secret-unlimited".to_string(),
+            limits: None,
+        };
         let limited = RuntimeAiCredential {
             name: "limited".to_string(),
             weight: 100,
@@ -1349,15 +1385,9 @@ mod tests {
                 tokens_per_minute: None,
             }),
         };
-        let unlimited = RuntimeAiCredential {
-            name: "unlimited".to_string(),
-            weight: 1,
-            credential: "secret-unlimited".to_string(),
-            limits: None,
-        };
-        let mut plan = selectable_plan(vec![limited, unlimited]);
-        let selected = select_target(&mut plan, 0).unwrap();
-        assert_eq!(selected.credential, 0);
+        let mut plan = selectable_plan(vec![unlimited, limited]);
+        let selected = select_target(&mut plan, 2).unwrap();
+        assert_eq!(selected.credential, 1);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 > 每个 `edgion_*` 指标的权威目录。路径与英文版对称，供中文文档内链解析。
 > CI 护栏 `cicd/checks/check_metrics_inventory.py` **只校验**
-> [`docs/en/ops-guide/observability/metrics-inventory.md`](../../en/ops-guide/observability/metrics-inventory.md)
+> [`docs/en/ops-guide/observability/metrics-inventory.md`](../../../en/ops-guide/observability/metrics-inventory.md)
 > 与代码发点之间的双向漂移；本页表格字段与英文权威清单保持一致。
 >
 > **Category** 为 `self`（Edgion 自身健康/基础设施）或 `business`（租户流量经 Gateway

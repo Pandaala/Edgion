@@ -1,6 +1,7 @@
 use super::pg_upstream_response_body_filter::{enforce_stream_processor_framing, run_stream_processor_headers};
 use super::EdgionHttpProxy;
 use crate::routes::http::session_persistence;
+use crate::runtime::server::server_header::ServerHeaderOpts;
 use crate::{EdgionHttpContext, ResponseStageDenial, SessionPersistenceState};
 use edgion_resources::resources::http_route::SessionPersistenceType;
 use edgion_resources::EdgionStatus;
@@ -78,6 +79,18 @@ fn release_late_request_body_view(ctx: &mut EdgionHttpContext) {
 }
 
 #[inline]
+fn normalize_final_response_headers(
+    response: &mut ResponseHeader,
+    ctx: &mut EdgionHttpContext,
+    server_headers: &ServerHeaderOpts,
+) {
+    // Provider translators may rebuild the header map. Restore gateway-owned
+    // server headers afterward so synchronous plugins observe Edgion's values.
+    run_stream_processor_headers(response, ctx);
+    server_headers.apply_to_response(response);
+}
+
+#[inline]
 pub fn upstream_response_filter(
     edgion_http: &EdgionHttpProxy,
     session: &mut Session,
@@ -107,8 +120,6 @@ pub fn upstream_response_filter(
     // decision below — see the relocated block — so a response that will be
     // discarded for retry does not consume the inject state or carry a pointless
     // Set-Cookie.
-
-    edgion_http.server_header_opts.apply_to_response(upstream_response);
 
     // Record header time (time from this upstream's start_time to receiving response header)
     if let Some(upstream) = ctx.get_current_upstream_mut() {
@@ -281,7 +292,7 @@ pub fn upstream_response_filter(
     // They may normalize a provider status/content type and retain the body
     // mode they will use later. Per-attempt upstream bookkeeping above keeps
     // the provider's raw status; the request-level status is client-visible.
-    run_stream_processor_headers(upstream_response, ctx);
+    normalize_final_response_headers(upstream_response, ctx, &edgion_http.server_header_opts);
     ctx.request_info.status = Some(upstream_response.status.as_u16());
 
     // Inject session persistence cookie/header if needed. Runs here, AFTER the
@@ -536,11 +547,75 @@ mod interim_status_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::release_late_request_body_view;
+    use super::{normalize_final_response_headers, release_late_request_body_view};
+    use crate::ctx::ResponseStreamKind;
+    use crate::plugins::runtime::traits::{PluginSession, StreamingResponseProcessor};
     use crate::request_body::BodyStorage;
+    use crate::runtime::server::server_header::ServerHeaderOpts;
     use crate::EdgionHttpContext;
+    use async_trait::async_trait;
     use bytes::Bytes;
     use pingora_core::protocols::http::RequestBodyBuffer;
+    use pingora_http::ResponseHeader;
+    use pingora_proxy::ResponseBodySink;
+
+    struct ProviderHeaderReset;
+
+    #[async_trait]
+    impl StreamingResponseProcessor for ProviderHeaderReset {
+        fn name(&self) -> &str {
+            "provider-header-reset"
+        }
+
+        fn on_response_header(&mut self, response: &mut ResponseHeader) {
+            response.remove_header("server");
+            response.remove_header("strict-transport-security");
+        }
+
+        async fn on_chunk(
+            &mut self,
+            _chunk: &mut Option<Bytes>,
+            _end_of_stream: bool,
+            _stream_kind: ResponseStreamKind,
+            _sink: &mut ResponseBodySink,
+            _session: &mut dyn PluginSession,
+        ) {
+        }
+    }
+
+    #[test]
+    fn gateway_server_headers_are_applied_after_provider_header_reset() {
+        let mut tls_response = ResponseHeader::build(200, None).unwrap();
+        tls_response.insert_header("server", "provider").unwrap();
+        tls_response
+            .insert_header("strict-transport-security", "max-age=1")
+            .unwrap();
+        let mut tls_ctx = EdgionHttpContext::default();
+        tls_ctx.stream_processors.push(Box::new(ProviderHeaderReset));
+
+        normalize_final_response_headers(&mut tls_response, &mut tls_ctx, &ServerHeaderOpts::default());
+
+        assert_eq!(tls_response.headers["server"], "Edgion");
+        assert_eq!(
+            tls_response.headers["strict-transport-security"],
+            "max-age=63072000; includeSubDomains; preload"
+        );
+
+        let mut plain_response = ResponseHeader::build(200, None).unwrap();
+        plain_response.insert_header("server", "provider").unwrap();
+        plain_response
+            .insert_header("strict-transport-security", "max-age=1")
+            .unwrap();
+        let mut plain_ctx = EdgionHttpContext::default();
+        plain_ctx.stream_processors.push(Box::new(ProviderHeaderReset));
+        let mut plain_headers = ServerHeaderOpts::default();
+        plain_headers.remove_hsts();
+
+        normalize_final_response_headers(&mut plain_response, &mut plain_ctx, &plain_headers);
+
+        assert_eq!(plain_response.headers["server"], "Edgion");
+        assert!(plain_response.headers.get("strict-transport-security").is_none());
+    }
 
     #[tokio::test]
     async fn final_response_header_stage_releases_request_body_view() {

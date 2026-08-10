@@ -51,14 +51,7 @@ Two pass-3 findings were put through an independent refutation pass: the P0 (`gw
 
 | ID | Dimension | Title | Status |
 |----|-----------|-------|--------|
-| [gw-18](./gw-18-usage-processor-rebuffers-anthropic-body.md) | Design-rule | `UsageExtractionProcessor` re-buffers and re-parses the translated Anthropic body | open |
-| [gw-19](./gw-19-provider-header-strip-is-denylist.md) | Security | Provider header stripping is a denylist, so edge headers still reach the client | open |
-| [gw-20](./gw-20-sse-decoder-dispatches-empty-data-event.md) | Correctness | `SseDecoder` dispatches an event for an empty `data:` field | open |
 | [gw-22](./gw-22-sse-degradation-flags-have-no-consumer.md) | Observability | SSE degradation flags have no production consumer — usage is silently lost | open |
-| [docs-04](./docs-04-partiallyinvalid-scope-not-updated.md) | Docs | `PartiallyInvalid` extended to a non-route kind; the status docs still say routes-only | open |
-| [docs-06](./docs-06-en-ops-guide-readme-unstaged.md) | Docs | `docs/en/ops-guide/README.md` unstaged while its zh-CN counterpart is staged | open |
-| [docs-07](./docs-07-assorted-reference-corrections.md) | Docs | Four one-line reference errors (skills path, suite map, Conflicted wording, zh inventory link) | open |
-| [test-10](./test-10-assertions-that-cannot-fail.md) | Testing | Nine assertions that are structurally unfalsifiable | open |
 
 ### Fixed in an earlier pass
 

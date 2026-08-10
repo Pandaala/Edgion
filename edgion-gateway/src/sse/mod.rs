@@ -434,6 +434,25 @@ mod tests {
     }
 
     #[test]
+    fn empty_data_fields_dispatch_per_the_eventsource_algorithm() {
+        let (events, degraded) = decode_all(&[
+            b"data:\n\n",
+            b"data: \n\n",
+            b"data\n\n",
+            b"data:\ndata:\n\n",
+            b"event: ping\n\n",
+            b"data:\n",
+        ]);
+
+        assert!(!degraded);
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].data, "");
+        assert_eq!(events[1].data, "");
+        assert_eq!(events[2].data, "");
+        assert_eq!(events[3].data, "\n");
+    }
+
+    #[test]
     fn done_sentinel_is_an_ordinary_data_event() {
         let (events, _) = decode_all(&[b"data: [DONE]\n\n"]);
         assert_eq!(events.len(), 1);

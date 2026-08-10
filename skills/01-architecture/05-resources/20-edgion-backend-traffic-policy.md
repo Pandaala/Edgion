@@ -51,8 +51,10 @@ not invent an unauthenticated public-provider health-probe contract.
 - Apply/delete requeues only affected sibling policies through the EBTP workqueue. EBTP changes do
   not rebuild HTTPRoutes.
 
-Status uses per-Gateway ancestors. `Accepted` reports schema and field-matrix validity,
-`ResolvedRefs` reports target existence, and `Conflicted` reports targets won by an older sibling.
+Status uses per-Gateway ancestors. `Accepted` reports schema, field-matrix validity, and
+oldest-wins arbitration: a losing target is reported as `Accepted=False` with reason `Conflicted`
+(GEP-2648; there is no separate `Conflicted` condition type). `ResolvedRefs` reports target
+existence.
 
 ## Gateway
 

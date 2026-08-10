@@ -680,14 +680,21 @@ mod tests {
     }
 
     #[test]
-    fn resolves_token_limit_priority_and_default() {
-        let equal = json!({
+    fn resolves_legacy_completion_and_default_token_limits() {
+        let legacy_only = json!({
             "model": "alias",
             "messages": [{"role": "user", "content": "Hello"}],
-            "max_completion_tokens": 42,
             "max_tokens": 42,
         });
-        assert_eq!(body(&prepare(equal).unwrap())["max_tokens"], 42);
+        assert_eq!(body(&prepare(legacy_only).unwrap())["max_tokens"], 42);
+
+        let completion_only = json!({
+            "model": "alias",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_completion_tokens": 43,
+        });
+        let prepared = prepare_anthropic_request(completion_only, "canonical", Some(17), false, LIMIT).unwrap();
+        assert_eq!(body(&prepared)["max_tokens"], 43);
 
         let without_limit = json!({
             "model": "alias",

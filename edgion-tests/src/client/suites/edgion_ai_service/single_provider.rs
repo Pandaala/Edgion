@@ -143,14 +143,14 @@ async fn post_with_client_authorization(
     post_inner(ctx, host, body, query, h2, trace_id, true, false).await
 }
 
-async fn post_with_raw_gzip(
+async fn post_with_raw_gzip_and_client_authorization(
     ctx: &TestContext,
     host: &str,
     body: Value,
     query: &str,
     h2: bool,
 ) -> Result<reqwest::Response, String> {
-    post_inner(ctx, host, body, query, h2, None, false, true).await
+    post_inner(ctx, host, body, query, h2, None, true, true).await
 }
 
 async fn post_with_quota_identity(
@@ -448,7 +448,7 @@ fn sse_json(frame: &[u8]) -> Result<Option<Value>, String> {
 
 async fn assert_paced_protocol(ctx: TestContext, h2: bool) -> TestResult {
     let start = Instant::now();
-    let response = match post_with_raw_gzip(
+    let response = match post_with_raw_gzip_and_client_authorization(
         &ctx,
         DEFAULT_HOST,
         json!({"model":"fixture-model", "stream":true, "messages":[{"role":"user","content":"hello"}]}),
@@ -1504,9 +1504,48 @@ fn token_quota_downgrade(ctx: TestContext) -> std::pin::Pin<Box<dyn std::future:
                 format!("downgrade target or quota status missing from access log: {genai}"),
             );
         }
+
+        let exhausted = match post_with_quota_identity_on_host(
+            &ctx,
+            DOWNGRADE_HOST,
+            &identity,
+            json!({"model":"premium-model","messages":[]}),
+            "",
+            None,
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        if exhausted.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("exhausted downgrade target expected 429, got {}", exhausted.status()),
+            );
+        }
+        if exhausted.headers().contains_key("x-edgion-ai-model-downgraded") {
+            return TestResult::failed(
+                start.elapsed(),
+                "an exhausted downgrade target must not trigger another downgrade".to_string(),
+            );
+        }
+        let exhausted_body: Value = match exhausted.json().await {
+            Ok(body) => body,
+            Err(error) => {
+                return TestResult::failed(start.elapsed(), format!("exhausted downgrade JSON failed: {error}"));
+            }
+        };
+        if exhausted_body["error"]["code"] != "token_quota_exceeded" {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("unexpected exhausted downgrade envelope: {exhausted_body}"),
+            );
+        }
         TestResult::passed_with_message(
             start.elapsed(),
-            "Premium quota exhaustion re-admitted economy-model and disclosed the bounded target".to_string(),
+            "Downgrade re-admitted economy-model once, then returned 429 after both model buckets were exhausted"
+                .to_string(),
         )
     })
 }
