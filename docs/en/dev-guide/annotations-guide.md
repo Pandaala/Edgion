@@ -54,7 +54,6 @@ If the placement is wrong, the code path and the documentation usually drift wit
 >
 > Note also that `edgion.io/edgion-stream-plugins` runs before the header is
 > parsed, so its IP rules match the load balancer, not the client.
-> See `tasks/proxy-protocol-inbound.md`.
 
 ### Route / TLS / Backend
 

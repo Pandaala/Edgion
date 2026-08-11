@@ -48,8 +48,8 @@ that the whole processing model assumes. The 2026-07-17 design
 rely on single-worker serialization for correctness — it allocates `sync_version` inside the store
 lock so ordering holds regardless — precisely because this guarantee does not exist.
 
-It would also silently defeat `tasks/todo/on-delete-bypasses-workqueue.md`: that fix's entire premise
-is "everything flows through one serial worker".
+It would also silently defeat the completed `on_event_key` workqueue design: that fix's entire
+premise is "everything flows through one serial worker".
 
 ## Fix sketch
 
@@ -67,8 +67,9 @@ and decide, per backend, whether a second Init should be a hard error rather tha
 ## Related
 
 - `docs/superpowers/specs/2026-07-17-conf-sync-event-ordering-design.md`
-- `tasks/todo/on-delete-bypasses-workqueue.md` — depends on single-worker-per-kind actually holding
-- `tasks/todo/agents-md-workqueue-discipline.md` — the rule this silently breaks
+- `docs/superpowers/specs/2026-07-17-on-delete-workqueue-design.md` — depends on
+  single-worker-per-kind actually holding
+- `AGENTS.md` (`Workqueue discipline (controller conf_sync)`) — the rule this silently breaks
 
 ## Addendum (2026-07-17)
 

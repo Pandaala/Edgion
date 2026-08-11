@@ -2,7 +2,7 @@
 # =============================================================================
 # Inbound PROXY protocol (v1 + v2) — end-to-end integration test.
 #
-# Design: tasks/proxy-protocol-inbound.md
+# Contract: docs/en/dev-guide/annotations-guide.md
 #
 # WHY STANDALONE (cannot join the shared run_integration.sh stack):
 #   A listener with `edgion.io/accept-proxy-protocol` REJECTS every connection

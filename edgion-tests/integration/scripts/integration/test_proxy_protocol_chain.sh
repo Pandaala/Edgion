@@ -3,7 +3,7 @@
 # Two-hop gateway chain — does a PROXY-derived client address survive the next
 # hop?
 #
-# Design: tasks/proxy-protocol-inbound.md
+# Contract: docs/en/dev-guide/annotations-guide.md
 #
 # WHY THIS EXISTS: the single-hop suite proves a PROXY header is parsed. It says
 # nothing about whether the address then reaches a SECOND gateway, which is the
