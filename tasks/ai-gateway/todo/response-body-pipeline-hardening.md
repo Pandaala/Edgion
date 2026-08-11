@@ -56,6 +56,14 @@ character estimate once degraded, or treat degradation as a fail-close condition
 for that request. Doing nothing means the feature's headline guarantee has a
 provider-triggerable bypass.
 
+**Closed follow-up (D1b, 2026-08-11):** invalid UTF-8 could freeze the same
+accumulator without degrading the decoder because poisoned events are dropped
+before the quota visitor. The decoder now counts completed poisoned events for
+its full lifetime; OpenAI quota observation tolerates one and fails closed on
+the second under the existing streaming + quota + Reject gate. The regression
+and review decision live in
+`skills/04-review/ai-quota/sse-malformed-events-must-not-disable-enforcement.md`.
+
 ### D2. A quota termination is booked as an upstream truncation, so the credential's TPM reservation is never reconciled
 
 **Severity: high (cross-tenant capacity leak).**

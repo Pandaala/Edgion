@@ -117,18 +117,15 @@ concurrent streams. Accepted because reaching it requires a hostile or broken
   mid-stream enforcement and is harmless on its own; an unquota'd stream must
   keep running and fall back to the character estimate.
 
-## Scope boundary — what this decision does NOT cover
+## Scope boundary — malformed-event sibling
 
-The rejections above are about the **degradation** path only. A sibling bypass
-of the same class is open and legitimately re-reportable:
+The rejections above are about the **degradation** path only. The sibling
+malformed-event bypass was fixed separately as D1b:
 
-- **`malformed()` — tracked as D1b**
-  (`tasks/todo/d1b-sse-malformed-events-disable-quota-enforcement.md`). A
-  provider that puts one invalid UTF-8 byte in every event's `data:` line gets
-  each event dropped by `dispatch`'s `!self.cur_poisoned` guard before the
-  visitor runs, producing the identical frozen-accumulator chain with **no**
-  degradation, **no** termination, and **no** `AiSseDecodeDegraded`. Do not wave
-  a report of that form off with this entry.
+- **`malformed()` — D1b, fixed 2026-08-11.** The decoder counts completed
+  poisoned events cumulatively. OpenAI quota observation tolerates one and
+  fails closed on the second under the existing enforcement gate. See
+  [sse-malformed-events-must-not-disable-enforcement.md](sse-malformed-events-must-not-disable-enforcement.md).
 - **The injected event's SSE boundary on the over-limit arm** — closed
   separately as D3, see
   [injected-error-event-needs-its-own-sse-boundary.md](injected-error-event-needs-its-own-sse-boundary.md).

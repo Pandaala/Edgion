@@ -1348,6 +1348,29 @@ fn ai_stream_plan(mode: &str, observation: &str) -> AiStreamPlan {
             interval: Duration::from_millis(50),
             abort_after_chunks: true,
         },
+        // Two completed poisoned events with one valid event between them.
+        // Invalid bytes are built directly so no UTF-8 text API can replace
+        // or reject them. The one-second cadence makes the client observe the
+        // valid middle event before the cumulative threshold terminates, while
+        // leaving a deterministic tail that would complete naturally later.
+        "quota_malformed" => AiStreamPlan {
+            chunks: vec![
+                Bytes::from_static(b"data: \xff\n\n"),
+                Bytes::from_static(
+                    b"data: {\"id\":\"quota-malformed-fixture\",\"choices\":[{\"delta\":{\"content\":\"valid-middle\"}}]}\n\n",
+                ),
+                // Leave the boundary probe incomplete in the same transport
+                // chunk as the second completed poisoned event. The gateway's
+                // injected error must supply its own leading blank-line
+                // boundary so this fragment cannot swallow the error event.
+                Bytes::from_static(b"data: \xfe\n\ndata: quota-malformed-boundary-probe"),
+                Bytes::from_static(
+                    b"data: {\"unreachable_marker\":\"quota-malformed-must-not-reach-client\"}\n\ndata: [DONE]\n\n",
+                ),
+            ],
+            interval: Duration::from_secs(1),
+            abort_after_chunks: false,
+        },
         // Five real content deltas (one quota output unit each), spaced far
         // apart (150ms) relative to the 10ms quota flush interval the
         // `ai-proxy-quota-terminate` fixture plugin uses, so a real
@@ -3853,6 +3876,23 @@ mod tests {
         let resilience_abort = ai_stream_plan("resilience_abort", observation);
         assert_eq!(resilience_abort.chunks.len(), 3);
         assert!(resilience_abort.abort_after_chunks);
+
+        let quota_malformed = ai_stream_plan("quota_malformed", observation);
+        assert_eq!(quota_malformed.chunks.len(), 4);
+        assert_eq!(quota_malformed.chunks[0], Bytes::from_static(b"data: \xff\n\n"));
+        assert!(quota_malformed.chunks[1]
+            .windows(b"valid-middle".len())
+            .any(|window| window == b"valid-middle"));
+        assert_eq!(
+            quota_malformed.chunks[2],
+            Bytes::from_static(b"data: \xfe\n\ndata: quota-malformed-boundary-probe")
+        );
+        assert!(quota_malformed.chunks[3]
+            .windows(b"quota-malformed-must-not-reach-client".len())
+            .any(|window| window == b"quota-malformed-must-not-reach-client"));
+        assert!(quota_malformed.chunks[3].ends_with(b"data: [DONE]\n\n"));
+        assert_eq!(quota_malformed.interval, Duration::from_secs(1));
+        assert!(!quota_malformed.abort_after_chunks);
 
         let long = ai_stream_plan("long", observation);
         assert!(long.chunks.len() > 100);

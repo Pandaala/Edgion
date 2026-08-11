@@ -481,11 +481,12 @@ path (two decoders); no aggregate cross-stream bound — accepted because reachi
 it requires an operator-configured provider (:9-36).
 
 Failure modes: **degraded** (oversized incomplete event) permanently stops parsing
-and frees buffers (:311-325, feed early-return :150-152); **malformed** (invalid
-UTF-8 in a field line) drops the poisoned event silently and continues
-(:262-299) — protocol translators use the sticky signal to fail closed (:111-117).
-Known issue D1b: all-events-poisoned silently disables quota on the OpenAI path
-(`todo/d1b-sse-malformed-events-disable-quota-enforcement.md`).
+and frees buffers; **malformed** (invalid UTF-8 in a field line) drops the
+poisoned event and increments a cumulative completed-event count. Protocol
+translators still use the sticky signal to fail closed. D1b is fixed on the
+OpenAI quota path: one malformed event is tolerated, while the second fails
+closed under the streaming quota Reject gate; valid events do not reset the
+count.
 
 ### 4.5 AI module (`edgion-gateway/src/ai/`, 17 files ~11.5k lines)
 
@@ -630,14 +631,13 @@ through untouched. This matches agentgateway's passthrough design point (side
 Moved task files now live under `tasks/ai-gateway/`. Cross-referenced state:
 
 **Response pipeline / termination** (from `todo/response-body-pipeline-hardening.md`,
-still open): D1b (malformed-SSE silent quota bypass — product call), D5 (sealed
-Anthropic stream drains upstream forever, can never terminate), D6 (emit budget:
+still open): D5 (sealed Anthropic stream drains upstream forever, can never terminate), D6 (emit budget:
 no per-response total / chunk-count cap), D7 (latent cache-feed panic class),
 D8 (read-only chains not terminate-aware, no eos after terminate), D9 (emitted
 chunks bypass RangeBodyFilter — latent fork hazard, unreachable from Edgion),
 D10 (terminate tears down H1 keepalive unnecessarily), D11 (no config-time
 rejection of cache+Reject; client-authorable quota identity), D12 (cache-stored
-injected content must be request-invariant). D1/D2/D3 are fixed (closed decisions
+injected content must be request-invariant). D1/D1b/D2/D3 are fixed (closed decisions
 in `skills/04-review/ai-quota/`).
 
 **SSE decoder**: zero-copy slice-chain redesign is design-phase only

@@ -54,6 +54,17 @@ pub enum EdgionStatus {
     /// reached, this one means the limit could no longer be evaluated.
     AiSseDegradedQuotaTerminated = 999_15,
 
+    /// At least one completed SSE event in an AI response contained invalid
+    /// UTF-8 and was dropped from usage parsing. The stream can continue, but
+    /// reported usage has lost precision for that event.
+    #[allow(clippy::mistyped_literal_suffixes)] // Preserve the canonical 999_16 status notation.
+    AiSseDecodeMalformed = 999_16,
+
+    /// The gateway cut an AI streaming response after repeated malformed SSE
+    /// events made token-quota enforcement unreliable. This is distinct from
+    /// decoder degradation and from a quota that actually went over limit.
+    AiSseMalformedQuotaTerminated = 999_17,
+
     /// ACME HTTP-01 challenge served locally by the gateway (HTTP 200)
     AcmeChallengeServed = 200_01,
 
@@ -365,6 +376,8 @@ mod tests {
             EdgionStatus::AiQuotaErrorEventDropped => None,
             EdgionStatus::AiSseDecodeDegraded => None,
             EdgionStatus::AiSseDegradedQuotaTerminated => None,
+            EdgionStatus::AiSseDecodeMalformed => None,
+            EdgionStatus::AiSseMalformedQuotaTerminated => None,
             EdgionStatus::AcmeChallengeServed => Some(200),
             EdgionStatus::HostMissing => Some(400),
             EdgionStatus::XffHeaderTooLong => Some(400),
@@ -451,6 +464,8 @@ mod tests {
             EdgionStatus::AiQuotaErrorEventDropped,
             EdgionStatus::AiSseDecodeDegraded,
             EdgionStatus::AiSseDegradedQuotaTerminated,
+            EdgionStatus::AiSseDecodeMalformed,
+            EdgionStatus::AiSseMalformedQuotaTerminated,
             EdgionStatus::AcmeChallengeServed,
             EdgionStatus::HostMissing,
             EdgionStatus::XffHeaderTooLong,

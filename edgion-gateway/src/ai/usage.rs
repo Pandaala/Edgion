@@ -66,6 +66,8 @@ pub(crate) static QUOTA_EXCEEDED_SSE_EVENT: LazyLock<Bytes> =
 pub(crate) static QUOTA_UNENFORCEABLE_SSE_EVENT: LazyLock<Bytes> =
     LazyLock::new(|| injected_sse_error_event(AiProxyError::QuotaUnavailable));
 
+const MAX_TOLERATED_MALFORMED_SSE_EVENTS: u64 = 1;
+
 /// Ends a streaming AI response over quota, shared by every processor that
 /// can reach this decision (`UsageExtractionProcessor` for OpenAI-shaped
 /// wire formats, `AnthropicResponseProcessor` for the translated Anthropic
@@ -129,6 +131,22 @@ pub(crate) fn terminate_quota_unenforceable(
         inject,
         &QUOTA_UNENFORCEABLE_SSE_EVENT,
         EdgionStatus::AiSseDegradedQuotaTerminated,
+    );
+}
+
+fn terminate_malformed_quota_unenforceable(
+    shared: &AiUsageShared,
+    sink: &mut ResponseBodySink,
+    session: &mut dyn PluginSession,
+    inject: bool,
+) {
+    terminate_ai_stream(
+        shared,
+        sink,
+        session,
+        inject,
+        &QUOTA_UNENFORCEABLE_SSE_EVENT,
+        EdgionStatus::AiSseMalformedQuotaTerminated,
     );
 }
 
@@ -662,6 +680,10 @@ pub struct UsageExtractionProcessor {
     /// degraded flag is sticky, so without this every subsequent chunk of the
     /// stream would append the same status again.
     sse_degraded_reported: bool,
+    /// Latches the one-shot `AiSseDecodeMalformed` record. The decoder's
+    /// malformed-event count is cumulative, so later chunks must not append
+    /// the observation status again.
+    sse_malformed_reported: bool,
     /// Whether this instance owns provider usage extraction. Provider-specific
     /// translators disable it while retaining the character estimate.
     extract_reported_usage: bool,
@@ -708,6 +730,7 @@ impl UsageExtractionProcessor {
             sse_chars: SseDataCharCounter::default(),
             chars_finished: false,
             sse_degraded_reported: false,
+            sse_malformed_reported: false,
             extract_reported_usage: true,
         }
     }
@@ -825,16 +848,16 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
     /// event lengthens it. Either way the upstream `content-length` cannot
     /// stand, so it must be stripped at the response-header boundaries.
     ///
-    /// All three conditions below are required, not just `quota.is_some()`:
-    /// `on_chunk`'s termination gate (below) only ever fires when
-    /// `requested_streaming && terminate_on_over_limit && quota.over_limit()`,
-    /// so a quota'd request that is non-streaming, or whose route configured
-    /// `Throttle`/`Downgrade` instead of `Reject`, can never actually have its
-    /// body mutated by this processor — declaring `true` for it anyway would
-    /// strip `content-length` from a response this processor provably leaves
-    /// untouched. This declaration must track that gate exactly: narrower
-    /// than the real behavior is the dangerous direction (a protocol bug —
-    /// the body changes but the header still promises the old length),
+    /// All three common mutation gates below are required, not just
+    /// `quota.is_some()`: a quota exists, the client requested streaming, and
+    /// `terminate_on_over_limit` resolved to `true` for `Reject`. Beyond that
+    /// gate, actual over-limit, decoder degradation, or the cumulative
+    /// malformed-event threshold may terminate the response. A quota'd
+    /// request that is non-streaming, or whose route configured
+    /// `Throttle`/`Downgrade`, can never have its body mutated by this
+    /// processor. This declaration must track the three common gates exactly:
+    /// narrower than the real behavior is the dangerous direction (a protocol
+    /// bug — the body changes but the header still promises the old length),
     /// broader only costs a needless strip.
     fn changes_body_length(&self) -> bool {
         self.quota.is_some() && self.requested_streaming && self.terminate_on_over_limit
@@ -859,6 +882,10 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
         if !self.sse_degraded_reported && self.sse.degraded() {
             self.sse_degraded_reported = true;
             session.add_error(EdgionStatus::AiSseDecodeDegraded);
+        }
+        if !self.sse_malformed_reported && self.sse.malformed_events() != 0 {
+            self.sse_malformed_reported = true;
+            session.add_error(EdgionStatus::AiSseDecodeMalformed);
         }
         if end_of_stream {
             self.finish(stream_kind);
@@ -887,8 +914,9 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
         // exactly as it did before this gate existed, even once quota goes
         // over limit.
         //
-        // The degradation arm below shares this gate exactly, so
-        // `changes_body_length` continues to describe both terminations.
+        // The over-limit, degradation, and cumulative malformed-event arms
+        // below share these three gates exactly, so `changes_body_length`
+        // continues to describe every possible mutation by this processor.
         if !(self.requested_streaming && self.terminate_on_over_limit && self.quota.is_some()) {
             return;
         }
@@ -910,6 +938,17 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
             // two terminations must stay mutually exclusive because either one
             // ends the stream.
             terminate_quota_unenforceable(&self.shared, sink, session, stream_kind == ResponseStreamKind::Sse);
+        } else if self.sse.malformed_events() > MAX_TOLERATED_MALFORMED_SSE_EVENTS {
+            // A single poisoned event remains tolerated. Repeated poisoned
+            // events make quota observation attacker-controllable because
+            // they are dropped before the visitor can advance the accumulator.
+            // The cumulative count deliberately survives valid events.
+            terminate_malformed_quota_unenforceable(
+                &self.shared,
+                sink,
+                session,
+                stream_kind == ResponseStreamKind::Sse,
+            );
         }
     }
 }
@@ -1323,6 +1362,192 @@ mod tests {
     /// permanently degrades it.
     fn oversized_sse_event() -> Bytes {
         Bytes::from(vec![b'x'; crate::sse::DEFAULT_MAX_PENDING_EVENT_BYTES + 1])
+    }
+
+    fn malformed_sse_with_valid_middle() -> Bytes {
+        Bytes::from_static(b"data: \xff\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"valid\"}}]}\n\ndata: \xfe\n\n")
+    }
+
+    #[tokio::test]
+    async fn first_malformed_sse_event_is_observed_once_and_tolerated() {
+        let shared = Arc::new(AiUsageShared::default());
+        let quota = Arc::new(QuotaAccumulator::new(16));
+        let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, true);
+        let mut session = MockPluginSession::new();
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
+            .times(1)
+            .return_const(());
+        let mut sink = ResponseBodySink::new();
+
+        let original = Bytes::from_static(b"data: \xff\n\n");
+        let mut body = Some(original.clone());
+        processor
+            .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+        let mut later = Some(Bytes::from_static(b"data: {\"choices\":[]}\n\n"));
+        processor
+            .on_chunk(&mut later, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+
+        assert_eq!(body, Some(original), "observation must leave upstream bytes untouched");
+        assert!(!sink.is_terminated());
+        assert!(sink.peek_extra().is_empty());
+        assert!(!shared.gateway_terminated());
+    }
+
+    #[tokio::test]
+    async fn second_cumulative_malformed_sse_event_fails_quota_closed() {
+        let shared = Arc::new(AiUsageShared::default());
+        let quota = Arc::new(QuotaAccumulator::new(16));
+        let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, true);
+        let mut session = MockPluginSession::new();
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
+            .times(1)
+            .return_const(());
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiSseMalformedQuotaTerminated)
+            .times(1)
+            .return_const(());
+        let mut sink = ResponseBodySink::new();
+        let original = malformed_sse_with_valid_middle();
+        let mut body = Some(original.clone());
+
+        processor
+            .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+
+        assert_eq!(
+            body,
+            Some(original),
+            "the terminating callback must still forward its current bytes"
+        );
+        assert!(sink.is_terminated());
+        assert!(shared.gateway_terminated());
+        assert_eq!(sink.peek_extra().len(), 1);
+        assert_eq!(sink.peek_extra()[0], *QUOTA_UNENFORCEABLE_SSE_EVENT);
+    }
+
+    #[tokio::test]
+    async fn multiple_invalid_lines_in_first_event_consume_one_tolerance() {
+        let shared = Arc::new(AiUsageShared::default());
+        let quota = Arc::new(QuotaAccumulator::new(16));
+        let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
+        let mut session = MockPluginSession::new();
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
+            .times(1)
+            .return_const(());
+        let mut sink = ResponseBodySink::new();
+        let mut body = Some(Bytes::from_static(b"data: \xff\ndata: \xfe\nevent: \xff\n\n"));
+
+        processor
+            .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+
+        assert!(!sink.is_terminated());
+        assert!(sink.peek_extra().is_empty());
+    }
+
+    #[tokio::test]
+    async fn malformed_sse_never_terminates_without_every_reject_gate() {
+        for (quota, requested_streaming, terminate_on_over_limit) in [
+            (None, true, true),
+            (Some(Arc::new(QuotaAccumulator::new(16))), true, false),
+            (Some(Arc::new(QuotaAccumulator::new(16))), false, true),
+        ] {
+            let shared = Arc::new(AiUsageShared::default());
+            let mut processor = UsageExtractionProcessor::new_with_quota(
+                shared.clone(),
+                quota,
+                requested_streaming,
+                terminate_on_over_limit,
+            );
+            let mut session = MockPluginSession::new();
+            session
+                .expect_add_error()
+                .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
+                .times(1)
+                .return_const(());
+            let mut sink = ResponseBodySink::new();
+            let mut body = Some(malformed_sse_with_valid_middle());
+
+            processor
+                .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+                .await;
+
+            assert!(!sink.is_terminated());
+            assert!(sink.peek_extra().is_empty());
+            assert!(!shared.gateway_terminated());
+        }
+    }
+
+    #[tokio::test]
+    async fn over_limit_precedes_repeated_malformed_sse_events() {
+        let shared = Arc::new(AiUsageShared::default());
+        let quota = Arc::new(QuotaAccumulator::new(16));
+        quota.finish(QuotaFinalStatus::OverLimit);
+        let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
+        let mut session = MockPluginSession::new();
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
+            .times(1)
+            .return_const(());
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiQuotaOverLimitTerminated)
+            .times(1)
+            .return_const(());
+        let mut sink = ResponseBodySink::new();
+        let mut body = Some(malformed_sse_with_valid_middle());
+
+        processor
+            .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+
+        assert_eq!(sink.peek_extra().len(), 1);
+        assert_eq!(sink.peek_extra()[0], *QUOTA_EXCEEDED_SSE_EVENT);
+    }
+
+    #[tokio::test]
+    async fn decoder_degradation_precedes_repeated_malformed_sse_events() {
+        let shared = Arc::new(AiUsageShared::default());
+        let quota = Arc::new(QuotaAccumulator::new(16));
+        let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
+        let mut session = MockPluginSession::new();
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
+            .times(1)
+            .return_const(());
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiSseDecodeDegraded)
+            .times(1)
+            .return_const(());
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiSseDegradedQuotaTerminated)
+            .times(1)
+            .return_const(());
+        let mut bytes = malformed_sse_with_valid_middle().to_vec();
+        bytes.extend_from_slice(&oversized_sse_event());
+        let mut body = Some(Bytes::from(bytes));
+        let mut sink = ResponseBodySink::new();
+
+        processor
+            .on_chunk(&mut body, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+
+        assert_eq!(sink.peek_extra().len(), 1);
+        assert_eq!(sink.peek_extra()[0], *QUOTA_UNENFORCEABLE_SSE_EVENT);
+        assert!(sink.is_terminated(), "only the degradation cause should terminate");
     }
 
     #[tokio::test]

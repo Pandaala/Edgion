@@ -82,6 +82,12 @@ usage 时，Edgion 会保留各 token 分量观察到的最高值；后续较低
 1 MiB 这个上限的取值，是为了让正常的 provider 够不到它。一个正常的流式事件只有几百字节；只有把整个
 回答作为单个事件发出的上游，或者干脆从不发出事件边界的上游，才会达到 1 MiB。
 
+无效 UTF-8 只会污染并丢弃包含它的那一条完整 SSE 事件。Edgion 会容忍一个响应中的第一条此类事件，但
+计数会在整个响应内累计：中间出现合法事件不会重置计数；第二条 malformed 事件会在相同的“流式请求 +
+已配置 `tokenQuota` + `onExceeded: Reject`”门控下 fail-close。无配额请求以及使用 `Throttle` 或
+`Downgrade` 的路由不会因此终止。客户端仍只会收到上文通用的 `token_quota_unavailable` 信封，错误说明
+不会暴露 malformed provider 字节或其他内部细节。
+
 需要告警的信号：
 
 | EdgionStatus | 代码 | 含义 |
@@ -90,6 +96,8 @@ usage 时，Edgion 会保留各 token 分量观察到的最高值；后续较低
 | `AiQuotaErrorEventDropped` | `999_13` | 截断前注入的错误事件未能放入单批次的发送预算，客户端只看到了裸截断，没有看到诊断事件。 |
 | `AiSseDecodeDegraded` | `999_14` | 某个 AI 响应因单个未终止事件超过上限，SSE 解码放弃解析。单独出现时损失的是计量精度而非正确性：上报用量回落为字符估算。 |
 | `AiSseDegradedQuotaTerminated` | `999_15` | 一个流式 AI 响应因配额已无法被计量而被中途截断。与 `AiQuotaOverLimitTerminated` 的区别：后者意味着确实达到了限制，前者意味着限制已经无法被测量。 |
+| `AiSseDecodeMalformed` | `999_16` | 至少一条完整 SSE 事件包含无效 UTF-8，因而未参与用量解析。无论是否启用配额执行，每个请求只记录一次。 |
+| `AiSseMalformedQuotaTerminated` | `999_17` | 同一响应内累计出现第二条 malformed SSE 事件，触发流式 Reject 执行 fail-close；它既不表示实际超限，也不表示解码器永久降级。 |
 
 ## 估算成本
 

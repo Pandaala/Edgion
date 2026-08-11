@@ -50,7 +50,7 @@ const QUOTA_WINDOW_MS: u128 = 60 * 60 * 1_000;
 const QUOTA_EXCEEDED_SSE_EVENT: &[u8] = b"\n\nevent: error\ndata: {\"error\":{\"message\":\"The token quota has been exceeded.\",\"type\":\"rate_limit_error\",\"code\":\"token_quota_exceeded\"}}\n\n";
 
 /// The SSE event carried by a stream cut short because quota could no longer
-/// be evaluated (SSE decoding degraded). Mirrors
+/// be evaluated (SSE decoding degraded or repeated malformed events). Mirrors
 /// `edgion_gateway::ai::usage::QUOTA_UNENFORCEABLE_SSE_EVENT`, which is
 /// `pub(crate)` and therefore not importable here. Reuses the same
 /// message/type/code the admission path renders when enforcement cannot be
@@ -190,15 +190,19 @@ fn append_quota_identity_part(output: &mut Vec<u8>, value: &[u8]) {
     output.extend_from_slice(value);
 }
 
-fn quota_bucket_key(identity: &str, window_id: u64) -> Result<String, String> {
+fn quota_bucket_key_for_plugin(plugin: &[u8], identity: &str, window_id: u64) -> Result<String, String> {
     let mut quota_identity = Vec::new();
-    append_quota_identity_part(&mut quota_identity, b"edgion-test/ai-proxy-quota/#0");
+    append_quota_identity_part(&mut quota_identity, plugin);
     append_quota_identity_part(&mut quota_identity, identity.as_bytes());
     append_quota_identity_part(&mut quota_identity, &QUOTA_WINDOW_MS.to_be_bytes());
     append_quota_identity_part(&mut quota_identity, b"identity");
     build_cumulative_quota_keys("edgion:aiq:", &quota_identity, window_id, b"integration-inspection")
         .map(|keys| keys.bucket)
         .map_err(|error| format!("failed to derive Redis quota bucket key: {error}"))
+}
+
+fn quota_bucket_key(identity: &str, window_id: u64) -> Result<String, String> {
+    quota_bucket_key_for_plugin(b"edgion-test/ai-proxy-quota/#0", identity, window_id)
 }
 
 async fn quota_bucket_used(ctx: &TestContext, key: &str) -> Result<Option<u64>, String> {
@@ -253,6 +257,26 @@ async fn quota_bucket_used_between(
         }
     }
     Err("the expected Redis quota bucket was not found".to_string())
+}
+
+async fn terminate_quota_bucket_used_between(
+    ctx: &TestContext,
+    identity: &str,
+    before_ms: u128,
+    after_ms: u128,
+) -> Result<(String, u64), String> {
+    let mut window_ids = vec![(before_ms / QUOTA_WINDOW_MS) as u64];
+    let after_window = (after_ms / QUOTA_WINDOW_MS) as u64;
+    if window_ids[0] != after_window {
+        window_ids.push(after_window);
+    }
+    for window_id in window_ids {
+        let key = quota_bucket_key_for_plugin(b"edgion-test/ai-proxy-quota-terminate/#0", identity, window_id)?;
+        if let Some(used) = quota_bucket_used(ctx, &key).await? {
+            return Ok((key, used));
+        }
+    }
+    Err("the expected terminate-route Redis quota bucket was not found".to_string())
 }
 
 async fn long_stream_observation(ctx: &TestContext, trace_id: &str) -> Result<Value, String> {
@@ -1751,6 +1775,91 @@ fn check_quota_terminate_body(body: &[u8]) -> Option<String> {
     None
 }
 
+fn check_malformed_quota_body(body: &[u8]) -> Option<String> {
+    if !body
+        .windows(b"data: \xff\n\n".len())
+        .any(|window| window == b"data: \xff\n\n")
+    {
+        return Some("the first malformed SSE event did not reach the client".to_string());
+    }
+    if !body
+        .windows(b"data: \xfe\n\n".len())
+        .any(|window| window == b"data: \xfe\n\n")
+    {
+        return Some("the terminating callback did not forward the second malformed event".to_string());
+    }
+    if body
+        .windows(b"quota-malformed-must-not-reach-client".len())
+        .any(|window| window == b"quota-malformed-must-not-reach-client")
+    {
+        return Some("the fixture tail reached the client after malformed-event termination".to_string());
+    }
+    if body.windows(b"[DONE]".len()).any(|window| window == b"[DONE]") {
+        return Some("the malformed stream reached its natural [DONE] boundary".to_string());
+    }
+
+    let mut decoder = edgion_gateway::sse::SseDecoder::with_default_limit();
+    let mut events = Vec::new();
+    decoder.feed(body, &mut events);
+    if decoder.malformed_events() != 2 {
+        return Some(format!(
+            "the client observed {} completed malformed events instead of 2",
+            decoder.malformed_events()
+        ));
+    }
+    let valid_middle_seen = events.iter().any(|event| {
+        serde_json::from_str::<Value>(&event.data)
+            .is_ok_and(|value| value["choices"][0]["delta"]["content"] == "valid-middle")
+    });
+    if !valid_middle_seen {
+        return Some(
+            "the valid middle event was not dispatched, so the first malformed event may have terminated early"
+                .to_string(),
+        );
+    }
+    if !events
+        .iter()
+        .any(|event| event.event.is_none() && event.data == "quota-malformed-boundary-probe")
+    {
+        return Some("the injected event did not independently close the upstream partial SSE fragment".to_string());
+    }
+    let error_events = events
+        .iter()
+        .filter(|event| event.event.as_deref() == Some("error"))
+        .filter_map(|event| serde_json::from_str::<Value>(&event.data).ok())
+        .filter(|value| value["error"]["code"] == "token_quota_unavailable")
+        .count();
+    if error_events != 1 {
+        return Some(format!(
+            "expected exactly one dispatchable token_quota_unavailable event, got {error_events}"
+        ));
+    }
+    if !body.ends_with(QUOTA_UNENFORCEABLE_SSE_EVENT) {
+        return Some("the client-visible error was not the final SSE event".to_string());
+    }
+    None
+}
+
+#[cfg(test)]
+mod malformed_quota_body_tests {
+    use super::{check_malformed_quota_body, QUOTA_UNENFORCEABLE_SSE_EVENT};
+
+    const UPSTREAM_PREFIX: &[u8] = b"data: \xff\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"valid-middle\"}}]}\n\ndata: \xfe\n\ndata: quota-malformed-boundary-probe";
+
+    #[test]
+    fn injected_error_requires_its_own_sse_boundary() {
+        let mut correctly_bounded = UPSTREAM_PREFIX.to_vec();
+        correctly_bounded.extend_from_slice(QUOTA_UNENFORCEABLE_SSE_EVENT);
+        assert_eq!(check_malformed_quota_body(&correctly_bounded), None);
+
+        let mut missing_boundary = UPSTREAM_PREFIX.to_vec();
+        missing_boundary.extend_from_slice(&QUOTA_UNENFORCEABLE_SSE_EVENT[2..]);
+        assert!(
+            check_malformed_quota_body(&missing_boundary).is_some_and(|error| error.contains("independently close"))
+        );
+    }
+}
+
 /// Item 1+2 (H1): the pre-termination content, the injected SSE error event,
 /// and a clean end of response — asserted on the *raw* wire (a hand-driven
 /// H1 connection, not a client library that would hide `Transfer-Encoding`).
@@ -2017,6 +2126,203 @@ fn oversized_sse_event_must_not_disable_mid_stream_quota_enforcement(
             format!(
                 "an oversized SSE event failed quota enforcement closed instead of disabling it ({} body bytes)",
                 body.len()
+            ),
+        )
+    })
+}
+
+/// D1b regression: malformed-event tolerance is cumulative for one response.
+///
+/// The real provider fixture emits malformed, valid, malformed, an incomplete
+/// boundary probe in the same transport chunk, then a delayed unreachable
+/// tail. The valid middle event proves the first malformed event was tolerated
+/// and also prevents a consecutive-only implementation from passing. The
+/// incomplete probe makes the client-side parser reject an injected error that
+/// lacks its own leading SSE boundary. The request uses the existing
+/// Redis-backed Reject quota route on the credential-limited provider. The
+/// bucket inspections below prove both that the production token-quota path
+/// was installed and that gateway termination reconciled the credential TPM
+/// reservation to the small amount actually consumed.
+fn repeated_malformed_sse_events_fail_quota_enforcement_closed(
+    ctx: TestContext,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestResult> + Send>> {
+    Box::pin(async move {
+        let start = Instant::now();
+
+        // Freeze one credential-reservation window around the request. A
+        // rollover would make the before/after Redis delta meaningless. The
+        // fixture completes in about two seconds, so an eight-second margin
+        // keeps the whole exchange and the access-log settlement in one
+        // window.
+        let (_, elapsed) = credential_window_now();
+        if elapsed > CREDENTIAL_RESERVATION_WINDOW_SECS - 8 {
+            tokio::time::sleep(Duration::from_secs(CREDENTIAL_RESERVATION_WINDOW_SECS - elapsed + 1)).await;
+        }
+        let (credential_window, _) = credential_window_now();
+        let provider_uid = match service_uid(&ctx, "edgion-test", "fixture-provider-credential-tpm").await {
+            Ok(uid) => uid,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        let credential_tpm_before = match credential_tpm_used(&ctx, &provider_uid, "primary", credential_window).await {
+            Ok(value) => value.unwrap_or(0),
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+
+        let response_start = Instant::now();
+        let identity = format!("quota-malformed-h1-{}", uuid::Uuid::new_v4());
+        let trace = format!("ai-quota-malformed-h1-{}", uuid::Uuid::new_v4());
+        let request_body = json!({"model":"fixture-model","stream":true,"messages":[]}).to_string();
+        let content_length = request_body.len().to_string();
+        let before_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+
+        let mut conn = match RawH1Conn::connect(&ctx.target_host, ctx.http_port).await {
+            Ok(conn) => conn,
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        if let Err(error) = conn
+            .write_head(
+                "POST",
+                "/v1/chat/completions?mock_mode=quota_malformed",
+                CREDENTIAL_TPM_HOST,
+                &[
+                    ("content-type", "application/json"),
+                    ("content-length", content_length.as_str()),
+                    ("x-quota-user", identity.as_str()),
+                    ("x-trace-id", trace.as_str()),
+                    ("access_log", "test_store"),
+                ],
+            )
+            .await
+        {
+            return TestResult::failed(start.elapsed(), error);
+        }
+        if let Err(error) = conn.write_raw(request_body.as_bytes()).await {
+            return TestResult::failed(start.elapsed(), error);
+        }
+
+        let head = match conn.read_response_head(Duration::from_secs(5)).await {
+            Ok(head) => head,
+            Err(error) => return TestResult::failed(start.elapsed(), format!("no response head: {error}")),
+        };
+        if head.status != 200 || !head.is_chunked() || head.header("content-length").is_some() {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("malformed quota termination expected chunked 200 without Content-Length; got {head}"),
+            );
+        }
+
+        let body = match conn.read_body(&head, Duration::from_secs(5)).await {
+            Ok(body) => body,
+            Err(error) => {
+                return TestResult::failed(start.elapsed(), format!("chunked body did not end cleanly: {error}"));
+            }
+        };
+        let body_finished = response_start.elapsed();
+        if body_finished >= Duration::from_millis(3500) {
+            return TestResult::failed(
+                body_finished,
+                "the response did not finish before the fixture's four-second natural completion deadline".to_string(),
+            );
+        }
+        if let Some(error) = check_malformed_quota_body(&body) {
+            return TestResult::failed(start.elapsed(), error);
+        }
+
+        let after_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        if let Err(error) = terminate_quota_bucket_used_between(&ctx, &identity, before_ms, after_ms).await {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("the real Redis-backed quota path was not exercised: {error}"),
+            );
+        }
+
+        let entry = match ctx.access_log_client().get_access_log_with_retry(&trace, 15, 200).await {
+            Ok(entry) => entry,
+            Err(error) => {
+                return TestResult::failed(start.elapsed(), format!("malformed quota access log missing: {error}"));
+            }
+        };
+        let errors = entry.data["errors"].as_array().cloned().unwrap_or_default();
+        let has = |status: &str| errors.iter().any(|value| value == status);
+        if !has("AiSseDecodeMalformed") || !has("AiSseMalformedQuotaTerminated") {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("malformed quota statuses were incomplete: {errors:?}"),
+            );
+        }
+        if has("AiQuotaOverLimitTerminated") || has("AiSseDegradedQuotaTerminated") {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("malformed termination was assigned the wrong cause: {errors:?}"),
+            );
+        }
+        let attempts = entry.data["genai"]["attempts"].as_array().cloned().unwrap_or_default();
+        if attempts.is_empty()
+            || attempts
+                .iter()
+                .any(|attempt| attempt["failure"] == "incomplete_response")
+        {
+            return TestResult::failed(
+                start.elapsed(),
+                format!(
+                    "gateway termination must use the settled reservation path, not upstream truncation: {attempts:?}"
+                ),
+            );
+        }
+
+        if credential_window_now().0 != credential_window {
+            return TestResult::failed(
+                start.elapsed(),
+                "the credential reservation window rolled over before settlement could be inspected — rerun the case"
+                    .to_string(),
+            );
+        }
+        let credential_tpm_after = match credential_tpm_used(&ctx, &provider_uid, "primary", credential_window).await {
+            Ok(Some(used)) => used,
+            Ok(None) => {
+                return TestResult::failed(
+                    start.elapsed(),
+                    "no credential TPM bucket exists after the malformed stream — the credential reservation path was not exercised"
+                        .to_string(),
+                );
+            }
+            Err(error) => return TestResult::failed(start.elapsed(), error),
+        };
+        let Some(settled_delta) = credential_tpm_after.checked_sub(credential_tpm_before) else {
+            return TestResult::failed(
+                start.elapsed(),
+                format!(
+                    "the credential TPM counter moved backwards from {credential_tpm_before} to {credential_tpm_after}; the settlement assertion is not reliable"
+                ),
+            );
+        };
+        if settled_delta == 0 {
+            return TestResult::failed(
+                start.elapsed(),
+                "the credential TPM bucket did not accrue any usage for the malformed stream — a pre-existing bucket alone does not prove that this attempt reserved and settled credential capacity"
+                    .to_string(),
+            );
+        }
+        if settled_delta >= CREDENTIAL_TPM_MAX_OUTPUT_TOKENS {
+            return TestResult::failed(
+                start.elapsed(),
+                format!(
+                    "the malformed-stream attempt added {settled_delta} tokens to the credential TPM bucket: it retained the full {CREDENTIAL_TPM_MAX_OUTPUT_TOKENS}-token output reservation instead of reconciling gateway termination"
+                ),
+            );
+        }
+
+        TestResult::passed_with_message(
+            start.elapsed(),
+            format!(
+                "the second cumulative malformed event failed Redis-backed Reject enforcement closed in {:?} and settled its credential TPM reservation to {settled_delta} tokens",
+                body_finished,
             ),
         )
     })
@@ -2605,6 +2911,11 @@ impl TestSuite for SingleProviderTestSuite {
                 "oversized_sse_event_must_not_disable_mid_stream_quota_enforcement",
                 "An oversized SSE event fails quota enforcement closed instead of silently disabling it",
                 oversized_sse_event_must_not_disable_mid_stream_quota_enforcement,
+            ),
+            TestCase::new(
+                "repeated_malformed_sse_events_fail_quota_enforcement_closed",
+                "The second cumulative malformed SSE event fails Redis-backed Reject enforcement closed",
+                repeated_malformed_sse_events_fail_quota_enforcement_closed,
             ),
             TestCase::new(
                 "quota_termination_h1_framing",

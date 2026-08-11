@@ -62,6 +62,7 @@ pub struct SseDecoder {
     max_pending_bytes: usize,
     degraded: bool,
     malformed: bool,
+    malformed_events: u64,
     cur_event: Option<String>,
     cur_id: Option<String>,
     cur_data: String,
@@ -87,6 +88,7 @@ impl SseDecoder {
             max_pending_bytes,
             degraded: false,
             malformed: false,
+            malformed_events: 0,
             cur_event: None,
             cur_id: None,
             cur_data: String::new(),
@@ -114,6 +116,14 @@ impl SseDecoder {
     /// protocol translators can use this sticky signal to fail closed.
     pub fn malformed(&self) -> bool {
         self.malformed
+    }
+
+    /// Number of completed events that contained invalid UTF-8 field lines.
+    ///
+    /// The count is cumulative for the decoder lifetime and saturates on
+    /// hostile input. Multiple invalid lines in one event count once.
+    pub fn malformed_events(&self) -> u64 {
+        self.malformed_events
     }
 
     /// Whether no incomplete event bytes or fields remain buffered.
@@ -288,6 +298,9 @@ impl SseDecoder {
     }
 
     fn dispatch(&mut self, visitor: &mut dyn FnMut(SseEvent)) {
+        if self.cur_poisoned {
+            self.malformed_events = self.malformed_events.saturating_add(1);
+        }
         if self.cur_has_data && !self.cur_poisoned {
             visitor(SseEvent {
                 event: self.cur_event.take(),
@@ -521,9 +534,62 @@ mod tests {
         let degraded = decoder.degraded();
         assert!(!degraded);
         assert!(decoder.malformed());
+        assert_eq!(decoder.malformed_events(), 1);
         assert!(decoder.is_idle());
         assert_eq!(events.len(), 1, "the malformed event is dropped, the stream continues");
         assert_eq!(events[0].data, "ok");
+    }
+
+    #[test]
+    fn multiple_invalid_lines_poison_one_completed_event_once() {
+        let mut decoder = SseDecoder::with_default_limit();
+        let mut events = Vec::new();
+
+        decoder.feed(b"data: \xff\ndata: \xfe\nevent: \xff\n\n", &mut events);
+
+        assert!(events.is_empty());
+        assert!(decoder.malformed());
+        assert_eq!(decoder.malformed_events(), 1);
+    }
+
+    #[test]
+    fn two_poisoned_events_in_one_chunk_are_counted_separately() {
+        let mut decoder = SseDecoder::with_default_limit();
+        let mut events = Vec::new();
+
+        decoder.feed(b"data: \xff\n\ndata: \xfe\n\n", &mut events);
+
+        assert!(events.is_empty());
+        assert_eq!(decoder.malformed_events(), 2);
+    }
+
+    #[test]
+    fn split_invalid_line_counts_only_when_its_event_completes() {
+        let mut decoder = SseDecoder::with_default_limit();
+        let mut events = Vec::new();
+
+        decoder.feed(b"data: \xc3", &mut events);
+        assert_eq!(decoder.malformed_events(), 0);
+        decoder.feed(b"\x28\n", &mut events);
+        assert!(decoder.malformed());
+        assert_eq!(decoder.malformed_events(), 0);
+        decoder.feed(b"\n", &mut events);
+
+        assert!(events.is_empty());
+        assert_eq!(decoder.malformed_events(), 1);
+    }
+
+    #[test]
+    fn valid_event_does_not_reset_cumulative_malformed_count() {
+        let mut decoder = SseDecoder::with_default_limit();
+        let mut events = Vec::new();
+
+        decoder.feed(b"data: \xff\n\ndata: valid\n\ndata: \xfe\n\n", &mut events);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "valid");
+        assert!(decoder.malformed());
+        assert_eq!(decoder.malformed_events(), 2);
     }
 
     #[test]

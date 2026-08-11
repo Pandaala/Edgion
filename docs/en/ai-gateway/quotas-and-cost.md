@@ -99,6 +99,14 @@ The 1 MiB cap is sized so a legitimate provider does not reach it. A normal stre
 few hundred bytes; 1 MiB is reached only by an upstream that emits an entire completion as one
 event, or one that never emits an event boundary at all.
 
+Invalid UTF-8 poisons and drops only the completed SSE event that contains it. Edgion tolerates
+the first such event in a response, but the count is cumulative: a valid event does not reset it,
+and the second malformed event fails closed under the same streaming + `tokenQuota` +
+`onExceeded: Reject` gate. Requests without quota and routes using `Throttle` or `Downgrade`
+continue without this termination. The client receives the generic `token_quota_unavailable`
+envelope above; malformed provider bytes and other internal details are never exposed in the
+error description.
+
 Alert on:
 
 | EdgionStatus | Code | Meaning |
@@ -107,6 +115,8 @@ Alert on:
 | `AiQuotaErrorEventDropped` | `999_13` | The injected error event did not fit the per-batch emit budget before the cut; the client saw a bare truncation instead of the diagnostic event. |
 | `AiSseDecodeDegraded` | `999_14` | SSE decoding gave up on an AI response because one unterminated event exceeded the cap. On its own this costs accounting precision, not correctness: reported usage falls back to the character estimate. |
 | `AiSseDegradedQuotaTerminated` | `999_15` | A streaming AI response was cut short because quota could no longer be evaluated. Distinct from `AiQuotaOverLimitTerminated`: that one means the limit was reached, this one means the limit could no longer be measured. |
+| `AiSseDecodeMalformed` | `999_16` | At least one completed SSE event contained invalid UTF-8 and was excluded from usage parsing. Recorded once per request, whether or not quota enforcement is active. |
+| `AiSseMalformedQuotaTerminated` | `999_17` | The second cumulative malformed SSE event caused streaming Reject enforcement to fail closed. This is neither an actual over-limit result nor permanent decoder degradation. |
 
 ## Estimated cost
 

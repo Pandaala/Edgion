@@ -3,13 +3,14 @@
 **Goal:** Replace the byte-at-a-time `SseDecoder` with a `Bytes`-slice-retaining
 incremental decoder, add a bounded hold-and-release window primitive (unblocking
 WS-03 response guards), eliminate the Anthropic double-decode, and add the
-canonical bounded-window clarification note to the body-invariant docs.
+canonical bounded-window clarification note to the body-invariant docs, while
+preserving the already-fixed D1b malformed-event enforcement contract.
 
 **This workstream adopts the existing design task**
 `tasks/ai-gateway/todo/sse-decoder-zero-copy-stream.md` (design-discussion
 stage) — that file carries the verified facts (F1-F3), constraints, and prior
 art; this file locks scope and sequencing. It also resolves decoder-adjacent
-open issues D1b and D5 from
+open issue D5 from
 `tasks/ai-gateway/todo/response-body-pipeline-hardening.md`.
 
 ## Why (from the comparison, §6)
@@ -59,12 +60,13 @@ open issues D1b and D5 from
    reject) is documented on the trait. Chunk-driven stall behavior (a held
    window waits for the next chunk or eos when the upstream stalls) is
    accepted; a fork-level max-hold-time tick is optional P3, out of this WS.
-6. **D1b resolution** (product decision executed here): adopt Anthropic-parity
-   fail-closed behavior on `malformed()` for quota-enforcing OpenAI streams —
-   i.e. `terminate_quota_unenforceable` extends its gate to sticky malformed
-   with N-event tolerance (exact threshold decided at kickoff with the user);
-   D5 (sealed Anthropic stream never terminates) fixed by allowing a sealed
-   translator to still request terminate.
+6. **D1b regression preservation**: D1b is already fixed. The replacement must
+   retain a whole-response cumulative malformed-event count, tolerate the first
+   poisoned event, and fail closed on the second only for streaming quota
+   `Reject` enforcement. Valid events never reset the count, and one poisoned
+   event with several invalid lines counts once. D5 (sealed Anthropic stream
+   never terminates) is fixed here by allowing a sealed translator to still
+   request terminate.
 
 ## File map
 
@@ -72,7 +74,7 @@ open issues D1b and D5 from
 Rewrite: edgion-gateway/src/sse/mod.rs        (decoder core; keep public API names)
 Create:  edgion-gateway/src/sse/chain.rs      (slice-chain buffer + range types)
 Create:  edgion-gateway/src/sse/window.rs     (hold-and-release window)
-Modify:  edgion-gateway/src/ai/usage.rs       (lazy extraction; D1b gate)
+Modify:  edgion-gateway/src/ai/usage.rs       (lazy extraction; preserve D1b gate)
 Modify:  edgion-gateway/src/ai/anthropic/response.rs  (event-emitting mode; D5)
 Modify:  edgion-gateway/src/ai/dispatch.rs    (event-pipeline composition)
 Modify:  CLAUDE.md + skills body-invariant docs (amendment)
@@ -88,7 +90,8 @@ Tests:   sse unit suite ports 1:1 + new chain-boundary property tests
 2. Lazy JSON in `usage.rs` (measurable: allocation count per event in a bench).
 3. Event pipeline (translator single-decode) — D5 fix rides along.
 4. Window primitive (+ invariant clarification note) — hands off to WS-03.
-5. D1b gate change (user decision applied).
+5. D1b regression port: preserve its threshold, gates, precedence, statuses,
+   and Redis-backed integration case unchanged.
 
 ## Acceptance
 
