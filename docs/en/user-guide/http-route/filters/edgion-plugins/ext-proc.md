@@ -152,6 +152,12 @@ stream, so the processor keeps state across the request. Back-pressure is
 inherent — the gateway does not read the next downstream chunk until the
 current verdict arrives.
 
+If the primary upstream finishes its response and stops accepting the request
+body before the client reaches its real end-of-stream, the gateway cancels the
+request-side `Process` stream. It does not send an `HttpBody` with
+`end_of_stream=true`, because the chunks already delivered to the processor
+are only an incomplete prefix.
+
 Because chunk mutation can change the total length, the upstream request is
 sent with chunked framing (`Content-Length` removed), and the request becomes
 **non-retryable** the moment the streamed plugin is selected. A mid-body

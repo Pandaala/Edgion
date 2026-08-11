@@ -135,6 +135,7 @@ spec:
 - **不支持 `BUFFERED_PARTIAL`**。
 - **请求与响应阶段仍是两条流**：`STREAMED`/`BUFFERED` 模式下 header 相位与请求 body 相位共用一条请求级流，但响应 header 相位另开一条短生命周期流，处理服务无法把请求阶段状态带到响应阶段。
 - **`STREAMED` 语义**：逐块改写可能改变总长度，上游请求改用 chunked 传输（移除 `Content-Length`）；选中流式插件后请求即不可重试；body 相位 verdict 中的 header mutation 被忽略（上游 header 已发出）并记入 access log；mid-body 的 `ImmediateResponse` 会应用其 header mutation（保护头拒绝），gRPC 路由映射为 `grpc-status` trailers；`CONTINUE_AND_REPLACE`（header 相位或 mid-body）一律按 bad verdict 处理；Upgrade/CONNECT 请求与 HTTP/1.1 以下客户端无法流式检查，按失败策略处理。
+- **请求 body 被放弃**：若主上游提前完成响应并停止接收仍在上传的请求 body，网关会取消请求侧 `Process` 流，不会发送 `end_of_stream=true`。处理服务已收到的数据只是前缀，不能作为完整 body 结算。
 - **响应阶段 `ImmediateResponse`**：自定义 header 不保留（仅状态码 + body；gRPC route 仅状态码）。
 
 ## 兼容性

@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use pingora_proxy::RequestBodyEvent;
 
 use super::client::ExtProcStream;
 use super::plugin::{exchange_failure_reason, sanitize_status};
@@ -121,13 +122,20 @@ impl RequestBodyStreamHandler for ExtProcStreamedBodyHandler {
         "ExtProc"
     }
 
-    async fn on_chunk(&mut self, chunk: &mut Option<Bytes>, end_of_stream: bool) -> ChunkVerdict {
+    async fn on_chunk(&mut self, chunk: &mut Option<Bytes>, event: RequestBodyEvent) -> ChunkVerdict {
         if self.done {
+            return ChunkVerdict::Continue;
+        }
+        if event == RequestBodyEvent::Abandoned {
+            self.done = true;
+            self.exchange = None;
+            self.push_log("ext_proc body abandoned");
             return ChunkVerdict::Continue;
         }
         let Some(exchange) = self.exchange.as_mut() else {
             return ChunkVerdict::Continue;
         };
+        let end_of_stream = event.is_complete();
         let body = HttpBody {
             body: chunk.as_ref().map(|b| b.to_vec()).unwrap_or_default(),
             end_of_stream,
@@ -283,7 +291,7 @@ mod tests {
         );
         let mut chunk = Some(Bytes::from_static(b"original"));
         assert!(matches!(
-            handler.on_chunk(&mut chunk, false).await,
+            handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await,
             ChunkVerdict::Continue
         ));
         assert_eq!(chunk.as_deref(), Some(&b"mutated"[..]));
@@ -297,7 +305,7 @@ mod tests {
         );
         let mut chunk = Some(Bytes::from_static(b"secret"));
         assert!(matches!(
-            handler.on_chunk(&mut chunk, false).await,
+            handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await,
             ChunkVerdict::Continue
         ));
         assert_eq!(chunk.as_deref(), Some(&b""[..]));
@@ -314,7 +322,7 @@ mod tests {
         };
         let mut handler = handler_with(vec![Ok(immediate)], false);
         let mut chunk = Some(Bytes::from_static(b"payload"));
-        match handler.on_chunk(&mut chunk, false).await {
+        match handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await {
             ChunkVerdict::Terminate { status, body, headers } => {
                 assert_eq!(status, 500, "1xx is not a valid final reply");
                 assert_eq!(body.as_deref(), Some("denied"));
@@ -353,7 +361,7 @@ mod tests {
         };
         let mut handler = handler_with(vec![Ok(immediate)], false);
         let mut chunk = Some(Bytes::from_static(b"payload"));
-        match handler.on_chunk(&mut chunk, false).await {
+        match handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await {
             ChunkVerdict::Terminate { status, headers, .. } => {
                 assert_eq!(status, 403);
                 assert_eq!(headers, vec![("x-denied-by".to_string(), "policy".to_string())]);
@@ -366,7 +374,7 @@ mod tests {
     async fn transport_error_fail_close_terminates_500() {
         let mut handler = handler_with(vec![Err(tonic::Status::unavailable("down"))], false);
         let mut chunk = Some(Bytes::from_static(b"x"));
-        match handler.on_chunk(&mut chunk, false).await {
+        match handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await {
             ChunkVerdict::Terminate { status, body, .. } => {
                 assert_eq!(status, 500);
                 assert_eq!(body.as_deref(), Some("ext_proc unavailable"));
@@ -382,7 +390,7 @@ mod tests {
         let mut handler = handler_with(vec![Err(tonic::Status::unavailable("down"))], true);
         let mut chunk = Some(Bytes::from_static(b"x"));
         assert!(matches!(
-            handler.on_chunk(&mut chunk, false).await,
+            handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await,
             ChunkVerdict::Continue
         ));
         assert_eq!(chunk.as_deref(), Some(&b"x"[..]), "fail-open must not drop the chunk");
@@ -390,7 +398,7 @@ mod tests {
         assert!(matches!(outcome.0, DyeOutcome::FailOpen));
         let mut next = Some(Bytes::from_static(b"y"));
         assert!(matches!(
-            handler.on_chunk(&mut next, true).await,
+            handler.on_chunk(&mut next, RequestBodyEvent::Complete).await,
             ChunkVerdict::Continue
         ));
         assert!(handler.take_pending_outcome().is_none(), "outcome drains once");
@@ -416,7 +424,7 @@ mod tests {
         let mut handler = handler_with(vec![Ok(cr)], false);
         let mut chunk = Some(Bytes::from_static(b"x"));
         assert!(matches!(
-            handler.on_chunk(&mut chunk, false).await,
+            handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await,
             ChunkVerdict::Terminate { status: 500, .. }
         ));
         assert_eq!(
@@ -437,7 +445,7 @@ mod tests {
         let mut handler = handler_with(vec![Ok(wrong)], false);
         let mut chunk = Some(Bytes::from_static(b"x"));
         assert!(matches!(
-            handler.on_chunk(&mut chunk, false).await,
+            handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await,
             ChunkVerdict::Terminate { status: 500, .. }
         ));
     }
@@ -462,10 +470,28 @@ mod tests {
         let mut handler = ExtProcStreamedBodyHandler::new(Box::new(AssertingExchange), false, None);
         let mut chunk = None;
         assert!(matches!(
-            handler.on_chunk(&mut chunk, true).await,
+            handler.on_chunk(&mut chunk, RequestBodyEvent::Complete).await,
             ChunkVerdict::Continue
         ));
         assert!(handler.take_log().is_some(), "streamed-done line expected at EOS");
+    }
+
+    #[tokio::test]
+    async fn abandoned_event_cancels_without_sending_clean_eos() {
+        let mut handler = handler_with(Vec::new(), false);
+        let mut chunk = None;
+
+        assert!(matches!(
+            handler.on_chunk(&mut chunk, RequestBodyEvent::Abandoned).await,
+            ChunkVerdict::Continue
+        ));
+        assert!(handler.exchange.is_none(), "the processor stream must be dropped");
+        assert!(handler.take_log().is_some(), "abandonment must be observable");
+
+        assert!(matches!(
+            handler.on_chunk(&mut chunk, RequestBodyEvent::Complete).await,
+            ChunkVerdict::Continue
+        ));
     }
 
     #[tokio::test]
@@ -473,7 +499,7 @@ mod tests {
         let mut handler = handler_with(vec![Ok(body_verdict(None))], false);
         let mut chunk = Some(Bytes::from_static(b"x"));
         assert!(matches!(
-            handler.on_chunk(&mut chunk, false).await,
+            handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await,
             ChunkVerdict::Continue
         ));
         assert!(handler.take_log().is_none(), "mid-stream success logs nothing");

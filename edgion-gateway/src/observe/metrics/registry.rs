@@ -428,8 +428,8 @@ pub fn status_group(status: Option<u16>) -> &'static str {
 /// Record a mirror request outcome.
 ///
 /// No latency histogram: mirror is fire-and-forget so its tail latency does
-/// not affect user traffic; the `channel_full` / `timeout` statuses on this
-/// counter are a sharper "mirror falling behind" signal than a percentile.
+/// not affect user traffic; the `body_abandoned` / `channel_full` / `timeout`
+/// statuses on this counter are sharper failure signals than a percentile.
 /// Per-request latency is in the mirror access log `et` field when
 /// `mirror_log` is enabled.
 #[inline]

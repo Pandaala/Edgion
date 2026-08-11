@@ -125,6 +125,7 @@ spec:
 
 - The mirror is non-blocking: the client always receives the primary backend's response, and the mirrored response is discarded.
 - If the mirror queue is full and `edgion.io/mirror-channel-full-timeout-ms` elapses, the mirror for that request is dropped rather than delaying the original request.
+- If the downstream transport does not reach its real end-of-stream before mirroring stops, Edgion cancels the mirror request rather than letting the mirror target accept a partial upload as complete; the mirror outcome is `body_abandoned`. Only a transport-level end-of-stream on the request headers proves that an empty body is already complete; a `Content-Length: 0` declaration alone does not provide that guarantee on HTTP/2.
 - This is the standard Gateway API mirror, which targets a `backendRef`. For richer mirroring options — such as inline tuning fields or finer control beyond a `backendRef` — see the [Edgion RequestMirror plugin](../edgion-plugins/request-mirror.md), whose config embeds the tuning knobs directly (its CRD is not subject to structural-schema pruning).
 
 ## Related documents

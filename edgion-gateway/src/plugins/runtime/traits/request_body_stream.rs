@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use pingora_proxy::RequestBodyEvent;
 
 use crate::plugins::runtime::dye_plan::CompiledDyePlan;
 use crate::plugins::runtime::log::PluginLog;
@@ -55,11 +56,11 @@ pub trait RequestBodyStreamHandler: Send {
     /// Plugin name for logs and diagnostics.
     fn name(&self) -> &str;
 
-    /// Inspect/mutate the current chunk in place. `chunk` may be `None` with
-    /// `end_of_stream == true` (a pure EOS event, including the synthesized
-    /// futile-read EOS). Called serially; the pump does not read the next
-    /// downstream chunk until this returns (inherent backpressure).
-    async fn on_chunk(&mut self, chunk: &mut Option<Bytes>, end_of_stream: bool) -> ChunkVerdict;
+    /// Inspect/mutate the current chunk in place. `chunk` may be `None` for a
+    /// terminal event. `Complete` means the real downstream EOF was observed;
+    /// `Abandoned` means earlier chunks are only a prefix. Called serially;
+    /// the pump does not read the next chunk until this returns.
+    async fn on_chunk(&mut self, chunk: &mut Option<Bytes>, event: RequestBodyEvent) -> ChunkVerdict;
 
     /// Drain accumulated access-log entries. The hook pushes the drained log
     /// under the `request_body_filters` stage at EOS, on terminate, and as a

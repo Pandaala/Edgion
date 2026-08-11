@@ -1,0 +1,52 @@
+# Mirror-then-reject bundle (regression guard for pingora-review-18).
+#
+# `requestPlugins` order IS execution order (PluginRuntime::add_request_filter
+# preserves it, and ExtensionRefFilter iterates the bundle in list order and
+# short-circuits on the first non-GoodNext result). So for every request:
+#
+#   1. RequestMirror starts the mirror (100% fraction, no `fraction` field).
+#   2. RequestRestriction denies unconditionally (Blacklist + Path regex ".*")
+#      by writing a 403 and returning ErrTerminateRequest, which makes
+#      ProxyHttp::request_filter return Ok(true) — Pingora then jumps straight
+#      to logging() and NEVER calls request_body_filter_action.
+#
+# A request whose transport ends on its headers therefore reaches the
+# mirror-cleanup path without any body event. The plugin must not have armed
+# the MirrorCancellation guard for it, or
+# the defensive cleanup in pg_logging would abort an already-complete mirror
+# request and record it as `body_abandoned`.
+#
+# `mirrorLog: true` keeps that outcome visible in the gateway mirror access log
+# (status `ok` vs `body_abandoned`) for manual investigation.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-mirror-reject
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestMirror
+      config:
+        backendRef:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        # Mirror 100% of requests (no fraction = mirror all)
+        connectTimeoutMs: 500
+        writeTimeoutMs: 1000
+        maxBufferedChunks: 10
+        mirrorLog: true
+        maxConcurrent: 100
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Blacklist
+        ruleGroups:
+          - rules:
+              - name: "deny-everything"
+                source: Path
+                regex:
+                  - ".*"
+        status: 403
+        message: "Denied after mirror"

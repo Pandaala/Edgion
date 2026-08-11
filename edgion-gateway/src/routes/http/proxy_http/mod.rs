@@ -4,7 +4,7 @@ use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::Digest;
 use pingora_core::Error;
 use pingora_http::ResponseHeader;
-use pingora_proxy::{FailToProxy, ProxyHttp, ResponseBodySink, Session};
+use pingora_proxy::{FailToProxy, ProxyHttp, RequestBodyEvent, ResponseBodySink, Session};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -133,13 +133,13 @@ impl ProxyHttp for EdgionHttpProxy {
         &self,
         session: &mut Session,
         body: &mut Option<bytes::Bytes>,
-        end_of_stream: bool,
+        event: RequestBodyEvent,
         ctx: &mut Self::CTX,
     ) -> pingora_core::Result<pingora_proxy::RequestBodyAction>
     where
         Self::CTX: Send + Sync,
     {
-        pg_request_body_filter_action::request_body_filter_action(self, session, body, end_of_stream, ctx).await
+        pg_request_body_filter_action::request_body_filter_action(self, session, body, event, ctx).await
     }
 
     fn upstream_request_body_disposition(

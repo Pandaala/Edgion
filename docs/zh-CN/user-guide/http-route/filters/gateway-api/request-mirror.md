@@ -124,6 +124,7 @@ spec:
 
 - 镜像是非阻塞的：客户端始终收到主后端的响应，镜像响应被丢弃。
 - 若镜像队列已满且 `edgion.io/mirror-channel-full-timeout-ms` 超时，该请求的镜像将被丢弃，而不会延迟原始请求。
+- 如果镜像停止前下游传输没有到达真实 EOS，Edgion 会取消镜像请求，避免镜像目标把不完整上传当成完整 body；镜像结果为 `body_abandoned`。只有请求头携带传输层 EOS 才能证明空 body 已完整；HTTP/2 中仅有 `Content-Length: 0` 声明并不能提供该保证。
 - 这是标准 Gateway API 镜像，目标是一个 `backendRef`。如需更丰富的镜像选项——例如内联调优字段或超出 `backendRef` 范围的精细控制——请参阅 [Edgion RequestMirror 插件](../edgion-plugins/request-mirror.md)，其配置直接内嵌调优参数（该 CRD 不受结构化 schema 剪除影响）。
 
 ## 相关文档

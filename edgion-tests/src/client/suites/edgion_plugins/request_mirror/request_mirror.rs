@@ -12,12 +12,22 @@
 // - Verify GET requests (no body) are mirrored correctly
 // - Verify POST requests with body are mirrored correctly
 // - Verify channelFullTimeoutMs: main request completes normally even when mirror is slow
+// - Verify a bodyless request rejected by a LATER request plugin still delivers a
+//   complete mirror request (regression guard for the MirrorCancellation arming
+//   decision: `request_filter` returning "response already sent" skips
+//   `request_body_filter_action` entirely, so an armed guard would abort a mirror
+//   whose zero-byte body was already complete)
 //
 // Config files (edgion-tests/integration/conf/EdgionPlugins/RequestMirror/):
 //   01_EdgionPlugins_request-mirror-basic.yaml    → 100% mirror, host: mirror-basic.example.com
 //   02_EdgionPlugins_request-mirror-sampled.yaml  → 50% mirror, host: mirror-sampled.example.com
 //   03_EdgionPlugins_request-mirror-with-timeout  → channelFullTimeoutMs=200, host: mirror-timeout.example.com
-//   HTTPRoute_default_request-mirror-routes.yaml  → binds all three routes
+//   04_EdgionPlugins_request-mirror-reject.yaml   → RequestMirror (100%) then an unconditional-deny
+//                                                   RequestRestriction, host: mirror-reject.example.com
+//   HTTPRoute_default_mirror-basic-route.yaml     → binds mirror-basic.example.com
+//   HTTPRoute_default_mirror-sampled-route.yaml   → binds mirror-sampled.example.com
+//   HTTPRoute_default_mirror-timeout-route.yaml   → binds mirror-timeout.example.com
+//   HTTPRoute_default_mirror-reject-route.yaml    → binds mirror-reject.example.com
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use serde_json::Value;
@@ -30,6 +40,7 @@ pub struct RequestMirrorTestSuite;
 const HOST_BASIC: &str = "mirror-basic.example.com";
 const HOST_SAMPLED: &str = "mirror-sampled.example.com";
 const HOST_TIMEOUT: &str = "mirror-timeout.example.com";
+const HOST_REJECT: &str = "mirror-reject.example.com";
 
 fn mirror_backend_hosts(ctx: &TestContext) -> Vec<String> {
     let k8s_mode = std::env::var("EDGION_TEST_K8S_MODE")
@@ -740,6 +751,131 @@ impl RequestMirrorTestSuite {
             },
         )
     }
+
+    // ============ TC-11: bodyless request rejected by a later plugin is still mirrored ============
+    //
+    // Regression guard for the MirrorCancellation arming decision.
+    //
+    // The mirror-reject bundle runs RequestMirror first and then an
+    // unconditional-deny RequestRestriction. The deny writes a 403 and returns
+    // ErrTerminateRequest, so `ProxyHttp::request_filter` returns Ok(true) and
+    // Pingora goes straight to `logging()` — `request_body_filter_action` is
+    // never invoked, so no body event can ever reach the mirror.
+    //
+    // This GET ends its downstream stream on the request headers, so the zero
+    // bytes already handed to the mirror writer task ARE its complete body. If the plugin had installed
+    // armed streaming state for it, the defensive cleanup on the logging path
+    // would drop the fail-closed guard, abort the in-flight mirror request
+    // mid-write, and record `body_abandoned` — the mirror backend would then see
+    // no capture at all (or an aborted one).
+    fn test_bodyless_reject_still_mirrored() -> TestCase {
+        TestCase::new(
+            "mirror_bodyless_reject_still_mirrored",
+            "RequestMirror: bodyless request rejected by a later plugin still delivers a complete mirror",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    reset_mirror_store(&ctx).await;
+
+                    let trace_id = gen_trace_id("reject-bodyless");
+                    let url = format!("{}/mirror/capture", ctx.http_url());
+
+                    // This ordinary GET ends on its request headers, so no body
+                    // chunk can be teed to the mirror.
+                    let resp = match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", HOST_REJECT)
+                        .header("x-trace-id", &trace_id)
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("main request failed: {}", e)),
+                    };
+
+                    // Assertion 1: the main request MUST be short-circuited by the
+                    // second plugin. Without this, a route that silently never
+                    // rejects (wrong plugin order, dropped bundle, misbound
+                    // hostname) would make the mirror assertion below pass while
+                    // testing nothing at all.
+                    let status = resp.status().as_u16();
+                    let body = resp.text().await.unwrap_or_default();
+                    if status != 403 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "main request should be rejected with 403 by RequestRestriction, got {} (body: {})",
+                                status, body
+                            ),
+                        );
+                    }
+                    // Assertion 2: the 403 came from the configured deny rule, not
+                    // from some other gateway-side rejection that happens to share
+                    // the status code.
+                    if !body.contains("Denied after mirror") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("403 body does not carry the configured deny message; got: {}", body),
+                        );
+                    }
+
+                    // Assertion 3: the mirror request still reached the mirror
+                    // backend. Pre-fix this is where the regression showed up —
+                    // the armed guard aborted the mirror send on the logging path.
+                    let captures = match poll_mirror_received(&ctx, &trace_id, 20, 100).await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("mirror not received for a rejected bodyless request: {}", e),
+                            );
+                        }
+                    };
+                    let Some(cap) = find_mirror_capture(&captures) else {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "No mirror capture found (x-mirror: true); {} total capture(s)",
+                                captures.len()
+                            ),
+                        );
+                    };
+
+                    // Assertion 4: the mirror is a faithful copy of the bodyless
+                    // GET. /mirror/query exposes method, path, headers and the
+                    // captured body, so "complete" here means "GET with an empty
+                    // body" whose downstream transport ended at the headers.
+                    let method = cap["method"].as_str().unwrap_or("");
+                    if method != "GET" {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected GET in mirror capture, got '{}'", method),
+                        );
+                    }
+                    let mirrored_body = cap["body"].as_str().unwrap_or("");
+                    if !mirrored_body.is_empty() {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Mirror of a bodyless request should carry no body, got {} byte(s): '{}'",
+                                mirrored_body.len(),
+                                mirrored_body
+                            ),
+                        );
+                    }
+
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        format!(
+                            "Main request rejected 403 by the later plugin, mirror still delivered ({} capture(s), GET, 0-byte body) ✓",
+                            captures.len()
+                        ),
+                    )
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for RequestMirrorTestSuite {
@@ -759,6 +895,7 @@ impl TestSuite for RequestMirrorTestSuite {
             Self::test_channel_full_timeout_no_main_block(),
             Self::test_query_string_forwarded(),
             Self::test_mirror_headers_correct(),
+            Self::test_bodyless_reject_still_mirrored(),
         ]
     }
 }

@@ -21,10 +21,10 @@ use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 /// Operator-defined log labels, resolved once per resource and shared by
@@ -845,17 +845,81 @@ pub struct MirrorConfig {
     pub mirror_log: bool,
 }
 
+/// Why a streaming mirror was cancelled before its body completed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MirrorAbandonReason {
+    BodyAbandoned = 1,
+    ChannelFull = 2,
+}
+
+/// Cancellation guard for an in-flight streaming mirror request.
+///
+/// Dropping an armed guard fails closed as `BodyAbandoned`. A real downstream
+/// EOF must explicitly call [`Self::complete`] to disarm it. This makes future
+/// early-return paths cancel the mirror instead of turning a delivered prefix
+/// into a clean HTTP EOF.
+pub struct MirrorCancellation {
+    cancel_tx: Option<oneshot::Sender<()>>,
+    reason: Arc<AtomicU8>,
+}
+
+impl MirrorCancellation {
+    pub(crate) fn new() -> (Self, oneshot::Receiver<()>) {
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        (
+            Self {
+                cancel_tx: Some(cancel_tx),
+                reason: Arc::new(AtomicU8::new(0)),
+            },
+            cancel_rx,
+        )
+    }
+
+    pub(crate) fn reason_handle(&self) -> Arc<AtomicU8> {
+        self.reason.clone()
+    }
+
+    pub(crate) fn cancel(mut self, reason: MirrorAbandonReason) {
+        self.reason.store(reason as u8, Ordering::Release);
+        if let Some(cancel_tx) = self.cancel_tx.take() {
+            let _ = cancel_tx.send(());
+        }
+    }
+
+    pub(crate) fn complete(mut self) {
+        drop(self.cancel_tx.take());
+    }
+
+    pub(crate) fn load_reason(reason: &AtomicU8) -> Option<MirrorAbandonReason> {
+        match reason.load(Ordering::Acquire) {
+            1 => Some(MirrorAbandonReason::BodyAbandoned),
+            2 => Some(MirrorAbandonReason::ChannelFull),
+            _ => None,
+        }
+    }
+}
+
+impl Drop for MirrorCancellation {
+    fn drop(&mut self) {
+        if let Some(cancel_tx) = self.cancel_tx.take() {
+            self.reason
+                .store(MirrorAbandonReason::BodyAbandoned as u8, Ordering::Release);
+            let _ = cancel_tx.send(());
+        }
+    }
+}
+
 /// Mirror stream state kept in request context.
 pub enum MirrorState {
     /// Mirror request task is active and waiting for body chunks from request_body_filter.
     Streaming {
+        /// Cancels the in-flight mirror request without ending its streamed
+        /// body as a clean HTTP EOF. Keep this field first: Rust drops enum
+        /// fields in declaration order, so implicit state destruction must
+        /// signal cancellation before `body_tx` can yield a normal EOF.
+        cancellation: MirrorCancellation,
         body_tx: mpsc::Sender<Result<Bytes, std::io::Error>>,
         writer_handle: JoinHandle<()>,
-        /// Shared flag between request_body_filter and the mirror task.
-        /// Set to true by request_body_filter when the mirror is abandoned due to
-        /// channel full. The mirror task reads this flag to distinguish
-        ///  "channel_full" from a genuine "write_err".
-        channel_full_flag: Arc<AtomicBool>,
         /// Maximum milliseconds to wait for channel space before abandoning the mirror.
         /// 0 = immediate abandon (zero impact on main request latency, default).
         /// > 0 = brief back-pressure window (adds at most this many ms to body processing).

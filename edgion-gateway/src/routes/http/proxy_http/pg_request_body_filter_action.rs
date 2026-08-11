@@ -9,11 +9,12 @@
 //! receives.
 
 use super::{pg_request_body_filter, EdgionHttpProxy};
+use crate::ctx::MirrorAbandonReason;
 use crate::plugins::runtime::{ChunkVerdict, PingoraSessionAdapter, PluginSession, StageLogs};
 use crate::EdgionHttpContext;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
-use pingora_proxy::{RequestBodyAction, Session};
+use pingora_proxy::{RequestBodyAction, RequestBodyEvent, Session};
 
 type Handlers = Vec<sync_wrapper::SyncWrapper<Box<dyn crate::plugins::runtime::RequestBodyStreamHandler>>>;
 
@@ -21,7 +22,7 @@ pub async fn request_body_filter_action(
     edgion_http: &EdgionHttpProxy,
     session: &mut Session,
     body: &mut Option<Bytes>,
-    end_of_stream: bool,
+    event: RequestBodyEvent,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<RequestBodyAction> {
     if !ctx.request_body_stream.is_empty() {
@@ -32,7 +33,7 @@ pub async fn request_body_filter_action(
         let mut handlers = std::mem::take(&mut ctx.request_body_stream);
         for handler in handlers.iter_mut() {
             let handler = handler.get_mut();
-            let verdict = handler.on_chunk(body, end_of_stream).await;
+            let verdict = handler.on_chunk(body, event).await;
             if let Some((outcome, cause)) = handler.take_pending_outcome() {
                 // Record against the installing entry's dye plan, mirroring
                 // the request-stage fail_mode choke point. At body phase only
@@ -51,6 +52,7 @@ pub async fn request_body_filter_action(
                     body: reply,
                     headers,
                 } => {
+                    pg_request_body_filter::abandon_request_mirror(ctx, MirrorAbandonReason::BodyAbandoned);
                     // Contract obligation: finish the downstream response
                     // before returning Terminate — the proxy never writes one.
                     write_terminate_reply(session, ctx, status, reply, headers).await;
@@ -60,13 +62,13 @@ pub async fn request_body_filter_action(
                 }
             }
         }
-        if end_of_stream {
+        if event.is_terminal() {
             drain_handler_logs(&mut handlers, ctx);
         }
         ctx.request_body_stream = handlers;
     }
 
-    pg_request_body_filter::request_body_filter(edgion_http, session, body, end_of_stream, ctx).await?;
+    pg_request_body_filter::request_body_filter(edgion_http, session, body, event, ctx).await?;
     Ok(RequestBodyAction::Continue)
 }
 

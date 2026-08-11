@@ -125,6 +125,7 @@ requestPlugins:
 3. Request body is also mirrored; `maxBufferedChunks` controls buffer size
 4. When concurrent mirrors reach `maxConcurrent`, new mirror requests are dropped
 5. `channelFullTimeoutMs: 0` (default) abandons the mirror immediately when the mirror body channel is full, guaranteeing zero impact on the main request; a small positive value (100–500ms) grants a brief back-pressure window before abandoning
+6. If the downstream transport does not reach its real end-of-stream before mirroring stops, Edgion cancels the mirror request rather than letting the mirror target accept a partial upload as complete; the mirror outcome is `body_abandoned`. This covers both the primary upstream stopping body consumption and a later request-stage plugin ending the request before the body pump runs. Only a transport-level end-of-stream on the request headers proves that an empty body is already complete; a `Content-Length: 0` declaration alone does not provide that guarantee on HTTP/2
 
 ---
 

@@ -2081,6 +2081,7 @@ mod record_outcome_tests {
     use crate::request_body::DEFAULT_MEMORY_BUFFER_BYTES;
     use edgion_resources::resources::edgion_plugins::BodyRequirement;
     use edgion_resources::resources::edgion_plugins::{DyeOutcome, DyeSuite};
+    use pingora_proxy::RequestBodyEvent;
     use sha2::Digest;
     use tokio::io::AsyncReadExt;
     use tokio::io::AsyncWriteExt;
@@ -2241,7 +2242,7 @@ mod record_outcome_tests {
         async fn on_chunk(
             &mut self,
             _chunk: &mut Option<Bytes>,
-            _end_of_stream: bool,
+            _event: RequestBodyEvent,
         ) -> crate::plugins::runtime::traits::ChunkVerdict {
             crate::plugins::runtime::traits::ChunkVerdict::Continue
         }
