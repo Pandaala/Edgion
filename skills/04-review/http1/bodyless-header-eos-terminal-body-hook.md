@@ -2,7 +2,7 @@
 name: bodyless-header-eos-terminal-body-hook
 description: Review rule for final upstream Header EOS responses that must drive the response-body terminal hook across H1, H2, custom upstreams, and cache replay.
 status: implemented-locally
-finding_id: gw-16
+finding_id: gw-16-review-01
 ---
 
 # Header EOS Drives the Terminal Response-Body Hook

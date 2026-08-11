@@ -51,7 +51,6 @@ Two pass-3 findings were put through an independent refutation pass: the P0 (`gw
 
 | ID | Dimension | Title | Status |
 |----|-----------|-------|--------|
-| [gw-22](./gw-22-sse-degradation-flags-have-no-consumer.md) | Observability | SSE degradation flags have no production consumer — usage is silently lost | open |
 
 ### Fixed in an earlier pass
 
