@@ -29,6 +29,8 @@ Two pass-3 findings were put through an independent refutation pass: the P0 (`gw
 
 ## Findings index
 
+No open findings remain in this batch.
+
 ### P0
 
 | ID | Dimension | Title | Status |
@@ -45,7 +47,6 @@ Two pass-3 findings were put through an independent refutation pass: the P0 (`gw
 
 | ID | Dimension | Title | Status |
 |----|-----------|-------|--------|
-| [gw-16](./gw-16-bodyless-upstream-response-emits-no-envelope.md) | Correctness | A bodyless upstream response yields an empty body and no error envelope | open |
 
 ### P3
 
