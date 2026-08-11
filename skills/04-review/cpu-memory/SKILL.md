@@ -25,6 +25,7 @@ Closed findings are recorded one-file-per-finding under the relevant `skills/04-
 
 | File | Description |
 |------|-------------|
+| [`cases/h1-request-body-capture-bounded-second-copy.md`](cases/h1-request-body-capture-bounded-second-copy.md) | Pingora H1 captured chunks incur a real second copy during in-memory accumulation, but Edgion uses its own spill-capable buffer and bounds the default copy to roughly 128 KiB; segmented storage is deferred pending profiling evidence |
 | [`cases/metrics-label-to-string-api.md`](cases/metrics-label-to-string-api.md) | `.to_string()` in metrics recording functions — mandatory for `Cow<'static, str>` API |
 | [`cases/control-plane-status-write-counter-pre-caching.md`](cases/control-plane-status-write-counter-pre-caching.md) | Pre-caching Counter handles for `record_status_write` on controller plane — not worth it |
 | [`cases/get-raw-any-lookup-not-json-scan.md`](cases/get-raw-any-lookup-not-json-scan.md) | `get_raw_any` / `lookup_gateway` is O(1) DashMap lookup, not JSON serialize + scan |
