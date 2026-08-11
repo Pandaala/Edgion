@@ -114,12 +114,12 @@ boring-sys = "4"
 # `edgion` branch; the committed Cargo.lock pins the exact commit, and
 # CI/release builds use `--locked`. Release milestones may temporarily use a
 # protected immutable tag when a manifest-level source identity is required.
-pingora-core = { path = "/Users/caohao/ws2/pingora/pingora-core", features = ["connection_filter"] }
-pingora-http = { path = "/Users/caohao/ws2/pingora/pingora-http" }
-pingora-proxy = { path = "/Users/caohao/ws2/pingora/pingora-proxy" }
-pingora-limits = { path = "/Users/caohao/ws2/pingora/pingora-limits" }
-pingora-load-balancing = { path = "/Users/caohao/ws2/pingora/pingora-load-balancing" }
-pingora-ketama = { path = "/Users/caohao/ws2/pingora/pingora-ketama" }
+pingora-core = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion", features = ["connection_filter"] }
+pingora-http = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
+pingora-proxy = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
+pingora-limits = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
+pingora-load-balancing = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
+pingora-ketama = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
 
 # HTTP server / client
 axum = { version = "0.8.8", features = ["macros", "ws"] }
