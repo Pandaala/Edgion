@@ -33,6 +33,7 @@ pub(crate) fn enforce_stream_processor_framing(response: &mut ResponseHeader, ct
             .stream_processors
             .iter()
             .any(|processor| processor.changes_body_length())
+        || ctx.attached_response_framing_reservations > 0
     {
         let _ = response.remove_header("content-length");
     }
@@ -54,6 +55,7 @@ pub(crate) async fn run_stream_processors(
     end_of_stream: bool,
     sink: &mut ResponseBodySink,
 ) {
+    ctx.response_body_processing_started = true;
     if ctx.stream_processors.is_empty() && ctx.ai_stream_processor.is_none() {
         return;
     }
@@ -421,6 +423,15 @@ mod tests {
         let mut mutating = crate::EdgionHttpContext::default();
         mutating.stream_processors.push(Box::new(HeaderMutator));
         enforce_stream_processor_framing(&mut response, &mutating);
+        assert!(response.headers.get("content-length").is_none());
+
+        let reserved = crate::EdgionHttpContext {
+            attached_response_framing_reservations: 1,
+            ..Default::default()
+        };
+        let mut response = ResponseHeader::build(200, None).unwrap();
+        response.insert_header("content-length", "42").unwrap();
+        enforce_stream_processor_framing(&mut response, &reserved);
         assert!(response.headers.get("content-length").is_none());
     }
 

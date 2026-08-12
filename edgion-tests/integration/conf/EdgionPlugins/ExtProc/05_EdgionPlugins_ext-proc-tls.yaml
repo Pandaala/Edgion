@@ -30,20 +30,5 @@ spec:
                   name: backend-ca
         processingMode:
           requestHeaderMode: SEND
-        failureModeAllow: false
-  upstreamResponsePlugins:
-    - enable: true
-      type: ExtProc
-      config:
-        grpcService:
-          target: "127.0.0.1:30042"
-          timeoutMs: 2000
-          tls:
-            enabled: true
-            validation:
-              caCertificateRefs:
-                - kind: Secret
-                  name: backend-ca
-        processingMode:
           responseHeaderMode: SEND
         failureModeAllow: false

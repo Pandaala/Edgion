@@ -90,6 +90,7 @@ struct Inner {
 }
 
 /// A `reqwest` DNS resolver that applies an egress policy to every resolved address.
+#[derive(Clone)]
 pub struct EgressResolver {
     inner: Arc<Inner>,
 }
@@ -124,6 +125,28 @@ impl EgressResolver {
     #[cfg(test)]
     fn cache_len(&self) -> usize {
         self.inner.cache.read().len()
+    }
+
+    /// Resolve and classify the exact socket addresses an outbound connector
+    /// will dial. Non-reqwest transports use this method so DNS, cache, test
+    /// escape-hatch, metrics, and IP policy stay canonical.
+    pub async fn resolve_socket_addrs(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
+        let now = Instant::now();
+        let allowed = match self.inner.cached(host, now) {
+            Some(hit) => hit,
+            None => {
+                let raw = dns_resolve(&self.inner.spec, host)
+                    .await
+                    .map_err(|e| format!("DNS resolution failed for outbound target: {e}"))?;
+                let allowed = self.inner.filter_addrs(raw);
+                self.inner.store(host, allowed.clone(), Instant::now());
+                allowed
+            }
+        };
+        if allowed.is_empty() {
+            return Err("egress policy blocked all resolved addresses".to_string());
+        }
+        Ok(allowed.into_iter().map(|ip| SocketAddr::new(ip, port)).collect())
     }
 }
 
@@ -161,7 +184,7 @@ impl Inner {
                     // Integration tests bind test_server to 127.0.0.1; the same escape
                     // hatch that `validate_endpoint_backend_addr` honors must apply here,
                     // or the guard kills our own test suite.
-                    IpClass::Loopback if is_integration_testing_mode() => return true,
+                    IpClass::Loopback if cfg!(test) || is_integration_testing_mode() => return true,
                     IpClass::Loopback => "loopback",
                     IpClass::LinkLocal => "link_local",
                     // Unspecified (0.0.0.0 / ::) is blocked unconditionally, not gated on

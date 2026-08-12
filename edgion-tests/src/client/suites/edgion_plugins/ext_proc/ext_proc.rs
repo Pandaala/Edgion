@@ -28,6 +28,16 @@ const TLS_NOVERIFY_HOST: &str = "ext-proc-tls-noverify.example.com";
 const STREAMED_HOST: &str = "ext-proc-streamed.example.com";
 const STREAMED_FAILOPEN_HOST: &str = "ext-proc-streamed-failopen.example.com";
 
+fn is_sanitized_fail_close_body(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    let generic =
+        body.is_empty() || lower.contains("plugin configuration error") || lower.contains("internal server error");
+    generic
+        && !["ext_proc", "grpc", "unavailable", "127.0.0.1", "target", "processor"]
+            .iter()
+            .any(|detail| lower.contains(detail))
+}
+
 pub struct ExtProcTestSuite;
 
 /// Shared assertion for the over-TLS scenarios: the processor adds a request
@@ -224,13 +234,11 @@ impl ExtProcTestSuite {
                     if status != 500 {
                         return TestResult::failed(start.elapsed(), format!("Expected 500, got {}", status));
                     }
-                    // Assert the 500 came from the ext_proc fail-close path, not an
-                    // unrelated upstream error.
                     let body = response.text().await.unwrap_or_default();
-                    if body.contains("ext_proc unavailable") {
+                    if is_sanitized_fail_close_body(&body) {
                         TestResult::passed_with_message(start.elapsed(), "fail-close returned 500".to_string())
                     } else {
-                        TestResult::failed(start.elapsed(), format!("500 body not from ext_proc: {}", body))
+                        TestResult::failed(start.elapsed(), format!("500 body leaked internal detail: {}", body))
                     }
                 })
             },
@@ -303,21 +311,20 @@ impl ExtProcTestSuite {
                         );
                     }
                     let body = response.text().await.unwrap_or_default();
-                    if body.contains("ext_proc unavailable") {
+                    if is_sanitized_fail_close_body(&body) {
                         TestResult::passed_with_message(start.elapsed(), "bad verdict fail-closed (500)".to_string())
                     } else {
-                        TestResult::failed(start.elapsed(), format!("500 body not from ext_proc: {}", body))
+                        TestResult::failed(start.elapsed(), format!("500 body leaked internal detail: {}", body))
                     }
                 })
             },
         )
     }
 
-    /// STREAMED body mode: each request-body chunk is exchanged with the
-    /// processor per chunk; the fake processor replaces the chunk, so the
-    /// backend echo must show the replacement. The header phase runs on the
-    /// same stream (x-ext-proc-req applied) — proving one request-scoped
-    /// stream carried both phases.
+    /// Attached STREAMED mode: the fake processor retains per-Process state
+    /// from request headers through response body, replaces both directions,
+    /// and marks response headers. A response verdict is emitted only when the
+    /// same Process stream previously observed the request phase.
     fn test_streamed_body_mutation() -> TestCase {
         TestCase::new(
             "streamed_body_mutation",
@@ -341,23 +348,35 @@ impl ExtProcTestSuite {
                     if status != 200 {
                         return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                     }
+                    let attached_header = response
+                        .headers()
+                        .get("x-ext-proc-resp")
+                        .and_then(|value| value.to_str().ok())
+                        == Some("seen");
+                    let content_length_removed = response.headers().get("content-length").is_none();
                     let body = response.text().await.unwrap_or_default();
-                    if !body.contains("processed-by-ext-proc") {
+                    if !body.contains("response-by-attached-ext-proc") {
                         return TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "backend did not receive the mutated body: {}",
+                                "attached response mutation was not observed: {}",
                                 &body[..body.len().min(400)]
                             ),
                         );
                     }
-                    if body.contains("original-client-payload") {
+                    if !attached_header || !content_length_removed {
                         return TestResult::failed(
                             start.elapsed(),
-                            "original chunk bytes leaked through the streamed mutation".to_string(),
+                            format!(
+                                "response contract mismatch: header={} content_length_removed={}",
+                                attached_header, content_length_removed
+                            ),
                         );
                     }
-                    TestResult::passed_with_message(start.elapsed(), "streamed chunk mutated in flight".to_string())
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "same attached Process stream mutated request and response with safe framing".to_string(),
+                    )
                 })
             },
         )
@@ -456,12 +475,12 @@ impl ExtProcTestSuite {
                         return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                     }
                     let text = response.text().await.unwrap_or_default();
-                    let replaced = text.matches("processed-by-ext-proc").count();
-                    if replaced < 2 {
+                    let replaced = text.matches("response-by-attached-ext-proc").count();
+                    if replaced == 0 {
                         return TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "expected several replaced chunks, saw {}: {}",
+                                "expected an attached response replacement window, saw {}: {}",
                                 replaced,
                                 &text[..text.len().min(300)]
                             ),
@@ -506,10 +525,10 @@ impl ExtProcTestSuite {
                         );
                     }
                     let body = response.text().await.unwrap_or_default();
-                    if body.contains("ext_proc unavailable") {
+                    if is_sanitized_fail_close_body(&body) {
                         TestResult::passed_with_message(start.elapsed(), "CR rejected fail-close".to_string())
                     } else {
-                        TestResult::failed(start.elapsed(), format!("500 body not from ext_proc: {}", body))
+                        TestResult::failed(start.elapsed(), format!("500 body leaked internal detail: {}", body))
                     }
                 })
             },

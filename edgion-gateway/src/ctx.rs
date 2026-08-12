@@ -1315,6 +1315,20 @@ pub struct EdgionHttpContext {
     /// chains. Not operator-facing; not a plugin stage.
     pub stream_processors: Vec<Box<dyn StreamingResponseProcessor>>,
 
+    /// Request-scoped ExtProc transactions keyed by the compiled request-entry
+    /// identity. The request filter and its internal response companion share
+    /// these owners; targets are never used as transaction identity.
+    pub attached_ext_proc:
+        std::collections::HashMap<String, std::sync::Arc<crate::plugins::http::ext_proc::AttachedExtProc>>,
+
+    /// Early framing reservations for attached processors that may mutate the
+    /// final response body before their concrete processor is installed.
+    pub attached_response_framing_reservations: usize,
+
+    /// Becomes true at the first response body callback. Late processor
+    /// installation is rejected to keep response composition deterministic.
+    pub response_body_processing_started: bool,
+
     /// Response-phase local-reply body, set by a response-phase plugin that
     /// returned `ErrResponse { status, body }` (Phase 6 sync or Phase 7 async)
     /// and consumed by `upstream_response_body_filter` (Phase 8). `Some` until
@@ -1500,6 +1514,9 @@ impl EdgionHttpContext {
             ai_stream_processor: None,
             genai_summary: None,
             stream_processors: Vec::new(),
+            attached_ext_proc: std::collections::HashMap::new(),
+            attached_response_framing_reservations: 0,
+            response_body_processing_started: false,
             local_reply_body: None,
             local_reply_header: None,
             local_reply_written: false,

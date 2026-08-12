@@ -22,10 +22,10 @@ Sometimes header logic is too dynamic to express as static config: rewriting hea
 | Response-phase short-circuit (`ImmediateResponse`) | ✅ | async `UpstreamResponse` |
 | Read / replace **request body** (full) | ✅ | `RequestFilter`, `requestBodyMode: BUFFERED` |
 | Inspect / mutate **request body** per chunk | ✅ | `requestBodyMode: STREAMED` |
-| Read / modify **response body** | ❌ | Proxied upstream responses remain streaming-only |
+| Inspect / mutate **response body** per transport window | ✅ | `responseBodyMode: STREAMED` |
 
-The `BUFFERED_PARTIAL` request mode is rejected. Response body modes other
-than `NONE`/`SKIP` are also rejected; they are never silently ignored.
+`BUFFERED_PARTIAL` request mode is rejected. Response `BUFFERED` and
+`BUFFERED_PARTIAL` are rejected; the main upstream response is never aggregated.
 
 ## Quick Start
 
@@ -46,16 +46,8 @@ spec:
         processingMode:
           requestHeaderMode: SEND
           requestBodyMode: BUFFERED
-        failureModeAllow: false   # fail-close if the processor is unreachable
-  # Response-header processing (separate entry, async stage)
-  upstreamResponsePlugins:
-    - type: ExtProc
-      config:
-        grpcService:
-          target: "ext-proc.svc.cluster.local:9000"
-          timeoutMs: 200
-        processingMode:
           responseHeaderMode: SEND
+          responseBodyMode: STREAMED
         failureModeAllow: false
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -81,7 +73,9 @@ spec:
           port: 30001
 ```
 
-> The request phase and the response phase are **separate entries** (`requestPlugins` vs `upstreamResponsePlugins`). List only the phase(s) you need. Each entry only reads its own phase's mode (`requestHeaderMode` for a `requestPlugins` entry, `responseHeaderMode` for an `upstreamResponsePlugins` entry).
+> One `requestPlugins` entry owns the complete request-scoped transaction. Its
+> internal response companion uses the same logical Process stream; do not add a
+> second ExtProc entry under `upstreamResponsePlugins`.
 
 ## Configuration parameters
 
@@ -91,9 +85,9 @@ spec:
 | `grpcService.timeoutMs` | Integer | `200` | Verdict timeout in milliseconds, `1..=60000`. Header-phase exchanges (and `BUFFERED`, whose phases share one stream) are bounded as one transaction; in `STREAMED` mode the bound applies per body-chunk exchange, and the first exchange also absorbs connect/TLS/h2 setup — raise it for TLS targets. |
 | `grpcService.tls` | Object | disabled | TLS settings for the processor dial: `enabled`, `verify`, `validation.caCertificateRefs`, `clientCertificateRef` (mTLS). Absent/`enabled: false` = plaintext h2c (in-cluster default); unset sub-fields inherit the global `outboundTls` default. |
 | `processingMode.requestHeaderMode` | Enum | `SEND` | `SEND` to send request headers to the processor, `SKIP` to skip. Only read by a `requestPlugins` entry. |
-| `processingMode.responseHeaderMode` | Enum | `SKIP` | `SEND` / `SKIP` for response headers. Only read by an `upstreamResponsePlugins` entry — set it to `SEND` there. |
+| `processingMode.responseHeaderMode` | Enum | `SKIP` | `SEND` / `SKIP` for final response headers on the same attached transaction. |
 | `processingMode.requestBodyMode` | Enum | `NONE` | `NONE`, `SKIP`, `BUFFERED`, or `STREAMED`. In `BUFFERED` mode, request headers (`end_of_stream=false`) and the full request body (`end_of_stream=true`) are sent on one `Process` stream. In `STREAMED` mode each body chunk is exchanged with the processor as it flows, on the same stream as the header phase. `BUFFERED_PARTIAL` is rejected. |
-| `processingMode.responseBodyMode` | Enum | `NONE` | Only `NONE` or `SKIP`; proxied upstream responses remain streaming-only. |
+| `processingMode.responseBodyMode` | Enum | `NONE` | `NONE`, `SKIP`, or `STREAMED`. Each bounded transport window is exchanged in lockstep; `BUFFERED` and `BUFFERED_PARTIAL` are rejected. |
 | `failureModeAllow` | Boolean | `false` | When the processor is unreachable, times out, or returns an unusable verdict: `false` (fail-close) short-circuits the request with a `500`; `true` (fail-open) skips processing and continues. |
 
 ## Behavior
@@ -165,8 +159,9 @@ sent with chunked framing (`Content-Length` removed), and the request becomes
 mutations are applied to the reply (protected headers rejected, as in the
 request phase) and on gRPC routes the status maps to `grpc-status` trailers.
 Note the upstream connection for that request is not reused. Header mutations
-inside a chunk verdict are ignored (upstream headers are already committed)
-and noted in the access log. `CONTINUE_AND_REPLACE` — at the headers phase or
+inside a chunk verdict are rejected as a bad verdict through
+`failureModeAllow` because upstream headers are already committed.
+`CONTINUE_AND_REPLACE` — at the headers phase or
 mid-body — is rejected as a bad verdict in streamed mode: there is no buffered
 body to replace, and "replace and stop" semantics are not implemented.
 Upgrade/CONNECT requests and pre-HTTP/1.1 clients cannot be streamed-inspected
@@ -180,26 +175,24 @@ If the processor returns an `ImmediateResponse`, the gateway stops proxying and 
 
 `failureModeAllow` is honored not only when the processor is unreachable or times out, but also when it returns a **malformed or wrong-phase verdict** — a buggy processor cannot silently bypass a configured fail-close.
 
-- `false` (fail-close, recommended for authz-like use): short-circuit with `500 ext_proc unavailable`.
+- `false` (fail-close, recommended for authz-like use): short-circuit with a generic `500` response.
 - `true` (fail-open, for non-critical enrichment): skip processing and continue to the backend.
 
 ## Limitations
 
 - **No partial body mode**: `BUFFERED_PARTIAL` is rejected.
-- **No response body processing**: response body modes remain `NONE`/`SKIP`.
-- **No response-header body replacement**: a response-header
-  `CONTINUE_AND_REPLACE` verdict requires response-body replacement support, so
-  it is treated as an unsupported verdict and follows `failureModeAllow`
-  instead of silently discarding the mutation.
-- **No cross-phase correlation**: each phase opens its own short-lived `Process` stream (MVP simplification), so a processor cannot carry state from the request phase to the response phase of the same transaction. Connection pooling / single-stream-per-transaction is a future optimization.
+- **No response aggregation**: response `STREAMED` processes one bounded
+  transport window at a time and does not treat a transport chunk as a semantic
+  SSE event.
+- **No response `CONTINUE_AND_REPLACE`**: ordinary body mutation is supported,
+  but the terminal stop-sending status follows `failureModeAllow`.
 - **Response-phase `ImmediateResponse`**: custom headers are not preserved (status + body only; gRPC routes are status-only).
 
 ## Compatibility
 
 The proto is a trimmed but wire-compatible subset of `envoy.service.ext_proc.v3`
 (matching field numbers). For a buffered request, headers and body are sent on
-the same short-lived `Process` stream. Request and response phases still use
-separate streams.
+the same request-scoped logical `Process` stream as the final response phases.
 
 ## FAQ
 
@@ -209,12 +202,12 @@ Yes. They are independent plugins. List both in `requestPlugins` (in the order y
 
 ### Q: My processor returns a header but the client/backend doesn't see it?
 
-Check the phase: request-header mutations reach the **upstream** (backend); response-header mutations reach the **client**. Also confirm the entry is in the matching list (`requestPlugins` vs `upstreamResponsePlugins`) with the corresponding mode set to `SEND`. If the header is `Content-Length`/`Connection`/etc., it is intentionally rejected (see Protected headers).
+Check the phase: request-header mutations reach the **upstream** (backend), while response-header mutations reach the **client**. The complete ExtProc configuration belongs in one `requestPlugins` entry. If the header is `Content-Length`/`Connection`/etc., it is intentionally rejected (see Protected headers).
 
 ### Q: The controller rejected my EdgionPlugins resource?
 
-Common causes: `requestBodyMode: BUFFERED_PARTIAL`, any response body mode
-other than `NONE`/`SKIP`, a `grpcService.target` that is a URL or missing a
+Common causes: `requestBodyMode: BUFFERED_PARTIAL`, response `BUFFERED` or
+`BUFFERED_PARTIAL`, a `grpcService.target` that is a URL or missing a
 port, or a `timeoutMs` of `0` or above `60000`.
 
 ### Q: What happens if the processor is down?

@@ -35,6 +35,12 @@ pub trait UpstreamResponse: Send + Sync {
         None
     }
 
+    /// Internal companions may attach their outcome to the request-stage owner
+    /// and suppress a second automatic stage log.
+    fn suppress_automatic_log(&self) -> bool {
+        false
+    }
+
     /// Run the upstream response handler (async)
     /// This is called during the response_filter stage after upstream responds
     async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult;

@@ -669,6 +669,46 @@ impl PluginRuntime {
 
                 let entry_scope = crate::plugins::common::entry_scope(resource_key, entry_alias.as_deref(), index);
 
+                if let EdgionPlugin::ExtProc(config) = &entry.plugin {
+                    let identity = format!(
+                        "{resource_key}/requestPlugins/{}",
+                        entry_alias
+                            .as_deref()
+                            .map_or_else(|| format!("#{index}"), str::to_string)
+                    );
+                    match ExtProc::create_attached(config, identity) {
+                        Some((request, response)) => {
+                            let gated: Box<dyn RequestFilter> = match body_req {
+                                Some(req) => Box::new(BodyGatedRequestFilter::new(request, req)),
+                                None => request,
+                            };
+                            self.add_request_filter(Box::new(ConditionalRequestFilter::with_alias_and_dye(
+                                gated,
+                                entry.conditions.clone(),
+                                entry_alias.clone(),
+                                dye_plan.clone(),
+                            )));
+                            // Conditions are request-owned. The companion only
+                            // observes the exact attached identity installed by
+                            // the matched request wrapper.
+                            self.add_upstream_response(Box::new(ConditionalUpstreamResponse::with_alias_and_dye(
+                                response,
+                                None,
+                                entry_alias,
+                                dye_plan,
+                            )));
+                        }
+                        None => {
+                            errors.push(format!(
+                                "requestPlugins[{}] (ExtProc): plugin construction failed",
+                                index
+                            ));
+                            self.invalid_plugins.record(&entry.plugin);
+                        }
+                    }
+                    continue;
+                }
+
                 match Self::create_request_filter_from_edgion(&entry.plugin, namespace, body_req.clone(), &entry_scope)
                 {
                     CreateResult::Ok(Some(filter)) => {
@@ -1314,7 +1354,7 @@ impl PluginRuntime {
             }
             EdgionPlugin::RealIp(config) => CreateResult::Ok(Some(RealIp::create(config))),
             EdgionPlugin::TraceContext(config) => CreateResult::Ok(Some(TraceContext::create(config))),
-            EdgionPlugin::ExtProc(config) => CreateResult::Ok(ExtProc::create_request(config)),
+            EdgionPlugin::ExtProc(_) => CreateResult::WrongStage,
             EdgionPlugin::ForwardAuth(config) => match ForwardAuth::new(config) {
                 Ok(fa) => CreateResult::Ok(Some(Box::new(fa))),
                 Err(_) => CreateResult::Ok(None),
@@ -1397,7 +1437,7 @@ impl PluginRuntime {
         _namespace: &str,
     ) -> CreateResult<Box<dyn UpstreamResponse>> {
         match plugin {
-            EdgionPlugin::ExtProc(config) => CreateResult::Ok(ExtProc::create_response(config)),
+            EdgionPlugin::ExtProc(_) => CreateResult::WrongStage,
             // Every other variant belongs to a different stage. Exhaustive
             // (no `_`), matching the other three `create_*_from_edgion`
             // constructors: these four matches are the runtime half of the
@@ -1863,7 +1903,9 @@ impl PluginRuntime {
             }
 
             let should_terminate = check_response_stage_terminate(&result, &mut plugin_log, &mut session_adapter);
-            filter_logs.push(plugin_log);
+            if !filter.suppress_automatic_log() {
+                filter_logs.push(plugin_log);
+            }
 
             if should_terminate {
                 session_adapter.set_terminate();

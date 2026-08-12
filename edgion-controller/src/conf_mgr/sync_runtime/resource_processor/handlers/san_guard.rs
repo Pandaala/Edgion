@@ -213,8 +213,6 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
     }
 
     scan_stage!(ep.spec.request_plugins);
-    // ExtProc also runs in the upstream_response stage; scan it too.
-    scan_stage!(ep.spec.upstream_response_plugins);
 
     errors
 }

@@ -501,7 +501,7 @@ impl Context for AuthPlugin {
 
 ### Q：guest 模块在响应阶段不生效？
 
-确认条目列在 `upstreamResponseFilterPlugins`（响应头）或 `upstreamResponseBodyFilterPlugins`（只读 body）下，而不是 `upstreamResponsePlugins`（那个异步阶段属于 ExtProc 等其他插件）。
+确认条目列在 `upstreamResponseFilterPlugins`（响应头）或 `upstreamResponseBodyFilterPlugins`（只读 body）下，而不是 `upstreamResponsePlugins`。ExtProc 只在 `requestPlugins` 中配置一次；响应处理由该请求条目持有的内部 companion 执行，并不是可单独配置的异步阶段条目。
 
 ### Q：controller 拒绝了我的 EdgionPlugins 资源？
 

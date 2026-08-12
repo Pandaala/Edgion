@@ -281,6 +281,10 @@ impl UpstreamResponse for ConditionalUpstreamResponse {
         self.dye_plan.as_ref()
     }
 
+    fn suppress_automatic_log(&self) -> bool {
+        self.inner.suppress_automatic_log()
+    }
+
     async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {

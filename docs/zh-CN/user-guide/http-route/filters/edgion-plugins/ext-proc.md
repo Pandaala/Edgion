@@ -18,13 +18,13 @@
 |---|:---:|---|
 | 读/改**请求** header | ✅ | `RequestFilter` |
 | 请求阶段短路（`ImmediateResponse`，如 403） | ✅ | `RequestFilter` |
-| 读/改**响应** header | ✅ | 异步 `UpstreamResponse` |
-| 响应阶段短路（`ImmediateResponse`） | ✅ | 异步 `UpstreamResponse` |
+| 读/改**响应** header | ✅ | 请求条目持有的内部 response companion |
+| 响应 header 尚未提交时短路（`ImmediateResponse`） | ✅ | 内部 response companion |
 | 读/替换**请求 body**（整体缓冲） | ✅ | `requestBodyMode: BUFFERED` |
 | 逐块检查/改写**请求 body**（流式） | ✅ | `requestBodyMode: STREAMED` |
-| 读/改**响应 body** | ❌ | 代理的上游响应保持纯流式 |
+| 逐窗口读/替换/清空**响应 body** | ✅ | `responseBodyMode: STREAMED`，保持主响应流式 |
 
-`BUFFERED_PARTIAL` 请求模式、以及 `NONE`/`SKIP` 以外的响应 body 模式会**被校验拒绝**（Controller 将资源标记为无效）——绝不会静默忽略。
+请求 `BUFFERED_PARTIAL`、响应 `BUFFERED` 和响应 `BUFFERED_PARTIAL` 会**被校验拒绝**。响应 `STREAMED` 当前处理的是有界 transport window；它不把 Pingora transport chunk 当作 SSE event，也不宣称具备 semantic SSE window。
 
 ## 快速开始
 
@@ -44,17 +44,9 @@ spec:
           timeoutMs: 200
         processingMode:
           requestHeaderMode: SEND
-        failureModeAllow: false   # 处理服务不可达时 fail-close
-  # 响应 header 处理（独立条目，异步阶段）
-  upstreamResponsePlugins:
-    - type: ExtProc
-      config:
-        grpcService:
-          target: "ext-proc.svc.cluster.local:9000"
-          timeoutMs: 200
-        processingMode:
           responseHeaderMode: SEND
-        failureModeAllow: false
+          responseBodyMode: STREAMED
+        failureModeAllow: false   # 处理服务不可达时 fail-close
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -79,19 +71,19 @@ spec:
           port: 30001
 ```
 
-> 请求阶段和响应阶段是**两个独立条目**（`requestPlugins` 与 `upstreamResponsePlugins`）。只需要哪个阶段就配哪个。每个条目只读自己阶段的模式（`requestPlugins` 条目读 `requestHeaderMode`，`upstreamResponsePlugins` 条目读 `responseHeaderMode`）。
+> ExtProc 只能配置在 `requestPlugins`。一个匹配的条目是唯一 transaction owner；它创建不可 Clone 的请求级 logical `Process` stream，并由内部 response companion 继续使用同一条 stream。不能在 `upstreamResponsePlugins` 再配置第二个 ExtProc 条目来拼接事务。
 
 ## 配置参数
 
 | 参数 | 类型 | 默认 | 说明 |
 |------|------|------|------|
 | `grpcService.target` | String | —（必填） | 处理服务的 gRPC 端点，纯 `host:port`（不是 URL）。IPv6 必须加方括号：`[::1]:9000`。 |
-| `grpcService.timeoutMs` | Integer | `200` | verdict 超时（毫秒），范围 `1..=60000`。header 相位交换（以及共用一条流的 `BUFFERED` 全部相位）按一次事务整体计时；`STREAMED` 模式下按每个 body 块交换计时，且首次交换还包含连接/TLS/h2 建立——TLS 目标建议调大。 |
+| `grpcService.timeoutMs` | Integer | `200` | 每条消息的超时（毫秒），范围 `1..=60000`；覆盖发送、首次 lazy open 和等待 verdict。没有总 stream deadline，合法的长时间 SSE/下载可长期保持空闲。 |
 | `grpcService.tls` | Object | 未启用 | 处理服务连接的 TLS 配置：`enabled`、`verify`、`validation.caCertificateRefs`、`clientCertificateRef`（mTLS）。缺省/`enabled: false` = 明文 h2c（集群内默认）；未设置的子字段继承全局 `outboundTls` 默认。 |
-| `processingMode.requestHeaderMode` | Enum | `SEND` | `SEND` 把请求 header 发给处理服务，`SKIP` 跳过。仅 `requestPlugins` 条目读取。 |
-| `processingMode.responseHeaderMode` | Enum | `SKIP` | 响应 header 的 `SEND` / `SKIP`。仅 `upstreamResponsePlugins` 条目读取——在那里要设成 `SEND`。 |
+| `processingMode.requestHeaderMode` | Enum | `SEND` | `SEND` 把请求 header 发给处理服务，`SKIP` 跳过。 |
+| `processingMode.responseHeaderMode` | Enum | `SKIP` | 同一请求条目在最终响应 header 阶段的 `SEND` / `SKIP`。 |
 | `processingMode.requestBodyMode` | Enum | `NONE` | `NONE`、`SKIP`、`BUFFERED` 或 `STREAMED`。`BUFFERED` 先缓冲完整请求 body 再送处理服务；`STREAMED` 逐块随流交换（与 header 相位共用一条请求级 `Process` 流，逐块改写、上游改用 chunked 传输、请求不可重试）。`BUFFERED_PARTIAL` 被校验拒绝。 |
-| `processingMode.responseBodyMode` | Enum | `NONE` | 必须为 `NONE` 或 `SKIP`（代理的上游响应保持纯流式）。 |
+| `processingMode.responseBodyMode` | Enum | `NONE` | `NONE`、`SKIP` 或 `STREAMED`。`STREAMED` 对每个有界 transport window 严格 lockstep 交换；响应仍逐块释放，绝不聚合完整 upstream response。 |
 | `failureModeAllow` | Boolean | `false` | 处理服务不可达、超时、或返回不可用 verdict 时：`false`（fail-close）以 `500` 短路请求；`true`（fail-open）跳过处理继续放行。 |
 
 ## 行为
@@ -120,23 +112,25 @@ spec:
 
 ### ImmediateResponse（短路）
 
-若处理服务返回 `ImmediateResponse`，网关停止回源，直接把该状态码 + body 返回给客户端。**请求**阶段会把该响应的自定义 header mutation 应用到回包；**响应**阶段只应用状态码和 body（运行时会重建回包，故响应阶段 `ImmediateResponse` 的自定义 header 不保留——gRPC route 上仅保留状态码）。
+若处理服务在响应尚未提交前返回 `ImmediateResponse`，网关可把它转换为正常 local reply。响应 header/body 已提交后不能伪装成新的 HTTP 4xx/5xx：默认丢弃尚未释放的 window 并安全终止 stream。通用 ExtProc 不生成 provider-specific SSE error event。response-body verdict 中的 header mutation 被拒绝并按失败策略处理。
 
 ### 失败处理（`failureModeAllow`）
 
 `failureModeAllow` 不仅在处理服务不可达/超时时生效，处理服务返回**畸形或错相位 verdict** 时同样生效——一个有 bug 的处理服务不能静默绕过已配置的 fail-close。
 
-- `false`（fail-close，鉴权类用法推荐）：以 `500 ext_proc unavailable` 短路。
+- `false`（fail-close，鉴权类用法推荐）：以不含依赖、目标或插件身份细节的通用 `500` 短路。
 - `true`（fail-open，非关键增强场景）：跳过处理，继续回源。
 
 ## 限制
 
-- **不支持响应 body 处理**：响应 body 模式仅 `NONE`/`SKIP`（代理的上游响应保持纯流式）。
+- **响应 body 不缓冲**：仅支持 `STREAMED` transport window；不创建 response-side `BodyStorage`，不聚合主响应。
 - **不支持 `BUFFERED_PARTIAL`**。
-- **请求与响应阶段仍是两条流**：`STREAMED`/`BUFFERED` 模式下 header 相位与请求 body 相位共用一条请求级流，但响应 header 相位另开一条短生命周期流，处理服务无法把请求阶段状态带到响应阶段。
-- **`STREAMED` 语义**：逐块改写可能改变总长度，上游请求改用 chunked 传输（移除 `Content-Length`）；选中流式插件后请求即不可重试；body 相位 verdict 中的 header mutation 被忽略（上游 header 已发出）并记入 access log；mid-body 的 `ImmediateResponse` 会应用其 header mutation（保护头拒绝），gRPC 路由映射为 `grpc-status` trailers；`CONTINUE_AND_REPLACE`（header 相位或 mid-body）一律按 bad verdict 处理；Upgrade/CONNECT 请求与 HTTP/1.1 以下客户端无法流式检查，按失败策略处理。
+- **同一 request transaction 只有一条 logical stream**：阶段严格按 request headers → request body windows → final response headers → response body windows → EOS/cancellation 排序。共享的是 target-scoped tonic Channel；logical `Process` stream 不共享、不可 Clone、不可在发送过 phase 后透明重连或重放。response-only 模式会 lazy open。
+- **窗口上限**：输入 window 与 replacement output 均采用 inclusive 1 MiB hard cap 和 checked arithmetic；超过上限按失败策略处理。可能改变 body 长度时移除 `Content-Length`。
+- **SSE 边界**：当前接入点接收 bounded transport chunks，不是 semantic SSE events。未来由 canonical SSE raw-byte hold/release adapter 在上游喂入；本插件不会复制第二套 decoder。未修改时直接释放原字节，不 parse 后重序列化。
+- **`STREAMED` 语义**：逐块改写可能改变总长度，上游请求改用 chunked 传输（移除 `Content-Length`）；选中流式插件后请求即不可重试；body 相位 verdict 中的 header mutation 会被视为 bad verdict，并按照 `failureModeAllow` 拒绝（上游 header 已发出）；mid-body 的 `ImmediateResponse` 会应用其 header mutation（保护头拒绝），gRPC 路由映射为 `grpc-status` trailers；`CONTINUE_AND_REPLACE`（header 相位或 mid-body）一律按 bad verdict 处理；Upgrade/CONNECT 请求与 HTTP/1.1 以下客户端无法流式检查，按失败策略处理。
 - **请求 body 被放弃**：若主上游提前完成响应并停止接收仍在上传的请求 body，网关会取消请求侧 `Process` 流，不会发送 `end_of_stream=true`。处理服务已收到的数据只是前缀，不能作为完整 body 结算。
-- **响应阶段 `ImmediateResponse`**：自定义 header 不保留（仅状态码 + body；gRPC route 仅状态码）。
+- **响应提交后的错误**：只能安全终止当前 stream 并记录聚合日志，不能改写成新的 HTTP 错误响应。
 
 ## 兼容性
 
@@ -150,11 +144,11 @@ proto 是 `envoy.service.ext_proc.v3` 的裁剪但线协议兼容子集（字段
 
 ### Q：处理服务返回了一个 header，但客户端/后端看不到？
 
-检查相位：请求 header mutation 发往**上游**（后端），响应 header mutation 发往**客户端**。还要确认条目在对应的列表里（`requestPlugins` vs `upstreamResponsePlugins`）且对应模式设为 `SEND`。如果该 header 是 `Content-Length`/`Connection` 之类，那是被有意拒绝的（见「受保护的 header」）。
+检查相位：请求 header mutation 发往**上游**（后端），响应 header mutation 发往**客户端**。确认唯一条目位于 `requestPlugins`，并把对应模式设为 `SEND`。如果该 header 是 `Content-Length`/`Connection` 等受保护字段，它会被有意拒绝。
 
 ### Q：Controller 拒绝了我的 EdgionPlugins 资源？
 
-常见原因：`requestBodyMode`/`responseBodyMode` 配了 `NONE`/`SKIP` 以外的值；`grpcService.target` 写成了 URL 或缺端口；`timeoutMs` 为 `0` 或超过 `60000`。
+常见原因：请求配置了 `BUFFERED_PARTIAL`，响应配置了 `BUFFERED`/`BUFFERED_PARTIAL`，ExtProc 放在了非 `requestPlugins` 阶段，`grpcService.target` 写成 URL/缺端口，或 `timeoutMs` 超出范围。
 
 ### Q：处理服务挂了会怎样？
 

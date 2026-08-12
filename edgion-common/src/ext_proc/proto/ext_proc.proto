@@ -12,8 +12,9 @@ syntax = "proto3";
 // THIS package (with matching field numbers) instead of pulling in the full
 // envoy/udpa/xds/validate proto trees. This keeps codegen self-contained.
 //
-// MVP scope: request-header and response-header phases only. Body and trailer
-// messages are defined for faithful decoding but are never sent by this client.
+// Edgion sends request headers/body and final response headers/body on one
+// request-scoped logical stream. Response bodies remain bounded transport
+// windows; full-response buffering and semantic SSE windows are out of scope.
 package envoy.service.ext_proc.v3;
 
 // The external processing service. A single bidirectional stream carries one
@@ -93,7 +94,7 @@ message ImmediateResponse {
   HttpStatus status = 1;
   HeaderMutation headers = 2;
   bytes body = 3;
-  // field 4 (grpc_status) intentionally omitted for MVP
+  // field 4 (grpc_status) intentionally omitted from this wire subset
   string details = 5;
 }
 

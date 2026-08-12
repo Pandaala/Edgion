@@ -509,7 +509,7 @@ Confirm that the `Wasm` entry is under `requestPlugins` and the compiled guest a
 
 ### Q: My guest module isn't taking effect on the response phase?
 
-Confirm you listed the entry under `upstreamResponseFilterPlugins` (headers) or `upstreamResponseBodyFilterPlugins` (read-only body), not `upstreamResponsePlugins` (that async stage belongs to other plugins such as ExtProc).
+Confirm you listed the entry under `upstreamResponseFilterPlugins` (headers) or `upstreamResponseBodyFilterPlugins` (read-only body), not `upstreamResponsePlugins`. ExtProc is configured once in `requestPlugins`; its response work is an internal companion owned by that request entry, not a separately configurable async-stage entry.
 
 ### Q: The controller rejected my EdgionPlugins resource?
 

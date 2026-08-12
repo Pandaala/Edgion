@@ -113,6 +113,9 @@ pub struct PluginLog {
 
     /// ExtensionRef reference name (for ExtensionRef filter only)
     pub refer_to: Option<String>,
+
+    /// Request-local attachment token. Never serialized.
+    pub(crate) internal_token: Option<String>,
 }
 
 impl Serialize for PluginLog {
@@ -197,6 +200,7 @@ impl PluginLog {
             ulog: None,
             log_full: None,
             refer_to: None,
+            internal_token: None,
         }
     }
 
@@ -371,6 +375,10 @@ impl PluginLog {
     #[inline]
     pub fn set_refer_to(&mut self, name: String) {
         self.refer_to = Some(name);
+    }
+
+    pub(crate) fn set_internal_token(&mut self, token: String) {
+        self.internal_token = Some(token);
     }
 
     /// Render this log as a single `String` suitable for `expect-test`
@@ -568,6 +576,17 @@ mod tests {
         assert_eq!(parsed["log"][1], "bbb; ");
         assert!(parsed.get("ulog").is_none());
         assert!(parsed.get("log_full").is_none()); // false doesn't serialize
+    }
+
+    #[test]
+    fn internal_attachment_token_is_never_serialized() {
+        let mut log = PluginLog::new("ExtProc");
+        log.set_internal_token("secret/request-scoped-identity".to_string());
+        log.push("safe summary");
+        let json = serde_json::to_string(&log).unwrap();
+        assert!(!json.contains("internal_token"));
+        assert!(!json.contains("request-scoped-identity"));
+        assert!(json.contains("safe summary"));
     }
 
     #[test]

@@ -342,6 +342,32 @@ pub trait PluginSession: Send + Sync {
         drop(processor);
     }
 
+    /// Install one request-scoped attached ExtProc owner. Duplicate identity is
+    /// a configuration/runtime error and never overwrites the first owner.
+    fn install_attached_ext_proc(
+        &mut self,
+        _identity: String,
+        _owner: std::sync::Arc<crate::plugins::http::ext_proc::AttachedExtProc>,
+        _reserve_framing: bool,
+    ) -> bool {
+        false
+    }
+
+    fn attached_ext_proc(
+        &self,
+        _identity: &str,
+    ) -> Option<std::sync::Arc<crate::plugins::http::ext_proc::AttachedExtProc>> {
+        None
+    }
+
+    fn install_attached_response_processor(
+        &mut self,
+        processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
+    ) -> bool {
+        drop(processor);
+        false
+    }
+
     /// Claim the request-wide JSON Schema validation slot.
     ///
     /// Returns `true` only for the first validator that actually runs in the

@@ -3,22 +3,23 @@
 //! Covers the request-header phase (`RequestFilter`) and response-header
 //! phase (the async `UpstreamResponse` hook). The processor may mutate headers
 //! or return an `ImmediateResponse` to short-circuit. The request phase also
-//! supports a fully buffered body and body replacement. Response-body modes
-//! remain rejected until the response buffering seam exists.
+//! supports a fully buffered body and body replacement. Response bodies use
+//! the ordinary bounded streaming-processor seam and are never aggregated.
 //!
-//! A single plugin type implements both traits; the runtime constructs a
-//! separate instance per stage from the same config.
+//! One request entry constructs both wrappers around the same compiled owner.
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use std::sync::Arc;
 
+use super::attached::AttachedExtProc;
 use super::client::ExtProcClient;
 use super::mutation;
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter, UpstreamResponse};
 use edgion_common::ext_proc::proto::{
-    body_mutation, common_response::ResponseStatus, processing_request, processing_response, CommonResponse,
-    HeaderMutation, HttpBody, HttpHeaders, ImmediateResponse, ProcessingRequest,
+    body_mutation, common_response::ResponseStatus, processing_request, processing_response, CommonResponse, HttpBody,
+    HttpHeaders, ImmediateResponse, ProcessingRequest,
 };
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::plugin_configs::{ExtProcConfig, ProcessingMode};
@@ -33,18 +34,21 @@ pub(super) fn exchange_failure_reason(status: &tonic::Status) -> &'static str {
     }
 }
 
+#[derive(Clone)]
 pub struct ExtProc {
     name: String,
+    identity: String,
     client: ExtProcClient,
     mode: ProcessingMode,
     failure_mode_allow: bool,
 }
 
 impl ExtProc {
-    fn build(config: &ExtProcConfig) -> Option<Self> {
+    fn build_with_identity(config: &ExtProcConfig, identity: String) -> Option<Self> {
         match ExtProcClient::new(config) {
             Ok(client) => Some(ExtProc {
                 name: PLUGIN_NAME.to_string(),
+                identity,
                 client,
                 mode: config.processing_mode.clone(),
                 failure_mode_allow: config.failure_mode_allow,
@@ -58,14 +62,24 @@ impl ExtProc {
         }
     }
 
-    /// Construct the request-stage filter, or `None` to fail closed.
-    pub fn create_request(config: &ExtProcConfig) -> Option<Box<dyn RequestFilter>> {
-        Self::build(config).map(|p| Box::new(p) as Box<dyn RequestFilter>)
+    #[cfg(test)]
+    fn build(config: &ExtProcConfig) -> Option<Self> {
+        Self::build_with_identity(config, "test/requestPlugins/#0".to_string())
     }
 
-    /// Construct the response-stage filter, or `None` to fail closed.
-    pub fn create_response(config: &ExtProcConfig) -> Option<Box<dyn UpstreamResponse>> {
-        Self::build(config).map(|p| Box::new(p) as Box<dyn UpstreamResponse>)
+    /// Compile one request entry into its request owner and internal response
+    /// companion. Both carry the same immutable identity and target runtime.
+    pub fn create_attached(
+        config: &ExtProcConfig,
+        identity: String,
+    ) -> Option<(Box<dyn RequestFilter>, Box<dyn UpstreamResponse>)> {
+        Self::build_with_identity(config, identity).map(|plugin| {
+            let companion = plugin.clone();
+            (
+                Box::new(plugin) as Box<dyn RequestFilter>,
+                Box::new(companion) as Box<dyn UpstreamResponse>,
+            )
+        })
     }
 
     /// Decide a phase result when the processor could not be consulted or gave an
@@ -111,20 +125,72 @@ impl ExtProc {
             session.record_outcome(DyeOutcome::FailClose, &cause);
             PluginRunningResult::ErrResponse {
                 status: 500,
-                body: Some("ext_proc unavailable".to_string()),
+                body: None,
             }
         }
+    }
+
+    fn fail_request_owner(
+        &self,
+        owner: &AttachedExtProc,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+        reason: &str,
+        detail: Option<&str>,
+    ) -> PluginRunningResult {
+        owner.mark_terminal(
+            if self.failure_mode_allow {
+                "fail-open"
+            } else {
+                "fail-close"
+            },
+            if reason == "bad verdict" {
+                "bad-verdict"
+            } else {
+                "request-stage-failure"
+            },
+        );
+        self.fail_mode(session, log, reason, detail)
     }
 
     async fn apply_request_common_response(
         &self,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
+        owner: Option<&AttachedExtProc>,
         mut common: Option<CommonResponse>,
         apply_body_mutation: bool,
     ) -> Result<(), PluginRunningResult> {
         let Some(common) = common.as_mut() else {
-            return Ok(());
+            return Err(match owner {
+                Some(owner) => {
+                    self.fail_request_owner(owner, session, log, "bad verdict", Some("missing common response"))
+                }
+                None => self.fail_mode(session, log, "bad verdict", Some("missing common response")),
+            });
+        };
+        let status = ResponseStatus::try_from(common.status).ok();
+        if status != Some(ResponseStatus::Continue)
+            && !(apply_body_mutation && status == Some(ResponseStatus::ContinueAndReplace))
+        {
+            return Err(match owner {
+                Some(owner) => {
+                    self.fail_request_owner(owner, session, log, "bad verdict", Some("invalid response status"))
+                }
+                None => self.fail_mode(session, log, "bad verdict", Some("invalid response status")),
+            });
+        }
+        if common
+            .body_mutation
+            .as_ref()
+            .is_some_and(|mutation| mutation.mutation.is_none())
+        {
+            return Err(match owner {
+                Some(owner) => {
+                    self.fail_request_owner(owner, session, log, "bad verdict", Some("malformed body mutation"))
+                }
+                None => self.fail_mode(session, log, "bad verdict", Some("malformed body mutation")),
+            });
         };
         if apply_body_mutation {
             if let Some(mutation) = common.body_mutation.take() {
@@ -152,7 +218,12 @@ impl ExtProc {
     /// stream, run the header phase on it, then install the per-chunk body
     /// handler. Installing a handler makes the request non-replayable and
     /// switches upstream framing to the streamed disposition.
-    async fn run_request_streamed(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+    async fn run_request_streamed(
+        &self,
+        owner: Arc<AttachedExtProc>,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+    ) -> PluginRunningResult {
         // Gate on the latched transport fact, NOT `declares_body()`: the
         // latter infers from Content-Length, which an H2 client can
         // contradict (declare CL:0, still send DATA frames) to smuggle body
@@ -161,7 +232,7 @@ impl ExtProc {
         // absent there and the fail mode applies.
         let headers_end_stream = match session.request_headers_end_stream() {
             Some(fact) => fact,
-            None => return self.fail_mode(session, log, "streamed unsupported", None),
+            None => return self.fail_request_owner(&owner, session, log, "streamed unsupported", None),
         };
 
         // Transport-guaranteed bodyless request: nothing to stream. Degenerate
@@ -177,11 +248,12 @@ impl ExtProc {
                     end_of_stream: true,
                 })),
             };
-            let response = match self.client.exchange(request).await {
+            let last = !self.mode.response_header_mode.is_send() && !self.mode.response_body_mode.is_streamed();
+            let response = match owner.exchange(request, last).await {
                 Ok(response) => response,
                 Err(status) => {
                     let reason = exchange_failure_reason(&status);
-                    return self.fail_mode(session, log, reason, Some(status.code().description()));
+                    return self.fail_request_owner(&owner, session, log, reason, Some(status.code().description()));
                 }
             };
             return match response.response {
@@ -192,24 +264,29 @@ impl ExtProc {
                     if hr.response.as_ref().is_some_and(|common| {
                         ResponseStatus::try_from(common.status).ok() == Some(ResponseStatus::ContinueAndReplace)
                     }) {
-                        return self.fail_mode(session, log, "bad verdict", Some("replace unsupported in streamed"));
+                        return self.fail_request_owner(
+                            &owner,
+                            session,
+                            log,
+                            "bad verdict",
+                            Some("replace unsupported in streamed"),
+                        );
                     }
                     match self
-                        .apply_request_common_response(session, log, hr.response, false)
+                        .apply_request_common_response(session, log, Some(owner.as_ref()), hr.response, false)
                         .await
                     {
                         Ok(()) => PluginRunningResult::GoodNext,
                         Err(result) => result,
                     }
                 }
-                Some(processing_response::Response::ImmediateResponse(imm)) => immediate_reply(session, log, imm),
-                _ => self.fail_mode(session, log, "bad verdict", None),
+                Some(processing_response::Response::ImmediateResponse(imm)) => {
+                    owner.mark_terminal("immediate-response", "request-immediate");
+                    immediate_reply(session, log, imm)
+                }
+                _ => self.fail_request_owner(&owner, session, log, "bad verdict", None),
             };
         }
-
-        // Lazy open: no network work yet — a connect/handshake failure
-        // surfaces from the first exchange below and takes the fail mode.
-        let mut stream = self.client.open_stream();
 
         if self.mode.request_header_mode.is_send() {
             let request = ProcessingRequest {
@@ -218,11 +295,11 @@ impl ExtProc {
                     end_of_stream: false,
                 })),
             };
-            let response = match stream.exchange(request, false).await {
+            let response = match owner.exchange(request, false).await {
                 Ok(response) => response,
                 Err(status) => {
                     let reason = exchange_failure_reason(&status);
-                    return self.fail_mode(session, log, reason, Some(status.code().description()));
+                    return self.fail_request_owner(&owner, session, log, reason, Some(status.code().description()));
                 }
             };
             match response.response {
@@ -233,29 +310,37 @@ impl ExtProc {
                     if hr.response.as_ref().is_some_and(|common| {
                         ResponseStatus::try_from(common.status).ok() == Some(ResponseStatus::ContinueAndReplace)
                     }) {
-                        return self.fail_mode(session, log, "bad verdict", Some("replace unsupported in streamed"));
+                        return self.fail_request_owner(
+                            &owner,
+                            session,
+                            log,
+                            "bad verdict",
+                            Some("replace unsupported in streamed"),
+                        );
                     }
                     if let Err(result) = self
-                        .apply_request_common_response(session, log, hr.response, false)
+                        .apply_request_common_response(session, log, Some(owner.as_ref()), hr.response, false)
                         .await
                     {
                         return result;
                     }
                 }
                 Some(processing_response::Response::ImmediateResponse(imm)) => {
+                    owner.mark_terminal("immediate-response", "request-immediate");
                     return immediate_reply(session, log, imm);
                 }
-                _ => return self.fail_mode(session, log, "bad verdict", None),
+                _ => return self.fail_request_owner(&owner, session, log, "bad verdict", None),
             }
         }
 
         let handler = super::streamed::ExtProcStreamedBodyHandler::new(
-            Box::new(stream),
+            Box::new(Arc::clone(&owner)),
             self.failure_mode_allow,
             session.current_dye_plan(),
+            !self.mode.response_header_mode.is_send() && !self.mode.response_body_mode.is_streamed(),
         );
         if !session.install_request_body_stream_handler(Box::new(handler)) {
-            return self.fail_mode(session, log, "streamed unsupported", None);
+            return self.fail_request_owner(&owner, session, log, "streamed unsupported", None);
         }
         log.push("ext_proc body streamed");
         PluginRunningResult::GoodNext
@@ -267,17 +352,15 @@ impl ExtProc {
         log: &mut PluginLog,
         common: Option<CommonResponse>,
     ) -> PluginRunningResult {
-        if common.as_ref().is_some_and(|response| {
-            ResponseStatus::try_from(response.status).ok() == Some(ResponseStatus::ContinueAndReplace)
-        }) {
-            return self.fail_mode(
-                session,
-                log,
-                "bad verdict",
-                Some("response body replacement unsupported"),
-            );
+        let Some(common) = common else {
+            return self.fail_mode(session, log, "bad verdict", Some("missing common response"));
+        };
+        if ResponseStatus::try_from(common.status).ok() != Some(ResponseStatus::Continue)
+            || common.body_mutation.is_some()
+        {
+            return self.fail_mode(session, log, "bad verdict", Some("invalid response headers verdict"));
         }
-        if let Some(mutation) = headers_mutation(common.as_ref()) {
+        if let Some(mutation) = common.header_mutation.as_ref() {
             let count = mutation::apply_to_response(session, mutation, log);
             log.push_fmt("resp hdr mut {}", la![count.to_string().as_str()]);
         }
@@ -321,11 +404,6 @@ fn immediate_reply(
     PluginRunningResult::ErrResponse { status, body }
 }
 
-/// Extract the `CommonResponse.header_mutation` from a headers verdict, if any.
-fn headers_mutation(common: Option<&edgion_common::ext_proc::proto::CommonResponse>) -> Option<&HeaderMutation> {
-    common.and_then(|c| c.header_mutation.as_ref())
-}
-
 #[async_trait]
 impl RequestFilter for ExtProc {
     fn name(&self) -> &str {
@@ -333,8 +411,17 @@ impl RequestFilter for ExtProc {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        let owner = Arc::new(AttachedExtProc::new(self.client.clone()));
+        if !session.install_attached_ext_proc(
+            self.identity.clone(),
+            Arc::clone(&owner),
+            self.mode.response_body_mode.is_streamed(),
+        ) {
+            return self.fail_mode(session, log, "duplicate attachment", None);
+        }
+        log.set_internal_token(self.identity.clone());
         if self.mode.request_body_mode.is_streamed() {
-            return self.run_request_streamed(session, log).await;
+            return self.run_request_streamed(owner, session, log).await;
         }
         let send_headers = self.mode.request_header_mode.is_send();
         let send_body = self.mode.request_body_mode.is_buffered();
@@ -345,7 +432,7 @@ impl RequestFilter for ExtProc {
         let body = if send_body {
             match session.read_request_body(None).await {
                 Ok(body) => Some(body),
-                Err(_) => return self.fail_mode(session, log, "body unavailable", None),
+                Err(_) => return self.fail_request_owner(&owner, session, log, "body unavailable", None),
             }
         } else {
             None
@@ -368,39 +455,59 @@ impl RequestFilter for ExtProc {
             });
         }
 
-        let responses = match self.client.exchange_all(requests).await {
-            Ok(responses) => responses,
-            Err(status) => {
-                let reason = exchange_failure_reason(&status);
-                return self.fail_mode(session, log, reason, Some(status.code().description()));
-            }
-        };
-
-        for response in responses {
+        let response_phase_remains =
+            self.mode.response_header_mode.is_send() || self.mode.response_body_mode.is_streamed();
+        let request_count = requests.len();
+        for (index, request) in requests.into_iter().enumerate() {
+            let last = index + 1 == request_count && !response_phase_remains;
+            let response = match owner.exchange(request, last).await {
+                Ok(response) => response,
+                Err(status) => {
+                    let reason = exchange_failure_reason(&status);
+                    return self.fail_request_owner(&owner, session, log, reason, Some(status.code().description()));
+                }
+            };
             match response.response {
                 Some(processing_response::Response::RequestHeaders(hr)) => {
-                    let apply_body_mutation = hr.response.as_ref().is_some_and(|common| {
+                    let stop_request_body = hr.response.as_ref().is_some_and(|common| {
                         ResponseStatus::try_from(common.status).ok() == Some(ResponseStatus::ContinueAndReplace)
                     });
                     if let Err(result) = self
-                        .apply_request_common_response(session, log, hr.response, apply_body_mutation)
+                        .apply_request_common_response(
+                            session,
+                            log,
+                            Some(owner.as_ref()),
+                            hr.response,
+                            stop_request_body,
+                        )
                         .await
                     {
                         return result;
                     }
+                    // Envoy's CONTINUE_AND_REPLACE at request headers replaces
+                    // the buffered body and terminates the request-body
+                    // direction. Do not send the original buffered body after
+                    // the processor has explicitly stopped that direction.
+                    if stop_request_body {
+                        if !response_phase_remains {
+                            owner.mark_terminal("success", "request-direction-replaced");
+                        }
+                        break;
+                    }
                 }
                 Some(processing_response::Response::RequestBody(br)) => {
                     if let Err(result) = self
-                        .apply_request_common_response(session, log, br.response, true)
+                        .apply_request_common_response(session, log, Some(owner.as_ref()), br.response, true)
                         .await
                     {
                         return result;
                     }
                 }
                 Some(processing_response::Response::ImmediateResponse(imm)) => {
+                    owner.mark_terminal("immediate-response", "request-immediate");
                     return immediate_reply(session, log, imm);
                 }
-                _ => return self.fail_mode(session, log, "bad verdict", None),
+                _ => return self.fail_request_owner(&owner, session, log, "bad verdict", None),
             }
         }
         PluginRunningResult::GoodNext
@@ -413,21 +520,51 @@ impl UpstreamResponse for ExtProc {
         &self.name
     }
 
+    fn suppress_automatic_log(&self) -> bool {
+        true
+    }
+
     async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        let Some(owner) = session.attached_ext_proc(&self.identity) else {
+            return PluginRunningResult::GoodNext;
+        };
+
         if !self.mode.response_header_mode.is_send() {
+            if self.mode.response_body_mode.is_streamed()
+                && !session.install_attached_response_processor(Box::new(
+                    super::response_streamed::ExtProcResponseProcessor::new(
+                        Arc::clone(&owner),
+                        self.failure_mode_allow,
+                        session.current_dye_plan(),
+                    ),
+                ))
+            {
+                return self.fail_mode(session, log, "late response processor", None);
+            }
             return PluginRunningResult::GoodNext;
         }
 
         let request = ProcessingRequest {
             request: Some(processing_request::Request::ResponseHeaders(HttpHeaders {
                 headers: Some(mutation::collect_response_headers(session)),
-                end_of_stream: true,
+                end_of_stream: !self.mode.response_body_mode.is_streamed(),
             })),
         };
 
-        let resp = match self.client.exchange(request).await {
+        let resp = match owner
+            .exchange(request, !self.mode.response_body_mode.is_streamed())
+            .await
+        {
             Ok(resp) => resp,
             Err(status) => {
+                owner.mark_terminal(
+                    if self.failure_mode_allow {
+                        "fail-open"
+                    } else {
+                        "fail-close"
+                    },
+                    "response-header-dependency",
+                );
                 return self.fail_mode(
                     session,
                     log,
@@ -439,10 +576,45 @@ impl UpstreamResponse for ExtProc {
 
         match resp.response {
             Some(processing_response::Response::ResponseHeaders(hr)) => {
-                self.apply_response_headers_response(session, log, hr.response)
+                let result = self.apply_response_headers_response(session, log, hr.response);
+                if !matches!(result, PluginRunningResult::GoodNext) {
+                    owner.mark_terminal(
+                        if self.failure_mode_allow {
+                            "fail-open"
+                        } else {
+                            "fail-close"
+                        },
+                        "response-header-invalid-verdict",
+                    );
+                }
+                if matches!(result, PluginRunningResult::GoodNext) && self.mode.response_body_mode.is_streamed() {
+                    if !session.install_attached_response_processor(Box::new(
+                        super::response_streamed::ExtProcResponseProcessor::new(
+                            Arc::clone(&owner),
+                            self.failure_mode_allow,
+                            session.current_dye_plan(),
+                        ),
+                    )) {
+                        return self.fail_mode(session, log, "late response processor", None);
+                    }
+                }
+                result
             }
-            Some(processing_response::Response::ImmediateResponse(imm)) => immediate_reply(session, log, imm),
-            _ => self.fail_mode(session, log, "bad verdict", None),
+            Some(processing_response::Response::ImmediateResponse(imm)) => {
+                owner.mark_terminal("immediate-response", "response-header-immediate");
+                immediate_reply(session, log, imm)
+            }
+            _ => {
+                owner.mark_terminal(
+                    if self.failure_mode_allow {
+                        "fail-open"
+                    } else {
+                        "fail-close"
+                    },
+                    "response-header-bad-verdict",
+                );
+                self.fail_mode(session, log, "bad verdict", None)
+            }
         }
     }
 }
@@ -472,6 +644,7 @@ mod tests {
     async fn streamed_without_transport_fact_fails_per_policy() {
         let ext_proc = ExtProc::build(&streamed_config(false, true)).expect("build must not dial");
         let mut session = MockPluginSession::new();
+        session.expect_install_attached_ext_proc().times(1).return_const(true);
         session.expect_request_headers_end_stream().return_const(None);
         session
             .expect_record_outcome()
@@ -489,6 +662,7 @@ mod tests {
     async fn streamed_skip_headers_installs_handler_without_network() {
         let ext_proc = ExtProc::build(&streamed_config(false, false)).expect("build must not dial");
         let mut session = MockPluginSession::new();
+        session.expect_install_attached_ext_proc().times(1).return_const(true);
         session.expect_request_headers_end_stream().return_const(Some(false));
         session.expect_current_dye_plan().return_const(None);
         session
@@ -506,6 +680,7 @@ mod tests {
     async fn streamed_install_refusal_fails_per_policy() {
         let ext_proc = ExtProc::build(&streamed_config(true, false)).expect("build must not dial");
         let mut session = MockPluginSession::new();
+        session.expect_install_attached_ext_proc().times(1).return_const(true);
         session.expect_request_headers_end_stream().return_const(Some(false));
         session.expect_current_dye_plan().return_const(None);
         session
@@ -554,7 +729,7 @@ mod tests {
         };
         let mut log = PluginLog::new("ExtProc");
         assert!(ext_proc
-            .apply_request_common_response(&mut session, &mut log, Some(response), true)
+            .apply_request_common_response(&mut session, &mut log, None, Some(response), true)
             .await
             .is_ok());
     }
@@ -576,7 +751,7 @@ mod tests {
 
         let mut log = PluginLog::new("ExtProc");
         assert!(ext_proc
-            .apply_request_common_response(&mut session, &mut log, Some(response), false)
+            .apply_request_common_response(&mut session, &mut log, None, Some(response), false)
             .await
             .is_ok());
     }
@@ -610,9 +785,39 @@ mod tests {
 
         let mut log = PluginLog::new("ExtProc");
         assert!(ext_proc
-            .apply_request_common_response(&mut session, &mut log, Some(response), true)
+            .apply_request_common_response(&mut session, &mut log, None, Some(response), true)
             .await
             .is_ok());
+    }
+
+    #[tokio::test]
+    async fn request_header_and_buffered_body_reject_missing_unknown_and_malformed_common_verdicts() {
+        use edgion_common::ext_proc::proto::BodyMutation;
+
+        let ext_proc = ExtProc::build(&test_config(false)).expect("client build must not touch the network");
+        let mut session = MockPluginSession::new();
+        session.expect_record_outcome().times(3).return_const(());
+        let cases = [
+            None,
+            Some(CommonResponse {
+                status: 99,
+                ..Default::default()
+            }),
+            Some(CommonResponse {
+                body_mutation: Some(BodyMutation { mutation: None }),
+                ..Default::default()
+            }),
+        ];
+        for (index, common) in cases.into_iter().enumerate() {
+            let mut log = PluginLog::new("ExtProc");
+            let result = ext_proc
+                .apply_request_common_response(&mut session, &mut log, None, common, index != 0)
+                .await;
+            assert!(matches!(
+                result,
+                Err(PluginRunningResult::ErrResponse { status: 500, .. })
+            ));
+        }
     }
 
     #[tokio::test]
@@ -660,7 +865,7 @@ mod tests {
 
         let mut log = PluginLog::new("ExtProc");
         let result = ext_proc
-            .apply_request_common_response(&mut session, &mut log, Some(response), true)
+            .apply_request_common_response(&mut session, &mut log, None, Some(response), true)
             .await;
         assert!(matches!(result, Err(PluginRunningResult::GoodNext)));
     }
@@ -689,7 +894,7 @@ mod tests {
 
         let mut log = PluginLog::new("ExtProc");
         let result = ext_proc
-            .apply_request_common_response(&mut session, &mut log, Some(response), true)
+            .apply_request_common_response(&mut session, &mut log, None, Some(response), true)
             .await;
         assert!(matches!(
             result,

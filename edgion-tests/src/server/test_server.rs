@@ -2775,6 +2775,22 @@ mod ext_proc_server {
         }
     }
 
+    fn response_body_verdict_with(body: &'static [u8]) -> ProcessingResponse {
+        ProcessingResponse {
+            response: Some(processing_response::Response::ResponseBody(BodyResponse {
+                response: Some(CommonResponse {
+                    status: ResponseStatus::Continue as i32,
+                    header_mutation: None,
+                    body_mutation: Some(BodyMutation {
+                        mutation: Some(body_mutation::Mutation::Body(body.to_vec())),
+                    }),
+                    trailers: None,
+                    clear_route_cache: false,
+                }),
+            })),
+        }
+    }
+
     fn request_headers_verdict(status: ResponseStatus, body: Option<&'static [u8]>) -> ProcessingResponse {
         ProcessingResponse {
             response: Some(processing_response::Response::RequestHeaders(HeadersResponse {
@@ -2805,12 +2821,17 @@ mod ext_proc_server {
             })
     }
 
-    fn handle(req: ProcessingRequest, mode: &mut Option<String>) -> (Option<ProcessingResponse>, bool) {
+    fn handle(
+        req: ProcessingRequest,
+        mode: &mut Option<String>,
+        request_phase_seen: &mut bool,
+    ) -> (Option<ProcessingResponse>, bool) {
         let Some(request) = req.request else {
             return (None, false);
         };
         match request {
             processing_request::Request::RequestHeaders(h) => {
+                *request_phase_seen = true;
                 *mode = h
                     .headers
                     .as_ref()
@@ -2845,7 +2866,9 @@ mod ext_proc_server {
                     ),
                 }
             }
-            processing_request::Request::ResponseHeaders(_) => (Some(headers_verdict(false, "x-ext-proc-resp")), false),
+            processing_request::Request::ResponseHeaders(_) if *request_phase_seen => {
+                (Some(headers_verdict(false, "x-ext-proc-resp")), false)
+            }
             processing_request::Request::RequestBody(_) => {
                 let response = match mode.as_deref() {
                     Some("duplicate-header") | Some("wrong-order") => headers_verdict(true, "x-duplicate-phase"),
@@ -2857,6 +2880,10 @@ mod ext_proc_server {
                 };
                 (Some(response), false)
             }
+            processing_request::Request::ResponseBody(_) if *request_phase_seen => (
+                Some(response_body_verdict_with(b"response-by-attached-ext-proc")),
+                false,
+            ),
             _ => (None, false),
         }
     }
@@ -2873,8 +2900,9 @@ mod ext_proc_server {
             let (tx, rx) = tokio::sync::mpsc::channel(4);
             tokio::spawn(async move {
                 let mut mode = None;
+                let mut request_phase_seen = false;
                 while let Ok(Some(req)) = inbound.message().await {
-                    let (response, terminal) = handle(req, &mut mode);
+                    let (response, terminal) = handle(req, &mut mode, &mut request_phase_seen);
                     if let Some(resp) = response {
                         if tx.send(Ok(resp)).await.is_err() {
                             break;

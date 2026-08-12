@@ -92,15 +92,17 @@ pub const HTTP_PLUGIN_STAGE_EXCEPTIONS: &[(&str, StageSet)] = &[
     // and upstream-response-body-filter (read-only observation) stages,
     // matching its three CRD stage enum entries.
     ("Wasm", StageSet::new(true, true, true, false)),
-    // ExtProc runs in the request stage and the async upstream-response stage.
-    ("ExtProc", StageSet::new(true, false, false, true)),
+    // One request-stage ExtProc entry owns request and response processing. The
+    // gateway installs its response companion internally.
+    ("ExtProc", StageSet::new(true, false, false, false)),
 ];
 
 /// Which execution stages a plugin type name is valid for.
 ///
 /// This mirrors `edgion-gateway`'s `create_*_from_edgion` stage gating: a
 /// variant that those functions answer with `WrongStage` is `false` here. The
-/// `upstream_response` (async) stage currently accepts only `ExtProc`.
+/// The async upstream-response stage currently has no directly configurable
+/// plugin. ExtProc response processing is owned by its request-stage entry.
 pub fn applicable_stages_by_name(type_name: &str) -> StageSet {
     let mut i = 0;
     while i < HTTP_PLUGIN_STAGE_EXCEPTIONS.len() {

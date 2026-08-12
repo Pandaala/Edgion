@@ -6,7 +6,7 @@
 //! response.
 //!
 //! Request bodies support `BUFFERED` and `STREAMED`. Proxied upstream response
-//! bodies remain streaming-only, so response body modes are rejected.
+//! bodies support `STREAMED`; response buffering is deliberately rejected.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -25,7 +25,7 @@ use crate::resources::edgion_plugins::PluginValidation;
 ///   requestHeaderMode:  SEND
 ///   responseHeaderMode: SEND
 ///   requestBodyMode:    BUFFERED
-///   responseBodyMode:   NONE   # must be SKIP/NONE this release
+///   responseBodyMode:   STREAMED
 /// failureModeAllow: false      # fail-close when the processor is unreachable
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -80,8 +80,8 @@ pub struct ProcessingMode {
     #[serde(default)]
     pub request_body_mode: BodySendMode,
 
-    /// Response body handling. Only `SKIP`/`NONE` are accepted because proxied
-    /// upstream response bodies remain streaming-only.
+    /// Response body handling. `STREAMED`, `SKIP`, and `NONE` are accepted.
+    /// Full or partial buffering is forbidden for proxied upstream responses.
     #[serde(default)]
     pub response_body_mode: BodySendMode,
 }
@@ -107,7 +107,7 @@ pub enum BodySendMode {
     None,
     /// Skip the body phase (equivalent to NONE for this plugin).
     Skip,
-    /// Stream body chunks to the processor. Supported for requests only.
+    /// Stream body chunks to the processor.
     Streamed,
     /// Buffer the full body. Supported for requests only.
     Buffered,
@@ -139,7 +139,7 @@ impl BodySendMode {
     }
 
     fn is_supported_response(&self) -> bool {
-        matches!(self, BodySendMode::None | BodySendMode::Skip)
+        matches!(self, BodySendMode::None | BodySendMode::Skip | BodySendMode::Streamed)
     }
 }
 
@@ -250,8 +250,8 @@ impl PluginValidation for ExtProcConfig {
         }
         if !self.processing_mode.response_body_mode.is_supported_response() {
             return Some(
-                "processingMode.responseBodyMode only supports NONE or SKIP because proxied \
-                 upstream response bodies remain streaming-only"
+                "processingMode.responseBodyMode supports NONE, SKIP, or STREAMED; \
+                 BUFFERED and BUFFERED_PARTIAL would aggregate the upstream response"
                     .to_string(),
             );
         }
@@ -356,11 +356,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_streamed_response_body() {
+    fn accepts_streamed_response_body() {
         let mut config = valid_base();
         config.processing_mode.response_body_mode = BodySendMode::Streamed;
-        let err = config.validation_error().unwrap();
-        assert!(err.contains("responseBodyMode"), "got: {err}");
+        assert!(config.validation_error().is_none());
     }
 
     #[test]
@@ -374,6 +373,14 @@ mod tests {
     fn rejects_buffered_response_body() {
         let mut config = valid_base();
         config.processing_mode.response_body_mode = BodySendMode::Buffered;
+        let err = config.validation_error().unwrap();
+        assert!(err.contains("responseBodyMode"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_buffered_partial_response_body() {
+        let mut config = valid_base();
+        config.processing_mode.response_body_mode = BodySendMode::BufferedPartial;
         let err = config.validation_error().unwrap();
         assert!(err.contains("responseBodyMode"), "got: {err}");
     }

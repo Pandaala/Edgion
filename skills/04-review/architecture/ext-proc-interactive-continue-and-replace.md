@@ -1,6 +1,6 @@
 ---
 name: ext-proc-interactive-continue-and-replace
-description: Use when reviewing ExtProc CONTINUE_AND_REPLACE semantics; covers interactive phase sending, stream half-close, and the response-body unsupported boundary.
+description: Use when reviewing ExtProc CONTINUE_AND_REPLACE semantics; covers interactive phase sending, stream half-close, and bounded response transport windows.
 status: fixed
 finding_id: BODY-004
 closed: 2026-07-27
@@ -16,9 +16,9 @@ the original body; `CONTINUE_AND_REPLACE` applies the valid request mutations
 and stops that direction, while the final outbound phase immediately
 half-closes the request stream.
 
-Response-header `CONTINUE_AND_REPLACE` is explicitly unsupported until a
-response-body replacement seam exists and therefore follows
-`failureModeAllow`.
+WP1 adds bounded response transport-window mutation, but response-header and
+response-body `CONTINUE_AND_REPLACE` remain explicitly unsupported: their
+stop-sending semantics are not equivalent to an ordinary per-window mutation.
 
 ## Core Rationale
 
@@ -43,12 +43,14 @@ A request-headers body mutation takes effect only with
 and body mutations. Body publication happens before header mutation so a
 rejected body version cannot leave half of the same verdict applied.
 
-**4. Unsupported response replacement fails explicitly**
+**4. Unsupported terminal replacement status fails explicitly**
 
-Edgion streams proxied upstream responses and has no response-body replacement
-storage. Accepting response-header `CONTINUE_AND_REPLACE` while ignoring its
-body mutation would be a silent protocol violation, so it is treated as an
-unsupported bad verdict and routed through the configured failure policy.
+Edgion streams proxied upstream responses. WP1 applies ordinary
+`ResponseBodyResponse.body_mutation` to one bounded transport window at a time
+without response-side storage. Accepting `CONTINUE_AND_REPLACE` while ignoring
+its direction-level stop semantics would still be a protocol violation, so it
+is routed through the configured failure policy. This is not semantic SSE
+windowing; that awaits the canonical raw-byte-preserving hold/release adapter.
 
 ## Fix Suggestions Not Accepted
 
@@ -63,9 +65,9 @@ unsupported bad verdict and routed through the configured failure policy.
 
 ## Re-evaluation Triggers
 
-Re-open this decision only if:
+Re-open the terminal-status decision only if:
 
-- Response-body replacement is implemented in the gateway.
+- Direction-level response replacement/stop-sending semantics are specified.
 - ExtProc adds another terminal response status.
 - The client moves from ordered phases to explicit correlation identifiers.
 

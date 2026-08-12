@@ -13,10 +13,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_proxy::RequestBodyEvent;
 
-use super::client::ExtProcStream;
+use super::attached::AttachedExtProc;
 use super::plugin::{exchange_failure_reason, sanitize_status};
 use crate::plugins::runtime::dye_plan::CompiledDyePlan;
-use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{ChunkVerdict, DyeOutcome, PluginLog, RequestBodyStreamHandler};
 use edgion_common::ext_proc::proto::{
     body_mutation, common_response::ResponseStatus, processing_request, processing_response, HttpBody,
@@ -25,19 +24,30 @@ use edgion_common::ext_proc::proto::{
 
 /// Per-message transport used by the handler. Abstracted so unit tests can
 /// script verdicts without a live gRPC server; the production impl is the
-/// request-scoped [`ExtProcStream`].
+/// request-scoped attached owner.
 #[async_trait]
 pub trait BodyExchange: Send {
     async fn exchange_body(&mut self, body: HttpBody, last: bool) -> Result<ProcessingResponse, tonic::Status>;
+
+    fn cancel(&mut self) {}
+    fn terminal(&mut self, _outcome: &'static str, _reason: &'static str) {}
 }
 
 #[async_trait]
-impl BodyExchange for ExtProcStream {
+impl BodyExchange for Arc<AttachedExtProc> {
     async fn exchange_body(&mut self, body: HttpBody, last: bool) -> Result<ProcessingResponse, tonic::Status> {
         let request = ProcessingRequest {
             request: Some(processing_request::Request::RequestBody(body)),
         };
-        self.exchange(request, last).await
+        AttachedExtProc::exchange(self, request, last).await
+    }
+
+    fn cancel(&mut self) {
+        AttachedExtProc::close(self);
+    }
+
+    fn terminal(&mut self, outcome: &'static str, reason: &'static str) {
+        AttachedExtProc::mark_terminal(self, outcome, reason);
     }
 }
 
@@ -49,13 +59,11 @@ pub struct ExtProcStreamedBodyHandler {
     /// Set when the handler stops exchanging (fail-open deactivation or a
     /// terminal verdict); later chunks pass through untouched.
     done: bool,
-    log: Option<PluginLog>,
-    /// Lines pushed since the last `take_log` — gates draining an empty log.
-    log_lines: usize,
     dye_plan: Option<Arc<CompiledDyePlan>>,
     /// Failure outcome of the last chunk, drained by the hook for dye
     /// recording (mirrors the request-stage `fail_mode` recording).
     pending_outcome: Option<(DyeOutcome, String)>,
+    terminal_at_request_eos: bool,
 }
 
 impl ExtProcStreamedBodyHandler {
@@ -63,22 +71,15 @@ impl ExtProcStreamedBodyHandler {
         exchange: Box<dyn BodyExchange>,
         failure_mode_allow: bool,
         dye_plan: Option<Arc<CompiledDyePlan>>,
+        terminal_at_request_eos: bool,
     ) -> Self {
         Self {
             exchange: Some(exchange),
             failure_mode_allow,
             done: false,
-            log: Some(PluginLog::new("ExtProc")),
-            log_lines: 0,
             dye_plan,
             pending_outcome: None,
-        }
-    }
-
-    fn push_log(&mut self, line: &str) {
-        if let Some(log) = self.log.as_mut() {
-            log.push(line);
-            self.log_lines += 1;
+            terminal_at_request_eos,
         }
     }
 
@@ -89,27 +90,30 @@ impl ExtProcStreamedBodyHandler {
     /// uniform across stages; `detail` carries the static sub-tag.
     fn fail(&mut self, reason: &str, detail: Option<&str>) -> ChunkVerdict {
         let cause = reason.replace(' ', "-");
-        let mode = if self.failure_mode_allow {
-            "fail-open"
+        let _ = detail;
+        let terminal_reason = if reason == "bad verdict" {
+            "bad-verdict"
         } else {
-            "fail-close"
+            "dependency"
         };
-        match detail {
-            Some(detail) => self.push_log(&format!("ext_proc body {reason}:{detail}:{mode}")),
-            None => self.push_log(&format!("ext_proc body {reason}:{mode}")),
-        }
         if self.failure_mode_allow {
             self.done = true;
             // Release the stream now instead of pinning it (and its
             // processor-side half) for the rest of a possibly long upload.
+            if let Some(exchange) = self.exchange.as_mut() {
+                exchange.terminal("fail-open", terminal_reason);
+            }
             self.exchange = None;
             self.pending_outcome = Some((DyeOutcome::FailOpen, cause));
             ChunkVerdict::Continue
         } else {
+            if let Some(exchange) = self.exchange.as_mut() {
+                exchange.terminal("fail-close", terminal_reason);
+            }
             self.pending_outcome = Some((DyeOutcome::FailClose, cause));
             ChunkVerdict::Terminate {
                 status: 500,
-                body: Some("ext_proc unavailable".to_string()),
+                body: None,
                 headers: Vec::new(),
             }
         }
@@ -128,8 +132,11 @@ impl RequestBodyStreamHandler for ExtProcStreamedBodyHandler {
         }
         if event == RequestBodyEvent::Abandoned {
             self.done = true;
+            if let Some(exchange) = self.exchange.as_mut() {
+                exchange.terminal("cancelled", "request-abandoned");
+                exchange.cancel();
+            }
             self.exchange = None;
-            self.push_log("ext_proc body abandoned");
             return ChunkVerdict::Continue;
         }
         let Some(exchange) = self.exchange.as_mut() else {
@@ -140,7 +147,10 @@ impl RequestBodyStreamHandler for ExtProcStreamedBodyHandler {
             body: chunk.as_ref().map(|b| b.to_vec()).unwrap_or_default(),
             end_of_stream,
         };
-        let response = match exchange.exchange_body(body, end_of_stream).await {
+        let response = match exchange
+            .exchange_body(body, end_of_stream && self.terminal_at_request_eos)
+            .await
+        {
             Ok(response) => response,
             Err(status) => {
                 let reason = exchange_failure_reason(&status);
@@ -150,21 +160,33 @@ impl RequestBodyStreamHandler for ExtProcStreamedBodyHandler {
 
         match response.response {
             Some(processing_response::Response::RequestBody(br)) => {
+                let Some(common) = br.response else {
+                    return self.fail("bad verdict", Some("missing common response"));
+                };
+                let status = ResponseStatus::try_from(common.status).ok();
                 // CONTINUE_AND_REPLACE mid-stream ("replace and stop sending
                 // chunks") is not implemented; never silently downgrade it to
                 // a plain CONTINUE — reject per the failure policy.
-                if br.response.as_ref().is_some_and(|common| {
-                    ResponseStatus::try_from(common.status).ok() == Some(ResponseStatus::ContinueAndReplace)
-                }) {
+                if status == Some(ResponseStatus::ContinueAndReplace) {
                     return self.fail("bad verdict", Some("replace unsupported in streamed"));
+                }
+                if status != Some(ResponseStatus::Continue) {
+                    return self.fail("bad verdict", Some("invalid response status"));
                 }
                 // Header mutations in a body verdict cannot apply: the
                 // upstream request headers are already committed by the time
                 // body chunks flow.
-                if br.response.as_ref().is_some_and(|c| c.header_mutation.is_some()) {
-                    self.push_log("ext_proc body hdr mut ignored");
+                if common.header_mutation.is_some() {
+                    return self.fail("bad verdict", Some("header mutation after commit"));
                 }
-                if let Some(mutation) = br.response.and_then(|c| c.body_mutation) {
+                if common
+                    .body_mutation
+                    .as_ref()
+                    .is_some_and(|mutation| mutation.mutation.is_none())
+                {
+                    return self.fail("bad verdict", Some("malformed body mutation"));
+                }
+                if let Some(mutation) = common.body_mutation {
                     match mutation.mutation {
                         // `Bytes::from(Vec<u8>)` takes ownership — no copy.
                         Some(body_mutation::Mutation::Body(bytes)) => {
@@ -176,18 +198,12 @@ impl RequestBodyStreamHandler for ExtProcStreamedBodyHandler {
                         Some(body_mutation::Mutation::ClearBody(false)) | None => {}
                     }
                 }
-                if end_of_stream {
-                    self.push_log("ext_proc body streamed done");
-                }
                 ChunkVerdict::Continue
             }
             Some(processing_response::Response::ImmediateResponse(imm)) => {
                 let status = imm.status.as_ref().map(|s| sanitize_status(s.code)).unwrap_or(500);
                 self.done = true;
-                if let Some(log) = self.log.as_mut() {
-                    log.push_fmt("ext_proc immediate {}", la![status.to_string().as_str()]);
-                    self.log_lines += 1;
-                }
+                exchange.terminal("immediate-response", "request-immediate");
                 // Carry the immediate response's header mutations into the
                 // local reply, matching the request-stage `immediate_reply`
                 // semantics. Protected/pseudo headers are rejected here (with
@@ -197,11 +213,8 @@ impl RequestBodyStreamHandler for ExtProcStreamedBodyHandler {
                 if let Some(mutation) = imm.headers.as_ref() {
                     for option in &mutation.set_headers {
                         let Some(header) = option.header.as_ref() else { continue };
-                        if let Some(log) = self.log.as_mut() {
-                            if super::mutation::reject_protected(&header.key, log) {
-                                self.log_lines += 1;
-                                continue;
-                            }
+                        if super::mutation::is_protected_header(&header.key) {
+                            continue;
                         }
                         let value = if header.raw_value.is_empty() {
                             header.value.clone()
@@ -219,11 +232,7 @@ impl RequestBodyStreamHandler for ExtProcStreamedBodyHandler {
     }
 
     fn take_log(&mut self) -> Option<PluginLog> {
-        if self.log_lines == 0 {
-            return None;
-        }
-        self.log_lines = 0;
-        self.log.take()
+        None
     }
 
     fn dye_plan(&self) -> Option<Arc<CompiledDyePlan>> {
@@ -278,7 +287,7 @@ mod tests {
         script: Vec<Result<ProcessingResponse, tonic::Status>>,
         failure_mode_allow: bool,
     ) -> ExtProcStreamedBodyHandler {
-        ExtProcStreamedBodyHandler::new(Box::new(ScriptedExchange::new(script)), failure_mode_allow, None)
+        ExtProcStreamedBodyHandler::new(Box::new(ScriptedExchange::new(script)), failure_mode_allow, None, true)
     }
 
     #[tokio::test]
@@ -330,7 +339,7 @@ mod tests {
             }
             ChunkVerdict::Continue => panic!("immediate response must terminate"),
         }
-        assert!(handler.take_log().is_some());
+        assert!(handler.take_log().is_none());
     }
 
     /// Immediate-response header mutations are carried into the terminate
@@ -377,7 +386,7 @@ mod tests {
         match handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await {
             ChunkVerdict::Terminate { status, body, .. } => {
                 assert_eq!(status, 500);
-                assert_eq!(body.as_deref(), Some("ext_proc unavailable"));
+                assert!(body.is_none());
             }
             ChunkVerdict::Continue => panic!("fail-close must terminate"),
         }
@@ -402,7 +411,7 @@ mod tests {
             ChunkVerdict::Continue
         ));
         assert!(handler.take_pending_outcome().is_none(), "outcome drains once");
-        assert!(handler.take_log().is_some());
+        assert!(handler.take_log().is_none());
     }
 
     /// CONTINUE_AND_REPLACE mid-stream is unimplemented ("replace and stop")
@@ -450,6 +459,42 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn missing_unknown_and_malformed_streamed_body_verdicts_fail_closed() {
+        let verdicts = [
+            ProcessingResponse {
+                response: Some(processing_response::Response::RequestBody(BodyResponse {
+                    response: None,
+                })),
+            },
+            ProcessingResponse {
+                response: Some(processing_response::Response::RequestBody(BodyResponse {
+                    response: Some(CommonResponse {
+                        status: 99,
+                        ..Default::default()
+                    }),
+                })),
+            },
+            ProcessingResponse {
+                response: Some(processing_response::Response::RequestBody(BodyResponse {
+                    response: Some(CommonResponse {
+                        body_mutation: Some(BodyMutation { mutation: None }),
+                        ..Default::default()
+                    }),
+                })),
+            },
+        ];
+        for verdict in verdicts {
+            let mut handler = handler_with(vec![Ok(verdict)], false);
+            let mut chunk = Some(Bytes::from_static(b"original"));
+            assert!(matches!(
+                handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await,
+                ChunkVerdict::Terminate { status: 500, .. }
+            ));
+            assert_eq!(chunk.as_deref(), Some(&b"original"[..]));
+        }
+    }
+
     /// A pure EOS event (None chunk) still reaches the processor as an empty
     /// end_of_stream body message, half-closing the outbound direction. The
     /// recording exchange asserts the on-wire shape from inside the script.
@@ -467,13 +512,16 @@ mod tests {
             }
         }
 
-        let mut handler = ExtProcStreamedBodyHandler::new(Box::new(AssertingExchange), false, None);
+        let mut handler = ExtProcStreamedBodyHandler::new(Box::new(AssertingExchange), false, None, true);
         let mut chunk = None;
         assert!(matches!(
             handler.on_chunk(&mut chunk, RequestBodyEvent::Complete).await,
             ChunkVerdict::Continue
         ));
-        assert!(handler.take_log().is_some(), "streamed-done line expected at EOS");
+        assert!(
+            handler.take_log().is_none(),
+            "attached owner owns the only aggregate log"
+        );
     }
 
     #[tokio::test]
@@ -486,7 +534,7 @@ mod tests {
             ChunkVerdict::Continue
         ));
         assert!(handler.exchange.is_none(), "the processor stream must be dropped");
-        assert!(handler.take_log().is_some(), "abandonment must be observable");
+        assert!(handler.take_log().is_none(), "attached owner owns abandonment logging");
 
         assert!(matches!(
             handler.on_chunk(&mut chunk, RequestBodyEvent::Complete).await,

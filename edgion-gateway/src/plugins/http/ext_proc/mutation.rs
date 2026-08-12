@@ -37,6 +37,10 @@ fn is_proxy_managed_header(name: &str) -> bool {
     MANAGED.iter().any(|m| name.eq_ignore_ascii_case(m))
 }
 
+pub(super) fn is_protected_header(name: &str) -> bool {
+    is_pseudo_header(name) || is_proxy_managed_header(name)
+}
+
 /// Decode a processor-supplied header value, preferring the modern `raw_value`
 /// (bytes) field and falling back to the legacy `value` (string) field.
 ///

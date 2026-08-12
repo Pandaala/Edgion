@@ -1062,6 +1062,41 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.stream_processors.push(processor);
     }
 
+    fn install_attached_ext_proc(
+        &mut self,
+        identity: String,
+        owner: std::sync::Arc<crate::plugins::http::ext_proc::AttachedExtProc>,
+        reserve_framing: bool,
+    ) -> bool {
+        if self.ctx.attached_ext_proc.contains_key(&identity) {
+            return false;
+        }
+        self.ctx.attached_ext_proc.insert(identity, owner);
+        if reserve_framing {
+            self.ctx.attached_response_framing_reservations =
+                self.ctx.attached_response_framing_reservations.saturating_add(1);
+        }
+        true
+    }
+
+    fn attached_ext_proc(
+        &self,
+        identity: &str,
+    ) -> Option<std::sync::Arc<crate::plugins::http::ext_proc::AttachedExtProc>> {
+        self.ctx.attached_ext_proc.get(identity).cloned()
+    }
+
+    fn install_attached_response_processor(
+        &mut self,
+        processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
+    ) -> bool {
+        if self.ctx.response_body_processing_started {
+            return false;
+        }
+        self.ctx.stream_processors.push(processor);
+        true
+    }
+
     fn claim_json_schema_validation(&mut self) -> bool {
         self.ctx.claim_json_schema_validation()
     }

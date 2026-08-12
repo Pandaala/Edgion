@@ -13,14 +13,5 @@ spec:
         timeoutMs: 2000
       processingMode:
         requestHeaderMode: SEND
-      failureModeAllow: false
-  upstreamResponsePlugins:
-  - enable: true
-    type: ExtProc
-    config:
-      grpcService:
-        target: edgion-test-server.edgion-test.svc.cluster.local:30041
-        timeoutMs: 2000
-      processingMode:
         responseHeaderMode: SEND
       failureModeAllow: false

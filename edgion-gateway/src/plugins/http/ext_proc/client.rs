@@ -1,8 +1,8 @@
 //! gRPC client for the external processing service.
 //!
 //! The channel is built lazily at plugin construction (no blocking connect) and
-//! multiplexes every request. Each processing phase opens its own short-lived
-//! `Process` bidirectional stream on that shared channel (one stream per phase).
+//! multiplexes request-scoped logical `Process` streams. One matched ExtProc
+//! entry retains one logical stream across its request and response phases.
 //!
 //! TLS is routed through the shared outbound resolver
 //! ([`edgion_common::link_sys_core::outbound_tls::resolve_outbound_tls`]) so the
@@ -12,21 +12,39 @@
 //! hand-rolled rustls `ClientConfig` plumbed into the channel via a custom
 //! `tower` connector (`connect_with_connector_lazy`).
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
 
 use edgion_common::ext_proc::proto::external_processor_client::ExternalProcessorClient;
-use edgion_common::ext_proc::proto::{
-    common_response::ResponseStatus, processing_response, CommonResponse, ProcessingRequest, ProcessingResponse,
-};
-use edgion_common::link_sys_core::outbound_tls::{resolve_outbound_tls, EffectiveCa};
+use edgion_common::ext_proc::proto::{processing_response, ProcessingRequest, ProcessingResponse};
+use edgion_common::link_sys_core::outbound_tls::{resolve_outbound_tls, EffectiveCa, ResolvedOutboundTls};
 use edgion_resources::plugin_configs::ExtProcConfig;
-use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 use tonic::transport::{Channel, Uri};
+
+use crate::plugins::http::common::outbound::egress::{
+    default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver,
+};
+use edgion_common::dns::ResolverSpec;
+use sha2::{Digest, Sha256};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+const TARGET_CACHE_CAP: usize = 1_024;
+const TARGET_SESSION_CAP: usize = 64;
+const PERMIT_WAIT_CAP: Duration = Duration::from_millis(100);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+static TARGET_RUNTIMES: LazyLock<Mutex<HashMap<String, Weak<ExtProcTargetRuntime>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+struct ExtProcTargetRuntime {
+    client: ExternalProcessorClient<Channel>,
+    sessions: Arc<Semaphore>,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProcessingPhase {
@@ -70,7 +88,8 @@ impl ProcessingPhase {
     }
 }
 
-fn common_response(response: &ProcessingResponse) -> Option<&CommonResponse> {
+#[cfg(test)]
+fn common_response(response: &ProcessingResponse) -> Option<&edgion_common::ext_proc::proto::CommonResponse> {
     use processing_response::Response;
 
     match response.response.as_ref() {
@@ -82,11 +101,14 @@ fn common_response(response: &ProcessingResponse) -> Option<&CommonResponse> {
     }
 }
 
-fn response_status(response: &ProcessingResponse) -> Result<ResponseStatus, tonic::Status> {
+#[cfg(test)]
+fn response_status(
+    response: &ProcessingResponse,
+) -> Result<edgion_common::ext_proc::proto::common_response::ResponseStatus, tonic::Status> {
     let Some(common) = common_response(response) else {
-        return Ok(ResponseStatus::Continue);
+        return Ok(edgion_common::ext_proc::proto::common_response::ResponseStatus::Continue);
     };
-    ResponseStatus::try_from(common.status)
+    edgion_common::ext_proc::proto::common_response::ResponseStatus::try_from(common.status)
         .map_err(|_| tonic::Status::failed_precondition("ext_proc processor returned an invalid response status"))
 }
 
@@ -110,7 +132,7 @@ async fn send_phase(
 /// Thin wrapper around the generated ext_proc gRPC client.
 #[derive(Clone)]
 pub struct ExtProcClient {
-    client: ExternalProcessorClient<Channel>,
+    runtime: Arc<ExtProcTargetRuntime>,
     timeout: Duration,
 }
 
@@ -128,129 +150,96 @@ impl ExtProcClient {
     pub fn new(cfg: &ExtProcConfig) -> Result<Self, String> {
         let grpc = &cfg.grpc_service;
         let timeout = Duration::from_millis(grpc.timeout_ms);
+        let (host, port) = split_authority(&grpc.target)?;
+        let normalized_authority = normalized_authority(&host, port);
+        let resolved_tls = if grpc.tls.enabled {
+            Some(
+                resolve_outbound_tls(
+                    &grpc.tls.outbound,
+                    grpc.tls.resolved_ca_certificates.as_deref(),
+                    grpc.tls.resolved_client_certificate.as_ref(),
+                    true,
+                    "ExtProc",
+                )
+                .map_err(|_| "ext_proc TLS configuration is invalid".to_string())?,
+            )
+        } else {
+            None
+        };
+        let mut hasher = Sha256::new();
+        hasher.update(normalized_authority.as_bytes());
+        fingerprint_effective_tls(&mut hasher, resolved_tls.as_ref());
+        hasher.update([u8::from(default_block_private())]);
+        let cache_key = format!("{:x}", hasher.finalize());
+        if let Some(runtime) = TARGET_RUNTIMES
+            .lock()
+            .map_err(|_| "ext_proc target cache lock poisoned".to_string())?
+            .get(&cache_key)
+            .and_then(Weak::upgrade)
+        {
+            return Ok(Self { runtime, timeout });
+        }
 
-        // Plain-HTTP path: identical behavior to the pre-TLS-refactor client.
-        if !grpc.tls.enabled {
-            let uri = format!("http://{}", grpc.target);
-            let channel = Channel::from_shared(uri)
-                .map_err(|e| format!("invalid ext_proc grpcService.target: {e}"))?
-                .connect_timeout(timeout)
-                .timeout(timeout)
-                .connect_lazy();
+        let channel = Self::build_channel(&normalized_authority, host, port, resolved_tls.as_ref())?;
+        let runtime = Arc::new(ExtProcTargetRuntime {
+            client: ExternalProcessorClient::new(channel),
+            sessions: Arc::new(Semaphore::new(TARGET_SESSION_CAP)),
+        });
+        let mut cache = TARGET_RUNTIMES
+            .lock()
+            .map_err(|_| "ext_proc target cache lock poisoned".to_string())?;
+        cache.retain(|_, runtime| runtime.strong_count() > 0);
+        if let Some(existing) = cache.get(&cache_key).and_then(Weak::upgrade) {
             return Ok(Self {
-                client: ExternalProcessorClient::new(channel),
+                runtime: existing,
                 timeout,
             });
         }
+        if cache.len() >= TARGET_CACHE_CAP {
+            return Err("ext_proc target cache reached its bounded capacity".to_string());
+        }
+        cache.insert(cache_key, Arc::downgrade(&runtime));
+        Ok(Self { runtime, timeout })
+    }
 
-        // TLS path: resolve once through the shared outbound resolver.
-        let resolved = resolve_outbound_tls(
-            &grpc.tls.outbound,
-            grpc.tls.resolved_ca_certificates.as_deref(),
-            grpc.tls.resolved_client_certificate.as_ref(),
-            true,
-            "ExtProc",
-        )
-        .map_err(|e| format!("ext_proc TLS configuration error: {e:?}"))?;
+    fn build_channel(
+        normalized_authority: &str,
+        host: String,
+        port: u16,
+        resolved_tls: Option<&ResolvedOutboundTls>,
+    ) -> Result<Channel, String> {
+        let resolver = Arc::new(EgressResolver::new(
+            ResolverSpec::System,
+            EgressPolicy {
+                block_private: default_block_private(),
+            },
+            egress_dns_cache_ttl(),
+        ));
 
-        let client_config = build_rustls_config(&resolved)?;
+        if resolved_tls.is_none() {
+            let uri = format!("http://{normalized_authority}");
+            let connector = build_plain_connector(host, port, resolver);
+            return Ok(Channel::from_shared(uri)
+                .map_err(|_| "invalid ext_proc grpcService.target".to_string())?
+                .connect_timeout(CONNECT_TIMEOUT)
+                .connect_with_connector_lazy(connector));
+        }
+
+        let resolved = resolved_tls.ok_or_else(|| "ext_proc TLS resolution is missing".to_string())?;
+        let client_config = build_rustls_config(resolved)?;
 
         // The custom connector performs the TLS handshake itself. tonic rejects an
         // `https://` authority unless its OWN built-in TLS is configured ("Connecting
         // to HTTPS without TLS enabled"), so the channel URI uses the `http://`
         // scheme: tonic then treats the connector's stream as the transport as-is,
         // while `build_tls_connector` still upgrades it to rustls (ALPN h2).
-        let uri = format!("http://{}", grpc.target);
-        let connector = build_tls_connector(client_config);
+        let uri = format!("http://{normalized_authority}");
+        let connector = build_tls_connector(client_config, host, port, resolver);
 
-        let channel = Channel::from_shared(uri)
-            .map_err(|e| format!("invalid ext_proc grpcService.target: {e}"))?
-            .connect_timeout(timeout)
-            .timeout(timeout)
-            .connect_with_connector_lazy(connector);
-
-        Ok(Self {
-            client: ExternalProcessorClient::new(channel),
-            timeout,
-        })
-    }
-
-    /// Send one phase to the processor and await its single verdict.
-    ///
-    /// Opens a fresh `Process` stream, sends exactly one `ProcessingRequest`,
-    /// half-closes the send side, and reads the first `ProcessingResponse`.
-    ///
-    /// The whole exchange is bounded by an explicit `tokio::time::timeout`:
-    /// the endpoint's transport `.timeout()` only bounds time-to-response-headers,
-    /// so a processor that accepts the stream and then stalls before emitting a
-    /// verdict would otherwise hang the request path forever.
-    pub async fn exchange(&self, request: ProcessingRequest) -> Result<ProcessingResponse, tonic::Status> {
-        let mut responses = self.exchange_all(vec![request]).await?;
-        responses
-            .pop()
-            .ok_or_else(|| tonic::Status::unavailable("ext_proc processor returned no response"))
-    }
-
-    /// Send all phases for one transaction on one ext_proc stream.
-    pub async fn exchange_all(
-        &self,
-        requests: Vec<ProcessingRequest>,
-    ) -> Result<Vec<ProcessingResponse>, tonic::Status> {
-        let mut client = self.client.clone();
-        let phases = requests
-            .iter()
-            .map(ProcessingPhase::from_request)
-            .collect::<Result<Vec<_>, _>>()?;
-        let fut = async move {
-            let mut pending = phases.into_iter().zip(requests).peekable();
-            let Some((first_phase, first_request)) = pending.next() else {
-                return Ok(Vec::new());
-            };
-
-            let (tx, rx) = tokio::sync::mpsc::channel(1);
-            let mut sender = Some(tx);
-            send_phase(&mut sender, first_request, pending.peek().is_none()).await?;
-            let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
-            let mut inbound = client.process(outbound).await?.into_inner();
-            let mut responses = Vec::with_capacity(pending.size_hint().0 + 1);
-            let mut phase = first_phase;
-            loop {
-                match inbound.message().await? {
-                    Some(response) => {
-                        let terminal = matches!(
-                            response.response,
-                            Some(processing_response::Response::ImmediateResponse(_))
-                        );
-                        if !terminal && !phase.accepts(&response) {
-                            return Err(tonic::Status::failed_precondition(
-                                "ext_proc processor returned a verdict for the wrong phase",
-                            ));
-                        }
-                        let stop_direction =
-                            !terminal && response_status(&response)? == ResponseStatus::ContinueAndReplace;
-                        responses.push(response);
-                        if terminal || stop_direction {
-                            break;
-                        }
-                        let Some((next_phase, next_request)) = pending.next() else {
-                            break;
-                        };
-                        send_phase(&mut sender, next_request, pending.peek().is_none()).await?;
-                        phase = next_phase;
-                    }
-                    None => {
-                        return Err(tonic::Status::failed_precondition(
-                            "ext_proc processor closed the stream without all phase responses",
-                        ))
-                    }
-                }
-            }
-            Ok(responses)
-        };
-        match tokio::time::timeout(self.timeout, fut).await {
-            Ok(result) => result,
-            Err(_) => Err(tonic::Status::deadline_exceeded("ext_proc verdict timed out")),
-        }
+        Ok(Channel::from_shared(uri)
+            .map_err(|_| "invalid ext_proc grpcService.target".to_string())?
+            .connect_timeout(CONNECT_TIMEOUT)
+            .connect_with_connector_lazy(connector))
     }
 
     /// Open one long-lived `Process` stream for a whole-request transaction
@@ -263,15 +252,23 @@ impl ExtProcClient {
     /// awaits the call — a processor whose stack defers response headers
     /// until it has received (or sent) a message (grpc-go's default) would
     /// otherwise deadlock against an eager open until the timeout.
-    pub fn open_stream(&self) -> ExtProcStream {
-        let mut client = self.client.clone();
+    pub async fn open_stream(&self) -> Result<ExtProcStream, tonic::Status> {
+        let wait = self.timeout.min(PERMIT_WAIT_CAP);
+        let permit = tokio::time::timeout(wait, self.runtime.sessions.clone().acquire_owned())
+            .await
+            .map_err(|_| tonic::Status::resource_exhausted("ext_proc target session limit reached"))?
+            .map_err(|_| tonic::Status::unavailable("ext_proc target runtime closed"))?;
+        let mut client = self.runtime.client.clone();
         let (tx, rx) = tokio::sync::mpsc::channel(4);
         let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
-        ExtProcStream {
+        Ok(ExtProcStream {
             sender: Some(tx),
             inbound: InboundState::Opening(Box::pin(async move { client.process(outbound).await })),
             timeout: self.timeout,
-        }
+            _permit: permit,
+            #[cfg(test)]
+            test_unsolicited: None,
+        })
     }
 }
 
@@ -294,9 +291,41 @@ pub struct ExtProcStream {
     sender: Option<tokio::sync::mpsc::Sender<ProcessingRequest>>,
     inbound: InboundState,
     timeout: Duration,
+    _permit: OwnedSemaphorePermit,
+    #[cfg(test)]
+    test_unsolicited: Option<tokio::sync::mpsc::Receiver<ProcessingResponse>>,
 }
 
 impl ExtProcStream {
+    fn reject_observable_unsolicited(&mut self) -> Result<(), tonic::Status> {
+        use futures::FutureExt;
+
+        #[cfg(test)]
+        if let Some(receiver) = self.test_unsolicited.as_mut() {
+            return match receiver.try_recv() {
+                Ok(_) => Err(tonic::Status::failed_precondition(
+                    "ext_proc processor returned an unsolicited verdict",
+                )),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => Ok(()),
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    Err(tonic::Status::aborted("ext_proc processor closed the stream"))
+                }
+            };
+        }
+
+        let InboundState::Open(streaming) = &mut self.inbound else {
+            return Ok(());
+        };
+        match streaming.message().now_or_never() {
+            None => Ok(()),
+            Some(Ok(Some(_))) => Err(tonic::Status::failed_precondition(
+                "ext_proc processor returned an unsolicited verdict",
+            )),
+            Some(Ok(None)) => Err(tonic::Status::aborted("ext_proc processor closed the stream")),
+            Some(Err(status)) => Err(status),
+        }
+    }
+
     /// Send one message and await its phase-matched verdict under the
     /// per-message timeout (the first call also resolves the lazy stream open
     /// within the same bound). `last` half-closes the outbound direction
@@ -307,9 +336,10 @@ impl ExtProcStream {
         request: ProcessingRequest,
         last: bool,
     ) -> Result<ProcessingResponse, tonic::Status> {
+        self.reject_observable_unsolicited()?;
         let phase = ProcessingPhase::from_request(&request)?;
-        send_phase(&mut self.sender, request, last).await?;
-        let receive = async {
+        let exchange = async {
+            send_phase(&mut self.sender, request, last).await?;
             if let InboundState::Opening(open) = &mut self.inbound {
                 self.inbound = InboundState::Open(open.await?.into_inner());
             }
@@ -318,7 +348,7 @@ impl ExtProcStream {
                 InboundState::Opening(_) => unreachable!("resolved above"),
             }
         };
-        let response = match tokio::time::timeout(self.timeout, receive).await {
+        let response = match tokio::time::timeout(self.timeout, exchange).await {
             Ok(Ok(Some(response))) => response,
             Ok(Ok(None)) => return Err(tonic::Status::aborted("ext_proc processor closed the stream")),
             Ok(Err(status)) => return Err(status),
@@ -411,11 +441,123 @@ fn build_rustls_config(
 /// stream (over a raw tokio `TcpStream`) to hyper's `Read`/`Write`, which is the
 /// IO bound tonic's `connect_with_connector_lazy` requires.
 type TlsTransport = TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
+type PlainTransport = TokioIo<tokio::net::TcpStream>;
+
+fn normalized_authority(host: &str, port: u16) -> String {
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V6(ip)) => format!("[{ip}]:{port}"),
+        Ok(std::net::IpAddr::V4(ip)) => format!("{ip}:{port}"),
+        Err(_) => format!("{}:{port}", host.to_ascii_lowercase()),
+    }
+}
+
+fn fingerprint_effective_tls(hasher: &mut Sha256, tls: Option<&ResolvedOutboundTls>) {
+    let Some(tls) = tls else {
+        hasher.update(b"plaintext");
+        return;
+    };
+    hasher.update(b"tls");
+    hasher.update([u8::from(tls.verify)]);
+    match &tls.ca {
+        EffectiveCa::System => hasher.update(b"system-ca"),
+        EffectiveCa::Custom(bundles) => {
+            hasher.update(b"custom-ca");
+            for bundle in bundles {
+                hasher.update((bundle.len() as u64).to_be_bytes());
+                hasher.update(bundle);
+            }
+        }
+    }
+    if let Some((certificate, key)) = &tls.client_identity {
+        hasher.update(b"mtls");
+        hasher.update((certificate.len() as u64).to_be_bytes());
+        hasher.update(certificate);
+        hasher.update((key.len() as u64).to_be_bytes());
+        hasher.update(key.as_slice());
+    } else {
+        hasher.update(b"no-mtls");
+    }
+    if let Some(san) = &tls.san {
+        hasher.update(b"san");
+        if let Ok(encoded) = serde_json::to_vec(san) {
+            hasher.update(encoded);
+        }
+    }
+}
+
+fn split_authority(authority: &str) -> Result<(String, u16), String> {
+    if let Some(rest) = authority.strip_prefix('[') {
+        let (host, suffix) = rest
+            .split_once(']')
+            .ok_or_else(|| "invalid ext_proc IPv6 authority".to_string())?;
+        let port = suffix
+            .strip_prefix(':')
+            .ok_or_else(|| "ext_proc target is missing a port".to_string())?
+            .parse::<u16>()
+            .map_err(|_| "ext_proc target has an invalid port".to_string())?;
+        return Ok((host.to_string(), port));
+    }
+    let (host, port) = authority
+        .rsplit_once(':')
+        .ok_or_else(|| "ext_proc target is missing a port".to_string())?;
+    let port = port
+        .parse::<u16>()
+        .map_err(|_| "ext_proc target has an invalid port".to_string())?;
+    if host.is_empty() {
+        return Err("ext_proc target host is empty".to_string());
+    }
+    Ok((host.to_string(), port))
+}
+
+async fn connect_admitted(
+    resolver: &EgressResolver,
+    host: &str,
+    port: u16,
+) -> Result<tokio::net::TcpStream, std::io::Error> {
+    let addrs = resolver
+        .resolve_socket_addrs(host, port)
+        .await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
+    let mut last_error = None;
+    for addr in addrs {
+        match tokio::net::TcpStream::connect(addr).await {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            "ext_proc target has no admitted address",
+        )
+    }))
+}
+
+fn build_plain_connector(
+    host: String,
+    port: u16,
+    resolver: Arc<EgressResolver>,
+) -> impl tower::Service<
+    Uri,
+    Response = PlainTransport,
+    Error = std::io::Error,
+    Future = impl std::future::Future<Output = Result<PlainTransport, std::io::Error>> + Send,
+> + Clone
+       + Send {
+    tower::service_fn(move |_uri: Uri| {
+        let host = host.clone();
+        let resolver = Arc::clone(&resolver);
+        async move { connect_admitted(&resolver, &host, port).await.map(TokioIo::new) }
+    })
+}
 
 /// Build the `tower` service that tonic drives per dial: TCP connect via
 /// `HttpConnector`, then a rustls handshake, yielding a hyper-compatible IO.
 fn build_tls_connector(
     client_config: ClientConfig,
+    host: String,
+    port: u16,
+    resolver: Arc<EgressResolver>,
 ) -> impl tower::Service<
     Uri,
     Response = TlsTransport,
@@ -424,28 +566,17 @@ fn build_tls_connector(
 > + Clone
        + Send {
     let tls_connector = TlsConnector::from(Arc::new(client_config));
-    let mut http = HttpConnector::new();
-    http.enforce_http(false);
 
-    tower::service_fn(move |uri: Uri| {
+    tower::service_fn(move |_uri: Uri| {
         let tls = tls_connector.clone();
-        let mut http = http.clone();
+        let host = host.clone();
+        let resolver = Arc::clone(&resolver);
         async move {
-            let host = uri
-                .host()
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "ext_proc target missing host"))?
-                .to_string();
-            let server_name = ServerName::try_from(host)
+            let server_name = ServerName::try_from(host.clone())
                 .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid ext_proc DNS name"))?
                 .to_owned();
-            // `HttpConnector` yields a `TokioIo<TcpStream>`; unwrap to the raw
-            // tokio `TcpStream` so tokio-rustls sees a native AsyncRead/Write
-            // transport and the resulting `TokioIo<TlsStream<TcpStream>>` satisfies
-            // tonic's hyper `Read`/`Write` IO bound.
-            let tcp = <HttpConnector as tower::Service<Uri>>::call(&mut http, uri)
-                .await
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-            let tls_stream = tls.connect(server_name, tcp.into_inner()).await?;
+            let tcp = connect_admitted(&resolver, &host, port).await?;
+            let tls_stream = tls.connect(server_name, tcp).await?;
             Ok::<_, std::io::Error>(TokioIo::new(tls_stream))
         }
     })
@@ -503,6 +634,8 @@ impl rustls::client::danger::ServerCertVerifier for AcceptAllVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_common::ext_proc::proto::common_response::ResponseStatus;
+    use edgion_common::ext_proc::proto::CommonResponse;
     use edgion_common::ext_proc::proto::{
         processing_request, BodyResponse, HeadersResponse, HttpBody, HttpHeaders, ImmediateResponse,
     };
@@ -573,6 +706,117 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn equivalent_authorities_and_message_timeouts_share_target_runtime() {
+        let mut first = ExtProcConfig::default();
+        first.grpc_service.target = "EXAMPLE.com:9000".to_string();
+        first.grpc_service.timeout_ms = 50;
+        let mut second = first.clone();
+        second.grpc_service.target = "example.COM:9000".to_string();
+        second.grpc_service.timeout_ms = 500;
+        let first = ExtProcClient::new(&first).unwrap();
+        let second = ExtProcClient::new(&second).unwrap();
+        assert!(Arc::ptr_eq(&first.runtime, &second.runtime));
+    }
+
+    #[tokio::test]
+    async fn distinct_effective_tls_policy_does_not_share_target_runtime() {
+        install_test_crypto_provider();
+        let mut verified = tls_cfg();
+        verified.grpc_service.tls.outbound.verify = Some(true);
+        let mut unverified = verified.clone();
+        unverified.grpc_service.tls.outbound.verify = Some(false);
+        let verified = ExtProcClient::new(&verified).unwrap();
+        let unverified = ExtProcClient::new(&unverified).unwrap();
+        assert!(!Arc::ptr_eq(&verified.runtime, &unverified.runtime));
+    }
+
+    #[tokio::test]
+    async fn inherited_tls_hot_change_changes_target_runtime_identity() {
+        use edgion_common::link_sys_core::outbound_tls::{outbound_global_default, set_outbound_global_default};
+        use edgion_resources::resources::common::OutboundTlsConfig;
+
+        static GLOBAL_TLS_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = GLOBAL_TLS_TEST.lock().unwrap();
+        install_test_crypto_provider();
+        let original = outbound_global_default();
+        set_outbound_global_default(OutboundTlsConfig::default());
+        let inherited_verified = ExtProcClient::new(&tls_cfg()).unwrap();
+        set_outbound_global_default(OutboundTlsConfig {
+            verify: false,
+            ..Default::default()
+        });
+        let inherited_unverified = ExtProcClient::new(&tls_cfg()).unwrap();
+        set_outbound_global_default(original);
+        assert!(!Arc::ptr_eq(&inherited_verified.runtime, &inherited_unverified.runtime));
+    }
+
+    #[tokio::test]
+    async fn session_limit_is_bounded_and_raii_release_reopens_capacity() {
+        let mut cfg = ExtProcConfig::default();
+        cfg.grpc_service.target = "session-cap.example:9000".to_string();
+        cfg.grpc_service.timeout_ms = 5;
+        let client = ExtProcClient::new(&cfg).unwrap();
+        let mut streams = Vec::new();
+        for _ in 0..TARGET_SESSION_CAP {
+            streams.push(client.open_stream().await.unwrap());
+        }
+        let saturated = match client.open_stream().await {
+            Ok(_) => panic!("session cap must reject excess logical streams"),
+            Err(status) => status,
+        };
+        assert_eq!(saturated.code(), tonic::Code::ResourceExhausted);
+        streams.pop();
+        assert!(
+            client.open_stream().await.is_ok(),
+            "dropping a stream releases its permit"
+        );
+    }
+
+    #[tokio::test]
+    async fn per_message_timeout_includes_blocked_send_and_lazy_open() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        sender
+            .send(ProcessingRequest {
+                request: Some(processing_request::Request::RequestHeaders(HttpHeaders::default())),
+            })
+            .await
+            .unwrap();
+        let semaphore = Arc::new(Semaphore::new(1));
+        let permit = semaphore.acquire_owned().await.unwrap();
+        let mut stream = ExtProcStream {
+            sender: Some(sender),
+            inbound: InboundState::Opening(Box::pin(std::future::pending())),
+            timeout: Duration::from_millis(5),
+            _permit: permit,
+            test_unsolicited: None,
+        };
+        let request = ProcessingRequest {
+            request: Some(processing_request::Request::RequestHeaders(HttpHeaders::default())),
+        };
+        let status = stream.exchange(request, false).await.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::DeadlineExceeded);
+        drop(receiver);
+    }
+
+    #[tokio::test]
+    async fn observable_unsolicited_verdict_is_rejected_before_send() {
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        let (unsolicited_tx, unsolicited_rx) = tokio::sync::mpsc::channel(1);
+        unsolicited_tx.send(ProcessingResponse::default()).await.unwrap();
+        let permit = Arc::new(Semaphore::new(1)).acquire_owned().await.unwrap();
+        let mut stream = ExtProcStream {
+            sender: Some(sender),
+            inbound: InboundState::Opening(Box::pin(std::future::pending())),
+            timeout: Duration::from_millis(5),
+            _permit: permit,
+            test_unsolicited: Some(unsolicited_rx),
+        };
+        let status = stream.reject_observable_unsolicited().unwrap_err();
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(status.message(), "ext_proc processor returned an unsolicited verdict");
+    }
+
     /// Minimal in-process ext_proc service: echoes a per-phase verdict, so the
     /// long-lived stream can be exercised end to end without external infra.
     mod live_stream {
@@ -595,18 +839,48 @@ mod tests {
                 let mut inbound = request.into_inner();
                 let (tx, rx) = tokio::sync::mpsc::channel(4);
                 tokio::spawn(async move {
+                    let mut rank = 0u8;
                     while let Some(Ok(message)) = inbound.next().await {
-                        let response = match message.request {
-                            Some(processing_request::Request::RequestHeaders(_)) => ProcessingResponse {
-                                response: Some(processing_response::Response::RequestHeaders(
-                                    HeadersResponse::default(),
-                                )),
-                            },
-                            Some(processing_request::Request::RequestBody(_)) => ProcessingResponse {
-                                response: Some(processing_response::Response::RequestBody(BodyResponse::default())),
-                            },
+                        let (next_rank, response) = match message.request {
+                            Some(processing_request::Request::RequestHeaders(_)) => (
+                                1,
+                                ProcessingResponse {
+                                    response: Some(processing_response::Response::RequestHeaders(
+                                        HeadersResponse::default(),
+                                    )),
+                                },
+                            ),
+                            Some(processing_request::Request::RequestBody(_)) => (
+                                2,
+                                ProcessingResponse {
+                                    response: Some(processing_response::Response::RequestBody(BodyResponse::default())),
+                                },
+                            ),
+                            Some(processing_request::Request::ResponseHeaders(_)) => (
+                                3,
+                                ProcessingResponse {
+                                    response: Some(processing_response::Response::ResponseHeaders(
+                                        HeadersResponse::default(),
+                                    )),
+                                },
+                            ),
+                            Some(processing_request::Request::ResponseBody(_)) => (
+                                4,
+                                ProcessingResponse {
+                                    response: Some(
+                                        processing_response::Response::ResponseBody(BodyResponse::default()),
+                                    ),
+                                },
+                            ),
                             _ => break,
                         };
+                        if next_rank < rank {
+                            let _ = tx
+                                .send(Err(tonic::Status::failed_precondition("phase order regressed")))
+                                .await;
+                            break;
+                        }
+                        rank = next_rank;
                         if tx.send(Ok(response)).await.is_err() {
                             break;
                         }
@@ -645,7 +919,7 @@ mod tests {
             install_test_crypto_provider();
             let addr = spawn_echo_server().await;
             let client = ExtProcClient::new(&cfg_for(addr)).unwrap();
-            let mut stream = client.open_stream();
+            let mut stream = client.open_stream().await.unwrap();
 
             let headers = ProcessingRequest {
                 request: Some(processing_request::Request::RequestHeaders(HttpHeaders {
@@ -674,6 +948,37 @@ mod tests {
             }
         }
 
+        #[tokio::test]
+        async fn one_process_stream_carries_request_and_response_in_exact_order() {
+            install_test_crypto_provider();
+            let addr = spawn_echo_server().await;
+            let client = ExtProcClient::new(&cfg_for(addr)).unwrap();
+            let mut stream = client.open_stream().await.unwrap();
+            let messages = vec![
+                ProcessingRequest {
+                    request: Some(processing_request::Request::RequestHeaders(HttpHeaders::default())),
+                },
+                ProcessingRequest {
+                    request: Some(processing_request::Request::RequestBody(HttpBody {
+                        body: b"request".to_vec(),
+                        end_of_stream: true,
+                    })),
+                },
+                ProcessingRequest {
+                    request: Some(processing_request::Request::ResponseHeaders(HttpHeaders::default())),
+                },
+                ProcessingRequest {
+                    request: Some(processing_request::Request::ResponseBody(HttpBody {
+                        body: b"response".to_vec(),
+                        end_of_stream: true,
+                    })),
+                },
+            ];
+            for (index, message) in messages.into_iter().enumerate() {
+                stream.exchange(message, index == 3).await.unwrap();
+            }
+        }
+
         /// A message sent after the outbound half-close must fail cleanly, not
         /// hang: the sender was consumed by `last = true`.
         #[tokio::test]
@@ -681,7 +986,7 @@ mod tests {
             install_test_crypto_provider();
             let addr = spawn_echo_server().await;
             let client = ExtProcClient::new(&cfg_for(addr)).unwrap();
-            let mut stream = client.open_stream();
+            let mut stream = client.open_stream().await.unwrap();
 
             let eos_chunk = ProcessingRequest {
                 request: Some(processing_request::Request::RequestBody(HttpBody {
@@ -691,7 +996,7 @@ mod tests {
             };
             stream.exchange(eos_chunk.clone(), true).await.unwrap();
             let err = stream.exchange(eos_chunk, true).await.unwrap_err();
-            assert_eq!(err.code(), tonic::Code::Internal);
+            assert!(matches!(err.code(), tonic::Code::Internal | tonic::Code::Aborted));
         }
     }
 

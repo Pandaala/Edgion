@@ -47,6 +47,7 @@ pub async fn logging(
     // early upstream response) still carry log entries — sweep them into the
     // stage logs before the access-log entry is assembled.
     super::pg_request_body_filter_action::drain_leftover_stream_logs(ctx);
+    finalize_attached_ext_proc_logs(ctx);
 
     let mut entry = AccessLogEntry::from_context(ctx);
     // Resolve operator-declared `ext` fields here rather than in a request-stage
@@ -103,6 +104,31 @@ pub async fn logging(
                 "Failed to store access log"
             );
             global_metrics().access_log_dropped();
+        }
+    }
+}
+
+fn finalize_attached_ext_proc_logs(ctx: &mut EdgionHttpContext) {
+    for (identity, owner) in &ctx.attached_ext_proc {
+        owner.terminalize_for_logging();
+        let Some(line) = owner.take_summary_line() else {
+            continue;
+        };
+        'stages: for stage in &mut ctx.stage_logs {
+            for log in &mut stage.filters {
+                if log.internal_token.as_deref() == Some(identity.as_str()) {
+                    log.push(&line);
+                    break 'stages;
+                }
+            }
+            for resource in &mut stage.edgion_plugins {
+                for log in &mut resource.logs {
+                    if log.internal_token.as_deref() == Some(identity.as_str()) {
+                        log.push(&line);
+                        break 'stages;
+                    }
+                }
+            }
         }
     }
 }
@@ -420,6 +446,59 @@ mod tests {
     use pingora_load_balancing::Backend;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
+
+    fn attached_owner() -> Arc<crate::plugins::http::ext_proc::AttachedExtProc> {
+        Arc::new(crate::plugins::http::ext_proc::AttachedExtProc::test_lazy())
+    }
+
+    #[tokio::test]
+    async fn attached_summary_finalizes_top_level_token_once() {
+        use crate::plugins::runtime::log::{PluginLog, StageLogs};
+
+        let identity = "route/requestPlugins/#0".to_string();
+        let owner = attached_owner();
+        let mut log = PluginLog::new("ExtProc");
+        log.set_internal_token(identity.clone());
+        let mut ctx = EdgionHttpContext::default();
+        ctx.attached_ext_proc.insert(identity, owner);
+        ctx.stage_logs.push(StageLogs {
+            stage: "request_filters",
+            filters: vec![log],
+            edgion_plugins: Vec::new(),
+        });
+
+        finalize_attached_ext_proc_logs(&mut ctx);
+        finalize_attached_ext_proc_logs(&mut ctx);
+        let rendered = serde_json::to_string(&ctx.stage_logs[0].filters[0]).unwrap();
+        assert_eq!(rendered.matches("ext_proc attached").count(), 1);
+        assert!(rendered.contains("reason=logging-fallback"));
+    }
+
+    #[tokio::test]
+    async fn attached_summary_finds_nested_extension_ref_token_once() {
+        use crate::plugins::runtime::log::{EdgionPluginsLog, PluginLog, StageLogs};
+
+        let identity = "extension/ref/requestPlugins/#0".to_string();
+        let owner = attached_owner();
+        let mut log = PluginLog::new("ExtProc");
+        log.set_internal_token(identity.clone());
+        let mut ctx = EdgionHttpContext::default();
+        ctx.attached_ext_proc.insert(identity, owner);
+        ctx.stage_logs.push(StageLogs {
+            stage: "request_filters",
+            filters: Vec::new(),
+            edgion_plugins: vec![EdgionPluginsLog {
+                name: "extension-ref".to_string(),
+                logs: vec![log],
+            }],
+        });
+
+        finalize_attached_ext_proc_logs(&mut ctx);
+        finalize_attached_ext_proc_logs(&mut ctx);
+        let rendered = serde_json::to_string(&ctx.stage_logs[0].edgion_plugins[0].logs[0]).unwrap();
+        assert_eq!(rendered.matches("ext_proc attached").count(), 1);
+        assert!(rendered.contains("reason=logging-fallback"));
+    }
 
     fn make_backend(ip: [u8; 4], port: u16) -> Arc<EdgionBackend> {
         Arc::new(EdgionBackend::new(Backend {

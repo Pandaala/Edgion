@@ -15,18 +15,15 @@ use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 
 /// Resolve ExtProc TLS secrets and register references with SecretRefManager.
 ///
-/// ExtProc can be configured in any plugin stage (request and every upstream
-/// response stage). The TLS material refs must be resolved wherever an ExtProc
-/// entry appears — a response-stage ExtProc over TLS needs its
-/// `validation.caCertificateRefs`/`clientCertificateRef` resolved just like the
-/// request stage, otherwise the gateway fails closed with `OutboundTlsCaMissing`.
+/// ExtProc is request-stage-owned. Its internal response companion shares the
+/// same resolved TLS material and compiled snapshot.
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     ep: &mut EdgionPlugins,
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    // Own the namespace up front so the four stage lists (fields of `ep.spec`)
-    // can each be borrowed mutably below without aliasing `ep.metadata`.
+    // Own the namespace up front so the stage list can be borrowed mutably
+    // without aliasing `ep.metadata`.
     let ep_ns = ep.metadata.namespace.clone();
 
     macro_rules! resolve_stage {
@@ -40,9 +37,6 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     }
 
     resolve_stage!(ep.spec.request_plugins);
-    resolve_stage!(ep.spec.upstream_response_filter_plugins);
-    resolve_stage!(ep.spec.upstream_response_body_filter_plugins);
-    resolve_stage!(ep.spec.upstream_response_plugins);
 }
 
 /// Resolve the TLS secret refs of a single plugin entry if it is an ExtProc.
