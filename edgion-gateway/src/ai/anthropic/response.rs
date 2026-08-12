@@ -1329,6 +1329,7 @@ mod tests {
             assert!(!output.contains("claude-provider"));
             assert_eq!(usage.reported_tokens(), Some((15, 11)));
             let mut oracle = SseDecoder::with_default_limit();
+            oracle.enable_data_char_counting();
             oracle.feed_each_bytes(Bytes::copy_from_slice(output.as_bytes()), |_| {});
             assert_eq!(usage.output_chars(), oracle.take_data_chars(), "split={split}");
         }

@@ -911,6 +911,7 @@ fn parsed_field_kind(raw: &SliceChain, range: ByteRange) -> ParsedFieldKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     fn decode_all(chunks: &[&[u8]]) -> (Vec<SseEvent>, bool) {
         let mut decoder = SseDecoder::with_default_limit();
@@ -1208,7 +1209,7 @@ mod tests {
     fn raw_records_preserve_every_byte_for_all_two_and_three_way_splits() {
         let input = b"\xef\xbb\xbf: keep\r\ndata: h\xc3\xa9\r\nunknown: x\r\n\r\ndata: \xff\n\ntail";
         for first in 0..=input.len() {
-            for second in [first, (first + 1).min(input.len()), input.len()] {
+            for second in first..=input.len() {
                 let mut decoder = SseDecoder::with_default_limit();
                 let mut raw = Vec::new();
                 for part in [&input[..first], &input[first..second], &input[second..]] {
@@ -1222,6 +1223,31 @@ mod tests {
                 });
                 assert_eq!(raw, input, "first={first}, second={second}");
             }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn arbitrary_bytes_and_chunking_preserve_raw_identity(
+            input in prop::collection::vec(any::<u8>(), 0..4096),
+            chunk_sizes in prop::collection::vec(1usize..128, 1..64),
+        ) {
+            let mut decoder = SseDecoder::with_default_limit();
+            let mut raw = Vec::new();
+            let mut offset = 0;
+            let mut sizes = chunk_sizes.into_iter().cycle();
+            while offset < input.len() {
+                let end = offset.saturating_add(sizes.next().unwrap()).min(input.len());
+                collect_raw(&mut decoder, Bytes::copy_from_slice(&input[offset..end]), &mut raw);
+                offset = end;
+            }
+            decoder.finish_records(|record| match record {
+                SseRecordRef::EosTail(bytes) | SseRecordRef::Opaque(bytes) => {
+                    bytes.for_each_slice(|part| raw.extend_from_slice(part));
+                }
+                _ => {}
+            });
+            prop_assert_eq!(raw, input);
         }
     }
 

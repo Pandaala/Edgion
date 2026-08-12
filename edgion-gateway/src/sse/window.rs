@@ -5,7 +5,7 @@ use std::mem::size_of;
 
 use bytes::{Bytes, BytesMut};
 
-use super::chain::{SliceChain, MAX_SLICE_HANDLES};
+use super::chain::{ChainLimit, SliceChain, MAX_SLICE_HANDLES};
 use super::{ByteRange, SseRecordRef};
 
 pub const MAX_RAW_BYTES: usize = 1024 * 1024;
@@ -144,7 +144,7 @@ pub enum WindowLimit {
     CombinedResidentBytes,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowError {
     Limit(WindowLimit),
     InvalidRange,
@@ -241,6 +241,7 @@ pub struct RawWindow {
     lines: usize,
     buckets: Vec<Bucket>,
     semantic_degraded: bool,
+    semantic_failure: Option<WindowError>,
     state: State,
 }
 
@@ -264,6 +265,7 @@ impl RawWindow {
             lines: 0,
             buckets: Vec::new(),
             semantic_degraded: false,
+            semantic_failure: None,
             state: State::Collecting,
         }
     }
@@ -301,77 +303,81 @@ impl RawWindow {
         check_limit(next_events, self.limits.events, WindowLimit::Events)?;
         let next_buckets = plan_buckets(&self.buckets, record.fragments, self.limits)?;
 
-        // Build the complete next chain off to the side. The live generation
-        // is untouched until every allocation and bound has succeeded.
-        let mut next_raw = SliceChain::default();
-        for bytes in self.raw.raw_slices().into_iter().chain(record.slices) {
-            next_raw
-                .push(bytes, self.limits.raw)
-                .map_err(|_| WindowError::Limit(WindowLimit::RawBytes))?;
-        }
-        next_raw
-            .normalize_retained(self.limits.resident)
-            .map_err(|_| WindowError::Limit(WindowLimit::ResidentBytes))?;
-        check_limit(next_raw.handle_count(), MAX_SLICE_HANDLES, WindowLimit::SliceHandles)?;
+        let raw_plan = self
+            .raw
+            .plan_append(record.slices, self.limits.raw, self.limits.resident)
+            .map_err(|limit| match limit {
+                ChainLimit::Logical => WindowError::Limit(WindowLimit::RawBytes),
+                ChainLimit::Resident => WindowError::Limit(WindowLimit::ResidentBytes),
+            })?;
+        check_limit(raw_plan.handle_count(), MAX_SLICE_HANDLES, WindowLimit::SliceHandles)?;
         check_limit(
-            next_raw.resident_capacity(),
+            raw_plan.resident_capacity(),
             self.limits.resident,
             WindowLimit::ResidentBytes,
         )?;
-        let metadata = metadata_charge(&next_raw, &next_buckets)?;
+        let metadata = metadata_charge(raw_plan.metadata_capacity(), &next_buckets)?;
         check_limit(metadata, self.limits.metadata, WindowLimit::MetadataBytes)?;
 
-        // During atomic preparation both chains and bucket vectors coexist.
-        let scratch_metadata = metadata_charge(&self.raw, &self.buckets)?;
+        // The live generation, normalized incoming slices, prospective handle
+        // vector/arena, and cloned bucket metadata coexist until commit.
+        let current_metadata = metadata_charge(self.raw.slice_metadata_capacity(), &self.buckets)?;
         check_limit(
-            self.raw
-                .resident_capacity()
-                .checked_add(next_raw.resident_capacity())
+            Some(self.raw.resident_capacity())
                 .and_then(|value| value.checked_add(overlap_capacity(&self.buckets).ok()?))
+                .and_then(|value| value.checked_add(current_metadata))
+                .and_then(|value| value.checked_add(raw_plan.scratch_resident()))
+                .and_then(|value| value.checked_add(raw_plan.scratch_metadata()))
+                .and_then(|value| value.checked_add(overlap_capacity(&next_buckets).ok()?))
                 .and_then(|value| value.checked_add(metadata))
-                .and_then(|value| value.checked_add(scratch_metadata))
                 .ok_or(WindowError::Limit(WindowLimit::CombinedResidentBytes))?,
             self.limits.combined,
             WindowLimit::CombinedResidentBytes,
         )?;
 
-        self.raw = next_raw;
+        self.raw.commit_append(raw_plan);
         self.raw_ranges = next_ranges;
         self.lines = next_lines;
         self.events = next_events;
         self.buckets = next_buckets;
         self.semantic_degraded |= !record.semantic_available;
+        if !record.semantic_available {
+            self.semantic_failure = Some(WindowError::SemanticUnavailable);
+        }
         Ok(())
     }
 
-    pub fn snapshot(&mut self, bucket: LogicalBucketKey) -> Result<WindowView, WindowError> {
+    pub fn snapshot(&mut self, bucket: LogicalBucketKey) -> Result<WindowView<'_>, WindowError> {
         self.require_collecting()?;
         if self.semantic_degraded {
             return Err(WindowError::SemanticUnavailable);
         }
-        let index = match self.buckets.binary_search_by_key(&bucket, |entry| entry.key) {
-            Ok(index) => index,
-            Err(_) => return Err(WindowError::SemanticUnavailable),
-        };
-        match self.materialize_bucket(index) {
-            Ok(value) => Ok(WindowView { value }),
-            Err(error) => {
-                self.semantic_degraded = true;
-                Err(error)
-            }
+        if self.buckets.binary_search_by_key(&bucket, |entry| entry.key).is_err() {
+            return Err(WindowError::SemanticUnavailable);
         }
+        Ok(WindowView { window: self, bucket })
     }
 
     /// Resolve exactly once. Semantic failure degrades this generation to a
     /// raw-only release instead of trapping its already-retained bytes.
     pub fn resolve(&mut self, decision: WindowDecision) -> Result<WindowOutput, WindowError> {
         self.require_collecting()?;
+        if let Some(error) = self.semantic_failure {
+            if !matches!(&decision, WindowDecision::Release) {
+                return Err(error);
+            }
+        }
         let prepared = self.prepare_decision(decision)?;
         if !self.semantic_degraded {
-            match self.prepare_overlaps() {
-                Ok(overlaps) => self.install_overlaps(overlaps),
-                Err(_) => self.semantic_degraded = true,
-            }
+            let overlaps = match self.prepare_overlaps() {
+                Ok(overlaps) => overlaps,
+                Err(error) => {
+                    self.semantic_degraded = true;
+                    self.semantic_failure = Some(error);
+                    return Err(error);
+                }
+            };
+            self.install_overlaps(overlaps);
         }
         for bucket in &mut self.buckets {
             bucket.fragments.clear();
@@ -395,6 +401,11 @@ impl RawWindow {
 
     pub fn finish(&mut self, decision: WindowDecision) -> Result<WindowOutput, WindowError> {
         self.require_collecting()?;
+        if let Some(error) = self.semantic_failure {
+            if !matches!(&decision, WindowDecision::Release) {
+                return Err(error);
+            }
+        }
         let prepared = self.prepare_decision(decision)?;
         let output = self.apply(prepared);
         self.clear_generation();
@@ -406,13 +417,22 @@ impl RawWindow {
     fn prepare_decision(&self, decision: WindowDecision) -> Result<PreparedDecision, WindowError> {
         match decision {
             WindowDecision::Release => {
-                let output_metadata = self
-                    .raw
-                    .slice_metadata_capacity()
+                let output = Vec::with_capacity(self.raw.handle_count());
+                let output_metadata = output
+                    .capacity()
                     .checked_mul(size_of::<Bytes>())
                     .ok_or(WindowError::Limit(WindowLimit::MetadataBytes))?;
                 check_limit(output_metadata, self.limits.metadata, WindowLimit::MetadataBytes)?;
-                Ok(PreparedDecision::Release)
+                check_limit(
+                    self.raw
+                        .resident_capacity()
+                        .checked_add(overlap_capacity(&self.buckets)?)
+                        .and_then(|value| value.checked_add(output_metadata))
+                        .ok_or(WindowError::Limit(WindowLimit::CombinedResidentBytes))?,
+                    self.limits.combined,
+                    WindowLimit::CombinedResidentBytes,
+                )?;
+                Ok(PreparedDecision::Release(output))
             }
             WindowDecision::Discard => Ok(PreparedDecision::Discard),
             WindowDecision::Replace(bytes) => {
@@ -493,7 +513,10 @@ impl RawWindow {
             bucket.overlap.clear();
         }
         for (key, overlap) in overlaps {
-            let index = self.buckets.binary_search_by_key(&key, |bucket| bucket.key).unwrap();
+            let index = self
+                .buckets
+                .binary_search_by_key(&key, |bucket| bucket.key)
+                .expect("prepared overlap keys must come from the current bucket set");
             self.buckets[index].overlap = overlap;
         }
     }
@@ -552,7 +575,7 @@ impl RawWindow {
 
     fn apply(&mut self, decision: PreparedDecision) -> WindowOutput {
         match decision {
-            PreparedDecision::Release => WindowOutput::Release(self.raw.take_raw_slices()),
+            PreparedDecision::Release(output) => WindowOutput::Release(self.raw.take_raw_slices_into(output)),
             PreparedDecision::Replace(bytes) => {
                 let _ = self.raw.take_raw_slices();
                 WindowOutput::Replace(bytes)
@@ -569,6 +592,7 @@ impl RawWindow {
         self.events = 0;
         self.lines = 0;
         self.semantic_degraded = false;
+        self.semantic_failure = None;
     }
 
     fn require_collecting(&self) -> Result<(), WindowError> {
@@ -591,19 +615,31 @@ impl RawWindow {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct WindowView {
-    value: String,
+pub struct WindowView<'a> {
+    window: &'a mut RawWindow,
+    bucket: LogicalBucketKey,
 }
 
-impl WindowView {
-    pub fn materialize(self) -> String {
-        self.value
+impl WindowView<'_> {
+    pub fn materialize(self) -> Result<String, WindowError> {
+        let index = self
+            .window
+            .buckets
+            .binary_search_by_key(&self.bucket, |entry| entry.key)
+            .map_err(|_| WindowError::SemanticUnavailable)?;
+        match self.window.materialize_bucket(index) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                self.window.semantic_degraded = true;
+                self.window.semantic_failure = Some(error);
+                Err(error)
+            }
+        }
     }
 }
 
 enum PreparedDecision {
-    Release,
+    Release(Vec<Bytes>),
     Replace(Bytes),
     Discard,
 }
@@ -669,16 +705,13 @@ fn plan_buckets(
     Ok(next)
 }
 
-fn metadata_charge(raw: &SliceChain, buckets: &[Bucket]) -> Result<usize, WindowError> {
-    let mut total = raw
-        .slice_metadata_capacity()
-        .checked_mul(size_of::<Bytes>())
-        .and_then(|value| value.checked_add(buckets.len().saturating_mul(size_of::<Bucket>())))
+fn metadata_charge(slice_metadata: usize, buckets: &Vec<Bucket>) -> Result<usize, WindowError> {
+    let mut total = slice_metadata
+        .checked_add(buckets.capacity().saturating_mul(size_of::<Bucket>()))
         .ok_or(WindowError::Limit(WindowLimit::MetadataBytes))?;
     for bucket in buckets {
         total = total
             .checked_add(bucket.fragments.capacity().saturating_mul(size_of::<StoredFragment>()))
-            .and_then(|value| value.checked_add(bucket.overlap.capacity()))
             .ok_or(WindowError::Limit(WindowLimit::MetadataBytes))?;
         for fragment in &bucket.fragments {
             total = total
@@ -835,7 +868,7 @@ mod tests {
                         .with_fragments(vec![fragment(bucket, vec![ByteRange::new(0, raw.len())])]),
                 )
                 .unwrap();
-            assert_eq!(window.snapshot(bucket).unwrap().materialize(), "a€𐍈");
+            assert_eq!(window.snapshot(bucket).unwrap().materialize().unwrap(), "a€𐍈");
             assert_eq!(released(window.resolve(WindowDecision::Release).unwrap()), raw);
         }
     }
@@ -853,7 +886,7 @@ mod tests {
                         .with_fragments(vec![SemanticFragment { bucket, source }]),
                 )
                 .unwrap();
-            assert_eq!(window.snapshot(bucket).unwrap().materialize(), "hé😀\\\"");
+            assert_eq!(window.snapshot(bucket).unwrap().materialize().unwrap(), "hé😀\\\"");
         }
     }
 
@@ -872,7 +905,12 @@ mod tests {
                     WindowRecord::raw(vec![invalid.clone()]).with_fragments(vec![SemanticFragment { bucket, source }]),
                 )
                 .unwrap();
-            assert!(window.snapshot(bucket).is_err());
+            let expected = window.snapshot(bucket).unwrap().materialize().unwrap_err();
+            assert_eq!(
+                window.resolve(WindowDecision::Replace(Bytes::from_static(b"replacement"))),
+                Err(expected)
+            );
+            assert_eq!(window.resolve(WindowDecision::Discard), Err(expected));
             assert_eq!(released(window.resolve(WindowDecision::Release).unwrap()), invalid);
             window.start_next().unwrap();
             window
@@ -883,20 +921,96 @@ mod tests {
     }
 
     #[test]
-    fn one_byte_stream_coalesces_once_and_is_linear() {
-        let mut window = RawWindow::new();
-        let bytes = MAX_SLICE_HANDLES + 100;
-        window
-            .retain(WindowRecord::raw(vec![Bytes::from_static(b"x"); bytes]))
+    fn overlap_and_combined_prepare_errors_require_explicit_raw_release() {
+        let bucket = key(0, LogicalField::Content);
+        let invalid = Bytes::from_static(b"\xff");
+        let mut overlap = RawWindow::new();
+        overlap
+            .retain(
+                WindowRecord::raw(vec![invalid.clone()])
+                    .with_fragments(vec![fragment(bucket, vec![ByteRange::new(0, 1)])]),
+            )
             .unwrap();
+        assert_eq!(overlap.resolve(WindowDecision::Discard), Err(WindowError::InvalidUtf8));
+        assert_eq!(
+            overlap.resolve(WindowDecision::Replace(Bytes::from_static(b"replacement"))),
+            Err(WindowError::InvalidUtf8)
+        );
+        assert_eq!(released(overlap.resolve(WindowDecision::Release).unwrap()), invalid);
+        overlap.start_next().unwrap();
+
+        let raw = Bytes::from_static(b"value");
+        let mut combined = RawWindow::new();
+        combined
+            .retain(event(raw.clone(), bucket, vec![ByteRange::new(0, raw.len())]))
+            .unwrap();
+        combined.limits.combined = combined.raw.resident_capacity();
+        assert_eq!(
+            combined.snapshot(bucket).unwrap().materialize(),
+            Err(WindowError::Limit(WindowLimit::CombinedResidentBytes))
+        );
+        assert_eq!(
+            combined.resolve(WindowDecision::Discard),
+            Err(WindowError::Limit(WindowLimit::CombinedResidentBytes))
+        );
+        // Release itself owns a bounded output handle, so restore that small
+        // allowance without altering the retained generation.
+        combined.limits.combined += size_of::<Bytes>();
+        assert_eq!(released(combined.resolve(WindowDecision::Release).unwrap()), raw);
+        combined.start_next().unwrap();
+    }
+
+    #[test]
+    fn one_byte_stream_coalesces_once_and_is_linear() {
+        let mut limits = Limits::default();
+        limits.ranges = usize::MAX;
+        limits.lines = usize::MAX;
+        limits.events = usize::MAX;
+        limits.metadata = usize::MAX;
+        limits.combined = usize::MAX;
+        let mut window = RawWindow::with_limits(limits);
+        let bytes = MAX_SLICE_HANDLES + 10_000;
+        for _ in 0..bytes {
+            window
+                .retain(WindowRecord::raw(vec![Bytes::from_static(b"x")]))
+                .unwrap();
+        }
         let (_, _, handles, coalesces, copied) = window.accounting();
         assert_eq!(handles, 1);
         assert_eq!(coalesces, 1);
-        assert!(copied <= bytes + MAX_SLICE_HANDLES + 1);
+        assert_eq!(copied, bytes);
         assert_eq!(
             released(window.resolve(WindowDecision::Release).unwrap()),
             vec![b'x'; bytes]
         );
+    }
+
+    #[test]
+    fn one_large_record_bypasses_unbounded_handle_metadata() {
+        let count = 10_000;
+        let mut window = RawWindow::new();
+        window
+            .retain(WindowRecord::raw(vec![Bytes::from_static(b"x"); count]))
+            .unwrap();
+        let (logical, resident, handles, coalesces, copied) = window.accounting();
+        assert_eq!(logical, count);
+        assert_eq!(handles, 1);
+        assert_eq!(coalesces, 1);
+        assert_eq!(copied, count);
+        assert_eq!(window.raw.slice_metadata_capacity(), 0);
+        assert!(resident <= MAX_RESIDENT_BYTES);
+        let before_empty_append = window.accounting();
+        window.retain(WindowRecord::raw(vec![Bytes::new(); 100_000])).unwrap();
+        assert_eq!(window.accounting(), before_empty_append);
+        assert_eq!(
+            released(window.resolve(WindowDecision::Release).unwrap()),
+            vec![b'x'; count]
+        );
+
+        let mut empty = RawWindow::new();
+        empty.retain(WindowRecord::raw(vec![Bytes::new(); 100_000])).unwrap();
+        assert_eq!(empty.accounting(), (0, 0, 0, 0, 0));
+        assert_eq!(released(empty.resolve(WindowDecision::Release).unwrap()), b"");
     }
 
     #[test]
@@ -935,6 +1049,19 @@ mod tests {
         );
         assert_eq!(released(raw.resolve(WindowDecision::Release).unwrap()), b"x");
 
+        let mut resident_limits = Limits::default();
+        resident_limits.resident = 1;
+        resident_limits.combined = 1024 * 1024;
+        let mut resident = RawWindow::with_limits(resident_limits);
+        resident
+            .retain(WindowRecord::raw(vec![Bytes::from_static(b"x")]))
+            .unwrap();
+        assert_eq!(
+            resident.retain(WindowRecord::raw(vec![Bytes::from_static(b"y")])),
+            Err(WindowError::Limit(WindowLimit::ResidentBytes))
+        );
+        assert_eq!(released(resident.resolve(WindowDecision::Release).unwrap()), b"x");
+
         for (line_limit, event_limit, expected) in [
             (1, usize::MAX, WindowLimit::Lines),
             (usize::MAX, 1, WindowLimit::Events),
@@ -956,6 +1083,21 @@ mod tests {
             };
             assert_eq!(window.retain(extra), Err(WindowError::Limit(expected)));
         }
+    }
+
+    #[test]
+    fn handle_limit_exact_then_one_time_coalesce() {
+        let mut window = RawWindow::new();
+        window
+            .retain(WindowRecord::raw(vec![Bytes::from_static(b"x"); MAX_SLICE_HANDLES]))
+            .unwrap();
+        assert_eq!(window.accounting().2, MAX_SLICE_HANDLES);
+        assert_eq!(window.accounting().3, 0);
+        window
+            .retain(WindowRecord::raw(vec![Bytes::from_static(b"x")]))
+            .unwrap();
+        assert_eq!(window.accounting().2, 1);
+        assert_eq!(window.accounting().3, 1);
     }
 
     #[test]
@@ -985,14 +1127,29 @@ mod tests {
             .retain(event(Bytes::from_static(b"four"), a, vec![ByteRange::new(0, 4)]))
             .unwrap();
         assert_eq!(
-            snapshot.snapshot(a),
+            snapshot.snapshot(a).unwrap().materialize(),
             Err(WindowError::Limit(WindowLimit::SnapshotBytes))
         );
         assert_eq!(released(snapshot.resolve(WindowDecision::Release).unwrap()), b"four");
 
         let mut limits = Limits::default();
+        limits.snapshot = 4;
+        let mut snapshot_exact = RawWindow::with_limits(limits);
+        snapshot_exact
+            .retain(event(Bytes::from_static(b"four"), a, vec![ByteRange::new(0, 4)]))
+            .unwrap();
+        assert_eq!(snapshot_exact.snapshot(a).unwrap().materialize().unwrap(), "four");
+
+        let mut limits = Limits::default();
         limits.replacement = 3;
         let mut replacement = RawWindow::with_limits(limits);
+        assert_eq!(
+            replacement
+                .resolve(WindowDecision::Replace(Bytes::from_static(b"123")))
+                .unwrap(),
+            WindowOutput::Replace(Bytes::from_static(b"123"))
+        );
+        replacement.start_next().unwrap();
         assert_eq!(
             replacement.resolve(WindowDecision::Replace(Bytes::from_static(b"1234"))),
             Err(WindowError::Limit(WindowLimit::ReplacementBytes))
@@ -1009,6 +1166,32 @@ mod tests {
         assert_eq!(
             metadata.retain(WindowRecord::raw(vec![Bytes::from_static(b"x")])),
             Err(WindowError::Limit(WindowLimit::MetadataBytes))
+        );
+
+        let probe = SliceChain::default()
+            .plan_append(vec![Bytes::from_static(b"x")], MAX_RAW_BYTES, MAX_RESIDENT_BYTES)
+            .unwrap();
+        let exact_metadata = metadata_charge(probe.metadata_capacity(), &Vec::new()).unwrap();
+        let mut limits = Limits::default();
+        limits.metadata = exact_metadata;
+        let mut metadata_exact = RawWindow::with_limits(limits);
+        metadata_exact
+            .retain(WindowRecord::raw(vec![Bytes::from_static(b"x")]))
+            .unwrap();
+
+        let exact_combined = probe.scratch_resident() + exact_metadata;
+        let mut limits = Limits::default();
+        limits.combined = exact_combined;
+        let mut combined_exact = RawWindow::with_limits(limits);
+        combined_exact
+            .retain(WindowRecord::raw(vec![Bytes::from_static(b"x")]))
+            .unwrap();
+        let mut limits = Limits::default();
+        limits.combined = exact_combined - 1;
+        let mut combined_plus_one = RawWindow::with_limits(limits);
+        assert_eq!(
+            combined_plus_one.retain(WindowRecord::raw(vec![Bytes::from_static(b"x")])),
+            Err(WindowError::Limit(WindowLimit::CombinedResidentBytes))
         );
     }
 
@@ -1031,8 +1214,8 @@ mod tests {
             .unwrap();
         window.resolve(WindowDecision::Discard).unwrap();
         window.start_next().unwrap();
-        let av = window.snapshot(a).unwrap().materialize();
-        let bv = window.snapshot(b).unwrap().materialize();
+        let av = window.snapshot(a).unwrap().materialize().unwrap();
+        let bv = window.snapshot(b).unwrap().materialize().unwrap();
         assert_eq!(av, "éé");
         assert_eq!(bv, "456");
         assert!(av.len() + bv.len() <= 7);
