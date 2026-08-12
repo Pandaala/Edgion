@@ -17,6 +17,7 @@ mod fault_injection;
 mod form_json_transform;
 mod forward_auth;
 mod global_access_control;
+mod guardrail;
 mod header_cert_auth;
 mod hmac_auth;
 mod ip_restriction;
@@ -76,6 +77,10 @@ pub use fault_injection::{
 pub use form_json_transform::{FormJsonDirection, FormJsonTransformConfig};
 pub use forward_auth::{ForwardAuthConfig, ForwardAuthDecision};
 pub use global_access_control::{AllowOutcome, AllowProfile, AllowRuleGroup, GlobalAccessControlConfig};
+pub use guardrail::{
+    GuardrailConfig, GUARDRAIL_MAX_CONCURRENT, GUARDRAIL_MAX_OVERLAP_BYTES, GUARDRAIL_MAX_REPLACEMENT_BYTES,
+    GUARDRAIL_MAX_REQUEST_BYTES, GUARDRAIL_MAX_WINDOW_BYTES,
+};
 pub use header_cert_auth::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderCertAuthConfig, UpstreamHeaderConfig};
 pub use hmac_auth::{HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup, HmacCredential};
 pub use ip_restriction::{DefaultAction, IpRestrictionConfig, IpSource};

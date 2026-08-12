@@ -342,6 +342,39 @@ pub trait PluginSession: Send + Sync {
         drop(processor);
     }
 
+    /// Whether one request-scoped guard currently owns canonical semantic AI
+    /// output. Alternate adapters are inert by default.
+    fn semantic_guard_active(&self) -> bool {
+        false
+    }
+
+    /// Publish one owned canonical record batch for the current response-body
+    /// callback. Failure returns ownership to the source so bytes cannot vanish.
+    fn publish_canonical_records(
+        &mut self,
+        batch: crate::ai::canonical_sse::CanonicalRecordBatch,
+    ) -> Result<(), crate::ai::canonical_sse::CanonicalRecordBatch> {
+        Err(batch)
+    }
+
+    /// Consume the current canonical batch exactly once.
+    fn take_canonical_records(&mut self) -> Option<crate::ai::canonical_sse::CanonicalRecordBatch> {
+        None
+    }
+
+    /// Disable canonical semantic withholding before response-body processing
+    /// begins. This is used only by an attached Guardrail that has selected its
+    /// configured pre-commit fail-open path.
+    fn disable_semantic_guard(&mut self) {}
+
+    fn install_semantic_response_processor(
+        &mut self,
+        processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
+    ) -> bool {
+        drop(processor);
+        false
+    }
+
     /// Install one request-scoped attached ExtProc owner. Duplicate identity is
     /// a configuration/runtime error and never overwrites the first owner.
     fn install_attached_ext_proc(
@@ -357,6 +390,23 @@ pub trait PluginSession: Send + Sync {
         &self,
         _identity: &str,
     ) -> Option<std::sync::Arc<crate::plugins::http::ext_proc::AttachedExtProc>> {
+        None
+    }
+
+    /// Install the one request-scoped semantic Guardrail owner. A duplicate
+    /// claim is a configuration/runtime error, independent of fail-open.
+    fn install_attached_guardrail(
+        &mut self,
+        _identity: String,
+        _owner: std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>,
+    ) -> bool {
+        false
+    }
+
+    fn attached_guardrail(
+        &self,
+        _identity: &str,
+    ) -> Option<std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>> {
         None
     }
 

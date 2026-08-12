@@ -62,6 +62,10 @@ pub fn get_http_client() -> &'static Client {
             connect_timeout: Some(Duration::from_secs(5)),
             total_timeout: Some(Duration::from_secs(10)),
             redirect: OutboundRedirect::Deny,
+            // Plugin dependency traffic must never inherit HTTP(S)_PROXY from
+            // the gateway process. Proxy routing would bypass the canonical
+            // dial-time egress resolver/classifier.
+            disable_proxy: true,
             ..Default::default()
         })
         .unwrap_or_else(|e| {
@@ -88,6 +92,7 @@ pub fn build_webhook_client(
         connect_timeout: Some(Duration::from_secs(5)),
         total_timeout: Some(Duration::from_secs(10)),
         redirect: OutboundRedirect::Deny,
+        disable_proxy: true,
         tls: tls_config.clone(),
         tls_context: Some("Webhook"),
         dns_resolver,
@@ -120,6 +125,7 @@ pub fn build_pooled_outbound_client(
             connect_timeout: Some(connect_timeout),
             total_timeout,
             redirect: OutboundRedirect::Deny,
+            disable_proxy: true,
             ..Default::default()
         },
     )

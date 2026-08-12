@@ -58,6 +58,11 @@ pub trait StreamingResponseProcessor: Send + Sync {
         false
     }
 
+    /// Settle request-level aggregate state when the response pump ends
+    /// without delivering EOS (for example an upstream error or downstream
+    /// cancellation). Called once from the universal logging boundary.
+    fn finalize_incomplete(&mut self, _outcome: &'static str, _reason: &'static str) {}
+
     /// Called for every upstream response body chunk, including the
     /// end-of-stream call (where `chunk` may be `None`). `stream_kind` is the
     /// allocation-free classification copied from the request context.

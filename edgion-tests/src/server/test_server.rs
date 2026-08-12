@@ -103,6 +103,25 @@ static AI_LONG_STREAM_OBSERVATIONS: std::sync::LazyLock<
     Mutex<std::collections::HashMap<String, AiLongStreamObservation>>,
 > = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
+/// Bounded, content-free observations for Guardrail integration assertions.
+/// The fixture retains only counters and structural validation booleans, never
+/// semantic window text or configured authentication headers.
+static GUARDRAIL_OBSERVATIONS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<String, GuardrailFixtureObservation>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuardrailFixtureObservation {
+    calls: u64,
+    total_windows: u64,
+    last_window_count: usize,
+    version_v1: bool,
+    minimal_envelope: bool,
+    sorted_unique_keys: bool,
+    canonical_content_window: bool,
+}
+
 #[derive(Debug, serde::Serialize)]
 struct AiCredentialExhaustionObservation {
     backend: &'static str,
@@ -536,6 +555,15 @@ fn create_echo_router(server_addr_str: String) -> Router {
         // integration suite. It reports only booleans and fixed fixture IDs;
         // credentials and arbitrary request values are never echoed.
         .route("/ai/{*path}", get(ai_provider_handler).post(ai_provider_handler))
+        // Bounded deterministic unary policy fixture for the Guardrail plugin.
+        // It shares this server with the AI provider so integration coverage
+        // does not add another process or network topology.
+        .route(
+            "/guardrail/decision/{action}",
+            axum::routing::post(guardrail_decision_handler),
+        )
+        .route("/guardrail/observation/{action}", get(guardrail_observation_handler))
+        .route("/guardrail/reset", axum::routing::post(guardrail_reset_handler))
         .route("/ai-resilience/count/{trace_id}", get(ai_resilience_count_handler))
         .route("/ai-resilience/counts/{fixture_id}", get(ai_resilience_counts_handler))
         .route(
@@ -1307,6 +1335,36 @@ fn ai_stream_plan(mode: &str, observation: &str) -> AiStreamPlan {
     let done = "data: [DONE]\n\n";
 
     match mode {
+        "guardrail_split" => {
+            let first = format!(
+                "data: {{\"id\":\"stream-fixture\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"fixed \"}}}}],\"mock\":{observation}}}\n\n"
+            );
+            AiStreamPlan {
+                chunks: format!("{first}{usage}{done}")
+                    .as_bytes()
+                    .chunks(7)
+                    .map(Bytes::copy_from_slice)
+                    .collect(),
+                interval: Duration::ZERO,
+                abort_after_chunks: false,
+            }
+        }
+        "guardrail_two_windows" => {
+            let first = format!(
+                "data: {{\"id\":\"stream-fixture\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"first\"}}}}],\"mock\":{observation}}}\n\n"
+            );
+            let second = "data: {\"id\":\"stream-fixture\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"second\"}}]}\n\n";
+            AiStreamPlan {
+                chunks: vec![
+                    Bytes::from(first),
+                    Bytes::from_static(second.as_bytes()),
+                    Bytes::from_static(usage.as_bytes()),
+                    Bytes::from_static(done.as_bytes()),
+                ],
+                interval: Duration::ZERO,
+                abort_after_chunks: false,
+            }
+        }
         "split" => AiStreamPlan {
             chunks: format!("{first}{usage}{done}")
                 .as_bytes()
@@ -1457,6 +1515,124 @@ fn ai_stream_plan(mode: &str, observation: &str) -> AiStreamPlan {
             abort_after_chunks: false,
         },
     }
+}
+
+async fn guardrail_decision_handler(
+    Path(action): Path<String>,
+    request: AxumRequest<Body>,
+) -> axum::response::Response {
+    use axum::body::to_bytes;
+    use axum::http::{header::CONTENT_TYPE, StatusCode};
+    use axum::response::Response;
+
+    let Ok(body) = to_bytes(request.into_body(), 1024 * 1024).await else {
+        return Response::builder()
+            .status(StatusCode::PAYLOAD_TOO_LARGE)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"error":"request_too_large"}"#))
+            .unwrap();
+    };
+    let input: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    record_guardrail_observation(&action, &input);
+
+    let response = match action.as_str() {
+        "pass" => serde_json::json!({"version": "v1", "action": "pass"}).to_string(),
+        "reject" => serde_json::json!({
+            "version": "v1",
+            "action": "reject",
+            "code": "fixture_policy",
+            "reason": "Rejected by the integration fixture"
+        })
+        .to_string(),
+        "replace" => {
+            let replacements = input
+                .get("windows")
+                .and_then(serde_json::Value::as_array)
+                .map(|windows| {
+                    windows
+                        .iter()
+                        .map(|window| {
+                            serde_json::json!({
+                                "choiceIndex": window.get("choiceIndex").cloned().unwrap_or_default(),
+                                "field": window.get("field").cloned().unwrap_or_default(),
+                                "current": "reviewed"
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            serde_json::json!({
+                "version": "v1",
+                "action": "replace",
+                "replacements": replacements
+            })
+            .to_string()
+        }
+        // Deliberately valid UTF-8 but invalid JSON. The Guardrail fail-open
+        // route must release the held original window byte-identically.
+        "malformed" => "{not-json".to_string(),
+        "timeout" => {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            serde_json::json!({"version": "v1", "action": "pass"}).to_string()
+        }
+        _ => serde_json::json!({"error": "unknown_fixture_action"}).to_string(),
+    };
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(response))
+        .unwrap()
+}
+
+fn record_guardrail_observation(action: &str, input: &serde_json::Value) {
+    let object = input.as_object();
+    let windows = input
+        .get("windows")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut keys = windows
+        .iter()
+        .map(|window| {
+            let choice = window.get("choiceIndex").and_then(serde_json::Value::as_u64);
+            let field = window.pointer("/field/type").and_then(serde_json::Value::as_str);
+            let tool = window
+                .pointer("/field/toolCallIndex")
+                .and_then(serde_json::Value::as_u64);
+            (choice, field.map(str::to_owned), tool)
+        })
+        .collect::<Vec<_>>();
+    let original_keys = keys.clone();
+    keys.sort();
+    let sorted_unique_keys = original_keys == keys && keys.windows(2).all(|pair| pair[0] != pair[1]);
+    let canonical_content_window = windows.len() == 1
+        && windows[0].get("choiceIndex").and_then(serde_json::Value::as_u64) == Some(0)
+        && windows[0].pointer("/field/type").and_then(serde_json::Value::as_str) == Some("content")
+        && windows[0].get("context").is_some_and(serde_json::Value::is_string)
+        && windows[0].get("current").is_some_and(serde_json::Value::is_string)
+        && windows[0].as_object().is_some_and(|window| window.len() == 4);
+
+    let mut observations = GUARDRAIL_OBSERVATIONS.lock();
+    let observation = observations.entry(action.to_string()).or_default();
+    observation.calls = observation.calls.saturating_add(1);
+    observation.total_windows = observation.total_windows.saturating_add(windows.len() as u64);
+    observation.last_window_count = windows.len();
+    observation.version_v1 = input.get("version").and_then(serde_json::Value::as_str) == Some("v1");
+    observation.minimal_envelope = object
+        .is_some_and(|object| object.len() == 2 && object.contains_key("version") && object.contains_key("windows"));
+    observation.sorted_unique_keys = sorted_unique_keys;
+    observation.canonical_content_window = canonical_content_window;
+}
+
+async fn guardrail_observation_handler(Path(action): Path<String>) -> impl IntoResponse {
+    let observation = GUARDRAIL_OBSERVATIONS.lock().get(&action).cloned().unwrap_or_default();
+    axum::Json(observation)
+}
+
+async fn guardrail_reset_handler() -> axum::http::StatusCode {
+    GUARDRAIL_OBSERVATIONS.lock().clear();
+    axum::http::StatusCode::NO_CONTENT
 }
 
 async fn ai_provider_handler(
@@ -3282,9 +3458,8 @@ async fn oidc_introspect_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     use axum::response::Json;
     use serde_json::json;
 
-    let body_bytes = match to_bytes(req.into_body(), 8 * 1024).await {
-        Ok(v) => v,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"active": false}))),
+    let Ok(body_bytes) = to_bytes(req.into_body(), 8 * 1024).await else {
+        return (StatusCode::BAD_REQUEST, Json(json!({"active": false})));
     };
     let body = String::from_utf8_lossy(&body_bytes);
     let token = extract_form_token(&body);
@@ -3876,6 +4051,31 @@ mod tests {
     }
 
     #[test]
+    fn guardrail_observation_retains_only_bounded_structure() {
+        let action = "unit-structure-only";
+        let input = serde_json::json!({
+            "version": "v1",
+            "windows": [{
+                "choiceIndex": 0,
+                "field": {"type": "content"},
+                "context": "sensitive-context-marker",
+                "current": "sensitive-current-marker"
+            }]
+        });
+        record_guardrail_observation(action, &input);
+        let observation = GUARDRAIL_OBSERVATIONS.lock().remove(action).unwrap();
+        assert_eq!(observation.calls, 1);
+        assert_eq!(observation.total_windows, 1);
+        assert!(observation.version_v1);
+        assert!(observation.minimal_envelope);
+        assert!(observation.sorted_unique_keys);
+        assert!(observation.canonical_content_window);
+        let encoded = serde_json::to_string(&observation).unwrap();
+        assert!(!encoded.contains("sensitive-context-marker"));
+        assert!(!encoded.contains("sensitive-current-marker"));
+    }
+
+    #[test]
     fn ai_stream_modes_have_deterministic_bounded_contracts() {
         let observation = "{\"fixture_id\":\"test\"}";
 
@@ -3891,6 +4091,27 @@ mod tests {
         let split_joined = split.chunks.concat();
         assert!(split_joined.windows(7).any(|window| window == b"\"usage\""));
         assert!(split_joined.ends_with(b"data: [DONE]\n\n"));
+
+        let guardrail_split = ai_stream_plan("guardrail_split", observation);
+        assert!(guardrail_split.chunks.len() > 3);
+        assert!(guardrail_split.chunks.iter().all(|chunk| chunk.len() <= 7));
+        assert!(guardrail_split
+            .chunks
+            .concat()
+            .windows(b"\"index\":0".len())
+            .any(|window| window == b"\"index\":0"));
+
+        let two_windows = ai_stream_plan("guardrail_two_windows", observation);
+        assert_eq!(two_windows.chunks.len(), 4);
+        assert_eq!(
+            two_windows
+                .chunks
+                .concat()
+                .windows(b"\"index\":0".len())
+                .filter(|window| *window == b"\"index\":0")
+                .count(),
+            2
+        );
 
         let missing = ai_stream_plan("missing_usage", observation).chunks.concat();
         assert!(!missing.windows(7).any(|window| window == b"\"usage\""));

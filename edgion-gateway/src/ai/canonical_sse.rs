@@ -1,0 +1,787 @@
+//! Single-pass observation and owned handoff for canonical OpenAI SSE records.
+
+use bytes::Bytes;
+
+use crate::sse::chain::SliceChain;
+use crate::sse::window::{LogicalBucketKey, LogicalField, SemanticFragment, SemanticSource, WindowRecord};
+use crate::sse::{ByteRange, SseEventRef};
+use serde_json::Value;
+
+const MAX_JSON_DEPTH: usize = 64;
+const MAX_JSON_NODES: usize = 16_384;
+pub(crate) const MAX_CANONICAL_BATCH_RECORDS: usize = 1_024;
+pub(crate) const MAX_CANONICAL_BATCH_METADATA_BYTES: usize = 128 * 1024;
+pub(crate) const MAX_CANONICAL_SOURCE_CHUNK_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_CANONICAL_BATCH_RAW_BYTES: usize =
+    crate::sse::DEFAULT_MAX_PENDING_EVENT_BYTES + MAX_CANONICAL_SOURCE_CHUNK_BYTES;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct CanonicalUsageObservation {
+    pub prompt_tokens: Option<u64>,
+    pub completion_tokens: Option<u64>,
+    pub cached_tokens: Option<u64>,
+    pub cache_read_input_tokens: Option<u64>,
+    pub cache_creation_input_tokens: Option<u64>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct CanonicalEventObservation {
+    pub usage: CanonicalUsageObservation,
+    pub output_units: u64,
+    pub fragments: Vec<SemanticFragment>,
+    pub semantic_available: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CanonicalSourceStatus {
+    Available,
+    Unavailable,
+}
+
+#[derive(Debug)]
+pub struct CanonicalRecordBatch {
+    records: Vec<WindowRecord>,
+    fallback: SliceChain,
+    raw_bytes: usize,
+    metadata_bytes: usize,
+    status: CanonicalSourceStatus,
+}
+
+impl CanonicalRecordBatch {
+    pub(crate) fn new() -> Self {
+        Self {
+            records: Vec::new(),
+            fallback: SliceChain::default(),
+            raw_bytes: 0,
+            metadata_bytes: 0,
+            status: CanonicalSourceStatus::Available,
+        }
+    }
+
+    pub(crate) fn push(&mut self, record: WindowRecord) -> Result<(), WindowRecord> {
+        let Some(next_raw) = self.raw_bytes.checked_add(record.raw_len()) else {
+            return Err(record);
+        };
+        if next_raw > MAX_CANONICAL_BATCH_RAW_BYTES {
+            return Err(record);
+        }
+        let record_metadata = record.metadata_bytes();
+        let annotated_fits = self.records.len() < MAX_CANONICAL_BATCH_RECORDS
+            && self
+                .metadata_bytes
+                .checked_add(record_metadata)
+                .is_some_and(|value| value <= MAX_CANONICAL_BATCH_METADATA_BYTES)
+            && self.fallback.is_empty();
+        if annotated_fits {
+            self.metadata_bytes += record_metadata;
+            self.records.push(record);
+        } else {
+            self.status = CanonicalSourceStatus::Unavailable;
+            if self.fallback.is_empty() {
+                let mut fallback = SliceChain::default();
+                for prior in &self.records {
+                    for slice in prior.raw_slices_cloned() {
+                        fallback
+                            .push(slice, MAX_CANONICAL_BATCH_RAW_BYTES)
+                            .map_err(|_| record.clone())?;
+                    }
+                }
+                self.metadata_bytes = 0;
+                self.fallback = fallback;
+                self.records.clear();
+            }
+            for slice in record.raw_slices_cloned() {
+                self.fallback
+                    .push(slice, MAX_CANONICAL_BATCH_RAW_BYTES)
+                    .map_err(|_| record.clone())?;
+            }
+        }
+        self.raw_bytes = next_raw;
+        Ok(())
+    }
+
+    pub(crate) fn mark_unavailable(&mut self) {
+        self.status = CanonicalSourceStatus::Unavailable;
+    }
+
+    pub(crate) fn status(&self) -> CanonicalSourceStatus {
+        self.status
+    }
+
+    pub(crate) fn into_records(self) -> Vec<WindowRecord> {
+        let mut records = self.records;
+        if !self.fallback.is_empty() {
+            records.push(WindowRecord::raw(self.fallback.raw_slices()).semantic_unavailable());
+        }
+        records
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.records.is_empty() && self.fallback.is_empty()
+    }
+
+    pub(crate) fn raw_len(&self) -> usize {
+        self.raw_bytes
+    }
+
+    pub(crate) fn into_raw_bytes(self) -> Result<Bytes, ()> {
+        let mut output = Vec::with_capacity(self.raw_len());
+        if output.capacity() > MAX_CANONICAL_BATCH_RAW_BYTES {
+            return Err(());
+        }
+        for record in self.records {
+            for slice in record.into_raw_slices() {
+                output.extend_from_slice(&slice);
+            }
+        }
+        for slice in self.fallback.raw_slices() {
+            output.extend_from_slice(&slice);
+        }
+        Ok(Bytes::from(output))
+    }
+}
+
+/// Serialize a gateway-constructed canonical event while recording semantic
+/// token ranges during the same structural walk. Generated bytes are never
+/// decoded or searched for repeated string values.
+pub(crate) fn write_canonical_record(value: &Value, limit: usize) -> Result<(Bytes, WindowRecord), ()> {
+    let mut writer = ValueWriter {
+        bytes: Vec::new(),
+        fragments: Vec::new(),
+        limit,
+    };
+    writer.append(b"data: ")?;
+    writer.value(value, WriteContext::Root)?;
+    writer.append(b"\n\n")?;
+    let bytes = Bytes::from(writer.bytes);
+    let record = WindowRecord::raw(vec![bytes.clone()]).with_fragments(writer.fragments);
+    Ok((bytes, record))
+}
+
+#[derive(Clone, Copy)]
+enum WriteContext {
+    Root,
+    Choices,
+    Choice(u32),
+    Delta(u32),
+    ToolCalls(u32),
+    Tool(u32, u32),
+    Function(u32, u32),
+    Other,
+}
+
+struct ValueWriter {
+    bytes: Vec<u8>,
+    fragments: Vec<SemanticFragment>,
+    limit: usize,
+}
+
+impl ValueWriter {
+    fn append(&mut self, value: &[u8]) -> Result<(), ()> {
+        let next = self.bytes.len().checked_add(value.len()).ok_or(())?;
+        if next > self.limit {
+            return Err(());
+        }
+        self.bytes.extend_from_slice(value);
+        Ok(())
+    }
+
+    fn value(&mut self, value: &Value, context: WriteContext) -> Result<(), ()> {
+        match value {
+            Value::Object(map) => {
+                self.append(b"{")?;
+                for (position, (key, child)) in map.iter().enumerate() {
+                    if position != 0 {
+                        self.append(b",")?;
+                    }
+                    self.append(&serde_json::to_vec(key).map_err(|_| ())?)?;
+                    self.append(b":")?;
+                    let next = match (context, key.as_str()) {
+                        (WriteContext::Root, "choices") => WriteContext::Choices,
+                        (WriteContext::Choice(choice), "delta") => WriteContext::Delta(choice),
+                        (WriteContext::Delta(choice), "tool_calls") => WriteContext::ToolCalls(choice),
+                        (WriteContext::Tool(choice, tool), "function") => WriteContext::Function(choice, tool),
+                        _ => WriteContext::Other,
+                    };
+                    let semantic = match (context, key.as_str()) {
+                        (WriteContext::Delta(choice), "content") => Some(LogicalBucketKey {
+                            choice_index: choice,
+                            field: LogicalField::Content,
+                        }),
+                        (WriteContext::Delta(choice), "reasoning_content") => Some(LogicalBucketKey {
+                            choice_index: choice,
+                            field: LogicalField::ReasoningContent,
+                        }),
+                        (WriteContext::Function(choice, tool), "arguments") => Some(LogicalBucketKey {
+                            choice_index: choice,
+                            field: LogicalField::ToolArguments { tool_call_index: tool },
+                        }),
+                        _ => None,
+                    };
+                    if let (Some(bucket), Value::String(text)) = (semantic, child) {
+                        let start = self.bytes.len();
+                        self.append(&serde_json::to_vec(text).map_err(|_| ())?)?;
+                        let end = self.bytes.len();
+                        self.fragments.push(SemanticFragment {
+                            bucket,
+                            source: SemanticSource::JsonStringTokenRanges(vec![ByteRange::new(start, end)]),
+                        });
+                    } else {
+                        self.value(child, next)?;
+                    }
+                }
+                self.append(b"}")
+            }
+            Value::Array(values) => {
+                self.append(b"[")?;
+                for (position, child) in values.iter().enumerate() {
+                    if position != 0 {
+                        self.append(b",")?;
+                    }
+                    let next = match context {
+                        WriteContext::Choices => child
+                            .get("index")
+                            .and_then(Value::as_u64)
+                            .and_then(|v| u32::try_from(v).ok())
+                            .map(WriteContext::Choice)
+                            .unwrap_or(WriteContext::Other),
+                        WriteContext::ToolCalls(choice) => child
+                            .get("index")
+                            .and_then(Value::as_u64)
+                            .and_then(|v| u32::try_from(v).ok())
+                            .map(|tool| WriteContext::Tool(choice, tool))
+                            .unwrap_or(WriteContext::Other),
+                        _ => WriteContext::Other,
+                    };
+                    self.value(child, next)?;
+                }
+                self.append(b"]")
+            }
+            _ => self.append(&serde_json::to_vec(value).map_err(|_| ())?),
+        }
+    }
+}
+
+pub(crate) fn observe_canonical_event(event: &SseEventRef<'_>) -> CanonicalEventObservation {
+    if event.data_is_literal(b"[DONE]") {
+        return CanonicalEventObservation {
+            semantic_available: true,
+            ..Default::default()
+        };
+    }
+    let Ok(data) = event.semantic_data() else {
+        return CanonicalEventObservation::default();
+    };
+    let Ok(root) = Parser::new(data.as_bytes()).parse() else {
+        return CanonicalEventObservation::default();
+    };
+    let mut observation = CanonicalEventObservation {
+        semantic_available: true,
+        ..Default::default()
+    };
+    observation.usage = observe_usage(&root);
+    let choices = match field(&root, "choices") {
+        Field::Missing => return observation,
+        Field::Unique(value) => match value.array() {
+            Some(choices) => choices,
+            None => {
+                observation.semantic_available = false;
+                return observation;
+            }
+        },
+        Field::Ambiguous => {
+            observation.semantic_available = false;
+            return observation;
+        }
+    };
+    for choice in choices {
+        let delta = match field(choice, "delta") {
+            Field::Missing => continue,
+            Field::Unique(value) => match value.object_marker() {
+                Some(delta) => delta,
+                None => {
+                    observation.semantic_available = false;
+                    continue;
+                }
+            },
+            Field::Ambiguous => {
+                observation.semantic_available = false;
+                continue;
+            }
+        };
+        let choice_index = match field(choice, "index") {
+            Field::Unique(value) => value.u32(),
+            Field::Missing | Field::Ambiguous => None,
+        };
+        if choice_index.is_none() {
+            observation.semantic_available = false;
+        }
+        let mut qualifying_output = false;
+        for (name, semantic_field) in [
+            ("content", LogicalField::Content),
+            ("reasoning_content", LogicalField::ReasoningContent),
+        ] {
+            let token = match field(delta, name) {
+                Field::Missing => continue,
+                Field::Unique(value) => match value.string_token() {
+                    Some(token) => token,
+                    None => {
+                        observation.semantic_available = false;
+                        continue;
+                    }
+                },
+                Field::Ambiguous => {
+                    observation.semantic_available = false;
+                    continue;
+                }
+            };
+            if name == "content" && !token.value.is_empty() {
+                qualifying_output = true;
+            }
+            {
+                if !choice_index.is_some_and(|choice_index| {
+                    push_token(event, &mut observation.fragments, choice_index, semantic_field, token)
+                }) {
+                    observation.semantic_available = false;
+                }
+            }
+        }
+        let tool_calls = match field(delta, "tool_calls") {
+            Field::Missing => None,
+            Field::Unique(value) => match value.array() {
+                Some(calls) => Some(calls),
+                None => {
+                    observation.semantic_available = false;
+                    None
+                }
+            },
+            Field::Ambiguous => {
+                observation.semantic_available = false;
+                None
+            }
+        };
+        if let Some(tool_calls) = tool_calls {
+            for tool in tool_calls {
+                let function = match field(tool, "function") {
+                    Field::Missing => continue,
+                    Field::Unique(value) => match value.object_marker() {
+                        Some(function) => function,
+                        None => {
+                            observation.semantic_available = false;
+                            continue;
+                        }
+                    },
+                    Field::Ambiguous => {
+                        observation.semantic_available = false;
+                        continue;
+                    }
+                };
+                let tool_index = match field(tool, "index") {
+                    Field::Unique(value) => value.u32(),
+                    Field::Missing | Field::Ambiguous => None,
+                };
+                if tool_index.is_none() {
+                    observation.semantic_available = false;
+                }
+                let token = match field(function, "arguments") {
+                    Field::Missing => continue,
+                    Field::Unique(value) => match value.string_token() {
+                        Some(token) => token,
+                        None => {
+                            observation.semantic_available = false;
+                            continue;
+                        }
+                    },
+                    Field::Ambiguous => {
+                        observation.semantic_available = false;
+                        continue;
+                    }
+                };
+                if !token.value.is_empty() {
+                    qualifying_output = true;
+                }
+                if !choice_index.zip(tool_index).is_some_and(|(choice_index, tool_index)| {
+                    push_token(
+                        event,
+                        &mut observation.fragments,
+                        choice_index,
+                        LogicalField::ToolArguments {
+                            tool_call_index: tool_index,
+                        },
+                        token,
+                    )
+                }) {
+                    observation.semantic_available = false;
+                }
+            }
+        }
+        if qualifying_output {
+            observation.output_units = observation.output_units.saturating_add(1);
+        }
+    }
+    if !observation.semantic_available {
+        observation.fragments.clear();
+    }
+    observation
+}
+
+fn push_token(
+    event: &SseEventRef<'_>,
+    fragments: &mut Vec<SemanticFragment>,
+    choice_index: u32,
+    field: LogicalField,
+    token: &StringToken,
+) -> bool {
+    let Ok(raw) = event.semantic_range_to_raw(ByteRange::new(token.start, token.end)) else {
+        return false;
+    };
+    fragments.push(SemanticFragment {
+        bucket: LogicalBucketKey { choice_index, field },
+        source: SemanticSource::JsonStringTokenRanges(vec![raw]),
+    });
+    true
+}
+
+fn observe_usage(root: &Node) -> CanonicalUsageObservation {
+    let Some(usage) = last_field(root, "usage").and_then(Node::object_marker) else {
+        return CanonicalUsageObservation::default();
+    };
+    let details = last_field(usage, "prompt_tokens_details").and_then(Node::object_marker);
+    CanonicalUsageObservation {
+        prompt_tokens: last_field(usage, "prompt_tokens").and_then(Node::u64),
+        completion_tokens: last_field(usage, "completion_tokens").and_then(Node::u64),
+        cached_tokens: details
+            .and_then(|value| last_field(value, "cached_tokens"))
+            .and_then(Node::u64),
+        cache_read_input_tokens: last_field(usage, "cache_read_input_tokens").and_then(Node::u64),
+        cache_creation_input_tokens: last_field(usage, "cache_creation_input_tokens").and_then(Node::u64),
+    }
+}
+
+#[derive(Debug)]
+enum Node {
+    Object(Vec<(String, Node)>),
+    Array(Vec<Node>),
+    String(StringToken),
+    Number(String),
+    Other,
+}
+
+#[derive(Debug)]
+struct StringToken {
+    value: String,
+    start: usize,
+    end: usize,
+}
+
+impl Node {
+    fn object_marker(&self) -> Option<&Self> {
+        matches!(self, Self::Object(_)).then_some(self)
+    }
+    fn array(&self) -> Option<&[Self]> {
+        if let Self::Array(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+    fn string_token(&self) -> Option<&StringToken> {
+        if let Self::String(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+    fn u64(&self) -> Option<u64> {
+        if let Self::Number(v) = self {
+            v.parse().ok()
+        } else {
+            None
+        }
+    }
+    fn u32(&self) -> Option<u32> {
+        self.u64().and_then(|v| u32::try_from(v).ok())
+    }
+}
+
+fn fields(node: &Node) -> Option<&[(String, Node)]> {
+    if let Node::Object(fields) = node {
+        Some(fields)
+    } else {
+        None
+    }
+}
+
+enum Field<'a> {
+    Missing,
+    Unique(&'a Node),
+    Ambiguous,
+}
+
+fn field<'a>(node: &'a Node, name: &str) -> Field<'a> {
+    let Some(fields) = fields(node) else {
+        return Field::Ambiguous;
+    };
+    let mut found = fields.iter().filter(|(key, _)| key == name).map(|(_, value)| value);
+    match (found.next(), found.next()) {
+        (None, _) => Field::Missing,
+        (Some(value), None) => Field::Unique(value),
+        (Some(_), Some(_)) => Field::Ambiguous,
+    }
+}
+
+fn last_field<'a>(node: &'a Node, name: &str) -> Option<&'a Node> {
+    fields(node)?
+        .iter()
+        .rev()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value)
+}
+
+struct Parser<'a> {
+    input: &'a [u8],
+    offset: usize,
+    nodes: usize,
+}
+
+impl<'a> Parser<'a> {
+    fn new(input: &'a [u8]) -> Self {
+        Self {
+            input,
+            offset: 0,
+            nodes: 0,
+        }
+    }
+
+    fn parse(mut self) -> Result<Node, ()> {
+        let value = self.value(0)?;
+        self.ws();
+        (self.offset == self.input.len()).then_some(value).ok_or(())
+    }
+
+    fn value(&mut self, depth: usize) -> Result<Node, ()> {
+        if depth > MAX_JSON_DEPTH || self.nodes >= MAX_JSON_NODES {
+            return Err(());
+        }
+        self.nodes += 1;
+        self.ws();
+        match self.input.get(self.offset).copied() {
+            Some(b'{') => self.object(depth + 1),
+            Some(b'[') => self.array(depth + 1),
+            Some(b'"') => self.string().map(Node::String),
+            Some(b'-' | b'0'..=b'9') => self.number().map(Node::Number),
+            Some(b't') => {
+                self.literal(b"true")?;
+                Ok(Node::Other)
+            }
+            Some(b'f') => {
+                self.literal(b"false")?;
+                Ok(Node::Other)
+            }
+            Some(b'n') => {
+                self.literal(b"null")?;
+                Ok(Node::Other)
+            }
+            _ => Err(()),
+        }
+    }
+
+    fn object(&mut self, depth: usize) -> Result<Node, ()> {
+        self.offset += 1;
+        let mut values = Vec::new();
+        self.ws();
+        if self.take(b'}') {
+            return Ok(Node::Object(values));
+        }
+        loop {
+            let key = self.string()?.value;
+            self.ws();
+            if !self.take(b':') {
+                return Err(());
+            }
+            values.push((key, self.value(depth)?));
+            self.ws();
+            if self.take(b'}') {
+                break;
+            }
+            if !self.take(b',') {
+                return Err(());
+            }
+            self.ws();
+        }
+        Ok(Node::Object(values))
+    }
+
+    fn array(&mut self, depth: usize) -> Result<Node, ()> {
+        self.offset += 1;
+        let mut values = Vec::new();
+        self.ws();
+        if self.take(b']') {
+            return Ok(Node::Array(values));
+        }
+        loop {
+            values.push(self.value(depth)?);
+            self.ws();
+            if self.take(b']') {
+                break;
+            }
+            if !self.take(b',') {
+                return Err(());
+            }
+        }
+        Ok(Node::Array(values))
+    }
+
+    fn string(&mut self) -> Result<StringToken, ()> {
+        let start = self.offset;
+        if !self.take(b'"') {
+            return Err(());
+        }
+        let mut escaped = false;
+        while let Some(byte) = self.input.get(self.offset).copied() {
+            self.offset += 1;
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match byte {
+                b'\\' => escaped = true,
+                b'"' => {
+                    let end = self.offset;
+                    let value = serde_json::from_slice::<String>(&self.input[start..end]).map_err(|_| ())?;
+                    return Ok(StringToken { value, start, end });
+                }
+                0..=0x1f => return Err(()),
+                _ => {}
+            }
+        }
+        Err(())
+    }
+
+    fn number(&mut self) -> Result<String, ()> {
+        let start = self.offset;
+        while self
+            .input
+            .get(self.offset)
+            .is_some_and(|byte| matches!(byte, b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9'))
+        {
+            self.offset += 1;
+        }
+        let text = std::str::from_utf8(&self.input[start..self.offset]).map_err(|_| ())?;
+        serde_json::from_str::<serde_json::Number>(text).map_err(|_| ())?;
+        Ok(text.to_owned())
+    }
+
+    fn literal(&mut self, literal: &[u8]) -> Result<(), ()> {
+        if self.input.get(self.offset..self.offset + literal.len()) == Some(literal) {
+            self.offset += literal.len();
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    fn ws(&mut self) {
+        while self.input.get(self.offset).is_some_and(u8::is_ascii_whitespace) {
+            self.offset += 1;
+        }
+    }
+    fn take(&mut self, byte: u8) -> bool {
+        if self.input.get(self.offset) == Some(&byte) {
+            self.offset += 1;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sse::SseDecoder;
+
+    fn observe(raw: &'static [u8]) -> CanonicalEventObservation {
+        let mut decoder = SseDecoder::with_default_limit();
+        let mut result = None;
+        decoder.feed_each_bytes(Bytes::from_static(raw), |event| {
+            result = Some(observe_canonical_event(&event))
+        });
+        result.unwrap()
+    }
+
+    #[test]
+    fn one_pass_observation_reports_usage_and_all_semantic_tokens() {
+        let observed = observe(b"data: {\"choices\":[{\"index\":2,\"delta\":{\"content\":\"a\\\\u00e9\",\"reasoning_content\":\"r\",\"tool_calls\":[{\"index\":3,\"function\":{\"arguments\":\"{}\"}}]}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":9,\"prompt_tokens_details\":{\"cached_tokens\":2}}}\n\n");
+        assert!(observed.semantic_available);
+        // Preserve the established quota estimate: one unit per qualifying
+        // choice, even when that choice carries multiple semantic fields.
+        assert_eq!(observed.output_units, 1);
+        assert_eq!(observed.fragments.len(), 3);
+        assert_eq!(observed.usage.prompt_tokens, Some(7));
+        assert_eq!(observed.usage.cached_tokens, Some(2));
+    }
+
+    #[test]
+    fn token_crossing_synthetic_data_newline_is_unavailable() {
+        let observed = observe(b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"a\ndata: b\"}}]}\n\n");
+        assert!(!observed.semantic_available);
+        assert!(observed.fragments.is_empty());
+    }
+
+    #[test]
+    fn duplicate_or_ambiguous_indices_disable_annotations_but_keep_usage() {
+        let observed = observe(b"data: {\"choices\":[{\"index\":0,\"index\":1,\"delta\":{\"content\":\"x\"}}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":5}}\n\n");
+        assert!(!observed.semantic_available);
+        assert_eq!(observed.usage.prompt_tokens, Some(4));
+    }
+
+    #[test]
+    fn duplicate_or_wrong_typed_semantic_paths_are_unavailable() {
+        for raw in [
+            b"data: {\"choices\":[],\"choices\":[]}\n\n".as_slice(),
+            b"data: {\"choices\":{}}\n\n".as_slice(),
+            b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"x\",\"content\":\"y\"}}]}\n\n".as_slice(),
+            b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":7}}]}\n\n".as_slice(),
+            b"data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":{}}}]}\n\n".as_slice(),
+            b"data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"x\",\"arguments\":\"y\"}}]}}]}\n\n".as_slice(),
+        ] {
+            let observed = observe(Box::leak(raw.to_vec().into_boxed_slice()));
+            assert!(!observed.semantic_available, "raw={}", String::from_utf8_lossy(raw));
+            assert!(observed.fragments.is_empty());
+        }
+    }
+
+    #[test]
+    fn batch_exact_record_limit_then_falls_back_without_losing_raw_bytes() {
+        let mut batch = CanonicalRecordBatch::new();
+        for _ in 0..MAX_CANONICAL_BATCH_RECORDS {
+            batch.push(WindowRecord::raw(vec![Bytes::from_static(b"x")])).unwrap();
+        }
+        batch.push(WindowRecord::raw(vec![Bytes::from_static(b"y")])).unwrap();
+        assert_eq!(batch.status(), CanonicalSourceStatus::Unavailable);
+        assert_eq!(batch.raw_len(), MAX_CANONICAL_BATCH_RECORDS + 1);
+        let raw = batch.into_raw_bytes().unwrap();
+        assert_eq!(
+            &raw[..MAX_CANONICAL_BATCH_RECORDS],
+            vec![b'x'; MAX_CANONICAL_BATCH_RECORDS]
+        );
+        assert_eq!(raw.last(), Some(&b'y'));
+    }
+
+    #[test]
+    fn batch_raw_cap_is_inclusive_and_plus_one_returns_the_record() {
+        let mut batch = CanonicalRecordBatch::new();
+        batch
+            .push(WindowRecord::raw(vec![Bytes::from(vec![
+                b'x';
+                MAX_CANONICAL_BATCH_RAW_BYTES
+            ])]))
+            .unwrap();
+        let rejected = batch
+            .push(WindowRecord::raw(vec![Bytes::from_static(b"y")]))
+            .unwrap_err();
+        assert_eq!(rejected.raw_len(), 1);
+        assert_eq!(batch.raw_len(), MAX_CANONICAL_BATCH_RAW_BYTES);
+    }
+}

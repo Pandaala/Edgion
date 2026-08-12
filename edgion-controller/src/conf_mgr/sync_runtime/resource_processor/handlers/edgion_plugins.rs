@@ -224,6 +224,7 @@ impl EdgionPluginsHandler {
                 | EdgionPlugin::Dsl(_)
                 | EdgionPlugin::TraceContext(_)
                 | EdgionPlugin::ExtProc(_)
+                | EdgionPlugin::Guardrail(_)
                 | EdgionPlugin::Wasm(_) => {}
             }
         }
@@ -278,6 +279,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         cred::resolve_csrf(&mut ep, &resource_ref, ctx);
         cred::resolve_global_access_control(&mut ep, &resource_ref, ctx);
         cred::resolve_forward_auth(&mut ep, &resource_ref, ctx).await;
+        cred::resolve_guardrail(&mut ep, &resource_ref, ctx).await;
         cred::resolve_wasm(&mut ep, &resource_ref, ctx);
 
         // Clear existing EdgionConfigData override refs for this EP, then re-register from scratch.
@@ -382,11 +384,13 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         };
 
         let mut resolved_errors = Self::resolve_secret_refs(ep, ctx);
+        resolved_errors.extend(resolve_guardrail_request_secret_refs(ep, ctx));
         resolved_errors.extend(resolve_wasm_refs(ep, ctx));
         resolved_errors.extend(resolve_override_refs(ep, ctx));
         resolved_errors.extend(resolve_ip_list_refs(ep, ctx));
         resolved_errors.extend(resolve_active_profile_refs(ep, ctx));
         resolved_errors.extend(resolve_canary_active_profile_refs(ep, ctx));
+        dedup_resolved_ref_errors(&mut resolved_errors);
         let resolved_refs = if resolved_errors.is_empty() {
             condition_true(
                 condition_types::RESOLVED_REFS,
@@ -429,6 +433,46 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         update_condition(&mut status.conditions, partially_invalid);
         super::super::plugin_policy_stamp::apply_policy_condition(&mut status.conditions, &policy_hits, generation);
     }
+}
+
+/// Re-evaluate Guardrail request-template Secret refs for the full
+/// Gateway-API status classification. Parse already registered the references;
+/// this path is read-only and additionally catches a present Secret with a
+/// missing/non-UTF-8 key and a cross-namespace reference denied by policy.
+fn resolve_guardrail_request_secret_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
+    let owner = ResourceRef::new(
+        ResourceKind::EdgionPlugins,
+        ep.metadata.namespace.clone(),
+        ep.metadata.name.clone().unwrap_or_default(),
+    );
+    let mut names = ep
+        .spec
+        .request_plugins
+        .iter()
+        .flatten()
+        .filter_map(|entry| match &entry.plugin {
+            EdgionPlugin::Guardrail(config) => Some(config.request.collect_secret_ref_names()),
+            _ => None,
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    crate::conf_mgr::sync_runtime::resource_processor::credential::request_secret_errors_readonly(
+        ctx,
+        &owner,
+        ResourceKind::EdgionPlugins,
+        &names,
+    )
+}
+
+/// Preserve first-occurrence ordering while removing exact duplicate status
+/// errors. Guardrail's read-only classifier intentionally reports
+/// SecretNotFound itself, while the generic dependency scan reports the same
+/// missing object; the condition must contain it only once.
+fn dedup_resolved_ref_errors(errors: &mut Vec<ResolvedRefsError>) {
+    let mut seen = std::collections::BTreeSet::new();
+    errors.retain(|error| seen.insert((error.reason(), error.message())));
 }
 
 impl EdgionPluginsHandler {
@@ -2586,6 +2630,7 @@ mod tests {
                 | EdgionPlugin::Dsl(_)
                 | EdgionPlugin::TraceContext(_)
                 | EdgionPlugin::ExtProc(_)
+                | EdgionPlugin::Guardrail(_)
                 | EdgionPlugin::Wasm(_) => false,
             }
         }
@@ -3221,6 +3266,210 @@ mod tests {
             "no clientCertificateRef was set"
         );
         assert_eq!(ctx.secret_ref_manager().get_refs("default/extproc-ca").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn guardrail_resolver_fills_request_and_tls_secrets() {
+        use edgion_resources::resources::common::{
+            CustomField, CustomSource, ExternalHttpConnection, OutboundRequestSpec, OutboundTlsLocal, PathSpec,
+            TlsConfig, WebhookTarget,
+        };
+        use edgion_resources::resources::edgion_plugins::GuardrailConfig;
+
+        let mut secrets = HashMap::new();
+        secrets.insert(
+            "default/guard-token".to_string(),
+            build_secret("default", "guard-token", "token", "TOKEN"),
+        );
+        secrets.insert(
+            "default/guard-ca".to_string(),
+            build_secret("default", "guard-ca", "ca.crt", "CA-PEM"),
+        );
+        let (ctx, _runtime) = make_ctx_with_secrets(secrets);
+
+        let mut request = OutboundRequestSpec {
+            path: Some(PathSpec {
+                template: "/v1/decision".to_string(),
+                allow_override: false,
+            }),
+            ..Default::default()
+        };
+        request.headers.custom.push(CustomField {
+            name: "Authorization".to_string(),
+            source: CustomSource::Template("Bearer ${secretRef:default/guard-token:token}".to_string()),
+        });
+        let config = GuardrailConfig {
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    url: Some("https://guard.example".to_string()),
+                    ..Default::default()
+                },
+                tls: Some(TlsConfig {
+                    enabled: true,
+                    outbound: OutboundTlsLocal {
+                        validation: Some(edgion_resources::resources::common::OutboundTlsValidation {
+                            ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                                kind: "Secret".to_string(),
+                                name: "guard-ca".to_string(),
+                                ..Default::default()
+                            }]),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            request,
+            ..Default::default()
+        };
+
+        let mut ep = EdgionPlugins::new("guardrail-plugins", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::Guardrail(config))]);
+
+        let parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
+            EdgionPlugin::Guardrail(config) => config,
+            _ => panic!("unexpected plugin type"),
+        };
+        assert_eq!(
+            config
+                .resolved_secrets
+                .as_ref()
+                .and_then(|secrets| secrets.0.get("default/guard-token:token"))
+                .map(String::as_str),
+            Some("TOKEN")
+        );
+        assert!(config
+            .conn
+            .tls
+            .as_ref()
+            .and_then(|tls| tls.resolved_ca_certificates.as_ref())
+            .is_some_and(|certificates| !certificates.is_empty()));
+        assert_eq!(ctx.secret_ref_manager().get_refs("default/guard-token").len(), 1);
+        assert_eq!(ctx.secret_ref_manager().get_refs("default/guard-ca").len(), 1);
+    }
+
+    fn guardrail_with_template_secret(secret_ref: &str) -> EdgionPlugin {
+        use edgion_resources::resources::common::{
+            CustomField, CustomSource, ExternalHttpConnection, OutboundRequestSpec, PathSpec, WebhookTarget,
+        };
+        use edgion_resources::resources::edgion_plugins::GuardrailConfig;
+
+        let mut request = OutboundRequestSpec {
+            path: Some(PathSpec {
+                template: "/v1/decision".to_string(),
+                allow_override: false,
+            }),
+            ..Default::default()
+        };
+        request.headers.custom.push(CustomField {
+            name: "Authorization".to_string(),
+            source: CustomSource::Template(format!("Bearer ${{secretRef:{secret_ref}}}")),
+        });
+        EdgionPlugin::Guardrail(GuardrailConfig {
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    url: Some("https://guard.example".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            request,
+            ..Default::default()
+        })
+    }
+
+    #[tokio::test]
+    async fn guardrail_present_secret_missing_key_sets_decode_error_status() {
+        let secret = build_secret("default", "guard-token", "other", "value");
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::from([("default/guard-token".to_string(), secret)]));
+        let mut ep = EdgionPlugins::new("guardrail-status", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(guardrail_with_template_secret(
+            "default/guard-token:token",
+        ))]);
+
+        let mut parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        EdgionPluginsHandler.update_status(&mut parsed, &ctx, &[]);
+        let condition = parsed
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(condition.status, "False");
+        assert_eq!(condition.reason, "DecodeError");
+        assert!(condition.message.contains("token"), "message: {}", condition.message);
+    }
+
+    #[tokio::test]
+    async fn guardrail_cross_namespace_denial_sets_ref_not_permitted_status() {
+        let secret = build_secret("policy", "guard-token", "token", "value");
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::from([("policy/guard-token".to_string(), secret)]));
+        let mut ep = EdgionPlugins::new("guardrail-status", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("application".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(guardrail_with_template_secret(
+            "policy/guard-token:token",
+        ))]);
+
+        let mut parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        EdgionPluginsHandler.update_status(&mut parsed, &ctx, &[]);
+        let condition = parsed
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(condition.status, "False");
+        assert_eq!(condition.reason, "RefNotPermitted");
+        assert!(
+            condition.message.contains("policy/guard-token"),
+            "message: {}",
+            condition.message
+        );
+    }
+
+    #[tokio::test]
+    async fn guardrail_missing_secret_is_reported_once() {
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+        let mut ep = EdgionPlugins::new("guardrail-status", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(guardrail_with_template_secret(
+            "default/guard-token:token",
+        ))]);
+
+        let mut parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        EdgionPluginsHandler.update_status(&mut parsed, &ctx, &[]);
+        let condition = parsed
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(condition.status, "False");
+        assert_eq!(condition.reason, "SecretNotFound");
+        assert_eq!(condition.message.matches("default/guard-token").count(), 1);
     }
 
     // ── Phase 1 SAN guard tests ───────────────────────────────────────────────

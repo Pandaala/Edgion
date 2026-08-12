@@ -21,6 +21,45 @@ pub const MAX_OVERLAP_BYTES: usize = 256 * 1024;
 pub const MAX_REPLACEMENT_BYTES: usize = 1024 * 1024;
 pub const MAX_COMBINED_RESIDENT_BYTES: usize = 2 * 1024 * 1024;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RawWindowPolicy {
+    pub per_bucket_overlap_bytes: usize,
+    pub global_overlap_bytes: usize,
+    pub max_replacement_bytes: usize,
+}
+
+impl Default for RawWindowPolicy {
+    fn default() -> Self {
+        Self {
+            per_bucket_overlap_bytes: MAX_OVERLAP_BYTES,
+            global_overlap_bytes: MAX_OVERLAP_BYTES,
+            max_replacement_bytes: MAX_REPLACEMENT_BYTES,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowStats {
+    pub raw_bytes: usize,
+    pub raw_ranges: usize,
+    pub events: usize,
+    pub lines: usize,
+    pub current_semantic_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticWindow {
+    pub key: LogicalBucketKey,
+    pub context: String,
+    pub current: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticReplacement {
+    pub key: LogicalBucketKey,
+    pub current: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LogicalField {
     Content,
@@ -69,7 +108,7 @@ pub struct SemanticFragment {
 
 /// An owned decoder record. Counts are derived by the constructors and cannot
 /// be supplied by adapters.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WindowRecord {
     slices: Vec<Bytes>,
     line_count: usize,
@@ -100,6 +139,30 @@ impl WindowRecord {
     pub fn semantic_unavailable(mut self) -> Self {
         self.semantic_available = false;
         self
+    }
+
+    pub(crate) fn raw_len(&self) -> usize {
+        self.slices.iter().map(Bytes::len).sum()
+    }
+
+    pub(crate) fn into_raw_slices(self) -> Vec<Bytes> {
+        self.slices
+    }
+
+    pub(crate) fn raw_slices_cloned(&self) -> Vec<Bytes> {
+        self.slices.clone()
+    }
+
+    pub(crate) fn metadata_bytes(&self) -> usize {
+        let mut total = self
+            .slices
+            .capacity()
+            .saturating_mul(size_of::<Bytes>())
+            .saturating_add(self.fragments.capacity().saturating_mul(size_of::<SemanticFragment>()));
+        for fragment in &self.fragments {
+            total = total.saturating_add(fragment.source.range_capacity().saturating_mul(size_of::<ByteRange>()));
+        }
+        total
     }
 
     /// Canonical synchronous decoder-to-window adapter.
@@ -151,6 +214,8 @@ pub enum WindowError {
     SemanticUnavailable,
     InvalidUtf8,
     InvalidJsonString,
+    InvalidPolicy,
+    InvalidReplacement,
     NotCollecting,
     NotResolved,
     Finished,
@@ -189,6 +254,7 @@ struct Limits {
     buckets: usize,
     fragments: usize,
     snapshot: usize,
+    #[allow(dead_code)]
     overlap: usize,
     replacement: usize,
     combined: usize,
@@ -243,6 +309,7 @@ pub struct RawWindow {
     semantic_degraded: bool,
     semantic_failure: Option<WindowError>,
     state: State,
+    policy: RawWindowPolicy,
 }
 
 impl Default for RawWindow {
@@ -253,10 +320,30 @@ impl Default for RawWindow {
 
 impl RawWindow {
     pub fn new() -> Self {
-        Self::with_limits(Limits::default())
+        Self::with_policy(RawWindowPolicy::default()).expect("default RawWindow policy is valid")
     }
 
+    pub fn with_policy(policy: RawWindowPolicy) -> Result<Self, WindowError> {
+        if policy.per_bucket_overlap_bytes > MAX_OVERLAP_BYTES
+            || policy.global_overlap_bytes > MAX_OVERLAP_BYTES
+            || policy.max_replacement_bytes > MAX_REPLACEMENT_BYTES
+        {
+            return Err(WindowError::InvalidPolicy);
+        }
+        Ok(Self::with_limits_and_policy(Limits::default(), policy))
+    }
+
+    #[allow(dead_code)]
     fn with_limits(limits: Limits) -> Self {
+        let policy = RawWindowPolicy {
+            per_bucket_overlap_bytes: limits.overlap,
+            global_overlap_bytes: limits.overlap,
+            max_replacement_bytes: limits.replacement,
+        };
+        Self::with_limits_and_policy(limits, policy)
+    }
+
+    fn with_limits_and_policy(limits: Limits, policy: RawWindowPolicy) -> Self {
         Self {
             limits,
             raw: SliceChain::default(),
@@ -267,12 +354,111 @@ impl RawWindow {
             semantic_degraded: false,
             semantic_failure: None,
             state: State::Collecting,
+            policy,
         }
+    }
+
+    pub fn stats(&mut self) -> Result<WindowStats, WindowError> {
+        self.require_collecting()?;
+        let current_semantic_bytes = self
+            .materialize_current_values()
+            .inspect_err(|error| {
+                self.semantic_degraded = true;
+                self.semantic_failure = Some(*error);
+            })?
+            .iter()
+            .try_fold(0usize, |total, (_, value)| total.checked_add(value.len()))
+            .ok_or(WindowError::Limit(WindowLimit::SnapshotBytes))?;
+        Ok(WindowStats {
+            raw_bytes: self.raw.len(),
+            raw_ranges: self.raw_ranges,
+            events: self.events,
+            lines: self.lines,
+            current_semantic_bytes,
+        })
+    }
+
+    pub fn snapshot_all(&mut self) -> Result<Vec<SemanticWindow>, WindowError> {
+        self.require_collecting()?;
+        if self.semantic_degraded {
+            return Err(WindowError::SemanticUnavailable);
+        }
+        let current = self.materialize_current_values().inspect_err(|error| {
+            self.semantic_degraded = true;
+            self.semantic_failure = Some(*error);
+        })?;
+        Ok(current
+            .into_iter()
+            .map(|(key, current)| {
+                let context = self
+                    .buckets
+                    .binary_search_by_key(&key, |bucket| bucket.key)
+                    .ok()
+                    .map(|index| self.buckets[index].overlap.clone())
+                    .unwrap_or_default();
+                SemanticWindow { key, context, current }
+            })
+            .collect())
+    }
+
+    pub fn resolve_semantic_replace(
+        &mut self,
+        replacements: Vec<SemanticReplacement>,
+    ) -> Result<WindowOutput, WindowError> {
+        self.apply_semantic_replace(replacements, false)
+    }
+
+    pub fn preview_semantic_replace(&self, replacements: &[SemanticReplacement]) -> Result<usize, WindowError> {
+        self.require_collecting()?;
+        if let Some(error) = self.semantic_failure {
+            return Err(error);
+        }
+        Ok(self.prepare_semantic_replace(replacements.to_vec())?.output.len())
+    }
+
+    pub fn finish_semantic_replace(
+        &mut self,
+        replacements: Vec<SemanticReplacement>,
+    ) -> Result<WindowOutput, WindowError> {
+        self.apply_semantic_replace(replacements, true)
+    }
+
+    fn apply_semantic_replace(
+        &mut self,
+        replacements: Vec<SemanticReplacement>,
+        finish: bool,
+    ) -> Result<WindowOutput, WindowError> {
+        self.require_collecting()?;
+        if let Some(error) = self.semantic_failure {
+            return Err(error);
+        }
+        let prepared = self.prepare_semantic_replace(replacements)?;
+        self.install_overlaps(prepared.overlaps);
+        for bucket in &mut self.buckets {
+            bucket.fragments.clear();
+        }
+        let _ = self.raw.take_raw_slices();
+        self.clear_generation();
+        if finish {
+            self.buckets.clear();
+            self.state = State::Finished;
+        } else {
+            self.state = State::Resolved;
+        }
+        Ok(WindowOutput::Replace(prepared.output))
     }
 
     /// Retain a record atomically. A failed append leaves the previous raw
     /// generation byte-identically releasable.
-    pub fn retain(&mut self, mut record: WindowRecord) -> Result<(), WindowError> {
+    pub fn retain(&mut self, record: WindowRecord) -> Result<(), WindowError> {
+        self.retain_with_transient_metadata(record, 0)
+    }
+
+    fn retain_with_transient_metadata(
+        &mut self,
+        mut record: WindowRecord,
+        transient_metadata: usize,
+    ) -> Result<(), WindowError> {
         self.require_collecting()?;
         let record_len =
             checked_sum(record.slices.iter().map(Bytes::len)).ok_or(WindowError::Limit(WindowLimit::RawBytes))?;
@@ -317,7 +503,13 @@ impl RawWindow {
             WindowLimit::ResidentBytes,
         )?;
         let metadata = metadata_charge(raw_plan.metadata_capacity(), &next_buckets)?;
-        check_limit(metadata, self.limits.metadata, WindowLimit::MetadataBytes)?;
+        check_limit(
+            metadata
+                .checked_add(transient_metadata)
+                .ok_or(WindowError::Limit(WindowLimit::MetadataBytes))?,
+            self.limits.metadata,
+            WindowLimit::MetadataBytes,
+        )?;
 
         // The live generation, normalized incoming slices, prospective handle
         // vector/arena, and cloned bucket metadata coexist until commit.
@@ -330,6 +522,7 @@ impl RawWindow {
                 .and_then(|value| value.checked_add(raw_plan.scratch_metadata()))
                 .and_then(|value| value.checked_add(overlap_capacity(&next_buckets).ok()?))
                 .and_then(|value| value.checked_add(metadata))
+                .and_then(|value| value.checked_add(transient_metadata))
                 .ok_or(WindowError::Limit(WindowLimit::CombinedResidentBytes))?,
             self.limits.combined,
             WindowLimit::CombinedResidentBytes,
@@ -347,6 +540,19 @@ impl RawWindow {
         Ok(())
     }
 
+    pub fn try_retain(&mut self, record: WindowRecord) -> Result<(), (WindowError, WindowRecord)> {
+        // The original must remain owned by this function so an atomic failure
+        // can return it byte-identically. Bytes payloads are ref-counted and
+        // therefore not duplicated by the clone, but the original slice,
+        // fragment, and range Vec allocations coexist with the prospective
+        // RawWindow plan. Charge that complete metadata explicitly.
+        let transient_metadata = record.metadata_bytes();
+        match self.retain_with_transient_metadata(record.clone(), transient_metadata) {
+            Ok(()) => Ok(()),
+            Err(error) => Err((error, record)),
+        }
+    }
+
     pub fn snapshot(&mut self, bucket: LogicalBucketKey) -> Result<WindowView<'_>, WindowError> {
         self.require_collecting()?;
         if self.semantic_degraded {
@@ -362,6 +568,16 @@ impl RawWindow {
     /// raw-only release instead of trapping its already-retained bytes.
     pub fn resolve(&mut self, decision: WindowDecision) -> Result<WindowOutput, WindowError> {
         self.require_collecting()?;
+        if matches!(&decision, WindowDecision::Discard) {
+            let output = self.apply(PreparedDecision::Discard);
+            self.clear_generation();
+            for bucket in &mut self.buckets {
+                bucket.fragments.clear();
+                bucket.overlap.clear();
+            }
+            self.state = State::Resolved;
+            return Ok(output);
+        }
         if let Some(error) = self.semantic_failure {
             if !matches!(&decision, WindowDecision::Release) {
                 return Err(error);
@@ -401,6 +617,13 @@ impl RawWindow {
 
     pub fn finish(&mut self, decision: WindowDecision) -> Result<WindowOutput, WindowError> {
         self.require_collecting()?;
+        if matches!(&decision, WindowDecision::Discard) {
+            let output = self.apply(PreparedDecision::Discard);
+            self.clear_generation();
+            self.buckets.clear();
+            self.state = State::Finished;
+            return Ok(output);
+        }
         if let Some(error) = self.semantic_failure {
             if !matches!(&decision, WindowDecision::Release) {
                 return Err(error);
@@ -476,8 +699,18 @@ impl RawWindow {
             self.limits.combined,
             WindowLimit::CombinedResidentBytes,
         )?;
-        let needs: Vec<_> = values.iter().map(|(_, value)| value.len()).collect();
-        let allocations = max_min_allocations(&needs, self.limits.overlap);
+        self.prepare_overlaps_from_values(values)
+    }
+
+    fn prepare_overlaps_from_values(
+        &self,
+        values: Vec<(LogicalBucketKey, String)>,
+    ) -> Result<Vec<(LogicalBucketKey, String)>, WindowError> {
+        let needs: Vec<_> = values
+            .iter()
+            .map(|(_, value)| value.len().min(self.policy.per_bucket_overlap_bytes))
+            .collect();
+        let allocations = max_min_allocations(&needs, self.policy.global_overlap_bytes);
         let mut result = Vec::with_capacity(values.len());
         let result_metadata = result
             .capacity()
@@ -492,7 +725,11 @@ impl RawWindow {
             overlap_resident = overlap_resident
                 .checked_add(overlap.capacity())
                 .ok_or(WindowError::Limit(WindowLimit::OverlapBytes))?;
-            check_limit(overlap_resident, self.limits.overlap, WindowLimit::OverlapBytes)?;
+            check_limit(
+                overlap_resident,
+                self.policy.global_overlap_bytes,
+                WindowLimit::OverlapBytes,
+            )?;
             result.push((key, overlap));
         }
         check_limit(
@@ -506,6 +743,26 @@ impl RawWindow {
             WindowLimit::CombinedResidentBytes,
         )?;
         Ok(result)
+    }
+
+    fn materialize_current_values(&self) -> Result<Vec<(LogicalBucketKey, String)>, WindowError> {
+        let mut values = Vec::with_capacity(self.buckets.len());
+        let mut total = values
+            .capacity()
+            .saturating_mul(size_of::<(LogicalBucketKey, String)>());
+        for (index, bucket) in self.buckets.iter().enumerate() {
+            let value = self.materialize_bucket_current(index)?;
+            total = total
+                .checked_add(value.capacity())
+                .ok_or(WindowError::Limit(WindowLimit::SnapshotBytes))?;
+            check_limit(total, self.limits.snapshot, WindowLimit::SnapshotBytes)?;
+            values.push((bucket.key, value));
+        }
+        Ok(values)
+    }
+
+    fn materialize_bucket_current(&self, index: usize) -> Result<String, WindowError> {
+        self.materialize_bucket_parts(index, false)
     }
 
     fn install_overlaps(&mut self, overlaps: Vec<(LogicalBucketKey, String)>) {
@@ -522,21 +779,25 @@ impl RawWindow {
     }
 
     fn materialize_bucket(&self, index: usize) -> Result<String, WindowError> {
+        self.materialize_bucket_parts(index, true)
+    }
+
+    fn materialize_bucket_parts(&self, index: usize, include_overlap: bool) -> Result<String, WindowError> {
         let bucket = &self.buckets[index];
-        let encoded_len = bucket
-            .fragments
-            .iter()
-            .try_fold(bucket.overlap.len(), |total, fragment| {
-                fragment.source.ranges().iter().try_fold(total, |total, range| {
-                    total
-                        .checked_add(range.len())
-                        .ok_or(WindowError::Limit(WindowLimit::SnapshotBytes))
-                })
-            })?;
+        let prefix_len = if include_overlap { bucket.overlap.len() } else { 0 };
+        let encoded_len = bucket.fragments.iter().try_fold(prefix_len, |total, fragment| {
+            fragment.source.ranges().iter().try_fold(total, |total, range| {
+                total
+                    .checked_add(range.len())
+                    .ok_or(WindowError::Limit(WindowLimit::SnapshotBytes))
+            })
+        })?;
         check_limit(encoded_len, self.limits.snapshot, WindowLimit::SnapshotBytes)?;
         let mut out = String::with_capacity(encoded_len);
         check_limit(out.capacity(), self.limits.snapshot, WindowLimit::SnapshotBytes)?;
-        out.push_str(&bucket.overlap);
+        if include_overlap {
+            out.push_str(&bucket.overlap);
+        }
         for fragment in &bucket.fragments {
             let length = checked_sum(fragment.source.ranges().iter().map(|range| range.len()))
                 .ok_or(WindowError::Limit(WindowLimit::SnapshotBytes))?;
@@ -571,6 +832,105 @@ impl RawWindow {
             )?;
         }
         Ok(out)
+    }
+
+    fn prepare_semantic_replace(
+        &self,
+        mut replacements: Vec<SemanticReplacement>,
+    ) -> Result<PreparedSemanticReplace, WindowError> {
+        replacements.sort_by_key(|entry| entry.key);
+        if replacements.len() != self.buckets.len()
+            || replacements.windows(2).any(|pair| pair[0].key == pair[1].key)
+            || replacements
+                .iter()
+                .zip(&self.buckets)
+                .any(|(replacement, bucket)| replacement.key != bucket.key)
+        {
+            return Err(WindowError::InvalidReplacement);
+        }
+        let replacement_text_bytes = replacements
+            .iter()
+            .try_fold(0usize, |total, replacement| {
+                total.checked_add(replacement.current.len())
+            })
+            .ok_or(WindowError::Limit(WindowLimit::ReplacementBytes))?;
+        check_limit(
+            replacement_text_bytes,
+            self.policy.max_replacement_bytes,
+            WindowLimit::ReplacementBytes,
+        )?;
+
+        let mut edits = Vec::new();
+        for (bucket, replacement) in self.buckets.iter().zip(&replacements) {
+            for (index, fragment) in bucket.fragments.iter().enumerate() {
+                let SemanticSource::JsonStringTokenRanges(ranges) = &fragment.source else {
+                    return Err(WindowError::InvalidReplacement);
+                };
+                if ranges.len() != 1 {
+                    return Err(WindowError::InvalidReplacement);
+                }
+                let encoded = if index == 0 {
+                    serde_json::to_vec(&replacement.current).map_err(|_| WindowError::InvalidReplacement)?
+                } else {
+                    b"\"\"".to_vec()
+                };
+                edits.push((ranges[0], encoded));
+            }
+        }
+        edits.sort_by_key(|(range, _)| range.start);
+        if edits.windows(2).any(|pair| pair[0].0.end > pair[1].0.start) {
+            return Err(WindowError::InvalidRange);
+        }
+        let output_len = edits
+            .iter()
+            .try_fold(self.raw.len(), |len, (range, encoded)| {
+                len.checked_sub(range.len())?.checked_add(encoded.len())
+            })
+            .ok_or(WindowError::Limit(WindowLimit::ReplacementBytes))?;
+        check_limit(output_len, self.limits.replacement, WindowLimit::ReplacementBytes)?;
+        let mut output = BytesMut::with_capacity(output_len);
+        check_limit(
+            output.capacity(),
+            self.limits.replacement,
+            WindowLimit::ReplacementBytes,
+        )?;
+        let mut cursor = 0;
+        for (range, encoded) in edits {
+            self.raw
+                .for_each_range(ByteRange::new(cursor, range.start), |part| {
+                    output.extend_from_slice(part)
+                })
+                .ok_or(WindowError::InvalidRange)?;
+            output.extend_from_slice(&encoded);
+            cursor = range.end;
+        }
+        self.raw
+            .for_each_range(ByteRange::new(cursor, self.raw.len()), |part| {
+                output.extend_from_slice(part)
+            })
+            .ok_or(WindowError::InvalidRange)?;
+        let overlaps = self.prepare_overlaps_from_values(
+            replacements
+                .into_iter()
+                .map(|entry| (entry.key, entry.current))
+                .collect(),
+        )?;
+        let overlap_resident = checked_sum(overlaps.iter().map(|(_, value)| value.capacity()))
+            .ok_or(WindowError::Limit(WindowLimit::OverlapBytes))?;
+        check_limit(
+            self.raw
+                .resident_capacity()
+                .checked_add(output.capacity())
+                .and_then(|value| value.checked_add(overlap_capacity(&self.buckets).ok()?))
+                .and_then(|value| value.checked_add(overlap_resident))
+                .ok_or(WindowError::Limit(WindowLimit::CombinedResidentBytes))?,
+            self.limits.combined,
+            WindowLimit::CombinedResidentBytes,
+        )?;
+        Ok(PreparedSemanticReplace {
+            output: output.freeze(),
+            overlaps,
+        })
     }
 
     fn apply(&mut self, decision: PreparedDecision) -> WindowOutput {
@@ -642,6 +1002,11 @@ enum PreparedDecision {
     Release(Vec<Bytes>),
     Replace(Bytes),
     Discard,
+}
+
+struct PreparedSemanticReplace {
+    output: Bytes,
+    overlaps: Vec<(LogicalBucketKey, String)>,
 }
 
 fn validate_and_translate(
@@ -910,8 +1275,7 @@ mod tests {
                 window.resolve(WindowDecision::Replace(Bytes::from_static(b"replacement"))),
                 Err(expected)
             );
-            assert_eq!(window.resolve(WindowDecision::Discard), Err(expected));
-            assert_eq!(released(window.resolve(WindowDecision::Release).unwrap()), invalid);
+            assert_eq!(window.resolve(WindowDecision::Discard).unwrap(), WindowOutput::Discard);
             window.start_next().unwrap();
             window
                 .retain(WindowRecord::raw(vec![Bytes::from_static(b"next")]))
@@ -921,7 +1285,7 @@ mod tests {
     }
 
     #[test]
-    fn overlap_and_combined_prepare_errors_require_explicit_raw_release() {
+    fn discard_never_materializes_semantics_or_prepares_overlap() {
         let bucket = key(0, LogicalField::Content);
         let invalid = Bytes::from_static(b"\xff");
         let mut overlap = RawWindow::new();
@@ -931,12 +1295,7 @@ mod tests {
                     .with_fragments(vec![fragment(bucket, vec![ByteRange::new(0, 1)])]),
             )
             .unwrap();
-        assert_eq!(overlap.resolve(WindowDecision::Discard), Err(WindowError::InvalidUtf8));
-        assert_eq!(
-            overlap.resolve(WindowDecision::Replace(Bytes::from_static(b"replacement"))),
-            Err(WindowError::InvalidUtf8)
-        );
-        assert_eq!(released(overlap.resolve(WindowDecision::Release).unwrap()), invalid);
+        assert_eq!(overlap.resolve(WindowDecision::Discard).unwrap(), WindowOutput::Discard);
         overlap.start_next().unwrap();
 
         let raw = Bytes::from_static(b"value");
@@ -950,13 +1309,9 @@ mod tests {
             Err(WindowError::Limit(WindowLimit::CombinedResidentBytes))
         );
         assert_eq!(
-            combined.resolve(WindowDecision::Discard),
-            Err(WindowError::Limit(WindowLimit::CombinedResidentBytes))
+            combined.resolve(WindowDecision::Discard).unwrap(),
+            WindowOutput::Discard
         );
-        // Release itself owns a bounded output handle, so restore that small
-        // allowance without altering the retained generation.
-        combined.limits.combined += size_of::<Bytes>();
-        assert_eq!(released(combined.resolve(WindowDecision::Release).unwrap()), raw);
         combined.start_next().unwrap();
     }
 
@@ -1212,13 +1567,253 @@ mod tests {
         window
             .retain(event(Bytes::from_static(b"123456"), b, vec![ByteRange::new(0, 6)]))
             .unwrap();
-        window.resolve(WindowDecision::Discard).unwrap();
+        window.resolve(WindowDecision::Release).unwrap();
         window.start_next().unwrap();
         let av = window.snapshot(a).unwrap().materialize().unwrap();
         let bv = window.snapshot(b).unwrap().materialize().unwrap();
         assert_eq!(av, "éé");
         assert_eq!(bv, "456");
         assert!(av.len() + bv.len() <= 7);
+    }
+
+    #[test]
+    fn configurable_overlap_applies_per_bucket_then_global_fairness() {
+        let a = key(0, LogicalField::Content);
+        let b = key(1, LogicalField::Content);
+        let mut window = RawWindow::with_policy(RawWindowPolicy {
+            per_bucket_overlap_bytes: 3,
+            global_overlap_bytes: 4,
+            max_replacement_bytes: MAX_REPLACEMENT_BYTES,
+        })
+        .unwrap();
+        window
+            .retain(event(Bytes::from_static(b"abcdef"), a, vec![ByteRange::new(0, 6)]))
+            .unwrap();
+        window
+            .retain(event(Bytes::from_static(b"123456"), b, vec![ByteRange::new(0, 6)]))
+            .unwrap();
+        window.resolve(WindowDecision::Release).unwrap();
+        window.start_next().unwrap();
+        let views = window.snapshot_all().unwrap();
+        assert_eq!(views[0].context, "ef");
+        assert_eq!(views[1].context, "56");
+    }
+
+    #[test]
+    fn semantic_replacement_preserves_non_semantic_bytes_and_is_atomic() {
+        let key = key(0, LogicalField::Content);
+        let raw = Bytes::from_static(
+            br#": keep
+data: {"choices":[{"index":0,"delta":{"content":"old","metadata":"same"}}]}
+
+"#,
+        );
+        let token_start = raw.windows(5).position(|part| part == b"\"old\"").unwrap();
+        let mut window = RawWindow::new();
+        window
+            .retain(
+                WindowRecord::raw(vec![raw.clone()])
+                    .complete()
+                    .with_fragments(vec![SemanticFragment {
+                        bucket: key,
+                        source: SemanticSource::JsonStringTokenRanges(vec![ByteRange::new(
+                            token_start,
+                            token_start + 5,
+                        )]),
+                    }]),
+            )
+            .unwrap();
+        assert_eq!(window.stats().unwrap().current_semantic_bytes, 3);
+        assert_eq!(window.snapshot_all().unwrap()[0].current, "old");
+        assert_eq!(
+            window.resolve_semantic_replace(Vec::new()),
+            Err(WindowError::InvalidReplacement)
+        );
+        let output = window
+            .resolve_semantic_replace(vec![SemanticReplacement {
+                key,
+                current: "new\\\"value".into(),
+            }])
+            .unwrap();
+        let WindowOutput::Replace(output) = output else {
+            panic!("expected replacement")
+        };
+        let mut expected = raw[..token_start].to_vec();
+        expected.extend_from_slice(br#""new\\\"value""#);
+        expected.extend_from_slice(&raw[token_start + 5..]);
+        assert_eq!(output.as_ref(), expected);
+        window.start_next().unwrap();
+        assert_eq!(window.snapshot_all().unwrap()[0].context, "new\\\"value");
+    }
+
+    #[test]
+    fn failed_try_retain_returns_the_exact_record_for_fresh_generation_retry() {
+        let mut limits = Limits::default();
+        limits.raw = 1;
+        limits.resident = 1;
+        let mut window = RawWindow::with_limits(limits);
+        window
+            .retain(WindowRecord::raw(vec![Bytes::from_static(b"a")]))
+            .unwrap();
+        let (error, record) = window
+            .try_retain(WindowRecord::raw(vec![Bytes::from_static(b"b")]))
+            .unwrap_err();
+        assert_eq!(error, WindowError::Limit(WindowLimit::RawBytes));
+        assert_eq!(record.raw_len(), 1);
+        assert_eq!(released(window.resolve(WindowDecision::Release).unwrap()), b"a");
+    }
+
+    #[test]
+    fn try_retain_charges_original_and_prospective_metadata_exactly() {
+        let mut slices = Vec::with_capacity(3);
+        slices.push(Bytes::from_static(b"x"));
+        let record = WindowRecord::raw(slices);
+        let transient = record.metadata_bytes();
+        let probe = SliceChain::default()
+            .plan_append(record.slices.clone(), MAX_RAW_BYTES, MAX_RESIDENT_BYTES)
+            .unwrap();
+        let prospective = metadata_charge(probe.metadata_capacity(), &Vec::new()).unwrap();
+        let exact = transient.checked_add(prospective).unwrap();
+
+        let mut exact_limits = Limits::default();
+        exact_limits.metadata = exact;
+        exact_limits.combined = usize::MAX;
+        let mut exact_window = RawWindow::with_limits(exact_limits);
+        exact_window.try_retain(record.clone()).unwrap();
+        assert_eq!(released(exact_window.resolve(WindowDecision::Release).unwrap()), b"x");
+
+        let mut plus_one_limits = Limits::default();
+        plus_one_limits.metadata = exact - 1;
+        plus_one_limits.combined = usize::MAX;
+        let mut plus_one_window = RawWindow::with_limits(plus_one_limits);
+        let original_vec_ptr = record.slices.as_ptr();
+        let original_bytes_ptr = record.slices[0].as_ptr();
+        let original_capacity = record.slices.capacity();
+        let (error, returned) = plus_one_window.try_retain(record).unwrap_err();
+        assert_eq!(error, WindowError::Limit(WindowLimit::MetadataBytes));
+        assert_eq!(returned.slices.as_ptr(), original_vec_ptr);
+        assert_eq!(returned.slices[0].as_ptr(), original_bytes_ptr);
+        assert_eq!(returned.slices.capacity(), original_capacity);
+        assert_eq!(returned.slices[0], Bytes::from_static(b"x"));
+        assert_eq!(plus_one_window.accounting().0, 0);
+    }
+
+    #[test]
+    fn try_retain_many_handles_fails_bounded_and_returns_original_handles() {
+        let handle_count = MAX_SLICE_HANDLES + 1;
+        let slices = vec![Bytes::from_static(b"x"); handle_count];
+        let record = WindowRecord::raw(slices);
+        let original_vec_ptr = record.slices.as_ptr();
+        let original_handle_ptrs: Vec<_> = record.slices.iter().map(|bytes| bytes.as_ptr()).collect();
+        let original_capacity = record.slices.capacity();
+
+        let mut limits = Limits::default();
+        limits.metadata = record.metadata_bytes().saturating_sub(1);
+        limits.combined = usize::MAX;
+        let mut window = RawWindow::with_limits(limits);
+        let (error, returned) = window.try_retain(record).unwrap_err();
+        assert_eq!(error, WindowError::Limit(WindowLimit::MetadataBytes));
+        assert_eq!(returned.slices.as_ptr(), original_vec_ptr);
+        assert_eq!(returned.slices.capacity(), original_capacity);
+        assert_eq!(returned.slices.len(), handle_count);
+        assert!(returned
+            .slices
+            .iter()
+            .zip(original_handle_ptrs)
+            .all(|(bytes, pointer)| bytes.as_ptr() == pointer));
+        assert_eq!(released(window.resolve(WindowDecision::Release).unwrap()), b"");
+    }
+
+    #[test]
+    fn replacement_preview_is_non_mutating_and_finish_is_terminal() {
+        let key = key(0, LogicalField::Content);
+        let raw = Bytes::from_static(
+            br#"data: {"choices":[{"index":0,"delta":{"content":"x"}}]}
+
+"#,
+        );
+        let start = raw.windows(3).position(|part| part == b"\"x\"").unwrap();
+        let mut window = RawWindow::new();
+        window
+            .retain(WindowRecord::raw(vec![raw]).with_fragments(vec![SemanticFragment {
+                bucket: key,
+                source: SemanticSource::JsonStringTokenRanges(vec![ByteRange::new(start, start + 3)]),
+            }]))
+            .unwrap();
+        let replacement = vec![SemanticReplacement {
+            key,
+            current: "exact".into(),
+        }];
+        let preview = window.preview_semantic_replace(&replacement).unwrap();
+        assert_eq!(window.snapshot_all().unwrap()[0].current, "x");
+        let WindowOutput::Replace(output) = window.finish_semantic_replace(replacement).unwrap() else {
+            panic!("expected replacement");
+        };
+        assert_eq!(preview, output.len());
+        assert_eq!(window.start_next(), Err(WindowError::Finished));
+    }
+
+    #[test]
+    fn zero_text_limit_allows_empty_replacement_without_limiting_encoded_output() {
+        let key = key(0, LogicalField::Content);
+        let raw = Bytes::from_static(
+            br#"data: {"choices":[{"index":0,"delta":{"content":"x"}}]}
+
+"#,
+        );
+        let start = raw.windows(3).position(|part| part == b"\"x\"").unwrap();
+        let mut window = RawWindow::with_policy(RawWindowPolicy {
+            per_bucket_overlap_bytes: 0,
+            global_overlap_bytes: 0,
+            max_replacement_bytes: 0,
+        })
+        .unwrap();
+        window
+            .retain(
+                WindowRecord::raw(vec![raw.clone()]).with_fragments(vec![SemanticFragment {
+                    bucket: key,
+                    source: SemanticSource::JsonStringTokenRanges(vec![ByteRange::new(start, start + 3)]),
+                }]),
+            )
+            .unwrap();
+        let WindowOutput::Replace(output) = window
+            .resolve_semantic_replace(vec![SemanticReplacement {
+                key,
+                current: String::new(),
+            }])
+            .unwrap()
+        else {
+            panic!("expected replacement")
+        };
+        assert_eq!(output.len(), raw.len().saturating_sub(1));
+    }
+
+    #[test]
+    fn semantic_rewrite_streams_raw_gaps_across_many_slices() {
+        let key = key(0, LogicalField::Content);
+        let prefix = Bytes::from(vec![b'a'; 300_000]);
+        let token = Bytes::from_static(b"\"x\"");
+        let suffix = Bytes::from(vec![b'b'; 300_000]);
+        let mut window = RawWindow::new();
+        window
+            .retain(
+                WindowRecord::raw(vec![prefix, token, suffix]).with_fragments(vec![SemanticFragment {
+                    bucket: key,
+                    source: SemanticSource::JsonStringTokenRanges(vec![ByteRange::new(300_000, 300_003)]),
+                }]),
+            )
+            .unwrap();
+        let WindowOutput::Replace(output) = window
+            .resolve_semantic_replace(vec![SemanticReplacement {
+                key,
+                current: "z".into(),
+            }])
+            .unwrap()
+        else {
+            panic!("expected replacement")
+        };
+        assert_eq!(output.len(), 600_003);
+        assert_eq!(&output[299_999..300_004], b"a\"z\"b");
     }
 
     #[test]

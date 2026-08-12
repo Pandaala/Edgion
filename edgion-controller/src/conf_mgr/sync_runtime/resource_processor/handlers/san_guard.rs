@@ -48,6 +48,9 @@ pub const SAN_ENFORCED_LDAP: bool = true;
 /// Phase 2 will flip this to `true` once the gRPC TLS verifier is wired.
 pub const SAN_ENFORCED_EXT_PROC: bool = false;
 
+/// Guardrail uses the managed HTTP client path and its OutboundSanVerifier.
+pub const SAN_ENFORCED_GUARDRAIL: bool = true;
+
 /// Phase 1: SAN pinning is NOT enforced for LinkSys providers.
 /// Phase 2 will flip this (or split per-provider) when verifiers land.
 pub const SAN_ENFORCED_LINK_SYS: bool = false;
@@ -124,7 +127,7 @@ fn check_validation_block(
 // Per-resource-type check functions
 // ============================================================================
 
-/// Scan all plugin stages in `ep` for OIDC / LdapAuth / ExtProc entries that
+/// Scan all plugin stages in `ep` for OIDC / LdapAuth / ExtProc / Guardrail entries that
 /// declare SAN pinning intent while the corresponding enforcement gate is off.
 ///
 /// Returns one error string per offending plugin entry.
@@ -158,6 +161,17 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
                                 config.grpc_service.tls.outbound.validation.as_ref(),
                                 "ExtProc",
                                 SAN_ENFORCED_EXT_PROC,
+                            ));
+                        }
+                        EdgionPlugin::Guardrail(config) => {
+                            errors.extend(check_validation_block(
+                                config
+                                    .conn
+                                    .tls
+                                    .as_ref()
+                                    .and_then(|tls| tls.outbound.validation.as_ref()),
+                                "Guardrail",
+                                SAN_ENFORCED_GUARDRAIL,
                             ));
                         }
                         // No outbound TLS `validation` block to guard. Exhaustive
@@ -390,5 +404,41 @@ mod tests {
         };
 
         assert!(check_plugins_san(&plugins).is_empty());
+    }
+
+    #[test]
+    fn guardrail_allows_enforced_san_but_rejects_unsupported_hostname_override() {
+        use edgion_resources::resources::common::TlsConfig;
+        use edgion_resources::resources::edgion_plugins::{
+            EdgionPlugin, EdgionPluginsSpec, GuardrailConfig, RequestFilterEntry,
+        };
+
+        let mut san_config = GuardrailConfig::default();
+        san_config.conn.tls = Some(TlsConfig::default());
+        san_config.conn.tls.as_mut().unwrap().outbound.validation = Some(san_only());
+        let san_plugins = EdgionPlugins {
+            metadata: Default::default(),
+            spec: EdgionPluginsSpec {
+                request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::Guardrail(san_config))]),
+                ..Default::default()
+            },
+            status: None,
+        };
+        assert!(check_plugins_san(&san_plugins).is_empty());
+
+        let mut hostname_config = GuardrailConfig::default();
+        hostname_config.conn.tls = Some(TlsConfig::default());
+        hostname_config.conn.tls.as_mut().unwrap().outbound.validation = Some(hostname_only());
+        let hostname_plugins = EdgionPlugins {
+            metadata: Default::default(),
+            spec: EdgionPluginsSpec {
+                request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::Guardrail(hostname_config))]),
+                ..Default::default()
+            },
+            status: None,
+        };
+        let errors = check_plugins_san(&hostname_plugins);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("hostname"));
     }
 }

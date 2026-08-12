@@ -1062,6 +1062,44 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.stream_processors.push(processor);
     }
 
+    fn semantic_guard_active(&self) -> bool {
+        self.ctx.semantic_response_guard_claimed
+    }
+
+    fn publish_canonical_records(
+        &mut self,
+        batch: crate::ai::canonical_sse::CanonicalRecordBatch,
+    ) -> Result<(), crate::ai::canonical_sse::CanonicalRecordBatch> {
+        if !self.ctx.semantic_response_guard_claimed || self.ctx.canonical_record_batch.is_some() {
+            return Err(batch);
+        }
+        self.ctx.canonical_record_batch = Some(batch);
+        Ok(())
+    }
+
+    fn take_canonical_records(&mut self) -> Option<crate::ai::canonical_sse::CanonicalRecordBatch> {
+        self.ctx.canonical_record_batch.take()
+    }
+
+    fn disable_semantic_guard(&mut self) {
+        if !self.ctx.response_body_processing_started {
+            self.ctx.semantic_response_guard_claimed = false;
+            self.ctx.canonical_record_batch = None;
+            self.ctx.semantic_response_processor = None;
+        }
+    }
+
+    fn install_semantic_response_processor(
+        &mut self,
+        processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
+    ) -> bool {
+        if self.ctx.response_body_processing_started || self.ctx.semantic_response_processor.is_some() {
+            return false;
+        }
+        self.ctx.semantic_response_processor = Some(processor);
+        true
+    }
+
     fn install_attached_ext_proc(
         &mut self,
         identity: String,
@@ -1084,6 +1122,32 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         identity: &str,
     ) -> Option<std::sync::Arc<crate::plugins::http::ext_proc::AttachedExtProc>> {
         self.ctx.attached_ext_proc.get(identity).cloned()
+    }
+
+    fn install_attached_guardrail(
+        &mut self,
+        identity: String,
+        owner: std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>,
+    ) -> bool {
+        if self.ctx.attached_guardrail.is_some() || self.ctx.semantic_response_guard_claimed {
+            return false;
+        }
+        self.ctx.attached_guardrail = Some((identity, owner));
+        self.ctx.semantic_response_guard_claimed = true;
+        self.ctx.attached_response_framing_reservations =
+            self.ctx.attached_response_framing_reservations.saturating_add(1);
+        true
+    }
+
+    fn attached_guardrail(
+        &self,
+        identity: &str,
+    ) -> Option<std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>> {
+        self.ctx
+            .attached_guardrail
+            .as_ref()
+            .filter(|(installed, _)| installed == identity)
+            .map(|(_, owner)| std::sync::Arc::clone(owner))
     }
 
     fn install_attached_response_processor(

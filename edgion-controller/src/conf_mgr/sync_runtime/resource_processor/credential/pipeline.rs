@@ -111,6 +111,30 @@ pub fn fetch_secret(
     owner_kind: &str,
     secret_ref: &SecretObjectReference,
 ) -> FetchOutcome<Secret> {
+    fetch_secret_inner(ctx, owner, owner_group, owner_kind, secret_ref, true)
+}
+
+/// Read-only form of [`fetch_secret`] for status derivation after parse has
+/// already registered dependencies. It shares the exact namespace, grant, and
+/// store lookup path but does not mutate `SecretRefManager`.
+pub(crate) fn fetch_secret_readonly(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    owner_group: &str,
+    owner_kind: &str,
+    secret_ref: &SecretObjectReference,
+) -> FetchOutcome<Secret> {
+    fetch_secret_inner(ctx, owner, owner_group, owner_kind, secret_ref, false)
+}
+
+fn fetch_secret_inner(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    owner_group: &str,
+    owner_kind: &str,
+    secret_ref: &SecretObjectReference,
+    register_dependency: bool,
+) -> FetchOutcome<Secret> {
     // ── Step 1: compute effective namespace ──────────────────────────────
     let owner_ns = owner.namespace.as_deref().unwrap_or("default");
     let secret_ns = secret_ref.effective_namespace(owner_ns).to_string();
@@ -119,8 +143,10 @@ pub fn fetch_secret(
     // Before Grant check and Secret lookup: owners must be tracked for Secret
     // lifecycle events even while Pending. ReferenceGrant changes requeue via
     // `ReferenceGrantStore`, not SecretRefManager.
-    let secret_key = format_secret_key(Some(&secret_ns), &secret_ref.name);
-    ctx.secret_ref_manager().add_ref(secret_key, owner.clone());
+    if register_dependency {
+        let secret_key = format_secret_key(Some(&secret_ns), &secret_ref.name);
+        ctx.secret_ref_manager().add_ref(secret_key, owner.clone());
+    }
 
     // ── Step 3: cross-namespace ReferenceGrant check ─────────────────────
     if secret_ref.is_cross_namespace(owner_ns) {

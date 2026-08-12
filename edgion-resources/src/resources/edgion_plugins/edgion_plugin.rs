@@ -9,10 +9,10 @@ use super::plugin_configs::{
     AiProxyConfig, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CanaryConfig, CorsConfig,
     CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig,
     DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig,
-    FormJsonTransformConfig, ForwardAuthConfig, GlobalAccessControlConfig, HeaderCertAuthConfig, HmacAuthConfig,
-    IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig,
-    MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig,
-    RegionRouteConfig, RequestBodyBufferConfig, RequestMirrorPluginConfig, RequestRestrictionConfig,
+    FormJsonTransformConfig, ForwardAuthConfig, GlobalAccessControlConfig, GuardrailConfig, HeaderCertAuthConfig,
+    HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig,
+    LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig,
+    RealIpConfig, RegionRouteConfig, RequestBodyBufferConfig, RequestMirrorPluginConfig, RequestRestrictionConfig,
     ResponseRewriteConfig, TraceContextConfig, WasmConfig, DEFAULT_INSTANCE_MAX_BYTES,
 };
 use crate::resources::http_route::{HTTPHeaderFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter};
@@ -115,6 +115,8 @@ pub enum EdgionPlugin {
     TraceContext(TraceContextConfig),
     /// ExtProc filter (external processing over a bidirectional gRPC stream)
     ExtProc(ExtProcConfig),
+    /// Unary Pass/Replace/Reject decisions for canonical semantic SSE windows.
+    Guardrail(GuardrailConfig),
     /// GlobalAccessControl filter (L7 allow-list: IP/CIDR and header/cookie/... composite, OR groups)
     GlobalAccessControl(GlobalAccessControlConfig),
     /// Canary filter (100% traffic to one named backend, switchable via a Selector EdgionConfigData)
@@ -245,6 +247,7 @@ impl EdgionPlugin {
             | RegionRoute(_)
             | TraceContext(_)
             | ExtProc(_)
+            | Guardrail(_)
             | Dsl(_)
             | GlobalAccessControl(_)
             | Canary(_)
@@ -308,6 +311,7 @@ impl EdgionPlugin {
             EdgionPlugin::RegionRoute(_) => "RegionRoute",
             EdgionPlugin::TraceContext(_) => "TraceContext",
             EdgionPlugin::ExtProc(_) => "ExtProc",
+            EdgionPlugin::Guardrail(_) => "Guardrail",
             EdgionPlugin::GlobalAccessControl(_) => "GlobalAccessControl",
             EdgionPlugin::Canary(_) => "Canary",
             EdgionPlugin::Wasm(_) => "Wasm",
@@ -371,6 +375,7 @@ impl EdgionPlugin {
             | EdgionPlugin::BandwidthLimit(_)
             | EdgionPlugin::AllEndpointStatus(_)
             | EdgionPlugin::TraceContext(_)
+            | EdgionPlugin::Guardrail(_)
             | EdgionPlugin::GlobalAccessControl(_) => &[],
         }
     }
@@ -424,6 +429,7 @@ impl EdgionPlugin {
             | EdgionPlugin::BandwidthLimit(_)
             | EdgionPlugin::AllEndpointStatus(_)
             | EdgionPlugin::TraceContext(_)
+            | EdgionPlugin::Guardrail(_)
             | EdgionPlugin::GlobalAccessControl(_) => "",
         }
     }
@@ -509,6 +515,7 @@ impl EdgionPlugin {
             | EdgionPlugin::Dsl(_)
             | EdgionPlugin::TraceContext(_)
             | EdgionPlugin::ExtProc(_)
+            | EdgionPlugin::Guardrail(_)
             | EdgionPlugin::GlobalAccessControl(_)
             | EdgionPlugin::Canary(_)
             | EdgionPlugin::Wasm(_) => Vec::new(),
@@ -557,6 +564,7 @@ impl EdgionPlugin {
             EdgionPlugin::DebugAccessLogToHeader(c) => c.validation_error(),
             EdgionPlugin::TraceContext(c) => c.validation_error(),
             EdgionPlugin::ExtProc(c) => c.validation_error(),
+            EdgionPlugin::Guardrail(c) => c.validation_error(),
             EdgionPlugin::GlobalAccessControl(c) => c.validation_error(),
             EdgionPlugin::Canary(c) => c.validation_error(),
             EdgionPlugin::Wasm(c) => c.validation_error(),

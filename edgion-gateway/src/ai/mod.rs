@@ -6,6 +6,7 @@ pub mod attempt;
 pub mod attempt_plan;
 pub mod attempt_runtime;
 pub mod backend_store;
+pub(crate) mod canonical_sse;
 pub mod circuit_breaker;
 pub mod credential_outlier;
 pub mod dispatch;

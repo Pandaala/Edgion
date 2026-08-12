@@ -1,0 +1,166 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-pass
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/pass
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-replace
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/replace
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-reject
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/reject
+        windowBytes: 1
+        overlapBytes: 0
+        # This is intentionally true: a policy Reject must never be softened.
+        failOpen: true
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-malformed-fail-open
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/malformed
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: true
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-timeout-fail-close
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 50
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/timeout
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-ext-proc
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/pass
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: false
+    - type: ExtProc
+      config:
+        grpcService:
+          target: 127.0.0.1:30041
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+          responseHeaderMode: SEND
+          responseBodyMode: STREAMED
+        failureModeAllow: false

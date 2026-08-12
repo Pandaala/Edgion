@@ -212,6 +212,7 @@ spec:
                           - FaultInjection
                           - TraceContext
                           - ExtProc
+                          - Guardrail
                           - GlobalAccessControl
                           - Canary
                           - Wasm

@@ -85,6 +85,26 @@ two endpoints model per-try timeout behavior for generic HTTP response bodies.
   `oversized`, or `abort` streaming behavior.
 - `fixture_query=preserved` supports exact query-preservation checks.
 
+### Guardrail unary decision fixture
+
+- `POST /guardrail/decision/pass` returns a strict v1 Pass decision.
+- `POST /guardrail/decision/replace` returns one `"reviewed"` replacement for
+  every logical window key in the bounded request envelope.
+- `POST /guardrail/decision/reject` returns a strict v1 policy Reject.
+- `POST /guardrail/decision/malformed` returns a 200 JSON content type with an
+  intentionally malformed body for dependency fail-open/fail-close tests.
+- `POST /guardrail/decision/timeout` records the request and waits 500 ms
+  before returning Pass, for static-deadline fail-close coverage.
+- `GET /guardrail/observation/{action}` returns only a call count, window
+  counts, and structural validation booleans. It never retains semantic text.
+- `POST /guardrail/reset` clears those bounded observations between cases.
+
+These endpoints share the ordinary HTTP server and are intended to be paired
+with `/ai/{*path}`. They retain no request content and add no process or port.
+The AI provider modes `guardrail_split` and `guardrail_two_windows` emit,
+respectively, one split canonical semantic event and two complete canonical
+semantic events with explicit choice indices for call-count assertions.
+
 The response exposes only fixed fixture identifiers and booleans for model,
 path, Host, usage-option, and credential checks. It never echoes an incoming or
 provider Authorization value. Use this endpoint for `EdgionBackend` tests;

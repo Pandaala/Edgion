@@ -1315,11 +1315,30 @@ pub struct EdgionHttpContext {
     /// chains. Not operator-facing; not a plugin stage.
     pub stream_processors: Vec<Box<dyn StreamingResponseProcessor>>,
 
+    /// Whether one request-stage semantic response guard claimed the canonical
+    /// AI source. The first matching guard wins for the request lifetime.
+    pub semantic_response_guard_claimed: bool,
+
+    /// Same-callback handoff from the canonical AI source to the dedicated
+    /// semantic guard. It is never a cross-request or detached queue.
+    pub canonical_record_batch: Option<crate::ai::canonical_sse::CanonicalRecordBatch>,
+
+    /// Dedicated canonical semantic guard. It runs after the AI source and
+    /// before every ordinary writable response processor.
+    pub semantic_response_processor: Option<Box<dyn StreamingResponseProcessor>>,
+
     /// Request-scoped ExtProc transactions keyed by the compiled request-entry
     /// identity. The request filter and its internal response companion share
     /// these owners; targets are never used as transaction identity.
     pub attached_ext_proc:
         std::collections::HashMap<String, std::sync::Arc<crate::plugins::http::ext_proc::AttachedExtProc>>,
+
+    /// The single request-scoped semantic Guardrail owner and its compiled
+    /// request-entry identity. Multiple matched entries are rejected.
+    pub attached_guardrail: Option<(
+        String,
+        std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>,
+    )>,
 
     /// Early framing reservations for attached processors that may mutate the
     /// final response body before their concrete processor is installed.
@@ -1514,7 +1533,11 @@ impl EdgionHttpContext {
             ai_stream_processor: None,
             genai_summary: None,
             stream_processors: Vec::new(),
+            semantic_response_guard_claimed: false,
+            canonical_record_batch: None,
+            semantic_response_processor: None,
             attached_ext_proc: std::collections::HashMap::new(),
+            attached_guardrail: None,
             attached_response_framing_reservations: 0,
             response_body_processing_started: false,
             local_reply_body: None,

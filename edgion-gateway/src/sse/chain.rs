@@ -33,7 +33,7 @@ struct StoredSlice {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct SliceChain {
+pub(crate) struct SliceChain {
     storage: ChainStorage,
     len: usize,
     coalesce_count: usize,

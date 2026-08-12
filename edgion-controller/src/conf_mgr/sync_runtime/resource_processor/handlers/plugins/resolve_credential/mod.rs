@@ -13,6 +13,7 @@ mod csrf;
 mod ext_proc;
 mod forward_auth;
 mod global_access_control;
+mod guardrail;
 mod header_cert_auth;
 mod hmac;
 mod jwe;
@@ -27,6 +28,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use csrf::re
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use ext_proc::resolve as resolve_ext_proc;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use forward_auth::resolve as resolve_forward_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use global_access_control::resolve as resolve_global_access_control;
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use guardrail::resolve as resolve_guardrail;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use header_cert_auth::resolve as resolve_header_cert_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use hmac::resolve as resolve_hmac;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use jwe::resolve as resolve_jwe;

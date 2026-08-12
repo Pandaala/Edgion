@@ -21,6 +21,7 @@ HTTP Route-level plugins provided by Edgion, configured via the `EdgionPlugins` 
 | [form-json-transform.md](form-json-transform.md) | Convert bounded request bodies between flat form URL encoding and JSON |
 | [ext-proc.md](ext-proc.md) | External processing over gRPC (Envoy ext_proc compatible) |
 | [global-access-control.md](global-access-control.md) | CDN/origin lockdown: composite IP-CIDR + secret-header allow-list with profile hot-swap |
+| [guardrail.md](guardrail.md) | Bounded unary Pass/Replace/Reject decisions for canonical semantic AI SSE windows |
 | [header-cert-auth.md](header-cert-auth.md) | Header/certificate authentication |
 | [hmac-auth.md](hmac-auth.md) | HMAC signature verification |
 | [ip-restriction.md](ip-restriction.md) | IP allowlist/denylist |

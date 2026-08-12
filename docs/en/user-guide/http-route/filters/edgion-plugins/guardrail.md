@@ -1,0 +1,157 @@
+# Guardrail Plugin
+
+Guardrail evaluates bounded semantic windows from a canonical streaming AI
+response before those bytes are released to the client. For every window it
+sends one bounded HTTP request to an operator-managed policy service. The
+service chooses exactly one action:
+
+- `pass`: release the original SSE bytes byte-for-byte;
+- `replace`: rewrite only the selected semantic JSON string tokens while
+  preserving SSE framing and all unrelated event fields;
+- `reject`: discard every unreleased byte and terminate the committed stream.
+
+Guardrail is a `requestPlugins` entry because one matched entry owns the whole
+request/response transaction. Do not add a separate response-stage entry.
+
+## Example
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: reviewed-ai-stream
+  namespace: default
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: policy-service
+          namespace: policy-system
+          port: 8080
+        timeoutMs: 1000
+        maxResponseBytes: 65536
+        request:
+          path:
+            template: /v1/decision
+          headers:
+            custom:
+              - name: Authorization
+                template: "Bearer ${secretRef:default/guardrail-token:token}"
+        windowBytes: 4096
+        overlapBytes: 256
+        maxRequestBytes: 1048576
+        maxReplacementBytes: 1048576
+        maxConcurrent: 64
+        failOpen: false
+```
+
+Attach the resource through an `ExtensionRef` on the AI route. The route must
+produce a successful, identity-encoded `text/event-stream` response through
+the canonical AI translation/event path. Generic SSE endpoints, non-AI JSON,
+WebSockets, and duplex HTTP streams are not Guardrail inputs.
+
+## Configuration
+
+| Field | Default | Limits and behavior |
+|-------|---------|---------------------|
+| `target` | required | External HTTP origin or Kubernetes Service target. Service targets require `name` and `port`. URL targets may set `blockPrivate`. |
+| `tls` | system trust | Shared outbound CA, verification, and mTLS configuration. |
+| `timeoutMs` | `5000` | One static deadline covering permit wait, request, response drain, and parsing. `timeoutMsTemplate` is rejected. |
+| `maxResponseBytes` | `1024` | Inclusive cap for the complete decision response body. |
+| `request.path.template` | required | Restricted outbound path template. |
+| `request.headers.custom` | empty | Optional custom headers. `Content-Type` is fixed to `application/json`. Secret templates are resolved by the Controller and redacted in admin output. |
+| `windowBytes` | `4096` | Decoded current semantic bytes that trigger a decision, `1..=1048576`. |
+| `overlapBytes` | `256` | Prior client-visible context retained per logical bucket, `0..=262144`; a separate 256 KiB global cap also applies. |
+| `maxRequestBytes` | `1048576` | Inclusive cap for the serialized decision request, `1..=1048576`. |
+| `maxReplacementBytes` | `1048576` | Inclusive aggregate decoded replacement cap, `0..=1048576`. |
+| `maxConcurrent` | `64` | Shared in-flight decision limit for this immutable plugin snapshot, `1..=1024`. |
+| `failOpen` | `false` | On a dependency failure, release the original held bytes and disable Guardrail for the rest of this response. It never changes a policy Reject. |
+
+Guardrail fixes the method to POST. Retry, custom success rules, request body,
+query, cookies, forwarded headers, and client-controlled path/header templates
+are rejected. A fixed POST is not replayed after an ambiguous network failure.
+
+## Decision protocol
+
+The request is a versioned JSON object. Windows are sorted and kept separate
+by choice, semantic field, and tool-call index:
+
+```json
+{
+  "version": "v1",
+  "windows": [
+    {
+      "choiceIndex": 0,
+      "field": { "type": "content" },
+      "context": "bounded prior text",
+      "current": "text awaiting a decision"
+    }
+  ]
+}
+```
+
+Field types are `content`, `reasoningContent`, and
+`toolArguments` (which also has `toolCallIndex`). Guardrail does not send raw
+SSE, prompts, HTTP headers, model/provider identifiers, or backend addresses.
+Configured authentication headers are the only additional outbound exposure.
+
+The service must return a 2xx response with exactly one
+`Content-Type: application/json` value and one strict JSON object:
+
+```json
+{"version":"v1","action":"pass"}
+```
+
+```json
+{"version":"v1","action":"replace","replacements":[{"choiceIndex":0,"field":{"type":"content"},"current":"reviewed text"}]}
+```
+
+```json
+{"version":"v1","action":"reject","code":"policy_code","reason":"Public bounded reason"}
+```
+
+A Replace response must name every current logical bucket exactly once and no
+other bucket. Unknown, duplicate, missing, trailing, invalid, or oversized
+fields are dependency failures. `code` is optional ASCII
+`[A-Za-z0-9_.-]` up to 64 bytes; `reason` is optional UTF-8 up to 256 bytes.
+Neither value is sent to the downstream client or logged.
+
+## Streaming and failure behavior
+
+The gateway allows only one decision in flight per downstream request and
+awaits it inline, which supplies backpressure without buffering the full
+response. Each immutable configuration snapshot owns one pooled managed HTTP
+client and one shared concurrency limit; a hot reload gives new requests a new
+snapshot while in-flight requests keep the old one.
+
+Pass releases original bytes unchanged. Replace preserves comments, event/id
+fields, usage, finish reasons, line endings, and `[DONE]`; only the current
+semantic JSON string ranges change. A valid Reject always discards the held
+window before terminating the already-committed response, even when
+`failOpen: true`. Guardrail does not manufacture a provider-specific terminal
+event or a new HTTP status after response commitment.
+
+Dependency failures include timeout, concurrency saturation, DNS/TLS/egress
+failure, response-cap overflow, invalid status/content type, malformed JSON,
+and source/bounds failures. With `failOpen: false`, the committed stream is
+terminated after held bytes are discarded. With `failOpen: true`, original
+held bytes are released and Guardrail is disabled for the rest of that
+response.
+
+## Composition and observability
+
+The response order is canonical AI translation and usage/quota accounting,
+then Guardrail, then ordinary writable processors such as ExtProc, then
+read-only filters and bandwidth limiting. Guardrail and ExtProc are independent
+processors; neither wraps the other.
+
+Access logging records one bounded aggregate Guardrail result for the complete
+downstream request. It does not create per-window log entries and never logs
+semantic content, replacement text, credentials, the complete target, or raw
+dependency errors. Guardrail callouts are plugin dependency traffic, not
+backend attempts or AI provider usage.

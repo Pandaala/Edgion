@@ -92,9 +92,6 @@ pub const HTTP_PLUGIN_STAGE_EXCEPTIONS: &[(&str, StageSet)] = &[
     // and upstream-response-body-filter (read-only observation) stages,
     // matching its three CRD stage enum entries.
     ("Wasm", StageSet::new(true, true, true, false)),
-    // One request-stage ExtProc entry owns request and response processing. The
-    // gateway installs its response companion internally.
-    ("ExtProc", StageSet::new(true, false, false, false)),
 ];
 
 /// Which execution stages a plugin type name is valid for.

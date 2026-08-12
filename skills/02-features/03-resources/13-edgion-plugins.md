@@ -1,6 +1,6 @@
 ---
 name: http-plugin-catalog
-description: Full EdgionPlugins CRD schema and catalog of 39 HTTP plugins.
+description: Full EdgionPlugins CRD schema and catalog of 40 HTTP plugins.
 ---
 
 # EdgionPlugins — HTTP Plugins
@@ -80,6 +80,7 @@ spec:
 | `RealIp` | Real IP extraction |
 | `CtxSet` | Set context variables |
 | `ExtProc` | Envoy-compatible external processing. One `requestPlugins` entry owns one request-scoped Process stream across request headers/body and final response headers/body. Request bodies support `BUFFERED`/`STREAMED`; response bodies support bounded transport-window `STREAMED` only (no full-response aggregation and no semantic SSE-window claim). |
+| `Guardrail` | One bounded HTTP Pass/Replace/Reject decision per canonical semantic AI SSE window. The request-stage owner installs an internal semantic response processor after AI translation/usage and before ordinary writable processors. Pass is byte-identical; policy Reject is never failed open. See `docs/en/user-guide/http-route/filters/edgion-plugins/guardrail.md`. |
 | `Wasm` | Executes a proxy-wasm ABI v0.2 guest module (WebAssembly, run via wasmtime) in-process: header mutation, local responses, HTTP callouts (`calloutAllowlist`-gated; request phase with Pause/resume, and from `on_tick` with root-context callbacks when the module's plugins agree on one allowlist), buffered `proxy_on_request_body` when the request entry declares `body:`, read-only response-body observation, shared data (per-module KV with CAS), and `on_tick` timers. No body rewrite or gRPC callouts. Source forms: `file` / `inline` / `url` / `oci` (gateway-side pull from an OCI registry, with a content-addressed disk cache). See `docs/en/user-guide/http-route/filters/edgion-plugins/wasm.md`. |
 | `TraceContext` | W3C trace-context propagation and normalization |
 
@@ -109,7 +110,7 @@ HTTP plugins execute across Pingora's 4 stages:
 
 | Stage | Trigger Time | Typical Plugins |
 |-------|--------------|-----------------|
-| `spec.requestPlugins` (`RequestFilter`) | After the request is received and before backend selection | Auth, RateLimit, CORS, routing plugins, `RequestBodyBuffer`, `ExtProc`, `Wasm` |
+| `spec.requestPlugins` (`RequestFilter`) | After the request is received and before backend selection | Auth, RateLimit, CORS, routing plugins, `RequestBodyBuffer`, `ExtProc`, `Guardrail`, `Wasm` |
 | `spec.upstreamResponseFilterPlugins` (`UpstreamResponseFilter`) | After upstream response headers are received, synchronous | ResponseHeaderModifier, DSL, `Wasm` |
 | `spec.upstreamResponseBodyFilterPlugins` (`UpstreamResponseBodyFilter`) | For each upstream response body chunk | ResponseRewrite, `Wasm` read-only observation |
 | `spec.upstreamResponsePlugins` (`UpstreamResponse`) | After upstream response headers arrive, asynchronous | No directly configurable plugin currently; ExtProc installs an internal companion from its request entry |
@@ -161,6 +162,7 @@ The following plugin types read Secret data from `ControllerRuntime.secret_store
 | `HeaderCertAuth` | CA certificates |
 | `Wasm` | `source.fetch`: artifact-repo Authorization header value, fetch TLS CA / client certs |
 | `Wasm` | `source.oci.pullSecretRef`: `kubernetes.io/dockerconfigjson` registry credentials, resolved into `resolved_pull_secret` (redacted in admin output); unresolved ⇒ plugin load failure |
+| `Guardrail` | `${secretRef:namespace/name:key}` values used by restricted request path/custom-header templates, plus outbound TLS CA/client credentials |
 
 Secret changes automatically trigger reprocessing of EdgionPlugins via SecretRefManager.
 

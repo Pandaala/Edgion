@@ -48,6 +48,7 @@ use crate::plugins::http::fault_injection::FaultInjection;
 use crate::plugins::http::form_json_transform::FormJsonTransform;
 use crate::plugins::http::forward_auth::ForwardAuth;
 use crate::plugins::http::global_access_control::GlobalAccessControl;
+use crate::plugins::http::guardrail::Guardrail;
 use crate::plugins::http::header_cert_auth::HeaderCertAuth;
 use crate::plugins::http::hmac_auth::HmacAuth;
 use crate::plugins::http::ip_restriction::IpRestriction;
@@ -709,6 +710,39 @@ impl PluginRuntime {
                     continue;
                 }
 
+                if let EdgionPlugin::Guardrail(config) = &entry.plugin {
+                    let identity = format!(
+                        "{resource_key}/requestPlugins/{}",
+                        entry_alias
+                            .as_deref()
+                            .map_or_else(|| format!("#{index}"), str::to_string)
+                    );
+                    match Guardrail::create_attached(config, identity) {
+                        Some((request, response)) => {
+                            self.add_request_filter(Box::new(ConditionalRequestFilter::with_alias_and_dye(
+                                request,
+                                entry.conditions.clone(),
+                                entry_alias.clone(),
+                                dye_plan.clone(),
+                            )));
+                            self.add_upstream_response(Box::new(ConditionalUpstreamResponse::with_alias_and_dye(
+                                response,
+                                None,
+                                entry_alias,
+                                dye_plan,
+                            )));
+                        }
+                        None => {
+                            errors.push(format!(
+                                "requestPlugins[{}] (Guardrail): plugin construction failed",
+                                index
+                            ));
+                            self.invalid_plugins.record(&entry.plugin);
+                        }
+                    }
+                    continue;
+                }
+
                 match Self::create_request_filter_from_edgion(&entry.plugin, namespace, body_req.clone(), &entry_scope)
                 {
                     CreateResult::Ok(Some(filter)) => {
@@ -1355,6 +1389,7 @@ impl PluginRuntime {
             EdgionPlugin::RealIp(config) => CreateResult::Ok(Some(RealIp::create(config))),
             EdgionPlugin::TraceContext(config) => CreateResult::Ok(Some(TraceContext::create(config))),
             EdgionPlugin::ExtProc(_) => CreateResult::WrongStage,
+            EdgionPlugin::Guardrail(_) => CreateResult::WrongStage,
             EdgionPlugin::ForwardAuth(config) => match ForwardAuth::new(config) {
                 Ok(fa) => CreateResult::Ok(Some(Box::new(fa))),
                 Err(_) => CreateResult::Ok(None),
@@ -1425,6 +1460,7 @@ impl PluginRuntime {
             | EdgionPlugin::DynamicExternalUpstream(_)
             | EdgionPlugin::FaultInjection(_)
             | EdgionPlugin::ExtProc(_)
+            | EdgionPlugin::Guardrail(_)
             | EdgionPlugin::RegionRoute(_)
             | EdgionPlugin::GlobalAccessControl(_)
             | EdgionPlugin::Canary(_) => CreateResult::WrongStage,
@@ -1437,7 +1473,7 @@ impl PluginRuntime {
         _namespace: &str,
     ) -> CreateResult<Box<dyn UpstreamResponse>> {
         match plugin {
-            EdgionPlugin::ExtProc(_) => CreateResult::WrongStage,
+            EdgionPlugin::ExtProc(_) | EdgionPlugin::Guardrail(_) => CreateResult::WrongStage,
             // Every other variant belongs to a different stage. Exhaustive
             // (no `_`), matching the other three `create_*_from_edgion`
             // constructors: these four matches are the runtime half of the
@@ -1536,6 +1572,7 @@ impl PluginRuntime {
             | EdgionPlugin::DynamicExternalUpstream(_)
             | EdgionPlugin::FaultInjection(_)
             | EdgionPlugin::ExtProc(_)
+            | EdgionPlugin::Guardrail(_)
             | EdgionPlugin::RegionRoute(_)
             | EdgionPlugin::GlobalAccessControl(_)
             | EdgionPlugin::Canary(_)
@@ -1588,6 +1625,7 @@ impl PluginRuntime {
             EdgionPlugin::Dsl(_) => "Dsl",
             EdgionPlugin::RegionRoute(_) => "RegionRoute",
             EdgionPlugin::ExtProc(_) => "ExtProc",
+            EdgionPlugin::Guardrail(_) => "Guardrail",
             EdgionPlugin::Wasm(_) => "Wasm",
         }
     }

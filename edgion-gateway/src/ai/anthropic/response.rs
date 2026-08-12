@@ -11,6 +11,7 @@ use pingora_http::ResponseHeader;
 use pingora_proxy::ResponseBodySink;
 use serde_json::{json, Map, Value};
 
+use crate::ai::canonical_sse::{write_canonical_record, CanonicalRecordBatch};
 use crate::ai::quota::QuotaAccumulator;
 use crate::ai::usage::{terminate_over_quota, AiUsageShared};
 use crate::ctx::ResponseStreamKind;
@@ -153,6 +154,7 @@ pub(crate) struct AnthropicResponseProcessor {
     error_recorded: bool,
     fixed_emitted: bool,
     pending_output_chars: u64,
+    semantic_records: Option<CanonicalRecordBatch>,
 }
 
 impl AnthropicResponseProcessor {
@@ -209,6 +211,7 @@ impl AnthropicResponseProcessor {
             error_recorded: false,
             fixed_emitted: false,
             pending_output_chars: 0,
+            semantic_records: None,
         }
     }
 
@@ -597,6 +600,13 @@ impl AnthropicResponseProcessor {
             )?;
         }
         append_capped(output, b"data: [DONE]\n\n", MAX_BODY_BYTES)?;
+        if let Some(batch) = &mut self.semantic_records {
+            batch
+                .push(crate::sse::window::WindowRecord::raw(vec![Bytes::from_static(
+                    b"data: [DONE]\n\n",
+                )]))
+                .map_err(|_| ())?;
+        }
         self.pending_output_chars = self.pending_output_chars.saturating_add(6);
         Ok(())
     }
@@ -623,18 +633,27 @@ impl AnthropicResponseProcessor {
     }
 
     fn push_json_event(&mut self, output: &mut Vec<u8>, value: &Value) -> Result<(), ()> {
-        let encoded = serde_json::to_vec(value).map_err(|_| ())?;
-        append_capped(output, b"data: ", MAX_BODY_BYTES)?;
-        append_capped(output, &encoded, MAX_BODY_BYTES)?;
-        append_capped(output, b"\n\n", MAX_BODY_BYTES)?;
-        self.pending_output_chars = self
-            .pending_output_chars
-            .saturating_add(u64::try_from(String::from_utf8_lossy(&encoded).chars().count()).unwrap_or(u64::MAX));
+        let (encoded_record, record) = write_canonical_record(value, MAX_BODY_BYTES)?;
+        append_capped(output, &encoded_record, MAX_BODY_BYTES)?;
+        self.pending_output_chars = self.pending_output_chars.saturating_add(
+            u64::try_from(
+                String::from_utf8_lossy(&encoded_record[6..encoded_record.len() - 2])
+                    .chars()
+                    .count(),
+            )
+            .unwrap_or(u64::MAX),
+        );
+        if let Some(batch) = &mut self.semantic_records {
+            batch.push(record).map_err(|_| ())?;
+        }
         Ok(())
     }
 
     fn fail_streaming(&mut self, chunk: &mut Option<Bytes>, session: &mut dyn PluginSession) {
         self.sealed = true;
+        if self.semantic_records.is_some() {
+            self.semantic_records = Some(CanonicalRecordBatch::new());
+        }
         self.pending_output_chars = stream_error_output_chars();
         self.record_translation_failure(session);
         *chunk = Some(Bytes::from_static(STREAM_ERROR));
@@ -678,6 +697,8 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
             return;
         }
         self.pending_output_chars = 0;
+        self.semantic_records = (session.semantic_guard_active() && matches!(self.mode, BodyMode::Streaming))
+            .then(CanonicalRecordBatch::new);
         match self.mode {
             BodyMode::AwaitingHeader => self.fail_non_streaming(chunk, session, RESPONSE_TRANSLATION_FAILED),
             BodyMode::Fixed(error) => self.process_fixed(chunk, session, error),
@@ -711,6 +732,21 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
         }
         if self.sealed && matches!(self.mode, BodyMode::Streaming) {
             sink.terminate();
+        }
+        if let Some(mut batch) = self.semantic_records.take() {
+            if self.sealed {
+                batch.mark_unavailable();
+                if let Some(bytes) = chunk.take() {
+                    let _ = batch.push(crate::sse::window::WindowRecord::raw(vec![bytes]).semantic_unavailable());
+                }
+            } else {
+                *chunk = None;
+            }
+            // Publish an empty active batch at EOS as an explicit semantic
+            // source boundary for a window retained by an earlier callback.
+            if (!batch.is_empty() || end_of_stream) && session.publish_canonical_records(batch).is_err() {
+                sink.terminate();
+            }
         }
         if !sink.is_terminated() {
             let chars = if matches!(self.mode, BodyMode::Streaming) {
@@ -1002,6 +1038,12 @@ mod tests {
     use crate::ai::usage::QUOTA_EXCEEDED_SSE_EVENT;
     use crate::plugins::runtime::traits::session::MockPluginSession;
 
+    fn mock_session() -> MockPluginSession {
+        let mut session = MockPluginSession::new();
+        session.expect_semantic_guard_active().return_const(false);
+        session
+    }
+
     fn processor(streaming: bool, usage_chunk: bool) -> (AnthropicResponseProcessor, Arc<AiUsageShared>) {
         let usage = Arc::new(AiUsageShared::default());
         (
@@ -1145,7 +1187,7 @@ mod tests {
                 .keys()
                 .all(|name| matches!(name.as_str(), "content-type" | "cache-control" | "retry-after")));
 
-            let mut session = MockPluginSession::new();
+            let mut session = mock_session();
             let body = run_chunk(&mut processor, &mut session, Some(b"provider secret body"), false)
                 .await
                 .expect("fixed body");
@@ -1191,7 +1233,7 @@ mod tests {
             }
             p.on_response_header(&mut response);
             assert_eq!(response.status.as_u16(), 503);
-            let mut session = MockPluginSession::new();
+            let mut session = mock_session();
             session
                 .expect_add_error()
                 .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
@@ -1220,7 +1262,7 @@ mod tests {
         }))
         .expect("fixture serializes");
         let split = provider.len() / 2;
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         assert!(run_chunk(&mut processor, &mut session, Some(&provider[..split]), false)
             .await
             .is_none());
@@ -1255,7 +1297,7 @@ mod tests {
         .unwrap();
         let (mut processor, _) = processor(false, false);
         processor.on_response_header(&mut header(200, "application/json"));
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         let translated = run_chunk(&mut processor, &mut session, Some(&provider), true)
             .await
             .unwrap();
@@ -1274,7 +1316,7 @@ mod tests {
     async fn malformed_non_streaming_response_is_fixed_redacted_and_sealed() {
         let (mut processor, _) = processor(false, false);
         processor.on_response_header(&mut header(200, "application/json"));
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session
             .expect_add_error()
             .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
@@ -1309,7 +1351,7 @@ mod tests {
         for split in 0..=fixture.len() {
             let (mut processor, usage) = processor(true, true);
             processor.on_response_header(&mut header(200, "text/event-stream"));
-            let mut session = MockPluginSession::new();
+            let mut session = mock_session();
             let first = run_chunk(&mut processor, &mut session, Some(&fixture.as_bytes()[..split]), false).await;
             let second = run_chunk(&mut processor, &mut session, Some(&fixture.as_bytes()[split..]), true).await;
             let mut output = Vec::new();
@@ -1372,7 +1414,7 @@ mod tests {
         .concat();
         let (mut processor, usage) = processor(true, false);
         processor.on_response_header(&mut header(200, "text/event-stream"));
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         let output = run_chunk(&mut processor, &mut session, Some(fixture.as_bytes()), true)
             .await
             .expect("translated stream");
@@ -1424,7 +1466,7 @@ mod tests {
         .concat();
         let (mut processor, _) = self::processor(true, false);
         processor.on_response_header(&mut header(200, "text/event-stream"));
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         let output = run_chunk(&mut processor, &mut session, Some(fixture.as_bytes()), true)
             .await
             .unwrap();
@@ -1468,7 +1510,7 @@ mod tests {
         .concat();
         let (mut invalid_processor, _) = self::processor(true, false);
         invalid_processor.on_response_header(&mut header(200, "text/event-stream"));
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session.expect_add_error().times(1).return_const(());
         assert_eq!(
             run_chunk(&mut invalid_processor, &mut session, Some(invalid.as_bytes()), false)
@@ -1493,7 +1535,7 @@ mod tests {
             false,
         );
         processor.on_response_header(&mut header(200, "text/event-stream"));
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         let events = [
             (
                 "message_start",
@@ -1573,7 +1615,7 @@ mod tests {
         .concat();
         let (mut processor, _) = self::processor(true, false);
         processor.on_response_header(&mut header(200, "text/event-stream"));
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session
             .expect_add_error()
             .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
@@ -1595,7 +1637,7 @@ mod tests {
         let ping = event("ping", json!({"type":"ping"}));
         let (mut processor, _) = self::processor(true, false);
         processor.on_response_header(&mut header(200, "text/event-stream"));
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         assert!(run_chunk(
             &mut processor,
             &mut session,
@@ -1618,7 +1660,7 @@ mod tests {
 
         let (mut second_processor, _) = self::processor(true, false);
         second_processor.on_response_header(&mut header(200, "text/event-stream"));
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session.expect_add_error().times(1).return_const(());
         let mismatch = event("error", json!({"type":"future_event"}));
         let output = run_chunk(&mut second_processor, &mut session, Some(mismatch.as_bytes()), false)
@@ -1642,7 +1684,7 @@ mod tests {
         .concat();
         let (mut processor, _) = processor(true, false);
         processor.on_response_header(&mut header(200, "text/event-stream"));
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session
             .expect_add_error()
             .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
@@ -1668,7 +1710,7 @@ mod tests {
         .expect("fixture serializes");
         let (mut processor, usage) = processor(false, false);
         processor.on_response_header(&mut header(200, "application/json"));
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session.expect_add_error().times(1).return_const(());
         let output = run_chunk(&mut processor, &mut session, Some(&provider), true)
             .await
@@ -1695,7 +1737,7 @@ mod tests {
         .concat();
         let (mut processor, usage) = self::processor(true, false);
         processor.on_response_header(&mut header(200, "text/event-stream"));
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session.expect_add_error().times(1).return_const(());
         let output = run_chunk(&mut processor, &mut session, Some(stream.as_bytes()), true)
             .await
@@ -1738,7 +1780,7 @@ mod tests {
         for input in cases {
             let (mut processor, _) = self::processor(true, false);
             processor.on_response_header(&mut header(200, "text/event-stream"));
-            let mut session = MockPluginSession::new();
+            let mut session = mock_session();
             session
                 .expect_add_error()
                 .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
@@ -1762,7 +1804,7 @@ mod tests {
             let input = format!("{}{suffix}", streaming_fixture());
             let (mut processor, _) = self::processor(true, false);
             processor.on_response_header(&mut header(200, "text/event-stream"));
-            let mut session = MockPluginSession::new();
+            let mut session = mock_session();
             session
                 .expect_add_error()
                 .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
@@ -1794,7 +1836,7 @@ mod tests {
         );
         processor.on_response_header(&mut header(200, "text/event-stream"));
 
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session
             .expect_add_error()
             .withf(|status| *status == EdgionStatus::AiQuotaOverLimitTerminated)
@@ -1833,7 +1875,7 @@ mod tests {
     async fn streaming_translation_failure_emits_error_then_terminates_once() {
         let (mut processor, usage) = processor(true, false);
         processor.on_response_header(&mut header(200, "text/event-stream"));
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session
             .expect_add_error()
             .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
@@ -1877,7 +1919,7 @@ mod tests {
         );
         processor.on_response_header(&mut header(200, "text/event-stream"));
 
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         let mut sink = ResponseBodySink::new();
         let message_start = event(
             "message_start",
@@ -1911,7 +1953,7 @@ mod tests {
         );
         processor.on_response_header(&mut header(200, "application/json"));
 
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         let mut sink = ResponseBodySink::new();
         let mut chunk = Some(Bytes::from_static(b"{\"partial"));
         processor
@@ -1946,7 +1988,7 @@ mod tests {
         let oversized = vec![b'x'; MAX_BODY_BYTES + 1];
         let (mut processor, _) = processor(false, false);
         processor.on_response_header(&mut header(200, "application/json"));
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session
             .expect_add_error()
             .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)

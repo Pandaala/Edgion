@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::EdgionHttpProxy;
+use crate::ai::canonical_sse::MAX_CANONICAL_SOURCE_CHUNK_BYTES;
 use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
 use crate::EdgionHttpContext;
 use pingora_http::ResponseHeader;
@@ -11,6 +12,9 @@ use pingora_proxy::{ResponseBodySink, Session};
 /// arbitration. The processor set is fixed during the request stage.
 pub(crate) fn run_stream_processor_headers(response: &mut ResponseHeader, ctx: &mut EdgionHttpContext) {
     if let Some(processor) = ctx.ai_stream_processor.as_mut() {
+        processor.on_response_header(response);
+    }
+    if let Some(processor) = ctx.semantic_response_processor.as_mut() {
         processor.on_response_header(response);
     }
     let mut processors = std::mem::take(&mut ctx.stream_processors);
@@ -29,6 +33,10 @@ pub(crate) fn enforce_stream_processor_framing(response: &mut ResponseHeader, ct
         .ai_stream_processor
         .as_ref()
         .is_some_and(|processor| processor.changes_body_length())
+        || ctx
+            .semantic_response_processor
+            .as_ref()
+            .is_some_and(|processor| processor.changes_body_length())
         || ctx
             .stream_processors
             .iter()
@@ -56,11 +64,32 @@ pub(crate) async fn run_stream_processors(
     sink: &mut ResponseBodySink,
 ) {
     ctx.response_body_processing_started = true;
-    if ctx.stream_processors.is_empty() && ctx.ai_stream_processor.is_none() {
+    if ctx.semantic_response_guard_claimed
+        && body
+            .as_ref()
+            .is_some_and(|chunk| chunk.len() > MAX_CANONICAL_SOURCE_CHUNK_BYTES)
+    {
+        // The locked Pingora H1/H2 readers both cap one physical response
+        // callback at 64 KiB. Treat a larger custom transport callback as an
+        // internal invariant violation; fail-open cannot relax a memory bound.
+        *body = None;
+        sink.terminate();
+        return;
+    }
+    if ctx.semantic_response_guard_claimed && ctx.canonical_record_batch.take().is_some() {
+        *body = None;
+        sink.terminate();
+        return;
+    }
+    if ctx.stream_processors.is_empty()
+        && ctx.ai_stream_processor.is_none()
+        && ctx.semantic_response_processor.is_none()
+    {
         return;
     }
     let stream_kind = ctx.response_stream_kind;
     let mut ai_processor = ctx.ai_stream_processor.take();
+    let mut semantic_processor = ctx.semantic_response_processor.take();
     let mut processors = std::mem::take(&mut ctx.stream_processors);
     {
         let mut adapter = PingoraSessionAdapter::new(session, ctx);
@@ -71,6 +100,13 @@ pub(crate) async fn run_stream_processors(
         // its own contract rather than depending solely on the fork's pump.
         if !sink.is_terminated() {
             if let Some(processor) = ai_processor.as_mut() {
+                processor
+                    .on_chunk(body, end_of_stream, stream_kind, sink, &mut adapter)
+                    .await;
+            }
+        }
+        if !sink.is_terminated() {
+            if let Some(processor) = semantic_processor.as_mut() {
                 processor
                     .on_chunk(body, end_of_stream, stream_kind, sink, &mut adapter)
                     .await;
@@ -88,7 +124,12 @@ pub(crate) async fn run_stream_processors(
         }
     }
     ctx.ai_stream_processor = ai_processor;
+    ctx.semantic_response_processor = semantic_processor;
     ctx.stream_processors = processors;
+    if ctx.semantic_response_guard_claimed && ctx.canonical_record_batch.take().is_some() {
+        *body = None;
+        sink.terminate();
+    }
 }
 
 /// Process upstream response body chunks
@@ -398,6 +439,29 @@ mod tests {
         }
     }
 
+    struct OrderMarker {
+        label: &'static str,
+        order: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait]
+    impl StreamingResponseProcessor for OrderMarker {
+        fn name(&self) -> &str {
+            self.label
+        }
+
+        async fn on_chunk(
+            &mut self,
+            _chunk: &mut Option<Bytes>,
+            _end_of_stream: bool,
+            _stream_kind: ResponseStreamKind,
+            _sink: &mut ResponseBodySink,
+            _session: &mut dyn PluginSession,
+        ) {
+            self.order.lock().push(self.label);
+        }
+    }
+
     #[test]
     fn header_callbacks_run_and_processors_survive() {
         let mut ctx = crate::EdgionHttpContext::default();
@@ -553,6 +617,65 @@ mod tests {
             !*ran.lock(),
             "the plain chain must not run once the AI processor terminated"
         );
+    }
+
+    #[tokio::test]
+    async fn ai_semantic_guard_and_generic_processors_are_distinct_ordered_slots() {
+        let mut session = test_session().await;
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let mut ctx = crate::EdgionHttpContext::default();
+        ctx.ai_stream_processor = Some(Box::new(OrderMarker {
+            label: "ai",
+            order: Arc::clone(&order),
+        }));
+        ctx.semantic_response_processor = Some(Box::new(OrderMarker {
+            label: "guardrail",
+            order: Arc::clone(&order),
+        }));
+        ctx.stream_processors.push(Box::new(OrderMarker {
+            label: "ext-proc",
+            order: Arc::clone(&order),
+        }));
+        let mut body = Some(Bytes::from_static(b"data: event\n\n"));
+        let mut sink = ResponseBodySink::new();
+
+        run_stream_processors(&mut session, &mut ctx, &mut body, false, &mut sink).await;
+
+        assert_eq!(&*order.lock(), &["ai", "guardrail", "ext-proc"]);
+        assert!(ctx.ai_stream_processor.is_some());
+        assert!(ctx.semantic_response_processor.is_some());
+        assert_eq!(ctx.stream_processors.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn guarded_physical_callback_limit_is_inclusive_and_stale_handoff_fails_closed() {
+        let mut session = test_session().await;
+        let mut ctx = crate::EdgionHttpContext {
+            semantic_response_guard_claimed: true,
+            ..Default::default()
+        };
+        let mut exact = Some(Bytes::from(vec![b'x'; MAX_CANONICAL_SOURCE_CHUNK_BYTES]));
+        let mut sink = ResponseBodySink::new();
+        run_stream_processors(&mut session, &mut ctx, &mut exact, false, &mut sink).await;
+        assert_eq!(exact.as_ref().map(Bytes::len), Some(MAX_CANONICAL_SOURCE_CHUNK_BYTES));
+        assert!(!sink.is_terminated());
+
+        let mut plus_one = Some(Bytes::from(vec![b'x'; MAX_CANONICAL_SOURCE_CHUNK_BYTES + 1]));
+        let mut sink = ResponseBodySink::new();
+        run_stream_processors(&mut session, &mut ctx, &mut plus_one, false, &mut sink).await;
+        assert!(plus_one.is_none());
+        assert!(sink.is_terminated());
+
+        let mut stale_ctx = crate::EdgionHttpContext {
+            semantic_response_guard_claimed: true,
+            canonical_record_batch: Some(crate::ai::canonical_sse::CanonicalRecordBatch::new()),
+            ..Default::default()
+        };
+        let mut body = None;
+        let mut sink = ResponseBodySink::new();
+        run_stream_processors(&mut session, &mut stale_ctx, &mut body, true, &mut sink).await;
+        assert!(sink.is_terminated());
+        assert!(stale_ctx.canonical_record_batch.is_none());
     }
 
     #[test]

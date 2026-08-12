@@ -9,17 +9,21 @@ use bytes::Bytes;
 use edgion_resources::resources::edgion_backend::ParsedAiModelPricing;
 use edgion_resources::EdgionStatus;
 use pingora_proxy::ResponseBodySink;
+#[cfg(test)]
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::Serialize;
 
+use crate::ai::canonical_sse::{observe_canonical_event, CanonicalRecordBatch};
 use crate::ai::error::render_openai_error;
 use crate::ai::quota::{AiQuotaRequest, QuotaAccumulator};
 use crate::ai::AiProxyError;
 use crate::ctx::ResponseStreamKind;
 use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
 use crate::plugins::runtime::PluginSession;
-use crate::sse::SseDecoder;
+use crate::sse::window::WindowRecord;
+use crate::sse::{SseDecoder, SseRecordRef};
 
+#[cfg(test)]
 macro_rules! ignore_json_scalars {
     ($value:expr) => {
         fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
@@ -60,6 +64,7 @@ macro_rules! ignore_json_scalars {
     };
 }
 
+#[cfg(test)]
 macro_rules! ignore_json_containers {
     ($value:expr) => {
         fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
@@ -80,6 +85,7 @@ macro_rules! ignore_json_containers {
     };
 }
 
+#[cfg(test)]
 macro_rules! ignore_json_value_except_map {
     ($value:expr) => {
         ignore_json_scalars!($value);
@@ -94,6 +100,7 @@ macro_rules! ignore_json_value_except_map {
     };
 }
 
+#[cfg(test)]
 macro_rules! ignore_json_value_except_seq {
     ($value:expr) => {
         ignore_json_scalars!($value);
@@ -108,6 +115,7 @@ macro_rules! ignore_json_value_except_seq {
     };
 }
 
+#[cfg(test)]
 macro_rules! ignore_json_value_except_u64 {
     ($value:expr) => {
         fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
@@ -146,6 +154,7 @@ macro_rules! ignore_json_value_except_u64 {
     };
 }
 
+#[cfg(test)]
 macro_rules! ignore_json_value_except_string {
     ($value:expr) => {
         fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
@@ -679,6 +688,7 @@ pub struct UsageExtractionProcessor {
     /// malformed-event count is cumulative, so later chunks must not append
     /// the observation status again.
     sse_malformed_reported: bool,
+    semantic_source_overflowed: bool,
 }
 
 impl UsageExtractionProcessor {
@@ -707,27 +717,60 @@ impl UsageExtractionProcessor {
             chars_finished: false,
             sse_degraded_reported: false,
             sse_malformed_reported: false,
+            semantic_source_overflowed: false,
         }
     }
 
-    fn observe_chunk(&mut self, chunk: &Bytes, stream_kind: ResponseStreamKind) {
+    fn observe_chunk(
+        &mut self,
+        chunk: Bytes,
+        stream_kind: ResponseStreamKind,
+        semantic_guard_active: bool,
+    ) -> Option<CanonicalRecordBatch> {
         match stream_kind {
             ResponseStreamKind::Sse => {
                 let shared = &self.shared;
                 let quota = self.quota.as_ref();
-                self.sse.feed_each_bytes(chunk.clone(), |event| {
-                    if !event.data_is_literal(b"[DONE]") {
-                        if let Ok(observation) = event.deserialize_data::<UsageEventObservation>() {
-                            if let Some(quota) = quota {
-                                quota.add_output_units(observation.output_units);
+                let mut batch = semantic_guard_active.then(CanonicalRecordBatch::new);
+                let mut batch_overflowed = false;
+                self.sse.feed_records(chunk, |record| match record {
+                    SseRecordRef::Block { status, event } => {
+                        let observation = observe_canonical_event(&event);
+                        if let Some(quota) = quota {
+                            quota.add_output_units(observation.output_units);
+                        }
+                        let usage = observation.usage;
+                        if let (Some(input_tokens), Some(output_tokens)) =
+                            (usage.prompt_tokens, usage.completion_tokens)
+                        {
+                            shared.observe_reported_usage(
+                                input_tokens,
+                                output_tokens,
+                                usage.cached_tokens.or(usage.cache_read_input_tokens).unwrap_or(0),
+                                usage.cache_creation_input_tokens.unwrap_or(0),
+                            );
+                        }
+                        if let Some(batch) = &mut batch {
+                            let mut owned = WindowRecord::from_sse_record(SseRecordRef::Block { status, event });
+                            if observation.semantic_available {
+                                owned = owned.with_fragments(observation.fragments);
+                            } else {
+                                owned = owned.semantic_unavailable();
+                                batch.mark_unavailable();
                             }
-                            if let Some(usage) = observation.reported_usage {
-                                shared.observe_reported_usage(
-                                    usage.input_tokens,
-                                    usage.output_tokens,
-                                    usage.cache_read_input_tokens,
-                                    usage.cache_write_input_tokens,
-                                );
+                            if batch.push(owned).is_err() {
+                                batch_overflowed = true;
+                            }
+                        }
+                    }
+                    other => {
+                        if let Some(batch) = &mut batch {
+                            let unavailable = matches!(other, SseRecordRef::Opaque(_));
+                            if batch.push(WindowRecord::from_sse_record(other)).is_err() {
+                                batch_overflowed = true;
+                            }
+                            if unavailable {
+                                batch.mark_unavailable();
                             }
                         }
                     }
@@ -735,11 +778,21 @@ impl UsageExtractionProcessor {
                 self.shared.add_output_chars(self.sse.take_data_chars());
                 if self.sse.degraded() {
                     self.shared.sse_degraded.store(true, Ordering::Release);
+                    if let Some(batch) = &mut batch {
+                        batch.mark_unavailable();
+                    }
+                }
+                if batch_overflowed {
+                    self.semantic_source_overflowed = true;
+                    None
+                } else {
+                    batch
                 }
             }
             ResponseStreamKind::None => {
-                self.shared.add_output_chars(self.non_streaming_chars.feed(chunk));
-                self.observe_non_streaming(chunk);
+                self.shared.add_output_chars(self.non_streaming_chars.feed(&chunk));
+                self.observe_non_streaming(&chunk);
+                None
             }
         }
     }
@@ -778,595 +831,601 @@ impl UsageExtractionProcessor {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct UsageEventObservation {
-    reported_usage: Option<ReportedAiUsage>,
-    output_units: u64,
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-struct UsageFields {
-    prompt_tokens: Option<u64>,
-    completion_tokens: Option<u64>,
-    details_cached_tokens: Option<u64>,
-    cache_read_input_tokens: Option<u64>,
-    cache_creation_input_tokens: Option<u64>,
-}
-
 #[cfg(test)]
-fn observe_openai_streaming_event(json: &[u8]) -> Option<UsageEventObservation> {
-    let mut deserializer = serde_json::Deserializer::from_slice(json);
-    let observation = RootSeed.deserialize(&mut deserializer).ok()?;
-    deserializer.end().ok()?;
-    Some(observation)
-}
+mod legacy_usage_observer {
+    use super::*;
 
-#[cfg(test)]
-struct RootSeed;
-
-#[derive(Clone, Copy)]
-enum ObservationField {
-    Usage,
-    Choices,
-    PromptTokens,
-    CompletionTokens,
-    PromptTokensDetails,
-    CachedTokens,
-    CacheReadInputTokens,
-    CacheCreationInputTokens,
-    Delta,
-    Content,
-    ToolCalls,
-    Function,
-    Arguments,
-    Other,
-}
-
-struct ObservationFieldSeed;
-
-impl<'de> DeserializeSeed<'de> for ObservationFieldSeed {
-    type Value = ObservationField;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_identifier(ObservationFieldVisitor)
-    }
-}
-
-struct ObservationFieldVisitor;
-
-fn observation_field(value: &str) -> ObservationField {
-    match value {
-        "usage" => ObservationField::Usage,
-        "choices" => ObservationField::Choices,
-        "prompt_tokens" => ObservationField::PromptTokens,
-        "completion_tokens" => ObservationField::CompletionTokens,
-        "prompt_tokens_details" => ObservationField::PromptTokensDetails,
-        "cached_tokens" => ObservationField::CachedTokens,
-        "cache_read_input_tokens" => ObservationField::CacheReadInputTokens,
-        "cache_creation_input_tokens" => ObservationField::CacheCreationInputTokens,
-        "delta" => ObservationField::Delta,
-        "content" => ObservationField::Content,
-        "tool_calls" => ObservationField::ToolCalls,
-        "function" => ObservationField::Function,
-        "arguments" => ObservationField::Arguments,
-        _ => ObservationField::Other,
-    }
-}
-
-impl Visitor<'_> for ObservationFieldVisitor {
-    type Value = ObservationField;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a JSON object field")
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+    pub(super) struct UsageEventObservation {
+        pub(super) reported_usage: Option<ReportedAiUsage>,
+        pub(super) output_units: u64,
     }
 
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
-        Ok(observation_field(value))
+    #[derive(Debug, Default, Clone, Copy)]
+    struct UsageFields {
+        prompt_tokens: Option<u64>,
+        completion_tokens: Option<u64>,
+        details_cached_tokens: Option<u64>,
+        cache_read_input_tokens: Option<u64>,
+        cache_creation_input_tokens: Option<u64>,
     }
 
-    fn visit_borrowed_str<E>(self, value: &str) -> Result<Self::Value, E> {
-        Ok(observation_field(value))
+    #[cfg(test)]
+    pub(super) fn observe_openai_streaming_event(json: &[u8]) -> Option<UsageEventObservation> {
+        let mut deserializer = serde_json::Deserializer::from_slice(json);
+        let observation = RootSeed.deserialize(&mut deserializer).ok()?;
+        deserializer.end().ok()?;
+        Some(observation)
     }
 
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
-        Ok(observation_field(&value))
-    }
-}
+    #[cfg(test)]
+    struct RootSeed;
 
-#[cfg(test)]
-impl<'de> DeserializeSeed<'de> for RootSeed {
-    type Value = UsageEventObservation;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(RootVisitor)
-    }
-}
-
-struct RootVisitor;
-
-impl<'de> serde::Deserialize<'de> for UsageEventObservation {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(RootVisitor)
-    }
-}
-
-impl<'de> Visitor<'de> for RootVisitor {
-    type Value = UsageEventObservation;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("an OpenAI response object")
+    #[derive(Clone, Copy)]
+    enum ObservationField {
+        Usage,
+        Choices,
+        PromptTokens,
+        CompletionTokens,
+        PromptTokensDetails,
+        CachedTokens,
+        CacheReadInputTokens,
+        CacheCreationInputTokens,
+        Delta,
+        Content,
+        ToolCalls,
+        Function,
+        Arguments,
+        Other,
     }
 
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut usage = None;
-        let mut output_units = None;
-        while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
-            match key {
-                ObservationField::Usage => usage = map.next_value_seed(UsageSeed)?,
-                ObservationField::Choices => output_units = map.next_value_seed(ChoicesSeed)?,
-                _ => {
-                    map.next_value::<IgnoredAny>()?;
+    struct ObservationFieldSeed;
+
+    impl<'de> DeserializeSeed<'de> for ObservationFieldSeed {
+        type Value = ObservationField;
+
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_identifier(ObservationFieldVisitor)
+        }
+    }
+
+    struct ObservationFieldVisitor;
+
+    fn observation_field(value: &str) -> ObservationField {
+        match value {
+            "usage" => ObservationField::Usage,
+            "choices" => ObservationField::Choices,
+            "prompt_tokens" => ObservationField::PromptTokens,
+            "completion_tokens" => ObservationField::CompletionTokens,
+            "prompt_tokens_details" => ObservationField::PromptTokensDetails,
+            "cached_tokens" => ObservationField::CachedTokens,
+            "cache_read_input_tokens" => ObservationField::CacheReadInputTokens,
+            "cache_creation_input_tokens" => ObservationField::CacheCreationInputTokens,
+            "delta" => ObservationField::Delta,
+            "content" => ObservationField::Content,
+            "tool_calls" => ObservationField::ToolCalls,
+            "function" => ObservationField::Function,
+            "arguments" => ObservationField::Arguments,
+            _ => ObservationField::Other,
+        }
+    }
+
+    impl Visitor<'_> for ObservationFieldVisitor {
+        type Value = ObservationField;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a JSON object field")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+            Ok(observation_field(value))
+        }
+
+        fn visit_borrowed_str<E>(self, value: &str) -> Result<Self::Value, E> {
+            Ok(observation_field(value))
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+            Ok(observation_field(&value))
+        }
+    }
+
+    #[cfg(test)]
+    impl<'de> DeserializeSeed<'de> for RootSeed {
+        type Value = UsageEventObservation;
+
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(RootVisitor)
+        }
+    }
+
+    struct RootVisitor;
+
+    impl<'de> serde::Deserialize<'de> for UsageEventObservation {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(RootVisitor)
+        }
+    }
+
+    impl<'de> Visitor<'de> for RootVisitor {
+        type Value = UsageEventObservation;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an OpenAI response object")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut usage = None;
+            let mut output_units = None;
+            while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
+                match key {
+                    ObservationField::Usage => usage = map.next_value_seed(UsageSeed)?,
+                    ObservationField::Choices => output_units = map.next_value_seed(ChoicesSeed)?,
+                    _ => {
+                        map.next_value::<IgnoredAny>()?;
+                    }
                 }
             }
-        }
-        let reported_usage = usage.and_then(|usage: UsageFields| {
-            Some(ReportedAiUsage {
-                input_tokens: usage.prompt_tokens?,
-                output_tokens: usage.completion_tokens?,
-                cache_read_input_tokens: usage
-                    .details_cached_tokens
-                    .or(usage.cache_read_input_tokens)
-                    .unwrap_or(0),
-                cache_write_input_tokens: usage.cache_creation_input_tokens.unwrap_or(0),
-            })
-        });
-        Ok(UsageEventObservation {
-            reported_usage,
-            output_units: output_units.unwrap_or(0),
-        })
-    }
-
-    ignore_json_value_except_map!(UsageEventObservation::default());
-}
-
-struct UsageSeed;
-
-impl<'de> DeserializeSeed<'de> for UsageSeed {
-    type Value = Option<UsageFields>;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(UsageVisitor)
-    }
-}
-
-struct UsageVisitor;
-
-impl<'de> Visitor<'de> for UsageVisitor {
-    type Value = Option<UsageFields>;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("an optional usage object")
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut usage = UsageFields::default();
-        while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
-            match key {
-                ObservationField::PromptTokens => usage.prompt_tokens = map.next_value_seed(U64Seed)?,
-                ObservationField::CompletionTokens => usage.completion_tokens = map.next_value_seed(U64Seed)?,
-                ObservationField::PromptTokensDetails => {
-                    usage.details_cached_tokens = map.next_value_seed(CachedDetailsSeed)?;
-                }
-                ObservationField::CacheReadInputTokens => {
-                    usage.cache_read_input_tokens = map.next_value_seed(U64Seed)?;
-                }
-                ObservationField::CacheCreationInputTokens => {
-                    usage.cache_creation_input_tokens = map.next_value_seed(U64Seed)?;
-                }
-                _ => {
-                    map.next_value::<IgnoredAny>()?;
-                }
-            }
-        }
-        Ok(Some(usage))
-    }
-
-    ignore_json_value_except_map!(None);
-}
-
-struct CachedDetailsSeed;
-
-impl<'de> DeserializeSeed<'de> for CachedDetailsSeed {
-    type Value = Option<u64>;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(CachedDetailsVisitor)
-    }
-}
-
-struct CachedDetailsVisitor;
-
-impl<'de> Visitor<'de> for CachedDetailsVisitor {
-    type Value = Option<u64>;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("an optional prompt token details object")
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut cached = None;
-        while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
-            if matches!(key, ObservationField::CachedTokens) {
-                cached = map.next_value_seed(U64Seed)?;
-            } else {
-                map.next_value::<IgnoredAny>()?;
-            }
-        }
-        Ok(cached)
-    }
-
-    ignore_json_value_except_map!(None);
-}
-
-struct U64Seed;
-
-impl<'de> DeserializeSeed<'de> for U64Seed {
-    type Value = Option<u64>;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(U64Visitor)
-    }
-}
-
-struct U64Visitor;
-
-impl<'de> Visitor<'de> for U64Visitor {
-    type Value = Option<u64>;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("an optional unsigned integer")
-    }
-
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
-        Ok(Some(value))
-    }
-
-    ignore_json_value_except_u64!(None);
-}
-
-struct ChoicesSeed;
-
-impl<'de> DeserializeSeed<'de> for ChoicesSeed {
-    type Value = Option<u64>;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(ChoicesVisitor)
-    }
-}
-
-struct ChoicesVisitor;
-
-impl<'de> Visitor<'de> for ChoicesVisitor {
-    type Value = Option<u64>;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("an optional choices array")
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let mut units = 0_u64;
-        while let Some(qualifies) = sequence.next_element_seed(ChoiceSeed)? {
-            units = units.saturating_add(u64::from(qualifies));
-        }
-        Ok(Some(units))
-    }
-
-    ignore_json_value_except_seq!(None);
-}
-
-struct ChoiceSeed;
-
-impl<'de> DeserializeSeed<'de> for ChoiceSeed {
-    type Value = bool;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(ChoiceVisitor)
-    }
-}
-
-struct ChoiceVisitor;
-
-impl<'de> Visitor<'de> for ChoiceVisitor {
-    type Value = bool;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a choice object")
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut delta = false;
-        while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
-            if matches!(key, ObservationField::Delta) {
-                delta = map.next_value_seed(DeltaSeed)?;
-            } else {
-                map.next_value::<IgnoredAny>()?;
-            }
-        }
-        Ok(delta)
-    }
-
-    ignore_json_value_except_map!(false);
-}
-
-struct DeltaSeed;
-
-impl<'de> DeserializeSeed<'de> for DeltaSeed {
-    type Value = bool;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(DeltaVisitor)
-    }
-}
-
-struct DeltaVisitor;
-
-impl<'de> Visitor<'de> for DeltaVisitor {
-    type Value = bool;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a delta object")
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut content = false;
-        let mut tool_calls = false;
-        while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
-            match key {
-                ObservationField::Content => content = map.next_value_seed(NonEmptyStringSeed)?,
-                ObservationField::ToolCalls => tool_calls = map.next_value_seed(ToolCallsSeed)?,
-                _ => {
-                    map.next_value::<IgnoredAny>()?;
-                }
-            }
-        }
-        Ok(content || tool_calls)
-    }
-
-    ignore_json_value_except_map!(false);
-}
-
-struct NonEmptyStringSeed;
-
-impl<'de> DeserializeSeed<'de> for NonEmptyStringSeed {
-    type Value = bool;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(NonEmptyStringVisitor)
-    }
-}
-
-struct NonEmptyStringVisitor;
-
-impl<'de> Visitor<'de> for NonEmptyStringVisitor {
-    type Value = bool;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("an optional non-empty string")
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
-        Ok(!value.is_empty())
-    }
-
-    fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E> {
-        Ok(!value.is_empty())
-    }
-
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
-        Ok(!value.is_empty())
-    }
-
-    ignore_json_value_except_string!(false);
-}
-
-struct ToolCallsSeed;
-
-impl<'de> DeserializeSeed<'de> for ToolCallsSeed {
-    type Value = bool;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(ToolCallsVisitor)
-    }
-}
-
-struct ToolCallsVisitor;
-
-impl<'de> Visitor<'de> for ToolCallsVisitor {
-    type Value = bool;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("an optional tool calls array")
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let mut any = false;
-        while let Some(qualifies) = sequence.next_element_seed(ToolCallSeed)? {
-            any |= qualifies;
-        }
-        Ok(any)
-    }
-
-    ignore_json_value_except_seq!(false);
-}
-
-struct ToolCallSeed;
-
-impl<'de> DeserializeSeed<'de> for ToolCallSeed {
-    type Value = bool;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(ToolCallVisitor)
-    }
-}
-
-struct ToolCallVisitor;
-
-impl<'de> Visitor<'de> for ToolCallVisitor {
-    type Value = bool;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a tool call object")
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut function = false;
-        while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
-            if matches!(key, ObservationField::Function) {
-                function = map.next_value_seed(FunctionSeed)?;
-            } else {
-                map.next_value::<IgnoredAny>()?;
-            }
-        }
-        Ok(function)
-    }
-
-    ignore_json_value_except_map!(false);
-}
-
-struct FunctionSeed;
-
-impl<'de> DeserializeSeed<'de> for FunctionSeed {
-    type Value = bool;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(FunctionVisitor)
-    }
-}
-
-struct FunctionVisitor;
-
-impl<'de> Visitor<'de> for FunctionVisitor {
-    type Value = bool;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a tool function object")
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut arguments = false;
-        while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
-            if matches!(key, ObservationField::Arguments) {
-                arguments = map.next_value_seed(NonEmptyStringSeed)?;
-            } else {
-                map.next_value::<IgnoredAny>()?;
-            }
-        }
-        Ok(arguments)
-    }
-
-    ignore_json_value_except_map!(false);
-}
-
-#[cfg(test)]
-#[cfg(test)]
-fn approximate_openai_output_units(value: &serde_json::Value) -> u64 {
-    value
-        .get("choices")
-        .and_then(serde_json::Value::as_array)
-        .map(|choices| {
-            choices
-                .iter()
-                .filter(|choice| {
-                    let Some(delta) = choice.get("delta").and_then(serde_json::Value::as_object) else {
-                        return false;
-                    };
-                    delta
-                        .get("content")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|content| !content.is_empty())
-                        || delta
-                            .get("tool_calls")
-                            .and_then(serde_json::Value::as_array)
-                            .is_some_and(|calls| {
-                                calls.iter().any(|call| {
-                                    call.get("function")
-                                        .and_then(serde_json::Value::as_object)
-                                        .and_then(|function| function.get("arguments"))
-                                        .and_then(serde_json::Value::as_str)
-                                        .is_some_and(|arguments| !arguments.is_empty())
-                                })
-                            })
+            let reported_usage = usage.and_then(|usage: UsageFields| {
+                Some(ReportedAiUsage {
+                    input_tokens: usage.prompt_tokens?,
+                    output_tokens: usage.completion_tokens?,
+                    cache_read_input_tokens: usage
+                        .details_cached_tokens
+                        .or(usage.cache_read_input_tokens)
+                        .unwrap_or(0),
+                    cache_write_input_tokens: usage.cache_creation_input_tokens.unwrap_or(0),
                 })
-                .count() as u64
-        })
-        .unwrap_or(0)
+            });
+            Ok(UsageEventObservation {
+                reported_usage,
+                output_units: output_units.unwrap_or(0),
+            })
+        }
+
+        ignore_json_value_except_map!(UsageEventObservation::default());
+    }
+
+    struct UsageSeed;
+
+    impl<'de> DeserializeSeed<'de> for UsageSeed {
+        type Value = Option<UsageFields>;
+
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(UsageVisitor)
+        }
+    }
+
+    struct UsageVisitor;
+
+    impl<'de> Visitor<'de> for UsageVisitor {
+        type Value = Option<UsageFields>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an optional usage object")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut usage = UsageFields::default();
+            while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
+                match key {
+                    ObservationField::PromptTokens => usage.prompt_tokens = map.next_value_seed(U64Seed)?,
+                    ObservationField::CompletionTokens => usage.completion_tokens = map.next_value_seed(U64Seed)?,
+                    ObservationField::PromptTokensDetails => {
+                        usage.details_cached_tokens = map.next_value_seed(CachedDetailsSeed)?;
+                    }
+                    ObservationField::CacheReadInputTokens => {
+                        usage.cache_read_input_tokens = map.next_value_seed(U64Seed)?;
+                    }
+                    ObservationField::CacheCreationInputTokens => {
+                        usage.cache_creation_input_tokens = map.next_value_seed(U64Seed)?;
+                    }
+                    _ => {
+                        map.next_value::<IgnoredAny>()?;
+                    }
+                }
+            }
+            Ok(Some(usage))
+        }
+
+        ignore_json_value_except_map!(None);
+    }
+
+    struct CachedDetailsSeed;
+
+    impl<'de> DeserializeSeed<'de> for CachedDetailsSeed {
+        type Value = Option<u64>;
+
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(CachedDetailsVisitor)
+        }
+    }
+
+    struct CachedDetailsVisitor;
+
+    impl<'de> Visitor<'de> for CachedDetailsVisitor {
+        type Value = Option<u64>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an optional prompt token details object")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut cached = None;
+            while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
+                if matches!(key, ObservationField::CachedTokens) {
+                    cached = map.next_value_seed(U64Seed)?;
+                } else {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+            Ok(cached)
+        }
+
+        ignore_json_value_except_map!(None);
+    }
+
+    struct U64Seed;
+
+    impl<'de> DeserializeSeed<'de> for U64Seed {
+        type Value = Option<u64>;
+
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(U64Visitor)
+        }
+    }
+
+    struct U64Visitor;
+
+    impl<'de> Visitor<'de> for U64Visitor {
+        type Value = Option<u64>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an optional unsigned integer")
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+            Ok(Some(value))
+        }
+
+        ignore_json_value_except_u64!(None);
+    }
+
+    struct ChoicesSeed;
+
+    impl<'de> DeserializeSeed<'de> for ChoicesSeed {
+        type Value = Option<u64>;
+
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(ChoicesVisitor)
+        }
+    }
+
+    struct ChoicesVisitor;
+
+    impl<'de> Visitor<'de> for ChoicesVisitor {
+        type Value = Option<u64>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an optional choices array")
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut units = 0_u64;
+            while let Some(qualifies) = sequence.next_element_seed(ChoiceSeed)? {
+                units = units.saturating_add(u64::from(qualifies));
+            }
+            Ok(Some(units))
+        }
+
+        ignore_json_value_except_seq!(None);
+    }
+
+    struct ChoiceSeed;
+
+    impl<'de> DeserializeSeed<'de> for ChoiceSeed {
+        type Value = bool;
+
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(ChoiceVisitor)
+        }
+    }
+
+    struct ChoiceVisitor;
+
+    impl<'de> Visitor<'de> for ChoiceVisitor {
+        type Value = bool;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a choice object")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut delta = false;
+            while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
+                if matches!(key, ObservationField::Delta) {
+                    delta = map.next_value_seed(DeltaSeed)?;
+                } else {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+            Ok(delta)
+        }
+
+        ignore_json_value_except_map!(false);
+    }
+
+    struct DeltaSeed;
+
+    impl<'de> DeserializeSeed<'de> for DeltaSeed {
+        type Value = bool;
+
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(DeltaVisitor)
+        }
+    }
+
+    struct DeltaVisitor;
+
+    impl<'de> Visitor<'de> for DeltaVisitor {
+        type Value = bool;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a delta object")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut content = false;
+            let mut tool_calls = false;
+            while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
+                match key {
+                    ObservationField::Content => content = map.next_value_seed(NonEmptyStringSeed)?,
+                    ObservationField::ToolCalls => tool_calls = map.next_value_seed(ToolCallsSeed)?,
+                    _ => {
+                        map.next_value::<IgnoredAny>()?;
+                    }
+                }
+            }
+            Ok(content || tool_calls)
+        }
+
+        ignore_json_value_except_map!(false);
+    }
+
+    struct NonEmptyStringSeed;
+
+    impl<'de> DeserializeSeed<'de> for NonEmptyStringSeed {
+        type Value = bool;
+
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(NonEmptyStringVisitor)
+        }
+    }
+
+    struct NonEmptyStringVisitor;
+
+    impl<'de> Visitor<'de> for NonEmptyStringVisitor {
+        type Value = bool;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an optional non-empty string")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+            Ok(!value.is_empty())
+        }
+
+        fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E> {
+            Ok(!value.is_empty())
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+            Ok(!value.is_empty())
+        }
+
+        ignore_json_value_except_string!(false);
+    }
+
+    struct ToolCallsSeed;
+
+    impl<'de> DeserializeSeed<'de> for ToolCallsSeed {
+        type Value = bool;
+
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(ToolCallsVisitor)
+        }
+    }
+
+    struct ToolCallsVisitor;
+
+    impl<'de> Visitor<'de> for ToolCallsVisitor {
+        type Value = bool;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an optional tool calls array")
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut any = false;
+            while let Some(qualifies) = sequence.next_element_seed(ToolCallSeed)? {
+                any |= qualifies;
+            }
+            Ok(any)
+        }
+
+        ignore_json_value_except_seq!(false);
+    }
+
+    struct ToolCallSeed;
+
+    impl<'de> DeserializeSeed<'de> for ToolCallSeed {
+        type Value = bool;
+
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(ToolCallVisitor)
+        }
+    }
+
+    struct ToolCallVisitor;
+
+    impl<'de> Visitor<'de> for ToolCallVisitor {
+        type Value = bool;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a tool call object")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut function = false;
+            while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
+                if matches!(key, ObservationField::Function) {
+                    function = map.next_value_seed(FunctionSeed)?;
+                } else {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+            Ok(function)
+        }
+
+        ignore_json_value_except_map!(false);
+    }
+
+    struct FunctionSeed;
+
+    impl<'de> DeserializeSeed<'de> for FunctionSeed {
+        type Value = bool;
+
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(FunctionVisitor)
+        }
+    }
+
+    struct FunctionVisitor;
+
+    impl<'de> Visitor<'de> for FunctionVisitor {
+        type Value = bool;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a tool function object")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut arguments = false;
+            while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
+                if matches!(key, ObservationField::Arguments) {
+                    arguments = map.next_value_seed(NonEmptyStringSeed)?;
+                } else {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+            Ok(arguments)
+        }
+
+        ignore_json_value_except_map!(false);
+    }
+
+    pub(super) fn approximate_openai_output_units(value: &serde_json::Value) -> u64 {
+        value
+            .get("choices")
+            .and_then(serde_json::Value::as_array)
+            .map(|choices| {
+                choices
+                    .iter()
+                    .filter(|choice| {
+                        let Some(delta) = choice.get("delta").and_then(serde_json::Value::as_object) else {
+                            return false;
+                        };
+                        delta
+                            .get("content")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|content| !content.is_empty())
+                            || delta
+                                .get("tool_calls")
+                                .and_then(serde_json::Value::as_array)
+                                .is_some_and(|calls| {
+                                    calls.iter().any(|call| {
+                                        call.get("function")
+                                            .and_then(serde_json::Value::as_object)
+                                            .and_then(|function| function.get("arguments"))
+                                            .and_then(serde_json::Value::as_str)
+                                            .is_some_and(|arguments| !arguments.is_empty())
+                                    })
+                                })
+                    })
+                    .count() as u64
+            })
+            .unwrap_or(0)
+    }
 }
+
+#[cfg(test)]
+use legacy_usage_observer::{approximate_openai_output_units, observe_openai_streaming_event, UsageEventObservation};
 
 #[async_trait]
 impl StreamingResponseProcessor for UsageExtractionProcessor {
@@ -1401,8 +1460,18 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
         sink: &mut ResponseBodySink,
         session: &mut dyn PluginSession,
     ) {
-        if let Some(bytes) = chunk.as_ref() {
-            self.observe_chunk(bytes, stream_kind);
+        let semantic_guard_active = session.semantic_guard_active() && stream_kind == ResponseStreamKind::Sse;
+        let mut canonical_batch = None;
+        if let Some(bytes) = chunk.take() {
+            let original = bytes.clone();
+            let batch = self.observe_chunk(bytes, stream_kind, semantic_guard_active);
+            if let Some(batch) = batch {
+                canonical_batch = Some(batch);
+            } else if semantic_guard_active && self.semantic_source_overflowed {
+                sink.terminate();
+            } else {
+                *chunk = Some(original);
+            }
         }
         // Recorded for every degraded stream, quota'd or not: even where no
         // enforcement is at stake, degradation silently downgrades reported
@@ -1418,8 +1487,27 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
             session.add_error(EdgionStatus::AiSseDecodeMalformed);
         }
         if end_of_stream {
+            if semantic_guard_active {
+                let mut batch = canonical_batch.take().unwrap_or_else(CanonicalRecordBatch::new);
+                let mut finish_overflowed = false;
+                self.sse.finish_records(|record| {
+                    if batch.push(WindowRecord::from_sse_record(record)).is_err() {
+                        finish_overflowed = true;
+                    }
+                });
+                // An empty batch is the explicit EOS signal that makes the
+                // guard resolve a below-threshold window retained earlier.
+                if finish_overflowed || session.publish_canonical_records(batch).is_err() {
+                    sink.terminate();
+                }
+            }
             self.finish(stream_kind);
             return;
+        }
+        if let Some(batch) = canonical_batch {
+            if session.publish_canonical_records(batch).is_err() {
+                sink.terminate();
+            }
         }
         // Gated on `requested_streaming`, not `stream_kind`. In the ordinary
         // non-streaming case (`stream_kind == None`) `quota.over_limit()`
@@ -1520,8 +1608,14 @@ mod tests {
     use crate::ai::quota::QuotaFinalStatus;
     use crate::plugins::runtime::traits::session::MockPluginSession;
 
-    async fn feed(processor: &mut UsageExtractionProcessor, chunks: &[(&[u8], bool)], kind: ResponseStreamKind) {
+    fn mock_session() -> MockPluginSession {
         let mut session = MockPluginSession::new();
+        session.expect_semantic_guard_active().return_const(false);
+        session
+    }
+
+    async fn feed(processor: &mut UsageExtractionProcessor, chunks: &[(&[u8], bool)], kind: ResponseStreamKind) {
+        let mut session = mock_session();
         // Tests that assert on recorded statuses build their own session; this
         // shared driver only has to tolerate them.
         session.expect_add_error().return_const(());
@@ -1755,7 +1849,7 @@ mod tests {
         // to `Reject`.
         let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, true);
 
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session
             .expect_add_error()
             .withf(|status| *status == EdgionStatus::AiQuotaOverLimitTerminated)
@@ -1804,7 +1898,7 @@ mod tests {
         // isolates this from the separate onExceeded gate covered below.
         let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), false, true);
 
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         let mut sink = ResponseBodySink::new();
         let mut body = Some(Bytes::from_static(
             br#"{"usage":{"prompt_tokens":1,"completion_tokens":1}}"#,
@@ -1834,7 +1928,7 @@ mod tests {
         quota.finish(QuotaFinalStatus::OverLimit);
         let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, false);
 
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         let mut sink = ResponseBodySink::new();
         let mut body = Some(Bytes::from_static(b"data: {\"x\":1}\n\n"));
         processor
@@ -1873,7 +1967,7 @@ mod tests {
         let shared = Arc::new(AiUsageShared::default());
         let quota = Arc::new(QuotaAccumulator::new(16));
         let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, true);
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session
             .expect_add_error()
             .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
@@ -1902,7 +1996,7 @@ mod tests {
         let shared = Arc::new(AiUsageShared::default());
         let quota = Arc::new(QuotaAccumulator::new(16));
         let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, true);
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session
             .expect_add_error()
             .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
@@ -1937,7 +2031,7 @@ mod tests {
         let shared = Arc::new(AiUsageShared::default());
         let quota = Arc::new(QuotaAccumulator::new(16));
         let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session
             .expect_add_error()
             .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
@@ -1968,7 +2062,7 @@ mod tests {
                 requested_streaming,
                 terminate_on_over_limit,
             );
-            let mut session = MockPluginSession::new();
+            let mut session = mock_session();
             session
                 .expect_add_error()
                 .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
@@ -1993,7 +2087,7 @@ mod tests {
         let quota = Arc::new(QuotaAccumulator::new(16));
         quota.finish(QuotaFinalStatus::OverLimit);
         let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session
             .expect_add_error()
             .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
@@ -2020,7 +2114,7 @@ mod tests {
         let shared = Arc::new(AiUsageShared::default());
         let quota = Arc::new(QuotaAccumulator::new(16));
         let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session
             .expect_add_error()
             .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
@@ -2064,7 +2158,7 @@ mod tests {
         let quota = Arc::new(QuotaAccumulator::new(16));
         let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, true);
 
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session
             .expect_add_error()
             .withf(|status| *status == EdgionStatus::AiSseDecodeDegraded)
@@ -2161,7 +2255,7 @@ mod tests {
         let shared = Arc::new(AiUsageShared::default());
         let mut processor = UsageExtractionProcessor::new(shared.clone());
 
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session
             .expect_add_error()
             .withf(|status| *status == EdgionStatus::AiSseDecodeDegraded)
@@ -2194,7 +2288,7 @@ mod tests {
         quota.finish(QuotaFinalStatus::OverLimit);
         let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
 
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session
             .expect_add_error()
             .withf(|status| *status == EdgionStatus::AiSseDecodeDegraded)
@@ -2223,7 +2317,7 @@ mod tests {
         quota.finish(QuotaFinalStatus::OverLimit);
         let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
 
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session
             .expect_add_error()
             .withf(|status| *status == EdgionStatus::AiQuotaErrorEventDropped)

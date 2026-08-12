@@ -9,7 +9,7 @@ use crate::observe::metrics::{
 };
 use crate::observe::AccessLogEntry;
 use crate::EdgionHttpContext;
-use pingora_core::Error as PingoraError;
+use pingora_core::{Error as PingoraError, ErrorSource};
 use pingora_proxy::Session;
 use std::time::Instant;
 
@@ -47,7 +47,16 @@ pub async fn logging(
     // early upstream response) still carry log entries — sweep them into the
     // stage logs before the access-log entry is assembled.
     super::pg_request_body_filter_action::drain_leftover_stream_logs(ctx);
+    if let Some(processor) = ctx.semantic_response_processor.as_mut() {
+        let (outcome, reason) = match _e.map(PingoraError::esource) {
+            Some(ErrorSource::Upstream) => ("upstream-abort", "stream-error"),
+            Some(ErrorSource::Downstream) | None => ("cancelled", "downstream-cancel"),
+            Some(ErrorSource::Internal | ErrorSource::Unset) => ("fail-close", "internal-stream-error"),
+        };
+        processor.finalize_incomplete(outcome, reason);
+    }
     finalize_attached_ext_proc_logs(ctx);
+    finalize_attached_guardrail_log(ctx);
 
     let mut entry = AccessLogEntry::from_context(ctx);
     // Resolve operator-declared `ext` fields here rather than in a request-stage
@@ -127,6 +136,31 @@ fn finalize_attached_ext_proc_logs(ctx: &mut EdgionHttpContext) {
                         log.push(&line);
                         break 'stages;
                     }
+                }
+            }
+        }
+    }
+}
+
+fn finalize_attached_guardrail_log(ctx: &mut EdgionHttpContext) {
+    let Some((identity, owner)) = ctx.attached_guardrail.as_ref() else {
+        return;
+    };
+    let Some(line) = owner.take_summary_line() else {
+        return;
+    };
+    'stages: for stage in &mut ctx.stage_logs {
+        for log in &mut stage.filters {
+            if log.internal_token.as_deref() == Some(identity.as_str()) {
+                log.push(&line);
+                break 'stages;
+            }
+        }
+        for resource in &mut stage.edgion_plugins {
+            for log in &mut resource.logs {
+                if log.internal_token.as_deref() == Some(identity.as_str()) {
+                    log.push(&line);
+                    break 'stages;
                 }
             }
         }

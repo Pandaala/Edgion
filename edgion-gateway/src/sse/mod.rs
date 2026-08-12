@@ -1,6 +1,6 @@
 //! Bounded slice-chain Server-Sent Events (SSE) substrate.
 
-mod chain;
+pub(crate) mod chain;
 pub mod window;
 
 use std::borrow::Cow;
@@ -163,6 +163,30 @@ impl<'a> SseEventRef<'a> {
 
     pub fn data_ranges(&self) -> &[ByteRange] {
         &self.data
+    }
+
+    /// Map a range in the semantic `data:` view back to the original raw SSE
+    /// record. A token crossing the synthetic newline inserted between two
+    /// `data:` fields is deliberately rejected.
+    pub fn semantic_range_to_raw(&self, semantic: ByteRange) -> Result<ByteRange, ()> {
+        if semantic.start > semantic.end {
+            return Err(());
+        }
+        let mut offset = 0usize;
+        for (index, raw) in self.data.iter().copied().enumerate() {
+            let end = offset.checked_add(raw.len()).ok_or(())?;
+            if semantic.start >= offset && semantic.end <= end {
+                return Ok(ByteRange::new(
+                    raw.start.checked_add(semantic.start - offset).ok_or(())?,
+                    raw.start.checked_add(semantic.end - offset).ok_or(())?,
+                ));
+            }
+            offset = end;
+            if index + 1 < self.data.len() {
+                offset = offset.checked_add(1).ok_or(())?;
+            }
+        }
+        Err(())
     }
 
     pub fn line_count(&self) -> usize {
