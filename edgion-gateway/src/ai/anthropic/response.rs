@@ -16,7 +16,7 @@ use crate::ai::usage::{terminate_over_quota, AiUsageShared};
 use crate::ctx::ResponseStreamKind;
 use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
 use crate::plugins::runtime::PluginSession;
-use crate::sse::{SseDecoder, SseEvent};
+use crate::sse::{SseDecoder, SseEventRef};
 
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 const MAX_IDENTIFIER_BYTES: usize = 512;
@@ -152,6 +152,7 @@ pub(crate) struct AnthropicResponseProcessor {
     sealed: bool,
     error_recorded: bool,
     fixed_emitted: bool,
+    pending_output_chars: u64,
 }
 
 impl AnthropicResponseProcessor {
@@ -207,6 +208,7 @@ impl AnthropicResponseProcessor {
             sealed: false,
             error_recorded: false,
             fixed_emitted: false,
+            pending_output_chars: 0,
         }
     }
 
@@ -357,7 +359,7 @@ impl AnthropicResponseProcessor {
         let mut output = Vec::new();
         let mut failed = false;
         let mut decoder = std::mem::replace(&mut self.decoder, SseDecoder::with_default_limit());
-        decoder.feed_each(&input, |event| {
+        decoder.feed_each_bytes(input, |event| {
             if failed {
                 return;
             }
@@ -379,14 +381,15 @@ impl AnthropicResponseProcessor {
         }
     }
 
-    fn process_sse_event(&mut self, event: SseEvent, output: &mut Vec<u8>) -> Result<(), ()> {
+    fn process_sse_event(&mut self, event: SseEventRef<'_>, output: &mut Vec<u8>) -> Result<(), ()> {
         if self.message_stopped {
             return Err(());
         }
-        let value: Value = serde_json::from_str(&event.data).map_err(|_| ())?;
+        let data = event.semantic_data()?;
+        let value: Value = serde_json::from_str(&data).map_err(|_| ())?;
         let object = value.as_object().ok_or(())?;
         let type_ = required_string(object, "type")?;
-        if event.event.as_deref() != Some(type_) {
+        if event.event().as_deref() != Some(type_) {
             return Err(());
         }
         if !is_known_event_type(type_) {
@@ -593,7 +596,9 @@ impl AnthropicResponseProcessor {
                 }),
             )?;
         }
-        append_capped(output, b"data: [DONE]\n\n", MAX_BODY_BYTES)
+        append_capped(output, b"data: [DONE]\n\n", MAX_BODY_BYTES)?;
+        self.pending_output_chars = self.pending_output_chars.saturating_add(6);
+        Ok(())
     }
 
     fn require_active_message(&self) -> Result<(), ()> {
@@ -604,7 +609,7 @@ impl AnthropicResponseProcessor {
         }
     }
 
-    fn push_chunk(&self, output: &mut Vec<u8>, choice: Value) -> Result<(), ()> {
+    fn push_chunk(&mut self, output: &mut Vec<u8>, choice: Value) -> Result<(), ()> {
         self.push_json_event(
             output,
             &json!({
@@ -617,15 +622,20 @@ impl AnthropicResponseProcessor {
         )
     }
 
-    fn push_json_event(&self, output: &mut Vec<u8>, value: &Value) -> Result<(), ()> {
+    fn push_json_event(&mut self, output: &mut Vec<u8>, value: &Value) -> Result<(), ()> {
         let encoded = serde_json::to_vec(value).map_err(|_| ())?;
         append_capped(output, b"data: ", MAX_BODY_BYTES)?;
         append_capped(output, &encoded, MAX_BODY_BYTES)?;
-        append_capped(output, b"\n\n", MAX_BODY_BYTES)
+        append_capped(output, b"\n\n", MAX_BODY_BYTES)?;
+        self.pending_output_chars = self
+            .pending_output_chars
+            .saturating_add(u64::try_from(String::from_utf8_lossy(&encoded).chars().count()).unwrap_or(u64::MAX));
+        Ok(())
     }
 
     fn fail_streaming(&mut self, chunk: &mut Option<Bytes>, session: &mut dyn PluginSession) {
         self.sealed = true;
+        self.pending_output_chars = stream_error_output_chars();
         self.record_translation_failure(session);
         *chunk = Some(Bytes::from_static(STREAM_ERROR));
     }
@@ -662,8 +672,12 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
     ) {
         if self.sealed {
             *chunk = None;
+            if matches!(self.mode, BodyMode::Streaming) {
+                sink.terminate();
+            }
             return;
         }
+        self.pending_output_chars = 0;
         match self.mode {
             BodyMode::AwaitingHeader => self.fail_non_streaming(chunk, session, RESPONSE_TRANSLATION_FAILED),
             BodyMode::Fixed(error) => self.process_fixed(chunk, session, error),
@@ -695,7 +709,25 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
             // injected event is always safe here.
             terminate_over_quota(&self.usage_shared, sink, session, true);
         }
+        if self.sealed && matches!(self.mode, BodyMode::Streaming) {
+            sink.terminate();
+        }
+        if !sink.is_terminated() {
+            let chars = if matches!(self.mode, BodyMode::Streaming) {
+                self.pending_output_chars
+            } else {
+                chunk
+                    .as_ref()
+                    .map(|bytes| u64::try_from(String::from_utf8_lossy(bytes).chars().count()).unwrap_or(u64::MAX))
+                    .unwrap_or(0)
+            };
+            self.usage_shared.add_output_chars(chars);
+        }
     }
+}
+
+fn stream_error_output_chars() -> u64 {
+    u64::try_from(STREAM_ERROR.len().saturating_sub(b"data: \n\n".len())).unwrap_or(u64::MAX)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1266,6 +1298,13 @@ mod tests {
 
     #[tokio::test]
     async fn streaming_translation_handles_every_byte_split_and_exact_usage() {
+        const WIRE_GOLDEN: &str = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"\",\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1785772800,\"id\":\"msg_1\",\"model\":\"claude-canonical\",\"object\":\"chat.completion.chunk\"}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null,\"index\":0}],\"created\":1785772800,\"id\":\"msg_1\",\"model\":\"claude-canonical\",\"object\":\"chat.completion.chunk\"}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"created\":1785772800,\"id\":\"msg_1\",\"model\":\"claude-canonical\",\"object\":\"chat.completion.chunk\"}\n\n",
+            "data: {\"choices\":[],\"created\":1785772800,\"id\":\"msg_1\",\"model\":\"claude-canonical\",\"object\":\"chat.completion.chunk\",\"usage\":{\"completion_tokens\":11,\"prompt_tokens\":15,\"total_tokens\":26}}\n\n",
+            "data: [DONE]\n\n",
+        );
         let fixture = streaming_fixture();
         for split in 0..=fixture.len() {
             let (mut processor, usage) = processor(true, true);
@@ -1281,6 +1320,7 @@ mod tests {
                 output.extend_from_slice(&second);
             }
             let output = String::from_utf8(output).expect("OpenAI SSE is UTF-8");
+            assert_eq!(output, WIRE_GOLDEN, "split={split}");
             assert!(output.contains("\"role\":\"assistant\""), "split={split}");
             assert!(output.contains("\"content\":\"Hello\""), "split={split}");
             assert!(output.contains("\"finish_reason\":\"stop\""), "split={split}");
@@ -1288,11 +1328,22 @@ mod tests {
             assert!(output.ends_with("data: [DONE]\n\n"), "split={split}");
             assert!(!output.contains("claude-provider"));
             assert_eq!(usage.reported_tokens(), Some((15, 11)));
+            let mut oracle = SseDecoder::with_default_limit();
+            oracle.feed_each_bytes(Bytes::copy_from_slice(output.as_bytes()), |_| {});
+            assert_eq!(usage.output_chars(), oracle.take_data_chars(), "split={split}");
         }
     }
 
     #[tokio::test]
     async fn streaming_tools_forward_argument_fragments_without_accumulating() {
+        const WIRE_GOLDEN: &str = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"\",\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1785772800,\"id\":\"msg_tools\",\"model\":\"claude-canonical\",\"object\":\"chat.completion.chunk\"}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"\",\"name\":\"weather\"},\"id\":\"toolu_1\",\"index\":0,\"type\":\"function\"}]},\"finish_reason\":null,\"index\":0}],\"created\":1785772800,\"id\":\"msg_tools\",\"model\":\"claude-canonical\",\"object\":\"chat.completion.chunk\"}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"{\\\"city\\\":\"},\"index\":0}]},\"finish_reason\":null,\"index\":0}],\"created\":1785772800,\"id\":\"msg_tools\",\"model\":\"claude-canonical\",\"object\":\"chat.completion.chunk\"}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"\\\"Paris\\\"}\"},\"index\":0}]},\"finish_reason\":null,\"index\":0}],\"created\":1785772800,\"id\":\"msg_tools\",\"model\":\"claude-canonical\",\"object\":\"chat.completion.chunk\"}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\",\"index\":0}],\"created\":1785772800,\"id\":\"msg_tools\",\"model\":\"claude-canonical\",\"object\":\"chat.completion.chunk\"}\n\n",
+            "data: [DONE]\n\n",
+        );
         let fixture = [
             event(
                 "message_start",
@@ -1325,12 +1376,7 @@ mod tests {
             .await
             .expect("translated stream");
         let output = String::from_utf8(output.to_vec()).expect("UTF-8 output");
-        assert!(output.contains("\"name\":\"weather\""));
-        assert!(output.contains("\"arguments\":\"\""));
-        assert!(output.contains("\"arguments\":\"{\\\"city\\\":\""));
-        assert!(output.contains("\"arguments\":\"\\\"Paris\\\"}\""));
-        assert!(output.contains("\"finish_reason\":\"tool_calls\""));
-        assert!(!output.contains("\"usage\":"));
+        assert_eq!(output, WIRE_GOLDEN);
         assert_eq!(usage.reported_tokens(), Some((1, 2)));
     }
 
@@ -1775,6 +1821,40 @@ mod tests {
              rejection renders"
         );
         assert!(chunk.is_some(), "the translated chunk in flight must not be dropped");
+        assert_eq!(
+            usage.output_chars(),
+            0,
+            "the terminated chunk never reached the old estimator"
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_translation_failure_emits_error_then_terminates_once() {
+        let (mut processor, usage) = processor(true, false);
+        processor.on_response_header(&mut header(200, "text/event-stream"));
+        let mut session = MockPluginSession::new();
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
+            .times(1)
+            .return_const(());
+        let mut sink = ResponseBodySink::new();
+        let mut chunk = Some(Bytes::from_static(b"event: error\ndata: {}\n\n"));
+        processor
+            .on_chunk(&mut chunk, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+
+        assert_eq!(chunk.as_deref(), Some(STREAM_ERROR));
+        assert!(sink.is_terminated());
+        assert!(sink.peek_extra().is_empty());
+        assert_eq!(usage.output_chars(), 0);
+
+        let mut later = Some(Bytes::from_static(b"provider bytes"));
+        processor
+            .on_chunk(&mut later, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+        assert!(later.is_none());
+        assert!(sink.peek_extra().is_empty());
     }
 
     #[tokio::test]

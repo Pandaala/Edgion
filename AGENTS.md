@@ -250,6 +250,12 @@ These are architectural boundaries, not implementation suggestions:
    transform the current chunk but must not accumulate unbounded state.
    Full-upstream-body APIs or modes (for example DSL `resp.body` or ExtProc
    response `BUFFERED`) must be rejected during configuration validation.
+   A semantic response window is permitted only through the canonical
+   `edgion_gateway::sse::window::RawWindow`: it must retain original slices
+   under all independent hard bounds, resolve each generation explicitly as
+   release/replace/discard, flush once at EOS, and never become full-response
+   aggregation. Holding bytes is not itself backpressure; an async decision
+   point provides backpressure only while its processor callback is awaited.
 3. **A plugin-initiated outbound call is a separate bounded exchange.** Such a
    call may aggregate its response body only behind an explicit hard byte cap
    (normally a 1 MiB global/configured limit), enforced while streaming the

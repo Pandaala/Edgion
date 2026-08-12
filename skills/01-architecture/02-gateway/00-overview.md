@@ -7,6 +7,29 @@ description: edgion-gateway overall architecture — dual runtime model, configu
 
 edgion-gateway is Edgion's data plane, a high-performance reverse proxy built on Cloudflare Pingora. It receives Kubernetes-style resource configuration from the Controller via gRPC and translates it into runtime proxy behavior.
 
+## Canonical SSE substrate
+
+`edgion-gateway/src/sse/` is the only production SSE framing and semantic
+window substrate. `SseDecoder` preserves ordered raw records while exposing
+callback-borrowed semantic event views; `sse::window::RawWindow` is the stable,
+policy-neutral owned seam for bounded hold-and-release consumers. A consumer
+must not retain a borrowed event across an `await`. It transfers raw slices and
+stable fragment ranges into `RawWindow`, then consumes one explicit
+release/replace/discard decision per generation and one final decision at EOS.
+
+The window independently bounds logical raw bytes, visible resident capacity,
+slice handles, ranges, lines, complete events, metadata, logical buckets,
+fragments, semantic snapshots, replacement bytes, global overlap, and combined
+residency. Handle pressure coalesces once per generation; other limit failures
+are atomic and never silently truncate raw bytes. The bucket key is choice
+index plus `Content`, `ReasoningContent`, or `ToolArguments(tool_call_index)`.
+
+ExtProc response STREAMED remains transport-chunk based. Semantic-window
+integration requires explicit configuration plus a reviewed source-aware
+wrapper or driver contract; placing an ordinary processor before the current
+ExtProc processor is not sufficient because sink extras are invisible to later
+processors.
+
 ## Dual runtime model
 
 Two runtimes coexist within the Gateway process:

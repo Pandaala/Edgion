@@ -465,7 +465,7 @@ fn prepare_ready_attempt(
         quota: None,
         quota_status: plan.quota_status,
     };
-    let mut response_processors: Vec<Box<dyn StreamingResponseProcessor>> = Vec::with_capacity(2);
+    let mut response_processors: Vec<Box<dyn StreamingResponseProcessor>> = Vec::with_capacity(1);
     if ai_backend.provider == AiProvider::Anthropic {
         let created = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -481,14 +481,14 @@ fn prepare_ready_attempt(
             plan.terminate_on_over_limit,
         )));
     }
-    let usage_processor = usage_processor_for_provider(
-        ai_backend.provider,
-        Arc::clone(&usage),
-        quota_accumulator,
-        requested_streaming,
-        plan.terminate_on_over_limit,
-    );
-    response_processors.push(Box::new(usage_processor));
+    if ai_backend.provider != AiProvider::Anthropic {
+        response_processors.push(Box::new(UsageExtractionProcessor::new_with_quota(
+            Arc::clone(&usage),
+            quota_accumulator,
+            requested_streaming,
+            plan.terminate_on_over_limit,
+        )));
+    }
     let response_processor: Box<dyn StreamingResponseProcessor> = Box::new(AiAttemptResponseProcessor {
         processors: response_processors,
         eos: Arc::clone(&eos),
@@ -859,21 +859,6 @@ fn provider_label(provider: AiProvider) -> AiProviderLabel {
     }
 }
 
-fn usage_processor_for_provider(
-    provider: AiProvider,
-    usage: Arc<AiUsageShared>,
-    quota: Option<Arc<crate::ai::quota::QuotaAccumulator>>,
-    requested_streaming: bool,
-    terminate_on_over_limit: bool,
-) -> UsageExtractionProcessor {
-    match provider {
-        AiProvider::Anthropic => UsageExtractionProcessor::new_estimation_only(usage),
-        AiProvider::OpenAI | AiProvider::OpenAICompatible => {
-            UsageExtractionProcessor::new_with_quota(usage, quota, requested_streaming, terminate_on_over_limit)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1193,22 +1178,6 @@ mod tests {
         let body: Value = serde_json::from_slice(&translated.body).unwrap();
         assert_eq!(body["model"], "claude-provider");
         assert_eq!(body["max_tokens"], 256);
-    }
-
-    #[test]
-    fn anthropic_uses_estimation_only_after_provider_translation() {
-        let anthropic = usage_processor_for_provider(
-            AiProvider::Anthropic,
-            Arc::new(AiUsageShared::default()),
-            None,
-            true,
-            true,
-        );
-        assert!(!anthropic.extracts_reported_usage_for_test());
-
-        let openai =
-            usage_processor_for_provider(AiProvider::OpenAI, Arc::new(AiUsageShared::default()), None, true, true);
-        assert!(openai.extracts_reported_usage_for_test());
     }
 
     #[test]

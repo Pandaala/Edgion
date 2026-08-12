@@ -24,6 +24,12 @@
 //!   once outside the body hot path (same rule as the read-only trait).
 //! - Termination: a processor may end the response via `sink.terminate()`.
 //!   The chain stops immediately; see `on_chunk`.
+//! - A bounded hold-and-release processor consumes exactly one decision for
+//!   each generation. Pass releases held raw bytes in source order; replace
+//!   discards held/current bytes before exposing the replacement; reject
+//!   discards them before pushing a diagnostic and terminating; masking
+//!   releases approved bytes before replacement/terminal bytes and terminate.
+//!   EOS resolves the final generation before propagating the sole EOS.
 
 use async_trait::async_trait;
 use bytes::Bytes;

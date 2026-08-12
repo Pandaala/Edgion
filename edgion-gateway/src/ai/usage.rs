@@ -9,6 +9,7 @@ use bytes::Bytes;
 use edgion_resources::resources::edgion_backend::ParsedAiModelPricing;
 use edgion_resources::EdgionStatus;
 use pingora_proxy::ResponseBodySink;
+use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::Serialize;
 
 use crate::ai::error::render_openai_error;
@@ -18,6 +19,162 @@ use crate::ctx::ResponseStreamKind;
 use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
 use crate::plugins::runtime::PluginSession;
 use crate::sse::SseDecoder;
+
+macro_rules! ignore_json_scalars {
+    ($value:expr) => {
+        fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_borrowed_str<E>(self, _value: &'de str) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_string<E>(self, _value: String) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+    };
+}
+
+macro_rules! ignore_json_containers {
+    ($value:expr) => {
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            while sequence.next_element::<IgnoredAny>()?.is_some() {}
+            Ok($value)
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+            Ok($value)
+        }
+    };
+}
+
+macro_rules! ignore_json_value_except_map {
+    ($value:expr) => {
+        ignore_json_scalars!($value);
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            while sequence.next_element::<IgnoredAny>()?.is_some() {}
+            Ok($value)
+        }
+    };
+}
+
+macro_rules! ignore_json_value_except_seq {
+    ($value:expr) => {
+        ignore_json_scalars!($value);
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+            Ok($value)
+        }
+    };
+}
+
+macro_rules! ignore_json_value_except_u64 {
+    ($value:expr) => {
+        fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_borrowed_str<E>(self, _value: &'de str) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_string<E>(self, _value: String) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        ignore_json_containers!($value);
+    };
+}
+
+macro_rules! ignore_json_value_except_string {
+    ($value:expr) => {
+        fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E> {
+            Ok($value)
+        }
+
+        ignore_json_containers!($value);
+    };
+}
 
 pub const MAX_NON_STREAMING_USAGE_BYTES: usize = 1024 * 1024;
 
@@ -357,7 +514,7 @@ impl AiUsageShared {
         self.gateway_terminated.store(true, Ordering::Release);
     }
 
-    fn add_output_chars(&self, delta: u64) {
+    pub(crate) fn add_output_chars(&self, delta: u64) {
         let _ = self
             .output_chars
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
@@ -434,167 +591,6 @@ struct Utf8CharCounter {
     pending: [u8; 4],
     pending_len: usize,
     expected_len: usize,
-}
-
-#[derive(Default)]
-enum SseDataLineState {
-    #[default]
-    MatchingName,
-    NameComplete,
-    ValueStart,
-    Value,
-    Ignore,
-}
-
-/// Fixed-state observer for the semantic values of SSE `data` fields.
-///
-/// This intentionally runs independently of exact-usage decoding: it can count
-/// content before a line or event is complete, and continues after the bounded
-/// decoder degrades. Framing and all non-`data` fields are ignored. Multiple
-/// `data` lines in one event contribute the newline inserted by SSE semantics.
-#[derive(Default)]
-struct SseDataCharCounter {
-    chars: Utf8CharCounter,
-    state: SseDataLineState,
-    matched_name_bytes: usize,
-    event_has_data: bool,
-    line_semantics_started: bool,
-    skip_lf_after_cr: bool,
-    bom_prefix: [u8; 3],
-    bom_prefix_len: usize,
-    bom_checked: bool,
-}
-
-impl SseDataCharCounter {
-    fn feed(&mut self, bytes: &[u8]) -> u64 {
-        let mut count = 0_u64;
-        let mut index = 0;
-
-        while !self.bom_checked && index < bytes.len() {
-            self.bom_prefix[self.bom_prefix_len] = bytes[index];
-            self.bom_prefix_len += 1;
-            index += 1;
-
-            let prefix = &self.bom_prefix[..self.bom_prefix_len];
-            if !b"\xef\xbb\xbf".starts_with(prefix) {
-                let replay = self.bom_prefix;
-                let replay_len = self.bom_prefix_len;
-                self.bom_prefix_len = 0;
-                self.bom_checked = true;
-                for &byte in &replay[..replay_len] {
-                    count = count.saturating_add(self.feed_byte(byte));
-                }
-            } else if self.bom_prefix_len == self.bom_prefix.len() {
-                self.bom_prefix_len = 0;
-                self.bom_checked = true;
-            }
-        }
-
-        if !self.bom_checked {
-            return count;
-        }
-        for &byte in &bytes[index..] {
-            count = count.saturating_add(self.feed_byte(byte));
-        }
-        count
-    }
-
-    fn feed_byte(&mut self, byte: u8) -> u64 {
-        if self.skip_lf_after_cr {
-            self.skip_lf_after_cr = false;
-            if byte == b'\n' {
-                return 0;
-            }
-        }
-
-        match byte {
-            b'\r' => {
-                let count = self.finish_line();
-                self.skip_lf_after_cr = true;
-                count
-            }
-            b'\n' => self.finish_line(),
-            _ => self.feed_line_byte(byte),
-        }
-    }
-
-    fn feed_line_byte(&mut self, byte: u8) -> u64 {
-        match self.state {
-            SseDataLineState::MatchingName => {
-                const NAME: &[u8] = b"data";
-                if byte == NAME[self.matched_name_bytes] {
-                    self.matched_name_bytes += 1;
-                    if self.matched_name_bytes == NAME.len() {
-                        self.state = SseDataLineState::NameComplete;
-                    }
-                } else {
-                    self.state = SseDataLineState::Ignore;
-                }
-                0
-            }
-            SseDataLineState::NameComplete => {
-                if byte == b':' {
-                    self.state = SseDataLineState::ValueStart;
-                } else {
-                    self.state = SseDataLineState::Ignore;
-                }
-                0
-            }
-            SseDataLineState::ValueStart => {
-                self.state = SseDataLineState::Value;
-                if byte == b' ' {
-                    0
-                } else {
-                    self.feed_value_byte(byte)
-                }
-            }
-            SseDataLineState::Value => self.feed_value_byte(byte),
-            SseDataLineState::Ignore => 0,
-        }
-    }
-
-    fn feed_value_byte(&mut self, byte: u8) -> u64 {
-        let mut count = self.start_line_semantics();
-        count = count.saturating_add(self.chars.feed(&[byte]));
-        count
-    }
-
-    fn start_line_semantics(&mut self) -> u64 {
-        if self.line_semantics_started {
-            return 0;
-        }
-        self.line_semantics_started = true;
-        if self.event_has_data {
-            self.chars.feed(b"\n")
-        } else {
-            0
-        }
-    }
-
-    fn finish_line(&mut self) -> u64 {
-        let blank_line = matches!(self.state, SseDataLineState::MatchingName) && self.matched_name_bytes == 0;
-        let is_data = matches!(
-            self.state,
-            SseDataLineState::NameComplete | SseDataLineState::ValueStart | SseDataLineState::Value
-        );
-        let mut count = 0_u64;
-        if is_data {
-            count = count.saturating_add(self.start_line_semantics());
-            count = count.saturating_add(self.chars.finish());
-            self.event_has_data = true;
-        }
-        if blank_line {
-            self.event_has_data = false;
-        }
-        self.state = SseDataLineState::MatchingName;
-        self.matched_name_bytes = 0;
-        self.line_semantics_started = false;
-        count
-    }
-
-    fn finish(&mut self) -> u64 {
-        self.chars.finish()
-    }
 }
 
 impl Utf8CharCounter {
@@ -674,7 +670,6 @@ pub struct UsageExtractionProcessor {
     non_streaming_overflowed: bool,
     non_streaming_parsed: bool,
     non_streaming_chars: Utf8CharCounter,
-    sse_chars: SseDataCharCounter,
     chars_finished: bool,
     /// Latches the one-shot `AiSseDecodeDegraded` record. The decoder's
     /// degraded flag is sticky, so without this every subsequent chunk of the
@@ -684,31 +679,11 @@ pub struct UsageExtractionProcessor {
     /// malformed-event count is cumulative, so later chunks must not append
     /// the observation status again.
     sse_malformed_reported: bool,
-    /// Whether this instance owns provider usage extraction. Provider-specific
-    /// translators disable it while retaining the character estimate.
-    extract_reported_usage: bool,
 }
 
 impl UsageExtractionProcessor {
     pub fn new(shared: Arc<AiUsageShared>) -> Self {
         Self::new_with_quota(shared, None, false, false)
-    }
-
-    /// Track only the translated response size used by estimated settlement.
-    ///
-    /// Provider-specific processors already own exact usage extraction. This
-    /// mode preserves the character fallback for incomplete or
-    /// gateway-terminated responses without buffering and parsing the
-    /// translated body a second time.
-    pub fn new_estimation_only(shared: Arc<AiUsageShared>) -> Self {
-        let mut processor = Self::new(shared);
-        processor.extract_reported_usage = false;
-        processor
-    }
-
-    #[cfg(test)]
-    pub(crate) fn extracts_reported_usage_for_test(&self) -> bool {
-        self.extract_reported_usage
     }
 
     pub fn new_with_quota(
@@ -717,52 +692,54 @@ impl UsageExtractionProcessor {
         requested_streaming: bool,
         terminate_on_over_limit: bool,
     ) -> Self {
+        let mut sse = SseDecoder::with_default_limit();
+        sse.enable_data_char_counting();
         Self {
             shared,
             quota,
             requested_streaming,
             terminate_on_over_limit,
-            sse: SseDecoder::with_default_limit(),
+            sse,
             non_streaming: Vec::new(),
             non_streaming_overflowed: false,
             non_streaming_parsed: false,
             non_streaming_chars: Utf8CharCounter::default(),
-            sse_chars: SseDataCharCounter::default(),
             chars_finished: false,
             sse_degraded_reported: false,
             sse_malformed_reported: false,
-            extract_reported_usage: true,
         }
     }
 
-    fn observe_chunk(&mut self, chunk: &[u8], stream_kind: ResponseStreamKind) {
+    fn observe_chunk(&mut self, chunk: &Bytes, stream_kind: ResponseStreamKind) {
         match stream_kind {
             ResponseStreamKind::Sse => {
-                self.shared.add_output_chars(self.sse_chars.feed(chunk));
-                if !self.extract_reported_usage {
-                    return;
-                }
                 let shared = &self.shared;
                 let quota = self.quota.as_ref();
-                self.sse.feed_each(chunk, |event| {
-                    if event.data != "[DONE]" {
-                        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(event.data.as_bytes()) {
+                self.sse.feed_each_bytes(chunk.clone(), |event| {
+                    if !event.data_is_literal(b"[DONE]") {
+                        if let Ok(observation) = event.deserialize_data::<UsageEventObservation>() {
                             if let Some(quota) = quota {
-                                quota.add_output_units(approximate_openai_output_units(&value));
+                                quota.add_output_units(observation.output_units);
                             }
-                            try_publish_usage_value(shared, &value);
+                            if let Some(usage) = observation.reported_usage {
+                                shared.observe_reported_usage(
+                                    usage.input_tokens,
+                                    usage.output_tokens,
+                                    usage.cache_read_input_tokens,
+                                    usage.cache_write_input_tokens,
+                                );
+                            }
                         }
                     }
                 });
+                self.shared.add_output_chars(self.sse.take_data_chars());
                 if self.sse.degraded() {
                     self.shared.sse_degraded.store(true, Ordering::Release);
                 }
             }
             ResponseStreamKind::None => {
                 self.shared.add_output_chars(self.non_streaming_chars.feed(chunk));
-                if self.extract_reported_usage {
-                    self.observe_non_streaming(chunk);
-                }
+                self.observe_non_streaming(chunk);
             }
         }
     }
@@ -788,23 +765,576 @@ impl UsageExtractionProcessor {
     fn finish(&mut self, stream_kind: ResponseStreamKind) {
         if !self.chars_finished {
             let remaining = match stream_kind {
-                ResponseStreamKind::Sse => self.sse_chars.finish(),
+                ResponseStreamKind::Sse => self.sse.finish_data_chars(),
                 ResponseStreamKind::None => self.non_streaming_chars.finish(),
             };
             self.shared.add_output_chars(remaining);
             self.chars_finished = true;
         }
-        if self.extract_reported_usage
-            && stream_kind == ResponseStreamKind::None
-            && !self.non_streaming_overflowed
-            && !self.non_streaming_parsed
-        {
+        if stream_kind == ResponseStreamKind::None && !self.non_streaming_overflowed && !self.non_streaming_parsed {
             self.non_streaming_parsed = true;
             try_publish_usage(&self.shared, &self.non_streaming);
         }
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct UsageEventObservation {
+    reported_usage: Option<ReportedAiUsage>,
+    output_units: u64,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct UsageFields {
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    details_cached_tokens: Option<u64>,
+    cache_read_input_tokens: Option<u64>,
+    cache_creation_input_tokens: Option<u64>,
+}
+
+#[cfg(test)]
+fn observe_openai_streaming_event(json: &[u8]) -> Option<UsageEventObservation> {
+    let mut deserializer = serde_json::Deserializer::from_slice(json);
+    let observation = RootSeed.deserialize(&mut deserializer).ok()?;
+    deserializer.end().ok()?;
+    Some(observation)
+}
+
+#[cfg(test)]
+struct RootSeed;
+
+#[derive(Clone, Copy)]
+enum ObservationField {
+    Usage,
+    Choices,
+    PromptTokens,
+    CompletionTokens,
+    PromptTokensDetails,
+    CachedTokens,
+    CacheReadInputTokens,
+    CacheCreationInputTokens,
+    Delta,
+    Content,
+    ToolCalls,
+    Function,
+    Arguments,
+    Other,
+}
+
+struct ObservationFieldSeed;
+
+impl<'de> DeserializeSeed<'de> for ObservationFieldSeed {
+    type Value = ObservationField;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_identifier(ObservationFieldVisitor)
+    }
+}
+
+struct ObservationFieldVisitor;
+
+fn observation_field(value: &str) -> ObservationField {
+    match value {
+        "usage" => ObservationField::Usage,
+        "choices" => ObservationField::Choices,
+        "prompt_tokens" => ObservationField::PromptTokens,
+        "completion_tokens" => ObservationField::CompletionTokens,
+        "prompt_tokens_details" => ObservationField::PromptTokensDetails,
+        "cached_tokens" => ObservationField::CachedTokens,
+        "cache_read_input_tokens" => ObservationField::CacheReadInputTokens,
+        "cache_creation_input_tokens" => ObservationField::CacheCreationInputTokens,
+        "delta" => ObservationField::Delta,
+        "content" => ObservationField::Content,
+        "tool_calls" => ObservationField::ToolCalls,
+        "function" => ObservationField::Function,
+        "arguments" => ObservationField::Arguments,
+        _ => ObservationField::Other,
+    }
+}
+
+impl Visitor<'_> for ObservationFieldVisitor {
+    type Value = ObservationField;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON object field")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(observation_field(value))
+    }
+
+    fn visit_borrowed_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(observation_field(value))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(observation_field(&value))
+    }
+}
+
+#[cfg(test)]
+impl<'de> DeserializeSeed<'de> for RootSeed {
+    type Value = UsageEventObservation;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(RootVisitor)
+    }
+}
+
+struct RootVisitor;
+
+impl<'de> serde::Deserialize<'de> for UsageEventObservation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(RootVisitor)
+    }
+}
+
+impl<'de> Visitor<'de> for RootVisitor {
+    type Value = UsageEventObservation;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("an OpenAI response object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut usage = None;
+        let mut output_units = None;
+        while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
+            match key {
+                ObservationField::Usage => usage = map.next_value_seed(UsageSeed)?,
+                ObservationField::Choices => output_units = map.next_value_seed(ChoicesSeed)?,
+                _ => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        let reported_usage = usage.and_then(|usage: UsageFields| {
+            Some(ReportedAiUsage {
+                input_tokens: usage.prompt_tokens?,
+                output_tokens: usage.completion_tokens?,
+                cache_read_input_tokens: usage
+                    .details_cached_tokens
+                    .or(usage.cache_read_input_tokens)
+                    .unwrap_or(0),
+                cache_write_input_tokens: usage.cache_creation_input_tokens.unwrap_or(0),
+            })
+        });
+        Ok(UsageEventObservation {
+            reported_usage,
+            output_units: output_units.unwrap_or(0),
+        })
+    }
+
+    ignore_json_value_except_map!(UsageEventObservation::default());
+}
+
+struct UsageSeed;
+
+impl<'de> DeserializeSeed<'de> for UsageSeed {
+    type Value = Option<UsageFields>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(UsageVisitor)
+    }
+}
+
+struct UsageVisitor;
+
+impl<'de> Visitor<'de> for UsageVisitor {
+    type Value = Option<UsageFields>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("an optional usage object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut usage = UsageFields::default();
+        while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
+            match key {
+                ObservationField::PromptTokens => usage.prompt_tokens = map.next_value_seed(U64Seed)?,
+                ObservationField::CompletionTokens => usage.completion_tokens = map.next_value_seed(U64Seed)?,
+                ObservationField::PromptTokensDetails => {
+                    usage.details_cached_tokens = map.next_value_seed(CachedDetailsSeed)?;
+                }
+                ObservationField::CacheReadInputTokens => {
+                    usage.cache_read_input_tokens = map.next_value_seed(U64Seed)?;
+                }
+                ObservationField::CacheCreationInputTokens => {
+                    usage.cache_creation_input_tokens = map.next_value_seed(U64Seed)?;
+                }
+                _ => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(Some(usage))
+    }
+
+    ignore_json_value_except_map!(None);
+}
+
+struct CachedDetailsSeed;
+
+impl<'de> DeserializeSeed<'de> for CachedDetailsSeed {
+    type Value = Option<u64>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(CachedDetailsVisitor)
+    }
+}
+
+struct CachedDetailsVisitor;
+
+impl<'de> Visitor<'de> for CachedDetailsVisitor {
+    type Value = Option<u64>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("an optional prompt token details object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut cached = None;
+        while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
+            if matches!(key, ObservationField::CachedTokens) {
+                cached = map.next_value_seed(U64Seed)?;
+            } else {
+                map.next_value::<IgnoredAny>()?;
+            }
+        }
+        Ok(cached)
+    }
+
+    ignore_json_value_except_map!(None);
+}
+
+struct U64Seed;
+
+impl<'de> DeserializeSeed<'de> for U64Seed {
+    type Value = Option<u64>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(U64Visitor)
+    }
+}
+
+struct U64Visitor;
+
+impl<'de> Visitor<'de> for U64Visitor {
+    type Value = Option<u64>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("an optional unsigned integer")
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(Some(value))
+    }
+
+    ignore_json_value_except_u64!(None);
+}
+
+struct ChoicesSeed;
+
+impl<'de> DeserializeSeed<'de> for ChoicesSeed {
+    type Value = Option<u64>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(ChoicesVisitor)
+    }
+}
+
+struct ChoicesVisitor;
+
+impl<'de> Visitor<'de> for ChoicesVisitor {
+    type Value = Option<u64>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("an optional choices array")
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut units = 0_u64;
+        while let Some(qualifies) = sequence.next_element_seed(ChoiceSeed)? {
+            units = units.saturating_add(u64::from(qualifies));
+        }
+        Ok(Some(units))
+    }
+
+    ignore_json_value_except_seq!(None);
+}
+
+struct ChoiceSeed;
+
+impl<'de> DeserializeSeed<'de> for ChoiceSeed {
+    type Value = bool;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(ChoiceVisitor)
+    }
+}
+
+struct ChoiceVisitor;
+
+impl<'de> Visitor<'de> for ChoiceVisitor {
+    type Value = bool;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a choice object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut delta = false;
+        while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
+            if matches!(key, ObservationField::Delta) {
+                delta = map.next_value_seed(DeltaSeed)?;
+            } else {
+                map.next_value::<IgnoredAny>()?;
+            }
+        }
+        Ok(delta)
+    }
+
+    ignore_json_value_except_map!(false);
+}
+
+struct DeltaSeed;
+
+impl<'de> DeserializeSeed<'de> for DeltaSeed {
+    type Value = bool;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(DeltaVisitor)
+    }
+}
+
+struct DeltaVisitor;
+
+impl<'de> Visitor<'de> for DeltaVisitor {
+    type Value = bool;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a delta object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut content = false;
+        let mut tool_calls = false;
+        while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
+            match key {
+                ObservationField::Content => content = map.next_value_seed(NonEmptyStringSeed)?,
+                ObservationField::ToolCalls => tool_calls = map.next_value_seed(ToolCallsSeed)?,
+                _ => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(content || tool_calls)
+    }
+
+    ignore_json_value_except_map!(false);
+}
+
+struct NonEmptyStringSeed;
+
+impl<'de> DeserializeSeed<'de> for NonEmptyStringSeed {
+    type Value = bool;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(NonEmptyStringVisitor)
+    }
+}
+
+struct NonEmptyStringVisitor;
+
+impl<'de> Visitor<'de> for NonEmptyStringVisitor {
+    type Value = bool;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("an optional non-empty string")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(!value.is_empty())
+    }
+
+    fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E> {
+        Ok(!value.is_empty())
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(!value.is_empty())
+    }
+
+    ignore_json_value_except_string!(false);
+}
+
+struct ToolCallsSeed;
+
+impl<'de> DeserializeSeed<'de> for ToolCallsSeed {
+    type Value = bool;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(ToolCallsVisitor)
+    }
+}
+
+struct ToolCallsVisitor;
+
+impl<'de> Visitor<'de> for ToolCallsVisitor {
+    type Value = bool;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("an optional tool calls array")
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut any = false;
+        while let Some(qualifies) = sequence.next_element_seed(ToolCallSeed)? {
+            any |= qualifies;
+        }
+        Ok(any)
+    }
+
+    ignore_json_value_except_seq!(false);
+}
+
+struct ToolCallSeed;
+
+impl<'de> DeserializeSeed<'de> for ToolCallSeed {
+    type Value = bool;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(ToolCallVisitor)
+    }
+}
+
+struct ToolCallVisitor;
+
+impl<'de> Visitor<'de> for ToolCallVisitor {
+    type Value = bool;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a tool call object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut function = false;
+        while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
+            if matches!(key, ObservationField::Function) {
+                function = map.next_value_seed(FunctionSeed)?;
+            } else {
+                map.next_value::<IgnoredAny>()?;
+            }
+        }
+        Ok(function)
+    }
+
+    ignore_json_value_except_map!(false);
+}
+
+struct FunctionSeed;
+
+impl<'de> DeserializeSeed<'de> for FunctionSeed {
+    type Value = bool;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(FunctionVisitor)
+    }
+}
+
+struct FunctionVisitor;
+
+impl<'de> Visitor<'de> for FunctionVisitor {
+    type Value = bool;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a tool function object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut arguments = false;
+        while let Some(key) = map.next_key_seed(ObservationFieldSeed)? {
+            if matches!(key, ObservationField::Arguments) {
+                arguments = map.next_value_seed(NonEmptyStringSeed)?;
+            } else {
+                map.next_value::<IgnoredAny>()?;
+            }
+        }
+        Ok(arguments)
+    }
+
+    ignore_json_value_except_map!(false);
+}
+
+#[cfg(test)]
+#[cfg(test)]
 fn approximate_openai_output_units(value: &serde_json::Value) -> u64 {
     value
         .get("choices")
@@ -871,7 +1401,7 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
         sink: &mut ResponseBodySink,
         session: &mut dyn PluginSession,
     ) {
-        if let Some(bytes) = chunk.as_deref() {
+        if let Some(bytes) = chunk.as_ref() {
             self.observe_chunk(bytes, stream_kind);
         }
         // Recorded for every degraded stream, quota'd or not: even where no
@@ -1072,36 +1602,6 @@ mod tests {
         feed(&mut overflow, &[(&oversized, true)], ResponseStreamKind::None).await;
         assert!(overflow_shared.non_streaming_overflowed());
         assert_eq!(overflow_shared.reported_tokens(), None);
-    }
-
-    #[tokio::test]
-    async fn estimation_only_counts_without_buffering_or_parsing() {
-        let shared = Arc::new(AiUsageShared::default());
-        let mut processor = UsageExtractionProcessor::new_estimation_only(shared.clone());
-        let valid = br#"{"usage":{"prompt_tokens":2,"completion_tokens":3}}"#;
-        feed(&mut processor, &[(valid, true)], ResponseStreamKind::None).await;
-        assert_eq!(shared.output_chars(), valid.len() as u64);
-        assert_eq!(shared.reported_tokens(), None);
-
-        let oversized_shared = Arc::new(AiUsageShared::default());
-        let mut oversized_processor = UsageExtractionProcessor::new_estimation_only(oversized_shared.clone());
-        let oversized = vec![b'x'; MAX_NON_STREAMING_USAGE_BYTES + 1];
-        feed(
-            &mut oversized_processor,
-            &[(&oversized, true)],
-            ResponseStreamKind::None,
-        )
-        .await;
-        assert_eq!(oversized_shared.output_chars(), oversized.len() as u64);
-        assert!(!oversized_shared.non_streaming_overflowed());
-
-        let sse_shared = Arc::new(AiUsageShared::default());
-        let mut sse_processor = UsageExtractionProcessor::new_estimation_only(sse_shared.clone());
-        let data = br#"{"usage":{"prompt_tokens":5,"completion_tokens":8}}"#;
-        let event = [b"data: ".as_slice(), data, b"\n\n"].concat();
-        feed(&mut sse_processor, &[(&event, true)], ResponseStreamKind::Sse).await;
-        assert_eq!(sse_shared.output_chars(), data.len() as u64);
-        assert_eq!(sse_shared.reported_tokens(), None);
     }
 
     #[tokio::test]
@@ -1816,6 +2316,130 @@ mod tests {
             ),
             0
         );
+    }
+
+    fn value_observation_oracle(json: &[u8]) -> Option<UsageEventObservation> {
+        let value: serde_json::Value = serde_json::from_slice(json).ok()?;
+        let reported_usage = value
+            .get("usage")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|usage| {
+                Some(ReportedAiUsage {
+                    input_tokens: usage.get("prompt_tokens")?.as_u64()?,
+                    output_tokens: usage.get("completion_tokens")?.as_u64()?,
+                    cache_read_input_tokens: usage
+                        .get("prompt_tokens_details")
+                        .and_then(serde_json::Value::as_object)
+                        .and_then(|details| details.get("cached_tokens"))
+                        .and_then(serde_json::Value::as_u64)
+                        .or_else(|| usage.get("cache_read_input_tokens").and_then(serde_json::Value::as_u64))
+                        .unwrap_or(0),
+                    cache_write_input_tokens: usage
+                        .get("cache_creation_input_tokens")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0),
+                })
+            });
+        Some(UsageEventObservation {
+            reported_usage,
+            output_units: approximate_openai_output_units(&value),
+        })
+    }
+
+    #[test]
+    fn streaming_observer_matches_value_for_tolerant_numeric_and_duplicate_fields() {
+        let cases: &[&[u8]] = &[
+            br#"{"usage":{"prompt_tokens":7,"completion_tokens":9,"prompt_tokens_details":{"cached_tokens":3},"cache_read_input_tokens":2,"cache_creation_input_tokens":1}}"#,
+            br#"{"usage":{"prompt_tokens":null,"completion_tokens":9}}"#,
+            br#"{"usage":{"prompt_tokens":-1,"completion_tokens":9}}"#,
+            br#"{"usage":{"prompt_tokens":1.5,"completion_tokens":9}}"#,
+            br#"{"usage":{"prompt_tokens":18446744073709551616,"completion_tokens":9}}"#,
+            br#"{"usage":{"prompt_tokens":1,"prompt_tokens":"wrong","completion_tokens":9}}"#,
+            br#"{"usage":{"prompt_tokens":"wrong","prompt_tokens":1,"completion_tokens":9}}"#,
+            br#"{"usage":{"prompt_tokens":1,"completion_tokens":2,"cache_read_input_tokens":4,"prompt_tokens_details":{"cached_tokens":5,"cached_tokens":null}}}"#,
+            br#"{"usage":{"prompt_tokens":1,"completion_tokens":2,"cache_read_input_tokens":4,"prompt_tokens_details":false}}"#,
+            br#"{"usage":{"prompt_tokens":1,"completion_tokens":2},"usage":null}"#,
+            br#"{"usage":null,"usage":{"prompt_tokens":1,"completion_tokens":2}}"#,
+        ];
+        for json in cases {
+            assert_eq!(
+                observe_openai_streaming_event(json),
+                value_observation_oracle(json),
+                "{json:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn streaming_observer_matches_value_for_choice_replacement_and_escapes() {
+        let cases: &[&[u8]] = &[
+            br#"{"choices":[{"delta":{"content":"hello","tool_calls":[{"function":{"arguments":"x"}}]}}]}"#,
+            br#"{"choices":[{"delta":{"content":""}},{"delta":{"tool_calls":[{"function":{"arguments":""}},{"function":{"arguments":"x"}}]}}]}"#,
+            br#"{"choices":[{"delta":{"content":"x","content":null}}]}"#,
+            br#"{"choices":[{"delta":{"content":null,"content":"x"}}]}"#,
+            br#"{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"x","arguments":3}}]}}]}"#,
+            br#"{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"x"},"function":false}]}}]}"#,
+            br#"{"choices":[{"delta":{"content":"x"},"delta":null}]}"#,
+            br#"{"choices":[{"delta":null,"delta":{"content":"x"}}]}"#,
+            br#"{"choices":[{"delta":{"content":"x"}}],"choices":false}"#,
+            br#"{"choices":false,"choices":[{"delta":{"content":"x"}}]}"#,
+            br#"{"cho\u0069ces":[{"del\u0074a":{"cont\u0065nt":"\u20ac"}}]}"#,
+        ];
+        for json in cases {
+            assert_eq!(
+                observe_openai_streaming_event(json),
+                value_observation_oracle(json),
+                "{json:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn streaming_observer_counts_at_most_one_unit_per_qualifying_choice() {
+        let observation = observe_openai_streaming_event(
+            br#"{"choices":[{"delta":{"content":"x","tool_calls":[{"function":{"arguments":"a"}},{"function":{"arguments":"b"}}]}},{"delta":{"content":"y"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(observation.output_units, 2);
+    }
+
+    #[test]
+    fn streaming_observer_discards_the_whole_malformed_document() {
+        for json in [
+            b"{not-json".as_slice(),
+            br#"{"usage":{"prompt_tokens":1,"completion_tokens":2},"unknown":[1,}"#,
+            br#"{"choices":[{"delta":{"content":"x"}}]} trailing"#,
+        ] {
+            assert_eq!(observe_openai_streaming_event(json), None);
+        }
+    }
+
+    #[test]
+    fn streaming_observer_bounded_cross_product_matches_value_oracle() {
+        let numeric_values = ["0", "17", "null", "-1", "1.25", "18446744073709551616", "{}", "[]"];
+        let string_values = [r#"""#, r#""x""#, r#""\u20ac""#, "null", "7", "{}", "[]"];
+        for prompt in numeric_values {
+            for completion in numeric_values {
+                let json = format!(r#"{{"usage":{{"prompt_tokens":{prompt},"completion_tokens":{completion}}}}}"#);
+                assert_eq!(
+                    observe_openai_streaming_event(json.as_bytes()),
+                    value_observation_oracle(json.as_bytes()),
+                    "{json}"
+                );
+            }
+        }
+        for content in string_values {
+            for arguments in string_values {
+                let json = format!(
+                    r#"{{"choices":[{{"delta":{{"content":{content},"tool_calls":[{{"function":{{"arguments":{arguments}}}}}]}}}}]}}"#
+                );
+                assert_eq!(
+                    observe_openai_streaming_event(json.as_bytes()),
+                    value_observation_oracle(json.as_bytes()),
+                    "{json}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
