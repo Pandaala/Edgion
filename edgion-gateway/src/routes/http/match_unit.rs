@@ -98,7 +98,7 @@ pub struct CompiledBackend {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompiledBackendTarget {
     Service { namespace: String, name: String },
-    EdgionAIService { namespace: String, name: String },
+    EdgionBackend { namespace: String, name: String },
     Invalid { classified_kind: HTTPBackendRefKind },
 }
 
@@ -117,13 +117,13 @@ impl CompiledBackend {
         )
     }
 
-    /// Whether this backend is an authorized EdgionAIService reference.
+    /// Whether this backend is an authorized EdgionBackend reference.
     ///
     /// AI routing bypasses the generic Service selector, so its callers must
     /// use this predicate rather than kind-only matching to preserve the
     /// Controller's ReferenceGrant decision.
-    pub fn is_permitted_ai_service(&self) -> bool {
-        self.schema.ref_denied.is_none() && matches!(self.target, CompiledBackendTarget::EdgionAIService { .. })
+    pub fn is_permitted_ai_backend(&self) -> bool {
+        self.schema.ref_denied.is_none() && matches!(self.target, CompiledBackendTarget::EdgionBackend { .. })
     }
 
     pub fn compile(
@@ -148,7 +148,7 @@ impl CompiledBackend {
                 namespace,
                 name: schema.name.clone(),
             },
-            HTTPBackendRefKind::EdgionAIService if schema.port.is_none() => CompiledBackendTarget::EdgionAIService {
+            HTTPBackendRefKind::EdgionBackend if schema.port.is_none() => CompiledBackendTarget::EdgionBackend {
                 namespace,
                 name: schema.name.clone(),
             },
@@ -507,8 +507,8 @@ mod tests {
                 {"name": "service-a", "port": 8080, "weight": 7},
                 {"kind": "ServiceExternalName", "name": "dns-svc", "port": 30001, "weight": 1},
                 {"kind": "ServiceImport", "name": "imported-svc", "port": 8080, "weight": 2},
-                {"group": "edgion.io", "kind": "EdgionAIService", "name": "ai-a", "weight": 3},
-                {"group": "edgion.io", "kind": "EdgionAIService", "name": "ai-bad", "port": 443},
+                {"group": "edgion.io", "kind": "EdgionBackend", "name": "ai-a", "weight": 3},
+                {"group": "edgion.io", "kind": "EdgionBackend", "name": "ai-bad", "port": 443},
                 {"group": "example.io", "kind": "Service", "name": "wrong-group-service"}
             ]
         }))
@@ -544,7 +544,7 @@ mod tests {
         );
         assert_eq!(
             runtime.backends[3].target,
-            CompiledBackendTarget::EdgionAIService {
+            CompiledBackendTarget::EdgionBackend {
                 namespace: "route-ns".to_string(),
                 name: "ai-a".to_string()
             }
@@ -552,7 +552,7 @@ mod tests {
         assert_eq!(
             runtime.backends[4].target,
             CompiledBackendTarget::Invalid {
-                classified_kind: HTTPBackendRefKind::EdgionAIService
+                classified_kind: HTTPBackendRefKind::EdgionBackend
             }
         );
         assert_eq!(

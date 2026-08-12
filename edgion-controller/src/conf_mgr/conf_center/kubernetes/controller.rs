@@ -61,12 +61,11 @@ use edgion_resources::ResourceMeta;
 
 // Import handlers from conf_mgr
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAIServiceHandler,
-    EdgionAcmeHandler, EdgionBackendTrafficPolicyHandler, EdgionConfigDataHandler, EdgionGatewayConfigHandler,
-    EdgionPluginsHandler, EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, GatewayClassHandler,
-    GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, ReferenceGrantBetaHandler,
-    ReferenceGrantHandler, SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteAlpha3Handler, TlsRouteHandler,
-    UdpRouteHandler,
+    BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler, EdgionBackendHandler,
+    EdgionBackendTrafficPolicyHandler, EdgionConfigDataHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
+    EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, GatewayClassHandler, GatewayHandler,
+    GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler,
+    SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteAlpha3Handler, TlsRouteHandler, UdpRouteHandler,
 };
 
 /// Context for spawn functions
@@ -454,7 +453,7 @@ impl KubernetesController {
                 "EdgionStreamPlugins",
                 "EdgionConfigData",
                 "LinkSys",
-                "EdgionAIService",
+                "EdgionBackend",
                 "EdgionAcme",
                 "EdgionBackendTrafficPolicy",
                 "EdgionGatewayConfig",
@@ -776,11 +775,11 @@ impl KubernetesController {
         if self.should_watch("LinkSys") {
             h.push(spawn::<LinkSys, _>(self, "LinkSys", LinkSysHandler::new(), &ctx));
         }
-        if self.should_watch("EdgionAIService") {
-            h.push(spawn::<EdgionAIService, _>(
+        if self.should_watch("EdgionBackend") {
+            h.push(spawn::<EdgionBackend, _>(
                 self,
-                "EdgionAIService",
-                EdgionAIServiceHandler::new(),
+                "EdgionBackend",
+                EdgionBackendHandler::new(),
                 &ctx,
             ));
         }

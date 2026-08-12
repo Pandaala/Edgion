@@ -1,6 +1,6 @@
 # 弹性与故障切换
 
-AI 弹性由 HTTPRoute 重试许可、每个 EdgionAIService 内的凭据优先轮次、Route 级后端故障切换，
+AI 弹性由 HTTPRoute 重试许可、每个 EdgionBackend 内的凭据优先轮次、Route 级后端故障切换，
 以及可选的 EdgionBackendTrafficPolicy（EBTP）目标控制共同组成。
 
 ## 共享尝试上限
@@ -32,7 +32,7 @@ Filter——都是**规则级**（per-rule）问题。出问题的 rule 一定�
 
 发生可重试失败时：
 
-1. 优先换同一 EdgionAIService 内的其他可用凭据。
+1. 优先换同一 EdgionBackend 内的其他可用凭据。
 2. 仅当所选 Service 没有可用凭据时，再通过 `backendSelection` 换到其他 Route 后端。
 3. 若当前所有可用目标都已扫描且仍有重试容量，且上一轮至少有一次已派发的可重试失败，则可开启新一轮。
 
@@ -58,9 +58,9 @@ Filter——都是**规则级**（per-rule）问题。出问题的 rule 一定�
 
 ## 面向 AI 的 EdgionBackendTrafficPolicy
 
-EBTP 直接指向同 Namespace 的 `edgion.io/EdgionAIService`。它不挂到 HTTPRoute，也不定义后端列表。
+EBTP 直接指向同 Namespace 的 `edgion.io/EdgionBackend`。它不挂到 HTTPRoute，也不定义后端列表。
 
-| 段 | 对 EdgionAIService |
+| 段 | 对 EdgionBackend |
 |----|--------------------|
 | `connection` | 支持 — 拨号 / 建连超时 |
 | `retryConstraint` | 支持 — 聚合防风暴预算 |
@@ -77,7 +77,7 @@ metadata:
 spec:
   targetRefs:
     - group: edgion.io
-      kind: EdgionAIService
+      kind: EdgionBackend
       name: primary-provider
   connection:
     connectTimeout: 2s

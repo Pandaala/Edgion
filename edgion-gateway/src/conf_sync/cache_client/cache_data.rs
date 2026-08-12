@@ -57,6 +57,10 @@ impl<T: ResourceMeta> CacheData<T> {
         self.ready = true;
     }
 
+    pub(crate) fn set_not_ready(&mut self) {
+        self.ready = false;
+    }
+
     // Data methods
     pub(crate) fn get(&self, key: &str) -> Option<&Arc<T>> {
         self.data.get(key)
@@ -222,6 +226,26 @@ impl<T: ResourceMeta> CacheData<T> {
             handler.compressed_events.add_event(key, change);
             handler.notify.notify_one();
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_conf_processor_for_test(&mut self, processor: Box<dyn ConfHandler<T> + Send + Sync>) {
+        self.handler = Some(ConfHandlerData::new(processor));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn compressed_event_count_for_test(&self) -> usize {
+        self.handler
+            .as_ref()
+            .map_or(0, |handler| handler.compressed_events.events.len())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn flush_compressed_events_for_test(cache_data: &Arc<RwLock<CacheData<T>>>) -> bool
+    where
+        T: Clone + ResourceMeta,
+    {
+        Self::process_compressed_events(cache_data)
     }
 }
 

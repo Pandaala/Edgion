@@ -87,7 +87,7 @@ two endpoints model per-try timeout behavior for generic HTTP response bodies.
 
 The response exposes only fixed fixture identifiers and booleans for model,
 path, Host, usage-option, and credential checks. It never echoes an incoming or
-provider Authorization value. Use this endpoint for `EdgionAIService` tests;
+provider Authorization value. Use this endpoint for `EdgionBackend` tests;
 do not start a separate mock-provider process.
 
 ### Mirror test endpoints

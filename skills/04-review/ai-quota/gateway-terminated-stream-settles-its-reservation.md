@@ -129,5 +129,5 @@ Re-open this decision only if:
   `ai::usage::tests::quota_over_limit_appends_an_error_event_and_terminates_without_dropping_the_current_chunk`,
   and the integration case
   `quota_terminated_stream_records_its_status_and_settles_its_bucket` in
-  `edgion-tests/src/client/suites/edgion_ai_service/single_provider.rs`
+  `edgion-tests/src/client/suites/edgion_backend/single_provider.rs`
 - `docs/en/ops-guide/observability/access-log.md` — what `failure` now means

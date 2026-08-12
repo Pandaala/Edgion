@@ -41,7 +41,7 @@ pub(crate) enum AnthropicRequestError {
 
 /// Validate and translate one parsed OpenAI Chat Completions request.
 ///
-/// The caller has already resolved the client model against the selected service catalog and
+/// The caller has already resolved the client model against the selected backend catalog and
 /// passes its canonical provider model here. Serialization never produces more than
 /// `max_output_bytes` bytes.
 pub(crate) fn prepare_anthropic_request(

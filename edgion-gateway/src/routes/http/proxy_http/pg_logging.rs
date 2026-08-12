@@ -659,7 +659,7 @@ mod genai_tests {
     use crate::plugins::runtime::traits::StreamingResponseProcessor;
     use crate::BackendContext;
     use bytes::Bytes;
-    use edgion_resources::resources::edgion_ai_service::AiModelPricing;
+    use edgion_resources::resources::edgion_backend::AiModelPricing;
     use metrics_exporter_prometheus::PrometheusBuilder;
     use std::sync::Arc;
 
@@ -867,7 +867,7 @@ mod genai_tests {
             ctx.ai_attempt_runtime.record_test_attempt(
                 GenAiAttempt {
                     number,
-                    service: "service-a".to_string(),
+                    backend: "service-a".to_string(),
                     provider: "openai",
                     credential: "primary".to_string(),
                     status: Some(200),
@@ -936,7 +936,7 @@ mod genai_tests {
         ctx.ai_attempt_runtime.record_test_attempt(
             GenAiAttempt {
                 number: 1,
-                service: "default/service-a".to_string(),
+                backend: "default/service-a".to_string(),
                 provider: "openai",
                 credential: "primary".to_string(),
                 status: Some(200),
@@ -981,7 +981,7 @@ mod genai_tests {
         let attempts = genai["attempts"].as_array().expect("attempt array");
         assert_eq!(attempts.len(), 1);
         let attempt = attempts[0].as_object().expect("attempt object");
-        assert_eq!(attempt["service"], "default/service-a");
+        assert_eq!(attempt["backend"], "default/service-a");
         assert_eq!(attempt["credential"], "primary");
         assert_eq!(
             attempt
@@ -996,7 +996,7 @@ mod genai_tests {
                 "output_tokens",
                 "provider",
                 "retry_after_seconds",
-                "service",
+                "backend",
                 "status",
                 "ttft_ms",
                 "usage_source",

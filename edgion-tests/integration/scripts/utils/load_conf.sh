@@ -302,11 +302,11 @@ get_all_suites() {
         fi
     done
 
-    # EdgionAIService test suites
-    for subdir in "${CONF_DIR}/EdgionAIService"/*; do
+    # EdgionBackend test suites
+    for subdir in "${CONF_DIR}/EdgionBackend"/*; do
         if [ -d "$subdir" ]; then
             local name=$(basename "$subdir")
-            suites="$suites EdgionAIService/$name"
+            suites="$suites EdgionBackend/$name"
         fi
     done
     

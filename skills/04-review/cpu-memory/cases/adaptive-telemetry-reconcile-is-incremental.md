@@ -3,7 +3,7 @@
 ## Decision
 
 Adaptive telemetry remains keyed by terminal HTTPRoute UID, terminal rule
-identity, typed `EdgionAIService` target, and logical model. Do not move this
+identity, typed `EdgionBackend` target, and logical model. Do not move this
 state into the AI-service store: doing so would either merge unrelated route
 rules or let a delete-and-recreate route inherit the prior generation's
 telemetry.

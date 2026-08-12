@@ -253,7 +253,7 @@ per-attempt 字段。`attempts` 最多包含八次已派发尝试，其序列化
 | `attempts[]` 字段 | 类型 | 说明 |
 |--------------------|------|------|
 | `number` | Integer | 从 1 起的已派发尝试序号 |
-| `service` | String | 有界的带 Namespace 的 EdgionAIService 键（`namespace/name`） |
+| `service` | String | 有界的带 Namespace 的 EdgionBackend 键（`namespace/name`） |
 | `provider` | String | 固定提供商枚举 |
 | `credential` | String | 非敏感配置凭据别名；绝不是提供商凭据或 Secret 数据 |
 | `status` | Integer | 收到时的提供商 HTTP 状态 |

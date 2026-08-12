@@ -44,10 +44,10 @@ description: Resource taxonomy and processing — common processing flow, per-re
 | [17-edgion-acme.md](17-edgion-acme.md) | EdgionAcme resource | Automatic certificates |
 | **Infrastructure** | | |
 | [18-link-sys.md](18-link-sys.md) | LinkSys resource | External system connections |
-| [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) | EdgionBackendTrafficPolicy | Typed direct-backend policy for Service or EdgionAIService; never route-scoped |
+| [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) | EdgionBackendTrafficPolicy | Typed direct-backend policy for Service or EdgionBackend; never route-scoped |
 | [21-configmap.md](21-configmap.md) | ConfigMap | Controller-side CA reference material |
 | **AI Gateway** | | |
-| [22-edgion-ai-service.md](22-edgion-ai-service.md) | EdgionAIService | Provider catalog, partial-good credential pool, route dependencies, and attempt runtime |
+| [22-edgion-backend.md](22-edgion-backend.md) | EdgionBackend | Provider catalog, partial-good credential pool, route dependencies, and attempt runtime |
 | **Relationships** | | |
 | [19-resource-dependency.md](19-resource-dependency.md) | Inter-resource dependencies | Understanding cross-resource references, Store queries, and requeue cascades |
 
@@ -68,7 +68,7 @@ GatewayClass ──────► Gateway ◄────── EdgionGatewayCo
             ├────────► BackendTLSPolicy
             └────────► EdgionBackendTrafficPolicy
 
-HTTPRoute ──► EdgionAIService ──► EdgionBackendTrafficPolicy
+HTTPRoute ──► EdgionBackend ──► EdgionBackendTrafficPolicy
 
 ConfigMap ──► BackendTLSPolicy (CA reference material)
 
@@ -81,8 +81,8 @@ HTTPRoute/GRPCRoute ──► EdgionPlugins (HTTP plugins)
 
 EdgionPlugins/EdgionStreamPlugins ──► EdgionConfigData (overlay/data primitive via overrideRef)
 
-EdgionAIService ──► Secret (bounded credential pool)
-HTTPRoute.backendRefs ──► EdgionAIService (sole candidate/order/weight source)
+EdgionBackend ──► Secret (bounded credential pool)
+HTTPRoute.backendRefs ──► EdgionBackend (sole candidate/order/weight source)
 EdgionPlugins/AiProxy ──► HTTPRoute candidates (selection algorithm only)
 
 Cross-namespace references ──► ReferenceGrant

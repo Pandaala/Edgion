@@ -54,7 +54,7 @@ pub struct CredentialReservationKeys {
 pub fn build_credential_reservation_keys(
     prefix: &str,
     namespace_scope: &[u8],
-    ai_service_uid: &[u8],
+    ai_backend_uid: &[u8],
     credential_alias: &[u8],
     window_id: u64,
     internal_request_id: &[u8],
@@ -62,7 +62,7 @@ pub fn build_credential_reservation_keys(
     validate_opaque_prefix(prefix, "credential reservation")?;
     for (name, value, max) in [
         ("namespace scope", namespace_scope, 512usize),
-        ("AI service UID", ai_service_uid, 512usize),
+        ("AI backend UID", ai_backend_uid, 512usize),
         ("credential alias", credential_alias, 512usize),
         ("internal request ID", internal_request_id, 256usize),
     ] {
@@ -71,7 +71,7 @@ pub fn build_credential_reservation_keys(
         }
     }
     let mut identity = Sha256::new();
-    for value in [namespace_scope, ai_service_uid, credential_alias] {
+    for value in [namespace_scope, ai_backend_uid, credential_alias] {
         identity.update((value.len() as u64).to_be_bytes());
         identity.update(value);
     }

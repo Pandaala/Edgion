@@ -14,14 +14,14 @@ spec:
           properties:
             spec:
               type: object
-              description: "Per-destination traffic policy attached to homogeneous Service or EdgionAIService targets"
+              description: "Per-destination traffic policy attached to homogeneous Service or EdgionBackend targets"
               required:
                 - targetRefs
               properties:
                 targetRefs:
                   type: array
                   minItems: 1
-                  description: "Homogeneous Service or EdgionAIService targets in the policy namespace"
+                  description: "Homogeneous Service or EdgionBackend targets in the policy namespace"
                   items:
                     type: object
                     required:
@@ -30,12 +30,12 @@ spec:
                     properties:
                       group:
                         type: string
-                        description: "Group of the referent: empty/core for Service, edgion.io for EdgionAIService"
+                        description: "Group of the referent: empty/core for Service, edgion.io for EdgionBackend"
                         enum: ["", "core", "edgion.io"]
                       kind:
                         type: string
                         description: "Kind of the referent"
-                        enum: ["Service", "EdgionAIService"]
+                        enum: ["Service", "EdgionBackend"]
                       name:
                         type: string
                         description: "Name of the referent in the policy namespace"
@@ -234,7 +234,7 @@ spec:
                           pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                 circuitBreaker:
                   type: object
-                  description: "Circuit breaker: hard cap on concurrent in-flight requests per Service endpoint or per EdgionAIService. Absent = no concurrency cap"
+                  description: "Circuit breaker: hard cap on concurrent in-flight requests per Service endpoint or per EdgionBackend. Absent = no concurrency cap"
                   required:
                     - maxParallelRequests
                   properties:
@@ -243,7 +243,7 @@ spec:
                       format: int32
                       description: >-
                         Max concurrent in-flight requests to one Service endpoint (one pod), or
-                        to one EdgionAIService in aggregate. Excess requests are shed with a
+                        to one EdgionBackend in aggregate. Excess requests are shed with a
                         non-retrying 503 rather than queued. A Service with N ready endpoints
                         admits up to N * maxParallelRequests concurrently. Must be >= 1.
                       minimum: 1
@@ -260,7 +260,7 @@ spec:
                         Per-backend gateway->backend connection-establishment deadline
                         (GEP-2257 duration), overriding
                         EdgionGatewayConfig.spec.httpTimeout.backend.defaultConnectTimeout
-                        for the targeted Service or EdgionAIService resources. Must be in (0s, 1h].
+                        for the targeted Service or EdgionBackend resources. Must be in (0s, 1h].
                       pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
             status:
               type: object

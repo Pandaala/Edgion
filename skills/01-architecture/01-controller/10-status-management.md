@@ -45,7 +45,7 @@ control plane:
 |-----------|---------|
 | **Accepted** | Resource is syntactically/semantically valid and accepted by the Controller |
 | **ResolvedRefs** | All references to other objects (Secrets, Services, etc.) are resolved |
-| **PartiallyInvalid** | Part of a partially-resolvable collection is invalid while the rest stays usable. Not route-exclusive: route rules with invalid backend refs, inline CIDR / IpList entries, an EdgionAIService credential pool with unresolved credentials — see [§4.2](#partiallyinvalid-on-non-route-resources) |
+| **PartiallyInvalid** | Part of a partially-resolvable collection is invalid while the rest stays usable. Not route-exclusive: route rules with invalid backend refs, inline CIDR / IpList entries, an EdgionBackend credential pool with unresolved credentials — see [§4.2](#partiallyinvalid-on-non-route-resources) |
 | **Conflicted** | Listener or policy conflicts detected by the Controller |
 | **Programmed** | Gateway/Gateway Listener processing state derived by the Gateway handler |
 
@@ -188,7 +188,7 @@ Flat-status resources already using that helper: `EdgionPlugins` and `EdgionStre
 `EdgionConfigData` (bad IpList entries) — all three from `update_status()`, all with the
 shared `RuleInvalid` reason.
 
-**`EdgionAIService` differs on two axes** and is the reference case for both:
+**`EdgionBackend` differs on two axes** and is the reference case for both:
 
 1. **Resource-specific reason.** It is the first emitter to use its own reason,
    `InvalidCredentials` (`status_utils.rs`), instead of the shared `RuleInvalid`.

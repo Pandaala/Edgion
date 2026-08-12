@@ -1,6 +1,6 @@
 ---
 name: edgion-backend-traffic-policy-features
-description: Canonical EdgionBackendTrafficPolicy schema for homogeneous Service or EdgionAIService direct-backend targets.
+description: Canonical EdgionBackendTrafficPolicy schema for homogeneous Service or EdgionBackend direct-backend targets.
 ---
 
 # EdgionBackendTrafficPolicy resource
@@ -9,7 +9,7 @@ description: Canonical EdgionBackendTrafficPolicy schema for homogeneous Service
 > Internal processing: [../../01-architecture/05-resources/20-edgion-backend-traffic-policy.md](../../01-architecture/05-resources/20-edgion-backend-traffic-policy.md)
 
 EdgionBackendTrafficPolicy (EBTP) configures one or more direct backend destinations. A policy
-targets either core Services or EdgionAIServices in its own Namespace. It does not target HTTPRoute
+targets either core Services or EdgionBackends in its own Namespace. It does not target HTTPRoute
 and does not define a backend list for routing.
 
 For AI traffic, HTTPRoute `backendRefs` remains the only candidate, order, and weight source;
@@ -30,24 +30,24 @@ or:
 ```yaml
 targetRefs:
   - group: edgion.io
-    kind: EdgionAIService
+    kind: EdgionBackend
     name: primary-provider
 ```
 
 Rules:
 
 - A policy has at least one `targetRef`
-- An EdgionAIService policy has at most 16 `targetRefs`; Service policies have no fixed maximum
+- An EdgionBackend policy has at most 16 `targetRefs`; Service policies have no fixed maximum
 - Every target is in the policy's Namespace; cross-Namespace targets are not supported
-- Accepted target pairs are core-group `Service` and `edgion.io/EdgionAIService`
+- Accepted target pairs are core-group `Service` and `edgion.io/EdgionBackend`
 - All refs in one policy have the same target kind
-- Duplicate EdgionAIService targets are rejected; duplicate Service targets are idempotent
-- A Service and EdgionAIService with the same Namespace/name are distinct targets
+- Duplicate EdgionBackend targets are rejected; duplicate Service targets are idempotent
+- A Service and EdgionBackend with the same Namespace/name are distinct targets
 - HTTPRoute, GRPCRoute, and other route kinds are not valid targets
 
 ## Section applicability
 
-| Section | Service | EdgionAIService |
+| Section | Service | EdgionBackend |
 |---------|---------|-----------------|
 | `loadBalancer` | Supported | Rejected |
 | `healthCheck` | Supported | Rejected |
@@ -57,7 +57,7 @@ Rules:
 | `upstreamAuthority` | Supported | Rejected |
 | `connection` | Supported | Supported |
 
-Unsupported sections reject the entire policy; they are never silently ignored. EdgionAIService
+Unsupported sections reject the entire policy; they are never silently ignored. EdgionBackend
 has one provider endpoint, so cross-service load balancing belongs to AiProxy and Host/SNI comes
 from that endpoint. Edgion does not issue unauthenticated active probes to public AI providers.
 
@@ -116,8 +116,8 @@ merges fields from competing policies.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `group` | String | No | Core API group | `""` or `core` for Service; exactly `edgion.io` for EdgionAIService |
-| `kind` | String | Yes | — | `Service` or `EdgionAIService`, paired with the correct group |
+| `group` | String | No | Core API group | `""` or `core` for Service; exactly `edgion.io` for EdgionBackend |
+| `kind` | String | Yes | — | `Service` or `EdgionBackend`, paired with the correct group |
 | `name` | String | Yes | — | Same-Namespace target name |
 
 ### `loadBalancer` (Service only)
@@ -151,7 +151,7 @@ non-empty path and status list. See [Service backends](16-service-backends.md) f
 | `maxEjectionPercent` | Maximum ejected share for a Service endpoint pool |
 
 Classification is per upstream attempt. For Service targets, state is per endpoint. For
-EdgionAIService targets, the stable destination is the typed service and passive state is further
+EdgionBackend targets, the stable destination is the typed service and passive state is further
 isolated by credential alias, so one failing or rate-limited credential does not eject its
 siblings. A half-open lease admits one probe after ejection expires.
 
@@ -172,13 +172,13 @@ budget. Both must pass.
 admitted when it is under either the percentage ceiling or the floor. The percentage denominator
 counts all dispatched attempts. For AI traffic, pre-dispatch skips consume neither route retry
 capacity nor retry-budget counters; a retryable dispatched failure charges the failed source
-EdgionAIService.
+EdgionBackend.
 
 ### `circuitBreaker`
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `maxParallelRequests` | Positive integer | Yes with section | — | Service: maximum concurrent requests per endpoint. EdgionAIService: aggregate concurrent requests for the service |
+| `maxParallelRequests` | Positive integer | Yes with section | — | Service: maximum concurrent requests per endpoint. EdgionBackend: aggregate concurrent requests for the service |
 
 Excess requests fail without queueing. For AI traffic, credential-specific outlier state remains
 separate from this aggregate service guard.
@@ -204,9 +204,9 @@ without literal characters, so an unset variable reliably renders empty.
 
 This field applies to HTTP upstream connections, including AI provider connections. It does not
 change TCPRoute/TLSRoute stream connect deadlines. Request and backend-request deadlines remain on
-HTTPRoute; EdgionAIService has no timeout field.
+HTTPRoute; EdgionBackend has no timeout field.
 
-## EdgionAIService example
+## EdgionBackend example
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -217,7 +217,7 @@ metadata:
 spec:
   targetRefs:
     - group: edgion.io
-      kind: EdgionAIService
+      kind: EdgionBackend
       name: primary-provider
   connection:
     connectTimeout: 2s
@@ -254,7 +254,7 @@ contains `Accepted` and `ResolvedRefs` conditions:
 | `Accepted=False/Invalid` | Structural, field-matrix, or section validation failed |
 | `Accepted=False/Conflicted` | An older policy wins a relevant typed target |
 | `ResolvedRefs=True/ResolvedRefs` | Relevant target objects exist |
-| `ResolvedRefs=False` | One or more relevant Service or EdgionAIService objects do not exist |
+| `ResolvedRefs=False` | One or more relevant Service or EdgionBackend objects do not exist |
 
 An unreferenced policy has an empty ancestor list. Target apply/delete and route dependency changes
 requeue the policy through its serialized workqueue so status and arbitration self-heal.
@@ -274,6 +274,6 @@ requeue the policy through its serialized workqueue so status and arbitration se
 ## Related documentation
 
 - [Service backends](16-service-backends.md)
-- [EdgionAIService](22-edgion-ai-service.md)
+- [EdgionBackend](22-edgion-backend.md)
 - [BackendTLSPolicy](12-backend-tls-policy.md)
 - [Internal backend-policy processing](../../01-architecture/05-resources/20-edgion-backend-traffic-policy.md)

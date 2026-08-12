@@ -72,7 +72,7 @@ const fn is_default_readable(kind: ResourceKind) -> bool {
         ResourceKind::EdgionAcme => true,
         ResourceKind::ConfigMap => true,
         ResourceKind::EdgionBackendTrafficPolicy => true,
-        ResourceKind::EdgionAIService => true,
+        ResourceKind::EdgionBackend => true,
     }
 }
 
@@ -110,7 +110,7 @@ const DEFAULT_READ_KINDS: &[&str] = &[
     ResourceKind::EdgionAcme.as_str(),
     ResourceKind::ConfigMap.as_str(),
     ResourceKind::EdgionBackendTrafficPolicy.as_str(),
-    ResourceKind::EdgionAIService.as_str(),
+    ResourceKind::EdgionBackend.as_str(),
 ];
 
 /// Build the built-in default Center policy.
@@ -390,7 +390,7 @@ mod tests {
             ResourceKind::EdgionAcme,
             ResourceKind::ConfigMap,
             ResourceKind::EdgionBackendTrafficPolicy,
-            ResourceKind::EdgionAIService,
+            ResourceKind::EdgionBackend,
         ];
 
         for variant in &all_variants {

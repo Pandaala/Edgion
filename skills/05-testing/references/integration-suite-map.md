@@ -10,10 +10,10 @@ This file only answers three things:
 
 | Family | YAML directory | Rust entry | `--gateway` | Notes |
 |------|-----------|-----------|-------------|------|
-| `EdgionAIService/SingleProvider` | `edgion-tests/integration/conf/EdgionAIService/SingleProvider/` | `SingleProviderTestSuite` | Yes | OpenAI-compatible proxying, H1/H2 streaming and downstream cancellation, credentials, usage/quota logs, and optional token metrics |
-| `EdgionAIService/AnthropicProvider` | `edgion-tests/integration/conf/EdgionAIService/AnthropicProvider/` | `AnthropicProviderTestSuite` | Yes | Anthropic Messages request translation plus JSON and incremental SSE response translation |
-| `EdgionAIService/Resilience` | `edgion-tests/integration/conf/EdgionAIService/Resilience/` | `ResilienceTestSuite` | Yes | Provider 429 Priority fallback, committed-SSE no-failover, half-open single-probe recovery |
-| `EdgionAIService/CredentialExhaustion` | `edgion-tests/integration/conf/EdgionAIService/CredentialExhaustion/` | `CredentialExhaustionTestSuite` | Yes | Credential-first rotation then next service; RPM exhaust and TPM reconcile to local 503; needs Redis |
+| `EdgionBackend/SingleProvider` | `edgion-tests/integration/conf/EdgionBackend/SingleProvider/` | `SingleProviderTestSuite` | Yes | OpenAI-compatible proxying, H1/H2 streaming and downstream cancellation, credentials, usage/quota logs, and optional token metrics |
+| `EdgionBackend/AnthropicProvider` | `edgion-tests/integration/conf/EdgionBackend/AnthropicProvider/` | `AnthropicProviderTestSuite` | Yes | Anthropic Messages request translation plus JSON and incremental SSE response translation |
+| `EdgionBackend/Resilience` | `edgion-tests/integration/conf/EdgionBackend/Resilience/` | `ResilienceTestSuite` | Yes | Provider 429 Priority fallback, committed-SSE no-failover, half-open single-probe recovery |
+| `EdgionBackend/CredentialExhaustion` | `edgion-tests/integration/conf/EdgionBackend/CredentialExhaustion/` | `CredentialExhaustionTestSuite` | Yes | Credential-first rotation then next service; RPM exhaust and TPM reconcile to local 503; needs Redis |
 | `HTTPRoute/Basic` | `edgion-tests/integration/conf/HTTPRoute/Basic/` | `edgion-tests/src/client/suites/http_route/` | No | Direct HTTP basic capability |
 | `HTTPRoute/SseStreaming` | `edgion-tests/integration/conf/HTTPRoute/SseStreaming/` | `SseStreamingTestSuite` | Yes | Paced SSE passthrough remains uncompressed while ordinary JSON is gzip-compressed |
 | `HTTPRoute/Delegation` | `edgion-tests/integration/conf/HTTPRoute/Delegation/` | `DelegationTestSuite` | Yes | Parent→child delegation flatten: inherited filter, out-of-prefix drop, plain sibling |

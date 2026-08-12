@@ -1,0 +1,240 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: edgionbackends.edgion.io
+spec:
+  group: edgion.io
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              x-kubernetes-validations:
+                - rule: "[has(self.ai)].filter(present, present).size() == 1"
+                  message: "spec must configure exactly one backend variant"
+              properties:
+                ai:
+                  type: object
+                  description: AI provider, credentials, and model catalog used by AI Gateway routes.
+                  required:
+                    - credentialPool
+                    - models
+                    - provider
+                  x-kubernetes-validations:
+                    - rule: "self.provider != 'OpenAICompatible' || has(self.endpoint)"
+                      message: "endpoint is required for provider OpenAICompatible"
+                    - rule: "!has(self.endpoint) || self.endpoint.matches('^https?://[^/?#@]+(/[^?#]*)?$')"
+                      message: "endpoint must be an absolute HTTP or HTTPS URL without user information, query, or fragment"
+                    - rule: "!has(self.endpoint) || !self.endpoint.startsWith('http://') || self.allowInsecureHttp"
+                      message: "HTTP endpoint requires allowInsecureHttp: true"
+                    - rule: "self.credentialPool.credentials.exists(c, has(c.limits)) ? has(self.credentialPool.redisRef) : !has(self.credentialPool.redisRef)"
+                      message: "credentialPool.redisRef is required exactly when a credential limit is configured"
+                    - rule: "self.credentialPool.credentials.exists(c, has(c.limits) && has(c.limits.tokensPerMinute)) ? has(self.defaults) && has(self.defaults.maxOutputTokens) : true"
+                      message: "tokensPerMinute requires defaults.maxOutputTokens"
+                  properties:
+                    provider:
+                      type: string
+                      enum: [OpenAI, OpenAICompatible, Anthropic]
+                    endpoint:
+                      type: string
+                      description: >-
+                        Absolute HTTP(S) provider endpoint. OpenAI defaults to
+                        https://api.openai.com, Anthropic defaults to
+                        https://api.anthropic.com, and OpenAICompatible requires an explicit value.
+                    allowInsecureHttp:
+                      type: boolean
+                      default: false
+                      description: Allow an explicit http endpoint. Disabled by default.
+                    credentialPool:
+                      type: object
+                      description: Bounded provider credential pool and optional distributed limits.
+                      required:
+                        - credentials
+                      properties:
+                        redisRef:
+                          type: string
+                          pattern: "^[A-Za-z0-9_-]+/[A-Za-z0-9_-]+$"
+                          description: >-
+                            Redis LinkSys reference in namespace/name form. Required exactly when
+                            at least one credential declares an RPM or TPM limit.
+                        onRedisFailure:
+                          type: string
+                          enum: [Allow, Deny]
+                          default: Deny
+                        credentials:
+                          type: array
+                          minItems: 1
+                          maxItems: 16
+                          items:
+                            type: object
+                            required:
+                              - name
+                              - secretRef
+                            properties:
+                              name:
+                                type: string
+                                minLength: 1
+                                maxLength: 64
+                                pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+                                description: Stable non-secret credential alias.
+                              weight:
+                                type: integer
+                                format: int32
+                                minimum: 1
+                                maximum: 1000000
+                                default: 1
+                              secretRef:
+                                type: object
+                                description: Reference to the Secret containing the provider credential.
+                                required:
+                                  - name
+                                properties:
+                                  group:
+                                    type: string
+                                    enum: ["", core]
+                                  kind:
+                                    type: string
+                                    enum: [Secret]
+                                  name:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 253
+                                    pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+                                  namespace:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 63
+                                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                              limits:
+                                type: object
+                                minProperties: 1
+                                properties:
+                                  requestsPerMinute:
+                                    type: integer
+                                    format: int64
+                                    minimum: 1
+                                    maximum: 9007199254740991
+                                  tokensPerMinute:
+                                    type: integer
+                                    format: int64
+                                    minimum: 1
+                                    maximum: 9007199254740991
+                    models:
+                      type: array
+                      minItems: 1
+                      maxItems: 256
+                      description: Canonical provider model names and optional request aliases.
+                      items:
+                        type: object
+                        required:
+                          - name
+                        properties:
+                          name:
+                            type: string
+                            minLength: 1
+                            maxLength: 512
+                          aliases:
+                            type: array
+                            default: []
+                            maxItems: 32
+                            items:
+                              type: string
+                              minLength: 1
+                              maxLength: 512
+                          pricing:
+                            type: object
+                            description: Estimated USD prices per one million tokens.
+                            required:
+                              - inputPerMillionUsd
+                              - outputPerMillionUsd
+                            properties:
+                              inputPerMillionUsd:
+                                type: string
+                                maxLength: 14
+                                pattern: "^[0-9]+(\\.[0-9]{1,6})?$"
+                              outputPerMillionUsd:
+                                type: string
+                                maxLength: 14
+                                pattern: "^[0-9]+(\\.[0-9]{1,6})?$"
+                              cacheReadInputPerMillionUsd:
+                                type: string
+                                maxLength: 14
+                                pattern: "^[0-9]+(\\.[0-9]{1,6})?$"
+                              cacheWriteInputPerMillionUsd:
+                                type: string
+                                maxLength: 14
+                                pattern: "^[0-9]+(\\.[0-9]{1,6})?$"
+                    defaults:
+                      type: object
+                      default:
+                        streaming: true
+                      properties:
+                        streaming:
+                          type: boolean
+                          default: true
+                        maxOutputTokens:
+                          type: integer
+                          format: int64
+                          minimum: 1
+                          maximum: 4294967295
+                          description: >-
+                            Default provider output-token limit when the client request does not
+                            specify one. Omitted by default.
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+                        maxLength: 1024
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                      reason:
+                        type: string
+                      status:
+                        type: string
+                      type:
+                        type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Provider
+          type: string
+          jsonPath: .spec.ai.provider
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: edgionbackends
+    singular: edgionbackend
+    kind: EdgionBackend
+    shortNames:
+      - eb

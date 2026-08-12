@@ -55,7 +55,7 @@ spec:
 1. AiProxy chooses an eligible HTTPRoute backend with `backendSelection`.
 2. Edgion chooses an eligible credential within that service by weight.
 3. A credential blocked by RPM, TPM, or cooldown is skipped.
-4. Edgion moves to another route backend only when the selected service has no eligible credential.
+4. Edgion moves to another route backend only when the selected backend has no eligible credential.
 
 See [Credentials and Limits](./credentials-and-limits.md) and [Resilience and Failover](./resilience.md)
 for how retries interact with this hierarchy.

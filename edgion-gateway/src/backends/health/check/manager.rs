@@ -396,6 +396,9 @@ mod tests {
                         kind: "Service".to_string(),
                         name: svc.to_string(),
                     }],
+                    resolved_target_class: Some(
+                        edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass::Service,
+                    ),
                     retry_constraint: None,
                     load_balancer: None,
                     health_check: None,

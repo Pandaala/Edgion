@@ -1,6 +1,6 @@
 # 凭据与限额
 
-每个 `EdgionAIService` 为同一提供商 Endpoint 拥有一个凭据池。凭据由 Secret 承载；状态与
+每个 `EdgionBackend` 为同一提供商 Endpoint 拥有一个凭据池。凭据由 Secret 承载；状态与
 access log 只出现配置别名。
 
 ## 凭据参数
@@ -14,7 +14,7 @@ access log 只出现配置别名。
 | `credentials[].limits.requestsPerMinute` | Integer | 无 | 可选分布式 RPM |
 | `credentials[].limits.tokensPerMinute` | Integer | 无 | 可选分布式 TPM |
 
-不要把提供商密钥写进 EdgionAIService、EdgionPlugins、HTTPRoute 或应用配置。
+不要把提供商密钥写进 EdgionBackend、EdgionPlugins、HTTPRoute 或应用配置。
 
 ## Redis 要求
 

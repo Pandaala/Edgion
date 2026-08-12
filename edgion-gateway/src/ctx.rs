@@ -1,5 +1,5 @@
 use crate::ai::{AiAttemptPlan, AiRequestContext, GenAiSummary};
-use crate::backends::EdgionService;
+use crate::backends::ServiceBackendKind;
 use crate::lb::edgion_backend::EdgionBackend;
 use crate::observe::logs::LogBuffer;
 use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
@@ -676,8 +676,8 @@ pub enum BackendSource {
     DirectEndpoint,
     /// ExternalJump bypass (plugin-staged external domain, DNS-resolved at runtime).
     ExternalJump,
-    /// Typed EdgionAIService selected by an AiProxy attempt plan.
-    AiService,
+    /// Typed EdgionBackend selected by an AiProxy attempt plan.
+    AiBackend,
 }
 
 /// Backend context containing service info and upstream attempt history.
@@ -701,7 +701,7 @@ pub struct BackendContext {
     /// `None` for ExternalJump (DNS-resolved external domain — none of the K8s
     /// service-routing modes apply). `Some` for the default path and DirectEndpoint.
     #[serde(skip)]
-    pub service_kind: Option<EdgionService>,
+    pub service_kind: Option<ServiceBackendKind>,
     /// List of upstream connection attempts (for retry tracking and access log)
     pub upstreams: Vec<UpstreamInfo>,
     /// Current upstream index (for status updates)
@@ -1296,7 +1296,7 @@ pub struct EdgionHttpContext {
     /// drained only at the next-attempt and universal logging seams.
     pub ai_attempt_runtime: crate::ai::attempt_runtime::AiAttemptRuntimeState,
 
-    /// Request-captured typed destination policy for the selected AI service.
+    /// Request-captured typed destination policy for the selected AI backend.
     pub ai_effective_policy: Option<Arc<crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy>>,
 
     /// Pristine post-rule request used to rebuild later AI attempts.
@@ -1682,7 +1682,7 @@ impl EdgionHttpContext {
         &mut self,
         rsc: Rsc,
         service_key: String,
-        service_kind: EdgionService,
+        service_kind: ServiceBackendKind,
         backend_ref_idx: Option<usize>,
     ) {
         self.backend_context = Some(BackendContext {

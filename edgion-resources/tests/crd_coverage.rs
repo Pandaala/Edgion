@@ -1,12 +1,12 @@
 //! Struct↔CRD field-coverage guard for the four fully-structural CRDs
 //! (EdgionGatewayConfig, EdgionTls, EdgionBackendTrafficPolicy, and
-//! EdgionAIService). See
+//! EdgionBackend). See
 //! docs/superpowers/specs/2026-06-15-crd-struct-coverage-guard-design.md.
 //!
 //! The walk is a lockstep node comparison: it descends EXPECTED (schemars) and
 //! ACTUAL (CRD) together, comparing property NAME sets at each node, and reports
 //! a difference at its highest absent ancestor. It is correct ONLY for resources
-//! with no tagged enums or preserve-unknown nodes. EdgionAIService credentials
+//! with no tagged enums or preserve-unknown nodes. EdgionBackend credentials
 //! flatten statically shaped `SecretSlot` values; schemars emits each
 //! operator-facing `secretRef` as an ordinary property, so the nested pool
 //! remains safe for this lockstep comparison.
@@ -220,47 +220,110 @@ fn backend_traffic_policy_target_ref_contract_matches_crd() {
     let kinds = string_enum_values(&target_refs["items"]["properties"]["kind"]);
     assert_eq!(
         kinds,
-        BTreeSet::from(["EdgionAIService".to_string(), "Service".to_string()])
+        BTreeSet::from(["EdgionBackend".to_string(), "Service".to_string()])
     );
 }
 
 #[test]
-fn ai_service_spec_has_no_uncovered_fields() {
-    let expected = serde_json::to_value(schema_for!(edgion_resources::EdgionAIServiceSpec)).unwrap();
-    let actual = crd_section("edgion_ai_service_crd.yaml", "spec");
+fn edgion_backend_spec_has_no_uncovered_fields() {
+    let expected = serde_json::to_value(schema_for!(edgion_resources::EdgionBackendSpec)).unwrap();
+    let actual = crd_section("edgion_backend_crd.yaml", "spec");
     let (d1, d2) = compare_spec(&expected, &actual, &[]);
     assert!(
         d1.is_empty() && d2.is_empty(),
-        "EdgionAIService CRD drift:\n  missing from CRD (Direction-1): {d1:?}\n  stale in CRD (Direction-2): {d2:?}\n\
-         Fix: add the missing field(s) to edgion_ai_service_crd.yaml, or add an intentional omission to the allowlist with a reason."
+        "EdgionBackend CRD drift:\n  missing from CRD (Direction-1): {d1:?}\n  stale in CRD (Direction-2): {d2:?}\n\
+         Fix: add the missing field(s) to edgion_backend_crd.yaml, or add an intentional omission to the allowlist with a reason."
     );
     assert!(
-        actual["properties"]["credentialPool"]["properties"]["credentials"]["items"]["properties"]
-            .get("secret")
+        !contains_property_named(&expected, "secret"),
+        "generated EdgionBackend schema must not expose any controller-resolved Secret"
+    );
+    assert!(
+        !contains_property_named(&actual, "secret"),
+        "EdgionBackend CRD must not expose any controller-resolved Secret"
+    );
+    assert!(
+        actual["properties"]["ai"]["properties"]["defaults"]["properties"]
+            .get("timeout")
             .is_none(),
-        "EdgionAIService CRD must not expose the controller-resolved Secret"
-    );
-    assert!(
-        actual["properties"]["defaults"]["properties"].get("timeout").is_none(),
-        "EdgionAIService CRD must not retain the removed defaults.timeout field"
+        "EdgionBackend CRD must not retain the removed defaults.timeout field"
     );
 }
 
 #[test]
-fn ai_service_provider_enum_matches_crd_bidirectionally() {
+fn edgion_backend_provider_enum_matches_crd_bidirectionally() {
     let expected_schema =
-        serde_json::to_value(schema_for!(edgion_resources::resources::edgion_ai_service::AiProvider)).unwrap();
+        serde_json::to_value(schema_for!(edgion_resources::resources::edgion_backend::AiProvider)).unwrap();
     let expected = string_enum_values(&expected_schema);
 
-    let actual_schema = crd_section("edgion_ai_service_crd.yaml", "spec");
-    let actual_provider = actual_schema["properties"]["provider"].clone();
+    let actual_schema = crd_section("edgion_backend_crd.yaml", "spec");
+    let actual_provider = actual_schema["properties"]["ai"]["properties"]["provider"].clone();
     let actual = string_enum_values(&actual_provider);
 
     let missing_from_crd: Vec<_> = expected.difference(&actual).cloned().collect();
     let stale_in_crd: Vec<_> = actual.difference(&expected).cloned().collect();
     assert!(
         missing_from_crd.is_empty() && stale_in_crd.is_empty(),
-        "EdgionAIService provider enum drift:\n  missing from CRD (Direction-1): {missing_from_crd:?}\n  stale in CRD (Direction-2): {stale_in_crd:?}"
+        "EdgionBackend provider enum drift:\n  missing from CRD (Direction-1): {missing_from_crd:?}\n  stale in CRD (Direction-2): {stale_in_crd:?}"
+    );
+}
+
+fn contains_property_named(node: &Value, needle: &str) -> bool {
+    match node {
+        Value::Object(map) => {
+            map.get("properties")
+                .and_then(Value::as_object)
+                .is_some_and(|properties| properties.contains_key(needle))
+                || map.values().any(|child| contains_property_named(child, needle))
+        }
+        Value::Array(items) => items.iter().any(|child| contains_property_named(child, needle)),
+        _ => false,
+    }
+}
+
+fn assert_declared_objects_are_structural(node: &Value, path: &str) {
+    match node {
+        Value::Object(map) => {
+            if map.get("properties").is_some_and(Value::is_object) {
+                assert_ne!(
+                    map.get("x-kubernetes-preserve-unknown-fields"),
+                    Some(&Value::Bool(true)),
+                    "declared object must not preserve unknown fields at {path}"
+                );
+                assert!(
+                    map.get("additionalProperties").is_none(),
+                    "Kubernetes 1.26 forbids additionalProperties beside declared properties at {path}"
+                );
+            }
+            for (name, child) in map {
+                assert_declared_objects_are_structural(child, &format!("{path}.{name}"));
+            }
+        }
+        Value::Array(items) => {
+            for (index, child) in items.iter().enumerate() {
+                assert_declared_objects_are_structural(child, &format!("{path}[{index}]"));
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn edgion_backend_crd_is_recursively_structural_and_secret_free() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../config/crd/edgion-crd/edgion_backend_crd.yaml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let crd: Value = serde_yaml::from_str(&text).unwrap();
+    let schema = &crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"];
+    assert_declared_objects_are_structural(schema, "openAPIV3Schema");
+    assert!(!contains_property_named(schema, "secret"));
+    assert_eq!(schema["required"], serde_json::json!(["spec"]));
+    assert!(
+        schema["properties"]["spec"]["required"].is_null(),
+        "spec.ai presence is enforced by the exactly-one CEL rule so Kubernetes 1.26 evaluates its message"
+    );
+    assert_eq!(
+        schema["properties"]["spec"]["x-kubernetes-validations"][0]["rule"],
+        "[has(self.ai)].filter(present, present).size() == 1"
     );
 }
 

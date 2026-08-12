@@ -1,0 +1,189 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-proxy-default
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-default.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-proxy-default
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-proxy-passthrough
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-passthrough.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-proxy-passthrough
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-proxy-optout
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-optout.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-proxy-optout
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-proxy-streaming-disabled
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-disabled.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-proxy-streaming-disabled
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider-streaming-disabled
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-proxy-quota
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-quota.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-proxy-quota
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-proxy-priority-retry
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-retry.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-proxy-priority-retry
+      retry:
+        attempts: 1
+        codes:
+          - 503
+      timeouts:
+        request: 5s
+        backendRequest: 2s
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider-retryable
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-proxy-quota-throttle
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-quota-throttle.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-proxy-quota-throttle
+      timeouts:
+        request: 3s
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-proxy-quota-downgrade
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-quota-downgrade.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-proxy-quota-downgrade
+      timeouts:
+        request: 5s
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider

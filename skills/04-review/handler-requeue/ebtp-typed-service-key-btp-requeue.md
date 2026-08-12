@@ -27,7 +27,7 @@ The two policy types deliberately need different local identities:
   `make_target_conflict_key`.
 - EdgionBackendTrafficPolicy supports multiple target kinds, so its conflict
   index uses `PolicyTargetKey::to_string()` to keep Service and
-  EdgionAIService identities disjoint.
+  EdgionBackend identities disjoint.
 
 Using a BackendTLSPolicy key directly against the EBTP manager produces an
 exact-lookup miss. The missing requeue leaves EBTP's cross-object

@@ -1,7 +1,7 @@
 # Resilience and Failover
 
 AI resilience combines HTTPRoute retry permission, credential-first rounds inside each
-EdgionAIService, route-level backend failover, and optional EdgionBackendTrafficPolicy (EBTP)
+EdgionBackend, route-level backend failover, and optional EdgionBackendTrafficPolicy (EBTP)
 destination controls.
 
 ## Shared attempt ceiling
@@ -37,14 +37,14 @@ parent stops serving while `Accepted` stays `True`; read the `PartiallyInvalid` 
 
 On a retryable failure:
 
-1. Prefer another eligible credential in the same EdgionAIService.
-2. Only when the selected service has no eligible credential, move to another route backend via
+1. Prefer another eligible credential in the same EdgionBackend.
+2. Only when the selected backend has no eligible credential, move to another route backend via
    `backendSelection`.
 3. After every currently eligible destination was scanned and retry capacity remains, a new round
    may start if the previous round contained at least one dispatched retryable failure.
 
 Pre-dispatch skips (no eligible credential, model mismatch, saturation) consume neither an
-HTTPRoute retry nor a retry-budget counter. Every actual dispatch charges the selected AI service's
+HTTPRoute retry nor a retry-budget counter. Every actual dispatch charges the selected AI backend's
 retry-budget denominator; a retryable dispatched failure consumes one HTTPRoute retry and that
 source service's retry-budget numerator.
 
@@ -68,10 +68,10 @@ Connect failures before dispatch remain eligible through the normal connection-r
 
 ## EdgionBackendTrafficPolicy for AI
 
-EBTP targets `edgion.io/EdgionAIService` directly (same Namespace). It does not target HTTPRoute and
+EBTP targets `edgion.io/EdgionBackend` directly (same Namespace). It does not target HTTPRoute and
 does not define a backend list.
 
-| Section | On EdgionAIService |
+| Section | On EdgionBackend |
 |---------|--------------------|
 | `connection` | Supported — dial / connect timeout |
 | `retryConstraint` | Supported — aggregate anti-storm budget |
@@ -88,7 +88,7 @@ metadata:
 spec:
   targetRefs:
     - group: edgion.io
-      kind: EdgionAIService
+      kind: EdgionBackend
       name: primary-provider
   connection:
     connectTimeout: 2s

@@ -608,7 +608,7 @@ pub(crate) fn build_domain_route_rules_from_routes(data: &HashMap<String, Arc<HT
 
 /// Build a raw-slot-aligned metric identity for every backendRef kind.
 /// Backend metrics label namespace/name but not kind, matching the dynamic
-/// fallback for Service, EdgionAIService, and invalid selected slots.
+/// fallback for Service, EdgionBackend, and invalid selected slots.
 fn http_backends_from_rule(rule: &HTTPRouteRule, route_ns: &str) -> Vec<(String, String)> {
     rule.backend_refs
         .as_ref()
@@ -715,7 +715,7 @@ mod tests {
                 {"name": "service"},
                 {
                     "group": "edgion.io",
-                    "kind": "EdgionAIService",
+                    "kind": "EdgionBackend",
                     "namespace": "models",
                     "name": "provider"
                 },

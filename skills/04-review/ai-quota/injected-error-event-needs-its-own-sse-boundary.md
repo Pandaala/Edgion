@@ -117,7 +117,7 @@ Re-open this decision only if:
   `terminate_ai_stream`, and the
   `every_injected_event_stays_parseable_after_an_unterminated_event` /
   `an_injected_event_dispatches_nothing_extra_at_a_clean_boundary` unit tests
-- `edgion-tests/src/client/suites/edgion_ai_service/single_provider.rs` —
+- `edgion-tests/src/client/suites/edgion_backend/single_provider.rs` —
   `byte_at_a_time_sse_delivery_still_terminates` and the shared
   `check_injected_event_is_dispatchable` assertion; fixture mode
   `quota_terminate_byte_at_a_time` in `edgion-tests/src/server/test_server.rs`

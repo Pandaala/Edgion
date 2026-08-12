@@ -154,5 +154,5 @@ Re-open this decision only if:
   `sse_degradation_without_quota_enforcement_only_records_the_signal`,
   `an_already_over_limit_stream_reports_over_limit_not_degradation`, and the
   integration case of the same name in
-  `edgion-tests/src/client/suites/edgion_ai_service/single_provider.rs`
+  `edgion-tests/src/client/suites/edgion_backend/single_provider.rs`
 - `docs/en/ai-gateway/quotas-and-cost.md` — operator-facing behavior and alerts

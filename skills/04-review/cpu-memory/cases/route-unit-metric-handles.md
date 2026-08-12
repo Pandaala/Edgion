@@ -33,7 +33,7 @@ HTTP Service/invalid selection carries `CompiledBackend.slot`; AI selection
 carries `AiPeerTarget.backend_slot`; DirectEndpoint retains the validated raw
 slot; and the gRPC initialization path derives its slot from the rule refs.
 HTTP route matrices are aligned to every raw backendRef slot, including
-`EdgionAIService` and invalid selected refs. Backend metrics label only the
+`EdgionBackend` and invalid selected refs. Backend metrics label only the
 resolved namespace/name, not resource kind, so each corresponding handle cell
 has the same label identity as the dynamic fallback. Pre-registration creates
 bounded zero-value protocol/status cells for configured

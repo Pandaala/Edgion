@@ -8,7 +8,7 @@
 ## Overview
 
 Attach exactly one enabled `AiProxy` through a rule-level `EdgionPlugins` ExtensionRef. HTTPRoute
-`backendRefs` must name only `edgion.io/EdgionAIService` destinations. AiProxy owns request
+`backendRefs` must name only `edgion.io/EdgionBackend` destinations. AiProxy owns request
 translation, `backendSelection`, optional token quota, and usage/cost accounting — not the
 provider list, weights, or retry attempt counts.
 
@@ -43,4 +43,4 @@ spec:
 ```
 
 See the [complete configuration example](../../../../ai-gateway/quick-start.md#complete-example)
-for Secret, EdgionAIService, and HTTPRoute resources.
+for Secret, EdgionBackend, and HTTPRoute resources.

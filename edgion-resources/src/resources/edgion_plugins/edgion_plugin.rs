@@ -47,7 +47,7 @@ pub enum EdgionPlugin {
     // ========== Custom Edgion plugins ==========
     /// Basic Authentication filter
     BasicAuth(BasicAuthConfig),
-    /// Route OpenAI-compatible requests to an EdgionAIService.
+    /// Route OpenAI-compatible requests to an EdgionBackend AI capability.
     AiProxy(AiProxyConfig),
     /// CORS (Cross-Origin Resource Sharing) filter
     Cors(CorsConfig),

@@ -23,7 +23,7 @@ const MAX_IDENTIFIER_BYTES: usize = 512;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 const MAX_CONTENT_BLOCKS: usize = 128;
 
-const STREAM_ERROR: &[u8] = b"data: {\"error\":{\"message\":\"The AI service stream could not be processed.\",\"type\":\"api_error\",\"code\":\"response_translation_failed\"}}\n\n";
+const STREAM_ERROR: &[u8] = b"data: {\"error\":{\"message\":\"The AI backend stream could not be processed.\",\"type\":\"api_error\",\"code\":\"response_translation_failed\"}}\n\n";
 
 #[derive(Clone, Copy)]
 struct FixedError {
@@ -36,7 +36,7 @@ struct FixedError {
 
 const PROVIDER_INVALID_REQUEST: FixedError = FixedError {
     status: 400,
-    message: "The AI service rejected the request.",
+    message: "The AI backend rejected the request.",
     type_: "invalid_request_error",
     code: "provider_invalid_request",
     record_translation_failure: false,
@@ -50,14 +50,14 @@ const REQUEST_TOO_LARGE: FixedError = FixedError {
 };
 const RATE_LIMIT_EXCEEDED: FixedError = FixedError {
     status: 429,
-    message: "The AI service rate limit was exceeded.",
+    message: "The AI backend rate limit was exceeded.",
     type_: "rate_limit_error",
     code: "rate_limit_exceeded",
     record_translation_failure: false,
 };
 const SERVICE_UNAVAILABLE: FixedError = FixedError {
     status: 503,
-    message: "The AI service is temporarily unavailable.",
+    message: "The AI backend is temporarily unavailable.",
     type_: "api_error",
     code: "service_unavailable",
     record_translation_failure: false,
@@ -68,14 +68,14 @@ const TRANSLATION_UNAVAILABLE: FixedError = FixedError {
 };
 const RESPONSE_TOO_LARGE: FixedError = FixedError {
     status: 503,
-    message: "The AI service response is too large.",
+    message: "The AI backend response is too large.",
     type_: "api_error",
     code: "response_too_large",
     record_translation_failure: true,
 };
 const RESPONSE_TRANSLATION_FAILED: FixedError = FixedError {
     status: 200,
-    message: "The AI service response could not be processed.",
+    message: "The AI backend response could not be processed.",
     type_: "api_error",
     code: "response_translation_failed",
     record_translation_failure: true,

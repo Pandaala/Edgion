@@ -13,9 +13,10 @@ Clients never hold provider API keys.
 
 | Topic | Description |
 |-------|-------------|
-| [Quick Start](./quick-start.md) | Secret → EdgionAIService → AiProxy → HTTPRoute → OpenAI SDK |
-| [Concepts](./concepts.md) | Ownership split across HTTPRoute, EdgionAIService, AiProxy, and EBTP |
-| [EdgionAIService](./edgion-ai-service.md) | Provider endpoint, model catalog, and typed AI backends |
+| [Quick Start](./quick-start.md) | Secret → EdgionBackend → AiProxy → HTTPRoute → OpenAI SDK |
+| [Concepts](./concepts.md) | Ownership split across HTTPRoute, EdgionBackend, AiProxy, and EBTP |
+| [EdgionBackend](./edgion-backend.md) | Provider endpoint, model catalog, and typed AI backends |
+| [Migration](./edgion-backend-migration.md) | Stop-the-world cutover and whole-graph rollback |
 | [Routing and Selection](./routing.md) | Weighted, Priority, LowestLatency, LowestUsage, CostWeighted |
 | [Credentials and Limits](./credentials-and-limits.md) | Credential pools, RPM/TPM reservation, rotation, cooldowns |
 | [Resilience and Failover](./resilience.md) | Credential-first retry, SSE commitment, outlier half-open, EBTP |
@@ -26,7 +27,7 @@ Clients never hold provider API keys.
 ## Capabilities at a glance
 
 - **Unified OpenAI client surface** — one base URL for OpenAI, OpenAI-compatible, and Anthropic backends
-- **Typed AI backends** — HTTPRoute `backendRefs` name `edgion.io/EdgionAIService` directly
+- **Typed AI backends** — HTTPRoute `backendRefs` name `edgion.io/EdgionBackend` directly
 - **Credential isolation** — Secret-backed pools with weighted rotation; RPM/TPM via Redis
 - **Intelligent selection** — five `backendSelection` algorithms without embedding a provider list in AiProxy
 - **Bounded resilience** — shared attempt ceiling, credential-first rounds, no mid-stream failover

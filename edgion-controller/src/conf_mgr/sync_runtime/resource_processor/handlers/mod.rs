@@ -10,7 +10,7 @@ pub(crate) mod config_data_ref_mark;
 mod configmap;
 pub(crate) mod dns_resolver_guard;
 mod edgion_acme;
-mod edgion_ai_service;
+mod edgion_backend;
 mod edgion_backend_traffic_policy;
 mod edgion_config_data;
 mod edgion_gateway_config;
@@ -39,7 +39,7 @@ mod udp_route;
 pub use backend_tls_policy::{BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler};
 pub use configmap::ConfigMapHandler;
 pub use edgion_acme::EdgionAcmeHandler;
-pub use edgion_ai_service::EdgionAIServiceHandler;
+pub use edgion_backend::EdgionBackendHandler;
 pub use edgion_backend_traffic_policy::EdgionBackendTrafficPolicyHandler;
 pub use edgion_config_data::EdgionConfigDataHandler;
 pub use edgion_gateway_config::EdgionGatewayConfigHandler;
@@ -176,8 +176,8 @@ fn ebtp_refs_for_target(target_ref_mgr: &SecretRefManager, target_key: &str) -> 
 /// Resolve the ancestor Gateways for typed EBTP targets.
 ///
 /// Service targets walk the existing Service reference manager. AI targets
-/// walk the distinct AI-service manager, which prevents same-named Service and
-/// EdgionAIService resources from sharing dependency or ancestor edges.
+/// walk the distinct typed-backend manager, which prevents same-named Service and
+/// EdgionBackend resources from sharing dependency or ancestor edges.
 pub(crate) fn resolve_policy_ancestor_gateways_for_targets(
     targets: &[PolicyTargetKey],
     policy_key: &str,
@@ -193,7 +193,7 @@ pub(crate) fn resolve_policy_ancestor_gateways_for_targets(
                 .runtime()
                 .service_ref_mgr
                 .get_refs(&format!("{}/{}", target.namespace, target.name)),
-            PolicyTargetKind::EdgionAIService => ctx.runtime().ai_service_ref_mgr.get_refs(&target.to_string()),
+            PolicyTargetKind::EdgionBackend => ctx.runtime().backend_ref_mgr.get_refs(&target.to_string()),
         };
         for route_ref in refs {
             for gateway_key in route_index.get_gateways_for_route(route_ref.kind, &route_ref.resource_key()) {
@@ -302,21 +302,21 @@ pub(crate) async fn requeue_backend_policies_for_route(
         }
     }
 
-    let ai_target_keys = ctx.runtime().ai_service_ref_mgr.get_dependencies(&route_ref.key());
-    requeue_backend_policies_for_ai_targets(&ai_target_keys, ctx).await;
+    let backend_target_keys = ctx.runtime().backend_ref_mgr.get_dependencies(&route_ref.key());
+    requeue_backend_policies_for_backend_targets(&backend_target_keys, ctx).await;
 }
 
-/// Requeue EBTPs bound to typed EdgionAIService targets.
+/// Requeue EBTPs bound to typed EdgionBackend targets.
 ///
 /// Callers pass the union of old/new route target keys so parentRef,
 /// delegation, and backend replacement all refresh affected ancestors.
-pub(crate) async fn requeue_backend_policies_for_ai_targets(ai_target_keys: &[String], ctx: &HandlerContext) {
-    for target_key in ai_target_keys {
-        for policy_ref in ebtp_refs_for_target(&ctx.runtime().ai_service_ref_mgr, target_key) {
+pub(crate) async fn requeue_backend_policies_for_backend_targets(backend_target_keys: &[String], ctx: &HandlerContext) {
+    for target_key in backend_target_keys {
+        for policy_ref in ebtp_refs_for_target(&ctx.runtime().backend_ref_mgr, target_key) {
             tracing::debug!(
                 policy = %policy_ref.resource_key(),
-                ai_service = %target_key,
-                "Requeuing EdgionBackendTrafficPolicy due to AI route target change"
+                backend = %target_key,
+                "Requeuing EdgionBackendTrafficPolicy due to route backend target change"
             );
             ctx.requeue(policy_ref.kind_str(), policy_ref.resource_key()).await;
         }
@@ -477,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_ancestor_resolver_separates_same_named_service_and_ai_service() {
+    fn typed_ancestor_resolver_separates_same_named_service_and_backend() {
         use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
         use crate::conf_mgr::ControllerRuntime;
         use edgion_resources::resources::common::ParentReference;
@@ -500,16 +500,14 @@ mod tests {
             name: "shared".to_string(),
         };
         let ai_target = PolicyTargetKey {
-            target_kind: PolicyTargetKind::EdgionAIService,
+            target_kind: PolicyTargetKind::EdgionBackend,
             namespace: "ns".to_string(),
             name: "shared".to_string(),
         };
         runtime
             .service_ref_mgr
             .add_ref("ns/shared".to_string(), service_route.clone());
-        runtime
-            .ai_service_ref_mgr
-            .add_ref(ai_target.to_string(), ai_route.clone());
+        runtime.backend_ref_mgr.add_ref(ai_target.to_string(), ai_route.clone());
 
         let parent = |name: &str| ParentReference {
             group: Some("gateway.networking.k8s.io".to_string()),

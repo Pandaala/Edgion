@@ -95,7 +95,7 @@ macro_rules! for_each_phase2_resource {
         $cb!(EdgionStreamPlugins, EdgionStreamPluginsHandler::new());
         $cb!(EdgionConfigData, EdgionConfigDataHandler::new());
         $cb!(LinkSys, LinkSysHandler::new());
-        $cb!(EdgionAIService, EdgionAIServiceHandler::new());
+        $cb!(EdgionBackend, EdgionBackendHandler::new());
         // ACME
         $cb!(EdgionAcme, EdgionAcmeHandler::new());
         // Backend traffic policy

@@ -8,7 +8,7 @@ Edgion AI Gateway 由四份契约拼装而成。把每项职责放在拥有它�
 |--------|--------|
 | 提供商候选、声明顺序、权重 | HTTPRoute `backendRefs` |
 | 总超时 / 单次超时；是否允许重试 | HTTPRoute `timeouts` / `retry` |
-| 单个提供商 Endpoint、模型目录、凭据池 | `EdgionAIService` |
+| 单个提供商 Endpoint、模型目录、凭据池 | `EdgionBackend` |
 | 请求转换、选择算法、配额、用量 | Rule 级 `AiProxy` |
 | 建连超时、outlier、熔断、重试预算 | 指向该 AI Service 的 `EdgionBackendTrafficPolicy` |
 
@@ -19,8 +19,8 @@ EBTP 不挂到 Route，也不发明后端。
 flowchart LR
   Client["OpenAI SDK"] --> Route["HTTPRoute"]
   Route --> AiProxy["AiProxy"]
-  Route --> S1["EdgionAIService A"]
-  Route --> S2["EdgionAIService B"]
+  Route --> S1["EdgionBackend A"]
+  Route --> S2["EdgionBackend B"]
   S1 --> Cred["Secret credentials"]
   S2 --> Cred
   EBTP["EdgionBackendTrafficPolicy"] -.-> S1
@@ -31,7 +31,7 @@ flowchart LR
 
 1. Route 匹配 `/v1/chat/completions`（或你配置的路径）并运行 Rule 级 AiProxy。
 2. AiProxy 保留客户端请求中的原始模型名/别名作为逻辑模型，并做可选的 token 配额准入。
-3. `backendSelection` 在支持该模型、权重为正的 EdgionAIService 中选择一个。
+3. `backendSelection` 在支持该模型、权重为正的 EdgionBackend 中选择一个。
 4. 选中的 Service 把逻辑名映射为 provider model，再按权重选择可用凭据（跳过 RPM/TPM/冷却）。
 5. Edgion 安装 Secret 凭据、拨号提供商，并流式返回响应。
 6. 在响应承诺之前若发生可重试失败，优先换同 Service 的其他凭据，再换其他 Route 后端，且共用
@@ -41,7 +41,7 @@ flowchart LR
 
 - AiProxy 必须通过 EdgionPlugins `ExtensionRef` 在 Rule 上恰好出现一次。
 - 不要全局挂载 AiProxy，也不要作为 backendRef Filter。
-- 使用 AiProxy 的 Rule 只能转发到 `edgion.io/EdgionAIService`。
+- 使用 AiProxy 的 Rule 只能转发到 `edgion.io/EdgionBackend`。
 - 本版本 AI backendRef Filter 仅允许 `RequestHeaderModifier` 与 `ResponseHeaderModifier`。请求
   修改会在每次尝试重建；响应修改只作用于最终、不再重试的响应。
 
@@ -52,6 +52,6 @@ flowchart LR
 
 ## 下一步
 
-- [EdgionAIService](./edgion-ai-service.md)
+- [EdgionBackend](./edgion-backend.md)
 - [路由与选择](./routing.md)
 - [弹性与故障切换](./resilience.md)

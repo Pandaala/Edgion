@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::resources::common::EdgionService;
+use crate::resources::common::ServiceBackendKind;
 use crate::resources::common::TlsConfig;
 
 // ============================================================
@@ -219,10 +219,10 @@ fn validate_service_ref(svc: &WebhookServiceRef) -> Result<(), String> {
         }
         Some(_) => {}
     }
-    match EdgionService::from_kind(svc.kind.as_ref()) {
-        EdgionService::Unsupported(k) => Err(format!("unsupported service kind: {k}")),
-        EdgionService::ServiceImport => Err("ServiceImport is not yet supported for webhook".to_string()),
-        EdgionService::ServiceExternalName => Err("ServiceExternalName is not supported for webhook".to_string()),
+    match ServiceBackendKind::from_kind(svc.kind.as_ref()) {
+        ServiceBackendKind::Unsupported(k) => Err(format!("unsupported service kind: {k}")),
+        ServiceBackendKind::ServiceImport => Err("ServiceImport is not yet supported for webhook".to_string()),
+        ServiceBackendKind::ServiceExternalName => Err("ServiceExternalName is not supported for webhook".to_string()),
         // Service, ServiceClusterIp, ServiceEndpointSlice
         _ => Ok(()),
     }

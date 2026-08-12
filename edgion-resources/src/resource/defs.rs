@@ -208,12 +208,12 @@ define_resources! {
     },
 
     // ==================== AI Gateway Resources ====================
-    EdgionAIService {
+    EdgionBackend {
         enum_value: 23,
-        kind_name: "edgionaiservice",
+        kind_name: "edgionbackend",
         kind_aliases: [],
-        cache_field: edgion_ai_services,
-        capacity_field: edgion_ai_services_capacity,
+        cache_field: edgion_backends,
+        capacity_field: edgion_backends_capacity,
         default_capacity: normal,
     },
 

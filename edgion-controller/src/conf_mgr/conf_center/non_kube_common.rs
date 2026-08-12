@@ -19,8 +19,8 @@ use tokio::task::JoinHandle;
 use crate::conf_mgr::conf_center::etcd::leadership_gate::LeaderHandle;
 use crate::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    run_post_cache_ready_revalidations, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAIServiceHandler,
-    EdgionAcmeHandler, EdgionBackendTrafficPolicyHandler, EdgionConfigDataHandler, EdgionGatewayConfigHandler,
+    run_post_cache_ready_revalidations, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
+    EdgionBackendHandler, EdgionBackendTrafficPolicyHandler, EdgionConfigDataHandler, EdgionGatewayConfigHandler,
     EdgionPluginsHandler, EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, GatewayClassHandler,
     GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, ProcessorHandler, ReferenceGrantHandler,
     ResourceProcessor, SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,

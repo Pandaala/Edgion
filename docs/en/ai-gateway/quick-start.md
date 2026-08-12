@@ -1,16 +1,16 @@
 # AI Gateway Quick Start
 
-Create a Secret, one or more `EdgionAIService` resources, a rule-level `AiProxy` plugin, and an
+Create a Secret, one or more `EdgionBackend` resources, a rule-level `AiProxy` plugin, and an
 HTTPRoute. Then point an OpenAI SDK at the route hostname.
 
 ## Minimal path
 
 1. Store the provider key in a Secret at key `api-key`.
-2. Create an `EdgionAIService` that references the Secret and declares at least one model (and
+2. Create an `EdgionBackend` that references the Secret and declares at least one model (and
    optional client-facing aliases).
 3. Create an `EdgionPlugins` resource with exactly one enabled `AiProxy`.
 4. Attach that plugin to an HTTPRoute rule through `ExtensionRef`, and list only
-   `edgion.io/EdgionAIService` backends on that rule.
+   `edgion.io/EdgionBackend` backends on that rule.
 5. Call `/v1/chat/completions` with any OpenAI-compatible client.
 
 ```python
@@ -59,42 +59,44 @@ stringData:
   api-key: replace-with-fallback-provider-key
 ---
 apiVersion: edgion.io/v1
-kind: EdgionAIService
+kind: EdgionBackend
 metadata:
   name: primary-provider
   namespace: production
 spec:
-  provider: OpenAI
-  credentialPool:
-    credentials:
-      - name: primary-account
-        secretRef:
-          name: primary-key
-  models:
-    - name: provider-chat-v2
-      aliases: [chat]
-  defaults:
-    streaming: true
-    maxOutputTokens: 4096
+  ai:
+    provider: OpenAI
+    credentialPool:
+      credentials:
+        - name: primary-account
+          secretRef:
+            name: primary-key
+    models:
+      - name: provider-chat-v2
+        aliases: [chat]
+    defaults:
+      streaming: true
+      maxOutputTokens: 4096
 ---
 apiVersion: edgion.io/v1
-kind: EdgionAIService
+kind: EdgionBackend
 metadata:
   name: fallback-provider
   namespace: production
 spec:
-  provider: Anthropic
-  credentialPool:
-    credentials:
-      - name: fallback-account
-        secretRef:
-          name: fallback-key
-  models:
-    - name: claude-example
-      aliases: [chat]
-  defaults:
-    streaming: true
-    maxOutputTokens: 4096
+  ai:
+    provider: Anthropic
+    credentialPool:
+      credentials:
+        - name: fallback-account
+          secretRef:
+            name: fallback-key
+    models:
+      - name: claude-example
+        aliases: [chat]
+    defaults:
+      streaming: true
+      maxOutputTokens: 4096
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -134,11 +136,11 @@ spec:
             name: ai-proxy
       backendRefs:
         - group: edgion.io
-          kind: EdgionAIService
+          kind: EdgionBackend
           name: primary-provider
           weight: 80
         - group: edgion.io
-          kind: EdgionAIService
+          kind: EdgionBackend
           name: fallback-provider
           weight: 20
       timeouts:

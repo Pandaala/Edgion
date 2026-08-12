@@ -1,21 +1,21 @@
 ---
 name: ai-backend-referencegrant-enforced-through-dispatch
-description: Use when reviewing cross-namespace EdgionAIService backendRefs, AI candidate eligibility, or ReferenceGrant enforcement on the data path.
+description: Use when reviewing cross-namespace EdgionBackend backendRefs, AI candidate eligibility, or ReferenceGrant enforcement on the data path.
 ---
 
 # AI backend ReferenceGrant decisions are enforced through dispatch
 
 ## Security invariant
 
-An EdgionAIService backend is usable only when it is classified as
-`CompiledBackendTarget::EdgionAIService` and its Controller-stamped `ref_denied` field is absent.
-`CompiledBackend::is_permitted_ai_service` is the canonical predicate for this invariant.
+An EdgionBackend backend is usable only when it is classified as
+`CompiledBackendTarget::EdgionBackend` and its Controller-stamped `ref_denied` field is absent.
+`CompiledBackend::is_permitted_ai_backend` is the canonical predicate for this invariant.
 
 The check exists at three connected boundaries:
 
 1. AiProxy maps a denied backend's declared weight into the Gateway API invalid-weight gate.
 2. Denied backends are not materialized into `AiPlanCandidate` values or looked up in the
-   cluster-wide `AiServiceStore`.
+   cluster-wide `AiBackendStore`.
 3. Dispatch resolves the candidate's stable backend slot and rechecks the predicate before
    preparing provider headers or a request body.
 

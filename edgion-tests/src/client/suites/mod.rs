@@ -1,6 +1,6 @@
 // Test suite module
 
-pub mod edgion_ai_service;
+pub mod edgion_backend;
 pub mod edgion_backend_traffic_policy;
 pub mod edgion_plugins;
 pub mod edgion_tls;
@@ -34,8 +34,8 @@ pub use edgion_backend_traffic_policy::{
     ConnectTimeoutTestSuite, EdgionBackendTrafficPolicyTestSuite, RetryBudgetTestSuite, UpstreamAuthorityTestSuite,
 };
 
-pub use edgion_ai_service::{
-    AiServiceSecretRotationInitialTestSuite, AiServiceSecretRotationUpdatedTestSuite, AnthropicProviderTestSuite,
+pub use edgion_backend::{
+    AiBackendSecretRotationInitialTestSuite, AiBackendSecretRotationUpdatedTestSuite, AnthropicProviderTestSuite,
     CredentialExhaustionTestSuite, ResilienceTestSuite, SingleProviderTestSuite,
 };
 

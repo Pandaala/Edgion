@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::KeyGet;
 use crate::duration::parse_duration;
-use crate::resources::edgion_ai_service::AI_MODEL_NAME_MAX_BYTES;
+use crate::resources::edgion_backend::AI_MODEL_NAME_MAX_BYTES;
 use crate::resources::edgion_plugins::PluginValidation;
 
 use super::rate_limit::OnMissingKey;

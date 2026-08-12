@@ -38,7 +38,7 @@ description: Use when looking up configuration schemas, resource field definitio
 | Use automatic certificates (ACME) | [03-resources/17-acme.md](03-resources/17-acme.md) |
 | Look up the configuration of a plugin | [03-resources/13-edgion-plugins.md](03-resources/13-edgion-plugins.md) |
 | Configure health checks/circuit breaking/load balancing | [03-resources/20-edgion-backend-traffic-policy.md](03-resources/20-edgion-backend-traffic-policy.md) |
-| Configure HTTPRoute AI backends, credential pools, and AiProxy selection | [03-resources/22-edgion-ai-service.md](03-resources/22-edgion-ai-service.md) |
+| Configure HTTPRoute AI backends, credential pools, and AiProxy selection | [03-resources/22-edgion-backend.md](03-resources/22-edgion-backend.md) |
 | Configure Access Log output | [04-observability/00-logging.md](04-observability/00-logging.md) |
 | Integrate with Redis/ES and other external systems | [03-resources/18-link-sys.md](03-resources/18-link-sys.md) |
 | Look up the meaning of an annotation | [05-annotations/](05-annotations/SKILL.md) |
@@ -70,4 +70,4 @@ Edgion extension resources (API group: `edgion.io`):
 | EdgionAcme | `edgion.io/v1` | ACME automatic certificate management |
 | LinkSys | `edgion.io/v1` | External system connector |
 | EdgionConfigData | `edgion.io/v1` | Plugin metadata |
-| EdgionAIService | `edgion.io/v1` | AI provider endpoint, credential pool, model catalog, and typed HTTPRoute backend |
+| EdgionBackend | `edgion.io/v1` | AI provider endpoint, credential pool, model catalog, and typed HTTPRoute backend |

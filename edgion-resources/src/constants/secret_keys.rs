@@ -15,6 +15,6 @@ pub mod tls {
 
 /// AI provider credential keys.
 pub mod ai {
-    /// Provider API key used by `EdgionAIService`.
+    /// Provider API key used by `EdgionBackend.spec.ai`.
     pub const API_KEY: &str = "api-key";
 }

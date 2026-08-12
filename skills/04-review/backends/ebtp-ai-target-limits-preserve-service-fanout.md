@@ -10,7 +10,7 @@ closed: 2026-08-09
 
 ## Conclusion
 
-The 16-target and unique-target constraints apply only to homogeneous EdgionAIService policies.
+The 16-target and unique-target constraints apply only to homogeneous EdgionBackend policies.
 Service policies retain their original unbounded fan-out and treat repeated references to the same
 Service idempotently. The shared structural CRD therefore declares only `minItems: 1`; conditional
 AI limits are enforced by `EdgionBackendTrafficPolicySpec::get_validation_errors()`.
@@ -22,14 +22,14 @@ policy because of an AI-specific dependency bound are **not accepted**.
 
 **1. New feature bounds must not silently change existing Service policy behavior**
 
-Before EdgionAIService support, Service policies had neither a maximum target count nor duplicate
+Before EdgionBackend support, Service policies had neither a maximum target count nor duplicate
 target rejection. Gateway arbitration already keys each effect by canonical Service identity, so a
 duplicate reference is idempotent. Applying the new AI bounds to Service policies made an otherwise
 valid policy disappear from Gateway arbitration and cleared all of its effective traffic settings.
 
 **2. The AI bound remains enforced at the owning validation layer**
 
-EdgionAIService policies introduce bounded AI dependency, sibling-arbitration, and status work, so
+EdgionBackend policies introduce bounded AI dependency, sibling-arbitration, and status work, so
 they still accept at most 16 unique targets. A plain OpenAPI array `maxItems` cannot express that
 condition without also limiting Service policies; the shared resource-layer validator can because
 it first resolves the homogeneous typed target kind. Controller and Gateway both consume that same

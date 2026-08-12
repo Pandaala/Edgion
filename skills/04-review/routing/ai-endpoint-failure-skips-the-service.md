@@ -2,7 +2,7 @@
 
 Predispatch failures are classified by the configuration they depend on.
 Credential admission failures skip only that credential. DNS resolution and
-resolved-address safety validation depend solely on the EdgionAIService
+resolved-address safety validation depend solely on the EdgionBackend
 endpoint, so either failure must skip the whole service for the current
 scheduler round.
 

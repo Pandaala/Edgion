@@ -60,7 +60,7 @@ impl_resource_meta!(TLSRouteAlpha3, TLSRoute, "TLSRoute");
 // =============================================================================
 
 use crate::resources::{
-    EdgionAIService, EdgionAcme, EdgionBackendTrafficPolicy, EdgionConfigData, EdgionGatewayConfig, EdgionPlugins,
+    EdgionAcme, EdgionBackend, EdgionBackendTrafficPolicy, EdgionConfigData, EdgionGatewayConfig, EdgionPlugins,
     EdgionStreamPlugins, EdgionTls, LinkSys,
 };
 
@@ -82,15 +82,13 @@ impl_resource_meta!(EdgionTls, EdgionTls, "EdgionTls", |self| {
 // PluginRuntime is built gateway-side via `compile_plugins`; no pre_parse needed.
 impl_resource_meta!(EdgionPlugins, EdgionPlugins, "EdgionPlugins");
 
-impl_resource_meta!(EdgionAIService, EdgionAIService, "EdgionAIService", |self| {
+impl_resource_meta!(EdgionBackend, EdgionBackend, "EdgionBackend", |self| {
     // The same stateless validation is used by Controller admission. The data
     // plane cannot reject a conf_sync item, so retain the existing resource and
     // expose any invalid transport state as a warning.
     if let Err(errors) = self.spec.validate() {
         let key = self.key_name();
-        for error in errors {
-            tracing::warn!(edgion_ai_service = %key, error = %error, "EdgionAIService validation error");
-        }
+        tracing::warn!(edgion_backend = %key, error_count = errors.len(), "EdgionBackend validation error");
     }
 });
 

@@ -23,7 +23,7 @@ use edgion_resources::resources::edgion_plugins::plugin_configs::CompiledTemplat
 
 use edgion_common::dns::ResolverSpec;
 
-use crate::backends::service_kind::EdgionService;
+use crate::backends::service_kind::ServiceBackendKind;
 use crate::backends::validate_endpoint_backend_addr;
 use crate::observe::metrics::record_egress_blocked;
 use crate::plugins::http::common::http_client::{build_webhook_client, get_http_client_arc};
@@ -502,22 +502,22 @@ fn build_resolved_target(target: &WebhookTarget, tls_enabled: bool) -> Result<Re
             // this unwrap_or_default cannot fire in practice.
             let name = svc.name.as_deref().unwrap_or_default();
 
-            match EdgionService::from_kind(svc.kind.as_ref()) {
-                EdgionService::ServiceClusterIp => {
+            match ServiceBackendKind::from_kind(svc.kind.as_ref()) {
+                ServiceBackendKind::ServiceClusterIp => {
                     let port_suffix = svc.port.map(|p| format!(":{p}")).unwrap_or_default();
                     Ok(ResolvedTarget::Static(format!(
                         "{scheme}://{name}.{ns}.svc.cluster.local{port_suffix}"
                     )))
                 }
-                EdgionService::Service | EdgionService::ServiceEndpointSlice => Ok(ResolvedTarget::Service {
+                ServiceBackendKind::Service | ServiceBackendKind::ServiceEndpointSlice => Ok(ResolvedTarget::Service {
                     service_key: format!("{ns}/{name}"),
                     port: svc.port,
                     scheme,
                     cursor: AtomicUsize::new(0),
                 }),
-                EdgionService::Unsupported(k) => Err(format!("unsupported service kind: {k}")),
-                EdgionService::ServiceImport => Err("ServiceImport is not supported".to_string()),
-                EdgionService::ServiceExternalName => Err("ServiceExternalName is not supported".to_string()),
+                ServiceBackendKind::Unsupported(k) => Err(format!("unsupported service kind: {k}")),
+                ServiceBackendKind::ServiceImport => Err("ServiceImport is not supported".to_string()),
+                ServiceBackendKind::ServiceExternalName => Err("ServiceExternalName is not supported".to_string()),
             }
         }
     }
@@ -1099,6 +1099,9 @@ mod tests {
                         kind: "Service".to_string(),
                         name: svc.to_string(),
                     }],
+                    resolved_target_class: Some(
+                        edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass::Service,
+                    ),
                     retry_constraint: None,
                     load_balancer: None,
                     health_check: None,
@@ -1179,6 +1182,9 @@ mod tests {
                         kind: "Service".to_string(),
                         name: svc.to_string(),
                     }],
+                    resolved_target_class: Some(
+                        edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass::Service,
+                    ),
                     retry_constraint: None,
                     load_balancer: None,
                     health_check: None,

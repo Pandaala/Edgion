@@ -6,7 +6,7 @@ use std::sync::{Arc, LazyLock};
 use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
 use bytes::Bytes;
-use edgion_resources::resources::edgion_ai_service::ParsedAiModelPricing;
+use edgion_resources::resources::edgion_backend::ParsedAiModelPricing;
 use edgion_resources::EdgionStatus;
 use pingora_proxy::ResponseBodySink;
 use serde::Serialize;
@@ -254,7 +254,7 @@ const fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GenAiAttempt {
     pub number: u8,
-    pub service: String,
+    pub backend: String,
     pub provider: &'static str,
     pub credential: String,
     #[serde(skip_serializing_if = "Option::is_none")]

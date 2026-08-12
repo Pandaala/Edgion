@@ -289,7 +289,7 @@ fn other_known_kind_names() -> HashSet<&'static str> {
         "EdgionStreamPlugins",
         "EdgionConfigData",
         "LinkSys",
-        "EdgionAIService",
+        "EdgionBackend",
         "EdgionAcme",
         "EdgionBackendTrafficPolicy",
         "EdgionGatewayConfig",
@@ -535,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn ai_service_is_a_known_no_watch_kind() {
-        assert!(other_known_kind_names().contains("EdgionAIService"));
+    fn backend_is_a_known_no_watch_kind() {
+        assert!(other_known_kind_names().contains("EdgionBackend"));
     }
 }

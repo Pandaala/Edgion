@@ -229,8 +229,8 @@ impl KubernetesStorage {
                 Scope::Namespaced,
             ),
             "LinkSys" => (api_resource("edgion.io", "v1", "LinkSys", "linksys"), Scope::Namespaced),
-            "EdgionAIService" => (
-                api_resource("edgion.io", "v1", "EdgionAIService", "edgionaiservices"),
+            "EdgionBackend" => (
+                api_resource("edgion.io", "v1", "EdgionBackend", "edgionbackends"),
                 Scope::Namespaced,
             ),
             // EdgionAcme: the conventional plural ("edgionacmes") matches the CRD,
@@ -667,7 +667,7 @@ impl CenterApi for KubernetesStorage {
             "LinkSys",
             "EdgionAcme",
             "EdgionBackendTrafficPolicy",
-            "EdgionAIService",
+            "EdgionBackend",
         ];
 
         let mut all_items = Vec::new();

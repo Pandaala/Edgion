@@ -216,8 +216,8 @@ pub enum ResolvedRefsError {
     InvalidKind { kind: String, name: String },
     /// Backend Service not found
     BackendNotFound { namespace: String, name: String },
-    /// Referenced EdgionAIService not found.
-    EdgionAIServiceNotFound { namespace: String, name: String },
+    /// Referenced EdgionBackend not found.
+    EdgionBackendNotFound { namespace: String, name: String },
     /// Referenced Secret not found
     SecretNotFound { namespace: String, name: String },
     /// Cross-namespace reference denied by ReferenceGrant policy.
@@ -277,7 +277,7 @@ impl ResolvedRefsError {
         match self {
             Self::InvalidKind { .. } => condition_reasons::INVALID_KIND,
             Self::BackendNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
-            Self::EdgionAIServiceNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
+            Self::EdgionBackendNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
             Self::SecretNotFound { .. } => condition_reasons::SECRET_NOT_FOUND,
             Self::RefNotPermitted { .. } => condition_reasons::REF_NOT_PERMITTED,
             Self::EdgionConfigDataNotFound { .. } => condition_reasons::INVALID_EDGION_CONFIG_DATA_REF,
@@ -297,8 +297,8 @@ impl ResolvedRefsError {
             Self::BackendNotFound { namespace, name } => {
                 format!("Service '{}/{}' not found", namespace, name)
             }
-            Self::EdgionAIServiceNotFound { namespace, name } => {
-                format!("EdgionAIService '{}/{}' not found", namespace, name)
+            Self::EdgionBackendNotFound { namespace, name } => {
+                format!("EdgionBackend '{}/{}' not found", namespace, name)
             }
             Self::SecretNotFound { namespace, name } => {
                 format!("Secret '{}/{}' not found", namespace, name)
@@ -513,7 +513,7 @@ pub(crate) fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'stati
             ResolvedRefsError::InvalidSecretType { .. } => 3,
             ResolvedRefsError::EdgionConfigDataNotFound { .. } => 4,
             ResolvedRefsError::BackendNotFound { .. } => 5,
-            ResolvedRefsError::EdgionAIServiceNotFound { .. } => 5,
+            ResolvedRefsError::EdgionBackendNotFound { .. } => 5,
             // Delegation child missing is the same severity class as a missing
             // Service backend (both surface as BACKEND_NOT_FOUND).
             ResolvedRefsError::DelegationChildNotFound { .. } => 5,

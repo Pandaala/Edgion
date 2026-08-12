@@ -1,6 +1,6 @@
 //! Credential-scoped passive ejection and provider cooldowns.
 //!
-//! Identity is `(typed EdgionAIService key, credential alias)`. Provider DNS
+//! Identity is `(typed EdgionBackend key, credential alias)`. Provider DNS
 //! answers and secret values are intentionally absent from keys and output.
 
 use crate::backends::outlier_detection::{EjectionAdmission, FailureClass, FailureTransition, PassiveEjectionState};
@@ -22,14 +22,14 @@ pub fn get_ai_credential_outlier_store() -> Arc<AiCredentialOutlierStore> {
 
 /// One immutable EBTP policy generation with a mutable, cold-path alias index.
 /// Captured credential handles keep this generation alive after replacement.
-pub struct AiCredentialOutlierServiceHandle {
+pub struct AiCredentialOutlierBackendHandle {
     config: Option<OutlierDetectionResolved>,
     credentials: DashMap<String, Arc<PassiveEjectionState>>,
     aliases: parking_lot::RwLock<HashSet<String>>,
     eject_lock: Mutex<()>,
 }
 
-impl AiCredentialOutlierServiceHandle {
+impl AiCredentialOutlierBackendHandle {
     fn new(config: Option<OutlierDetectionResolved>, aliases: HashSet<String>) -> Arc<Self> {
         let credentials = aliases
             .iter()
@@ -64,7 +64,7 @@ impl AiCredentialOutlierServiceHandle {
     /// handle remains valid if the alias or whole resource is later removed.
     pub fn capture(self: &Arc<Self>, alias: &str) -> Option<AiCredentialOutlierHandle> {
         self.credential(alias).map(|state| AiCredentialOutlierHandle {
-            service: Arc::clone(self),
+            backend: Arc::clone(self),
             state,
         })
     }
@@ -96,7 +96,7 @@ impl AiCredentialOutlierServiceHandle {
 /// never performs a global target-key lookup.
 #[derive(Clone)]
 pub struct AiCredentialOutlierHandle {
-    service: Arc<AiCredentialOutlierServiceHandle>,
+    backend: Arc<AiCredentialOutlierBackendHandle>,
     state: Arc<PassiveEjectionState>,
 }
 
@@ -110,7 +110,7 @@ impl AiCredentialOutlierHandle {
             return FailureTransition::None;
         };
         if self
-            .service
+            .backend
             .config
             .as_ref()
             .is_some_and(|config| config.max_ejection_percent == 0)
@@ -118,11 +118,11 @@ impl AiCredentialOutlierHandle {
             return self.state.finish_failure(candidate, true);
         }
         let _guard = self
-            .service
+            .backend
             .eject_lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.state.finish_failure(candidate, self.service.failure_allowed())
+        self.state.finish_failure(candidate, self.backend.failure_allowed())
     }
 
     pub fn record_success(&self) {
@@ -141,7 +141,7 @@ impl AiCredentialOutlierHandle {
         if hint.is_zero() {
             return None;
         }
-        let cooldown = hint.clamp(Duration::from_secs(1), self.service.cooldown_cap());
+        let cooldown = hint.clamp(Duration::from_secs(1), self.backend.cooldown_cap());
         self.state.open_for(cooldown);
         Some(cooldown)
     }
@@ -155,7 +155,7 @@ impl AiCredentialOutlierHandle {
 /// Runtime credential ejection store. It emits no metrics and performs no
 /// tracing on request-path operations.
 pub struct AiCredentialOutlierStore {
-    services: DashMap<PolicyTargetKey, Arc<AiCredentialOutlierServiceHandle>>,
+    backends: DashMap<PolicyTargetKey, Arc<AiCredentialOutlierBackendHandle>>,
 }
 
 impl Default for AiCredentialOutlierStore {
@@ -167,63 +167,63 @@ impl Default for AiCredentialOutlierStore {
 impl AiCredentialOutlierStore {
     pub fn new() -> Self {
         Self {
-            services: DashMap::new(),
+            backends: DashMap::new(),
         }
     }
 
-    /// Number of AI services with credential outlier state.
+    /// Number of AI backends with credential outlier state.
     pub fn count(&self) -> usize {
-        self.services.len()
+        self.backends.len()
     }
 
-    /// AI service target keys currently tracked (snapshot).
+    /// AI backend target keys currently tracked (snapshot).
     pub fn keys(&self) -> Vec<String> {
-        self.services.iter().map(|entry| entry.key().to_string()).collect()
+        self.backends.iter().map(|entry| entry.key().to_string()).collect()
     }
 
     /// Publish the effective outlier config and current usable credential aliases.
     /// Equivalent config updates preserve cooldown/ejection state; a real config
     /// change resets it, matching the existing Service outlier store.
-    pub fn configure_service(
+    pub fn configure_backend(
         &self,
         target: PolicyTargetKey,
         config: Option<OutlierDetectionResolved>,
         aliases: impl IntoIterator<Item = String>,
     ) -> bool {
-        if target.target_kind != PolicyTargetKind::EdgionAIService {
+        if target.target_kind != PolicyTargetKind::EdgionBackend {
             return false;
         }
         let aliases: HashSet<_> = aliases.into_iter().collect();
-        match self.services.entry(target) {
+        match self.backends.entry(target) {
             dashmap::mapref::entry::Entry::Occupied(mut occupied) => {
                 if occupied.get().config == config {
                     occupied.get().reconcile_aliases(aliases);
                 } else {
-                    occupied.insert(AiCredentialOutlierServiceHandle::new(config, aliases));
+                    occupied.insert(AiCredentialOutlierBackendHandle::new(config, aliases));
                 }
             }
             dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                vacant.insert(AiCredentialOutlierServiceHandle::new(config, aliases));
+                vacant.insert(AiCredentialOutlierBackendHandle::new(config, aliases));
             }
         }
         true
     }
 
     /// Update only the policy half of the state. Credential aliases already
-    /// published by EdgionAIService sync are retained.
+    /// published by EdgionBackend sync are retained.
     pub fn publish_policy(
         &self,
         target: PolicyTargetKey,
         config: Option<OutlierDetectionResolved>,
-    ) -> Option<Arc<AiCredentialOutlierServiceHandle>> {
-        if target.target_kind != PolicyTargetKind::EdgionAIService {
+    ) -> Option<Arc<AiCredentialOutlierBackendHandle>> {
+        if target.target_kind != PolicyTargetKind::EdgionBackend {
             return None;
         }
-        let handle = match self.services.entry(target) {
+        let handle = match self.backends.entry(target) {
             dashmap::mapref::entry::Entry::Occupied(mut occupied) => {
                 if occupied.get().config != config {
                     let aliases = occupied.get().aliases.read().clone();
-                    occupied.insert(AiCredentialOutlierServiceHandle::new(config, aliases));
+                    occupied.insert(AiCredentialOutlierBackendHandle::new(config, aliases));
                 }
                 Arc::clone(occupied.get())
             }
@@ -234,7 +234,7 @@ impl AiCredentialOutlierStore {
                 // aliases can never be captured. Inserting one here left an
                 // entry per target for the process lifetime.
                 config.as_ref()?;
-                Arc::clone(&vacant.insert(AiCredentialOutlierServiceHandle::new(config, HashSet::new())))
+                Arc::clone(&vacant.insert(AiCredentialOutlierBackendHandle::new(config, HashSet::new())))
             }
         };
         Some(handle)
@@ -247,55 +247,55 @@ impl AiCredentialOutlierStore {
     /// Update only the credential half of the state. Effective EBTP config
     /// already published by policy sync is retained.
     pub fn set_credentials(&self, target: PolicyTargetKey, aliases: impl IntoIterator<Item = String>) -> bool {
-        if target.target_kind != PolicyTargetKind::EdgionAIService {
+        if target.target_kind != PolicyTargetKind::EdgionBackend {
             return false;
         }
         let aliases: HashSet<_> = aliases.into_iter().collect();
-        match self.services.entry(target) {
+        match self.backends.entry(target) {
             dashmap::mapref::entry::Entry::Occupied(occupied) => occupied.get().reconcile_aliases(aliases),
             dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                vacant.insert(AiCredentialOutlierServiceHandle::new(None, aliases));
+                vacant.insert(AiCredentialOutlierBackendHandle::new(None, aliases));
             }
         }
         true
     }
 
-    pub fn remove_service(&self, target: &PolicyTargetKey) {
-        self.services.remove(target);
+    pub fn remove_backend(&self, target: &PolicyTargetKey) {
+        self.backends.remove(target);
     }
 
     /// Current globally discoverable policy generation. Request planning may
     /// use this only when no effective EBTP snapshot exists for the target.
-    pub fn current_handle(&self, target: &PolicyTargetKey) -> Option<Arc<AiCredentialOutlierServiceHandle>> {
-        self.services.get(target).map(|entry| Arc::clone(entry.value()))
+    pub fn current_handle(&self, target: &PolicyTargetKey) -> Option<Arc<AiCredentialOutlierBackendHandle>> {
+        self.backends.get(target).map(|entry| Arc::clone(entry.value()))
     }
 
     /// Check normal admission or acquire the sole half-open probe lease.
     pub fn admit(&self, target: &PolicyTargetKey, alias: &str) -> EjectionAdmission {
-        let Some(service) = self.services.get(target).map(|entry| Arc::clone(entry.value())) else {
+        let Some(backend) = self.backends.get(target).map(|entry| Arc::clone(entry.value())) else {
             return EjectionAdmission::Rejected;
         };
-        let Some(credential) = service.capture(alias) else {
+        let Some(credential) = backend.capture(alias) else {
             return EjectionAdmission::Rejected;
         };
         credential.admit()
     }
 
     pub fn record_failure(&self, target: &PolicyTargetKey, alias: &str, class: FailureClass) -> FailureTransition {
-        let Some(service) = self.services.get(target).map(|entry| Arc::clone(entry.value())) else {
+        let Some(backend) = self.backends.get(target).map(|entry| Arc::clone(entry.value())) else {
             return FailureTransition::None;
         };
-        let Some(credential) = service.capture(alias) else {
+        let Some(credential) = backend.capture(alias) else {
             return FailureTransition::None;
         };
         credential.record_failure(class)
     }
 
     pub fn record_success(&self, target: &PolicyTargetKey, alias: &str) {
-        let Some(service) = self.services.get(target).map(|entry| Arc::clone(entry.value())) else {
+        let Some(backend) = self.backends.get(target).map(|entry| Arc::clone(entry.value())) else {
             return;
         };
-        if let Some(credential) = service.capture(alias) {
+        if let Some(credential) = backend.capture(alias) {
             credential.record_success();
         }
     }
@@ -309,15 +309,15 @@ impl AiCredentialOutlierStore {
         value: &str,
         now: SystemTime,
     ) -> Option<Duration> {
-        let service = self.services.get(target).map(|entry| Arc::clone(entry.value()))?;
-        service.capture(alias)?.apply_retry_after(value, now)
+        let backend = self.backends.get(target).map(|entry| Arc::clone(entry.value()))?;
+        backend.capture(alias)?.apply_retry_after(value, now)
     }
 
     #[cfg(test)]
     fn state(&self, target: &PolicyTargetKey, alias: &str) -> Arc<PassiveEjectionState> {
-        self.services
+        self.backends
             .get(target)
-            .and_then(|service| service.credential(alias))
+            .and_then(|backend| backend.credential(alias))
             .expect("configured credential")
     }
 }
@@ -328,7 +328,7 @@ mod tests {
 
     fn target(name: &str) -> PolicyTargetKey {
         PolicyTargetKey {
-            target_kind: PolicyTargetKind::EdgionAIService,
+            target_kind: PolicyTargetKind::EdgionBackend,
             namespace: "default".to_string(),
             name: name.to_string(),
         }
@@ -352,11 +352,11 @@ mod tests {
         assert!(store.keys().is_empty());
 
         let target = target("tracked");
-        store.configure_service(target.clone(), None, ["primary".to_string()]);
+        store.configure_backend(target.clone(), None, ["primary".to_string()]);
         assert_eq!(store.count(), 1);
         assert_eq!(store.keys(), vec![target.to_string()]);
 
-        store.remove_service(&target);
+        store.remove_backend(&target);
         assert_eq!(store.count(), 0);
         assert!(store.keys().is_empty());
     }
@@ -366,9 +366,9 @@ mod tests {
         let store = AiCredentialOutlierStore::new();
         let first = target("first");
         let second = target("second");
-        for service in [&first, &second] {
-            assert!(store.configure_service(
-                service.clone(),
+        for backend in [&first, &second] {
+            assert!(store.configure_backend(
+                backend.clone(),
                 Some(config(10, 100)),
                 ["primary".to_string(), "secondary".to_string()],
             ));
@@ -386,10 +386,10 @@ mod tests {
     fn parsed_reset_cooldown_uses_the_retry_after_floor_and_cap() {
         let store = AiCredentialOutlierStore::new();
         let target = target("svc");
-        store.configure_service(target.clone(), Some(config(10, 100)), ["primary".to_string()]);
+        store.configure_backend(target.clone(), Some(config(10, 100)), ["primary".to_string()]);
         let credential = store
             .current_handle(&target)
-            .and_then(|service| service.capture("primary"))
+            .and_then(|backend| backend.capture("primary"))
             .expect("credential");
         assert_eq!(
             credential.apply_cooldown(Duration::from_millis(1)),
@@ -407,10 +407,10 @@ mod tests {
     fn concurrent_success_does_not_cancel_retry_after_cooldown() {
         let store = AiCredentialOutlierStore::new();
         let target = target("svc");
-        store.configure_service(target.clone(), Some(config(60, 100)), ["primary".to_string()]);
-        let service = store.current_handle(&target).expect("service handle");
-        let rate_limited = service.capture("primary").expect("rate-limited request handle");
-        let in_flight_success = service.capture("primary").expect("concurrent request handle");
+        store.configure_backend(target.clone(), Some(config(60, 100)), ["primary".to_string()]);
+        let backend = store.current_handle(&target).expect("backend handle");
+        let rate_limited = backend.capture("primary").expect("rate-limited request handle");
+        let in_flight_success = backend.capture("primary").expect("concurrent request handle");
 
         assert_eq!(
             rate_limited.apply_retry_after("60", SystemTime::UNIX_EPOCH),
@@ -425,7 +425,7 @@ mod tests {
     fn zero_past_invalid_and_unknown_alias_do_not_install_cooldown() {
         let store = AiCredentialOutlierStore::new();
         let target = target("svc");
-        store.configure_service(target.clone(), None, ["key".to_string()]);
+        store.configure_backend(target.clone(), None, ["key".to_string()]);
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
         assert_eq!(store.apply_retry_after(&target, "key", "0", now), None);
         assert_eq!(store.apply_retry_after(&target, "key", "invalid", now), None);
@@ -437,7 +437,7 @@ mod tests {
     fn max_ejection_percent_is_scoped_to_credentials_of_one_service() {
         let store = AiCredentialOutlierStore::new();
         let target = target("svc");
-        store.configure_service(
+        store.configure_backend(
             target.clone(),
             Some(config(10, 50)),
             ["one".to_string(), "two".to_string()],
@@ -460,7 +460,7 @@ mod tests {
         let target = target("svc");
         let mut threshold_three = config(10, 50);
         threshold_three.consecutive_gateway_errors = 3;
-        store.configure_service(
+        store.configure_backend(
             target.clone(),
             Some(threshold_three),
             ["one".to_string(), "two".to_string()],
@@ -505,11 +505,11 @@ mod tests {
     fn equivalent_config_preserves_state_and_changed_config_resets() {
         let store = AiCredentialOutlierStore::new();
         let target = target("svc");
-        store.configure_service(target.clone(), Some(config(10, 100)), ["key".to_string()]);
+        store.configure_backend(target.clone(), Some(config(10, 100)), ["key".to_string()]);
         store.apply_retry_after(&target, "key", "5", SystemTime::UNIX_EPOCH);
-        store.configure_service(target.clone(), Some(config(10, 100)), ["key".to_string()]);
+        store.configure_backend(target.clone(), Some(config(10, 100)), ["key".to_string()]);
         assert!(matches!(store.admit(&target, "key"), EjectionAdmission::Rejected));
-        store.configure_service(target.clone(), Some(config(20, 100)), ["key".to_string()]);
+        store.configure_backend(target.clone(), Some(config(20, 100)), ["key".to_string()]);
         assert!(matches!(store.admit(&target, "key"), EjectionAdmission::Closed));
     }
 
@@ -517,7 +517,7 @@ mod tests {
     fn expired_cooldown_admits_one_probe_and_drop_releases_it() {
         let store = AiCredentialOutlierStore::new();
         let target = target("svc");
-        store.configure_service(target.clone(), Some(config(10, 100)), ["key".to_string()]);
+        store.configure_backend(target.clone(), Some(config(10, 100)), ["key".to_string()]);
         store.state(&target, "key").open_for(Duration::ZERO);
         let EjectionAdmission::Probe(probe) = store.admit(&target, "key") else {
             panic!("probe must be admitted");
@@ -530,9 +530,9 @@ mod tests {
     #[test]
     fn service_kind_is_part_of_identity() {
         let store = AiCredentialOutlierStore::new();
-        let mut service = target("same-name");
-        service.target_kind = PolicyTargetKind::Service;
-        assert!(!store.configure_service(service, None, ["key".to_string()]));
+        let mut backend = target("same-name");
+        backend.target_kind = PolicyTargetKind::Service;
+        assert!(!store.configure_backend(backend, None, ["key".to_string()]));
     }
 
     #[test]
@@ -586,7 +586,7 @@ mod tests {
         second_credential.apply_retry_after("5", SystemTime::UNIX_EPOCH);
         assert!(matches!(second_credential.admit(), EjectionAdmission::Rejected));
 
-        store.remove_service(&target);
+        store.remove_backend(&target);
         assert!(store.current_handle(&target).is_none());
         assert!(matches!(first_credential.admit(), EjectionAdmission::Rejected));
     }
@@ -612,7 +612,7 @@ mod tests {
         // such target leaked one for the process lifetime.
         let store = AiCredentialOutlierStore::new();
         let target = PolicyTargetKey {
-            target_kind: PolicyTargetKind::EdgionAIService,
+            target_kind: PolicyTargetKind::EdgionBackend,
             namespace: "default".to_string(),
             name: "ghost".to_string(),
         };
@@ -623,12 +623,12 @@ mod tests {
 
     #[test]
     fn absent_policy_still_keeps_a_live_credential_generation() {
-        // The documented reason the no-policy generation exists: a service with
+        // The documented reason the no-policy generation exists: a backend with
         // credentials but no EBTP still needs somewhere to record Retry-After
         // cooldowns. That must survive.
         let store = AiCredentialOutlierStore::new();
         let target = PolicyTargetKey {
-            target_kind: PolicyTargetKind::EdgionAIService,
+            target_kind: PolicyTargetKind::EdgionBackend,
             namespace: "default".to_string(),
             name: "live".to_string(),
         };

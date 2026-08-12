@@ -8,7 +8,7 @@
 ## 概览
 
 通过 Rule 级 `EdgionPlugins` ExtensionRef 恰好挂载一个启用的 `AiProxy`。该 Rule 的
-HTTPRoute `backendRefs` 只能指向 `edgion.io/EdgionAIService`。AiProxy 负责请求转换、
+HTTPRoute `backendRefs` 只能指向 `edgion.io/EdgionBackend`。AiProxy 负责请求转换、
 `backendSelection`、可选 token 配额以及用量/成本核算 — 不负责提供商列表、权重或重试次数。
 
 ## 下一步
@@ -41,5 +41,5 @@ spec:
         onUnknownModel: reject
 ```
 
-Secret、EdgionAIService 与 HTTPRoute 见
+Secret、EdgionBackend 与 HTTPRoute 见
 [完整配置示例](../../../../ai-gateway/quick-start.md#完整示例)。

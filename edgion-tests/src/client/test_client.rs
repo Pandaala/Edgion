@@ -702,10 +702,10 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
 /// Return the port-config key for the given suite name.
 fn suite_to_port_key(suite: &str) -> &str {
     match suite {
-        "EdgionAIService/AnthropicProvider" => "EdgionAIService/AnthropicProvider",
-        "EdgionAIService/CredentialExhaustion" => "EdgionAIService/CredentialExhaustion",
-        "EdgionAIService/Resilience" => "EdgionAIService/Resilience",
-        "EdgionAIService/SingleProvider" => "EdgionAIService/SingleProvider",
+        "EdgionBackend/AnthropicProvider" => "EdgionBackend/AnthropicProvider",
+        "EdgionBackend/CredentialExhaustion" => "EdgionBackend/CredentialExhaustion",
+        "EdgionBackend/Resilience" => "EdgionBackend/Resilience",
+        "EdgionBackend/SingleProvider" => "EdgionBackend/SingleProvider",
         // Control-plane suite: no data-plane listener of its own; borrow a valid
         // HTTP port key so the per-suite context still resolves a port.
         "EdgionBackendTrafficPolicy" => "HTTPRoute/Backend/CircuitBreaker",
@@ -884,30 +884,30 @@ fn suite_to_port_key(suite: &str) -> &str {
 /// Register test suites matching the given suite name into the runner.
 fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, phase: Option<&str>) {
     match suite {
-        "EdgionAIService/AnthropicProvider" => {
+        "EdgionBackend/AnthropicProvider" => {
             if !gateway {
-                eprintln!("Error: EdgionAIService/AnthropicProvider tests require --gateway flag");
+                eprintln!("Error: EdgionBackend/AnthropicProvider tests require --gateway flag");
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::AnthropicProviderTestSuite));
         }
-        "EdgionAIService/SingleProvider" => {
+        "EdgionBackend/SingleProvider" => {
             if !gateway {
-                eprintln!("Error: EdgionAIService/SingleProvider tests require --gateway flag");
+                eprintln!("Error: EdgionBackend/SingleProvider tests require --gateway flag");
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::SingleProviderTestSuite));
         }
-        "EdgionAIService/Resilience" => {
+        "EdgionBackend/Resilience" => {
             if !gateway {
-                eprintln!("Error: EdgionAIService/Resilience tests require --gateway flag");
+                eprintln!("Error: EdgionBackend/Resilience tests require --gateway flag");
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::ResilienceTestSuite));
         }
-        "EdgionAIService/CredentialExhaustion" => {
+        "EdgionBackend/CredentialExhaustion" => {
             if !gateway {
-                eprintln!("Error: EdgionAIService/CredentialExhaustion tests require --gateway flag");
+                eprintln!("Error: EdgionBackend/CredentialExhaustion tests require --gateway flag");
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::CredentialExhaustionTestSuite));

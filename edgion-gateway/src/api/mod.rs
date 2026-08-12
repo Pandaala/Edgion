@@ -398,7 +398,7 @@ struct StoreStatsResponse {
     health_check_config_store: SimpleCountStats,
     gateway_backend_tls_store: SimpleCountStats,
     edgion_config_data_store: SimpleCountStats,
-    ai_service_store: SimpleCountStats,
+    ai_backend_store: SimpleCountStats,
     ai_credential_outlier_store: SimpleCountStats,
     adaptive_telemetry_store: SimpleCountStats,
     link_sys_runtime: LinkSysRuntimeStats,
@@ -550,8 +550,8 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         count: crate::plugins::runtime::edgion_config_data::count_edgion_config_data(),
     };
 
-    let ai_service_store = SimpleCountStats {
-        count: crate::ai::count_ai_services(),
+    let ai_backend_store = SimpleCountStats {
+        count: crate::ai::count_ai_backends(),
     };
     let (ai_credential_outlier_store, adaptive_telemetry_store) = collect_ai_runtime_store_counts(
         crate::ai::get_ai_credential_outlier_store().as_ref(),
@@ -598,7 +598,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         health_check_config_store,
         gateway_backend_tls_store,
         edgion_config_data_store,
-        ai_service_store,
+        ai_backend_store,
         ai_credential_outlier_store,
         adaptive_telemetry_store,
         link_sys_runtime,
@@ -1720,64 +1720,68 @@ mod edgion_tls_scrub_tests {
 }
 
 #[cfg(test)]
-mod edgion_ai_service_admin_tests {
+mod edgion_backend_admin_tests {
     use super::*;
     use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
-    use edgion_resources::resources::edgion_ai_service::{
-        AiCredential, AiCredentialPool, AiModel, AiProvider, AiServiceDefaults, EdgionAIService, EdgionAIServiceSpec,
+    use edgion_resources::resources::edgion_backend::{
+        AiBackendDefaults, AiBackendSpec, AiCredential, AiCredentialPool, AiModel, AiProvider, EdgionBackend,
+        EdgionBackendSpec,
     };
     use edgion_resources::resources::edgion_plugins::OnRedisFailure;
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
     use std::collections::BTreeMap;
 
-    fn ai_service(name: &str, endpoint: &str, credential: Option<&[u8]>) -> EdgionAIService {
+    fn ai_backend(name: &str, endpoint: &str, credential: Option<&[u8]>) -> EdgionBackend {
         let secret = credential.map(|value| Secret {
             data: Some(BTreeMap::from([("api-key".to_string(), ByteString(value.to_vec()))])),
             ..Default::default()
         });
-        let spec = EdgionAIServiceSpec {
-            provider: AiProvider::OpenAICompatible,
-            endpoint: Some(endpoint.to_string()),
-            allow_insecure_http: false,
-            credential_pool: AiCredentialPool {
-                redis_ref: None,
-                on_redis_failure: OnRedisFailure::Deny,
-                credentials: vec![AiCredential {
-                    name: "primary".to_string(),
-                    weight: 1,
-                    credential: SecretSlot {
-                        secret_ref: SecretObjectReference {
-                            group: None,
-                            kind: None,
-                            name: "provider-key".to_string(),
-                            namespace: None,
+        let spec = EdgionBackendSpec {
+            ai: Some(AiBackendSpec {
+                provider: AiProvider::OpenAICompatible,
+                endpoint: Some(endpoint.to_string()),
+                allow_insecure_http: false,
+                credential_pool: AiCredentialPool {
+                    redis_ref: None,
+                    on_redis_failure: OnRedisFailure::Deny,
+                    credentials: vec![AiCredential {
+                        name: "primary".to_string(),
+                        weight: 1,
+                        credential: SecretSlot {
+                            secret_ref: SecretObjectReference {
+                                group: None,
+                                kind: None,
+                                name: "provider-key".to_string(),
+                                namespace: None,
+                            },
+                            secret,
                         },
-                        secret,
-                    },
-                    limits: None,
+                        limits: None,
+                    }],
+                },
+                models: vec![AiModel {
+                    name: "model-a".to_string(),
+                    aliases: vec![],
+                    pricing: None,
                 }],
-            },
-            models: vec![AiModel {
-                name: "model-a".to_string(),
-                aliases: vec![],
-                pricing: None,
-            }],
-            defaults: AiServiceDefaults::default(),
+                defaults: AiBackendDefaults::default(),
+            }),
+            reconcile_outcome: None,
         };
-        let mut service = EdgionAIService::new(name, spec);
+        let mut service = EdgionBackend::new(name, spec);
         service.metadata.namespace = Some("ai-admin-test".to_string());
         service
     }
 
     #[test]
     fn configclient_redacts_ai_credential_and_retains_inactive_resources() {
-        let _store_guard = crate::ai::lock_global_ai_service_store_for_test();
+        let _store_guard = crate::ai::lock_global_ai_backend_store_for_test();
         let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
         let _enter = rt.enter();
         let client = ConfigClient::new("cid-ai".to_string(), "cname-ai".to_string());
-        let mut active = ai_service("active", "https://ai.example.com/v1", Some(b"admin-private-key"));
-        let mut secondary = active.spec.credential_pool.credentials[0].clone();
+        let mut active = ai_backend("active", "https://ai.example.com/v1", Some(b"admin-private-key"));
+        let mut secondary = active.spec.ai.as_ref().unwrap().credential_pool.credentials[0].clone();
         secondary.name = "secondary".to_string();
         secondary.credential.secret = Some(Secret {
             data: Some(BTreeMap::from([(
@@ -1786,18 +1790,25 @@ mod edgion_ai_service_admin_tests {
             )])),
             ..Default::default()
         });
-        active.spec.credential_pool.credentials.push(secondary);
+        active
+            .spec
+            .ai
+            .as_mut()
+            .unwrap()
+            .credential_pool
+            .credentials
+            .push(secondary);
 
-        client.edgion_ai_services().reset(
+        client.edgion_backends().reset(
             vec![
                 active,
-                ai_service("unresolved", "https://ai.example.com/v1", None),
-                ai_service("invalid", "http://ai.example.com/v1", Some(b"invalid-private-key")),
+                ai_backend("unresolved", "https://ai.example.com/v1", None),
+                ai_backend("invalid", "http://ai.example.com/v1", Some(b"invalid-private-key")),
             ],
             1,
         );
 
-        let listed = list_client_resources(&client, ResourceKind::EdgionAIService);
+        let listed = list_client_resources(&client, ResourceKind::EdgionBackend);
         assert_eq!(
             listed.len(),
             3,
@@ -1808,11 +1819,11 @@ mod edgion_ai_service_admin_tests {
             .find(|value| value["metadata"]["name"] == "active")
             .expect("active resource listed");
         assert_eq!(
-            active["spec"]["credentialPool"]["credentials"][0]["secret"],
+            active["spec"]["ai"]["credentialPool"]["credentials"][0]["secret"],
             "[redacted]"
         );
         assert_eq!(
-            active["spec"]["credentialPool"]["credentials"][1]["secret"],
+            active["spec"]["ai"]["credentialPool"]["credentials"][1]["secret"],
             "[redacted]"
         );
         let serialized = serde_json::to_string(&listed).unwrap();
@@ -1820,13 +1831,13 @@ mod edgion_ai_service_admin_tests {
         assert!(!serialized.contains("secondary-private-key"));
         assert!(!serialized.contains("invalid-private-key"));
 
-        let runtime = crate::ai::get_global_ai_service_store();
+        let runtime = crate::ai::get_global_ai_backend_store();
         assert_eq!(runtime.count(), 1, "only the valid, resolved resource is activatable");
         assert!(runtime.get_by_key("ai-admin-test/active").is_some());
         assert!(runtime.get_by_key("ai-admin-test/unresolved").is_none());
         assert!(runtime.get_by_key("ai-admin-test/invalid").is_none());
 
-        client.edgion_ai_services().reset(Vec::new(), 2);
+        client.edgion_backends().reset(Vec::new(), 2);
         assert_eq!(runtime.count(), 0, "wipe must clear the derived runtime store");
     }
 }
@@ -1841,11 +1852,11 @@ mod store_stats_tests {
         let credential_outliers = crate::ai::AiCredentialOutlierStore::new();
         let adaptive_telemetry = crate::ai::AdaptiveTelemetryStore::new();
         let target = PolicyTargetKey {
-            target_kind: PolicyTargetKind::EdgionAIService,
+            target_kind: PolicyTargetKind::EdgionBackend,
             namespace: "default".to_string(),
             name: "provider".to_string(),
         };
-        credential_outliers.configure_service(target.clone(), None, ["primary".to_string()]);
+        credential_outliers.configure_backend(target.clone(), None, ["primary".to_string()]);
         let telemetry_key = crate::ai::AdaptiveTelemetryKey::new(
             "route-uid".to_string(),
             "rule".to_string(),
@@ -1926,7 +1937,7 @@ mod store_stats_tests {
             health_check_config_store: SimpleCountStats { count: 0 },
             gateway_backend_tls_store: SimpleCountStats { count: 0 },
             edgion_config_data_store: SimpleCountStats { count: 0 },
-            ai_service_store: SimpleCountStats { count: 0 },
+            ai_backend_store: SimpleCountStats { count: 0 },
             ai_credential_outlier_store: SimpleCountStats { count: 0 },
             adaptive_telemetry_store: SimpleCountStats { count: 0 },
             link_sys_runtime: LinkSysRuntimeStats {
@@ -1946,7 +1957,7 @@ mod store_stats_tests {
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json.is_object());
         assert!(json.get("client_caches").is_some());
-        assert!(json.get("ai_service_store").is_some());
+        assert!(json.get("ai_backend_store").is_some());
         assert_eq!(json["ai_credential_outlier_store"]["count"], 0);
         assert_eq!(json["adaptive_telemetry_store"]["count"], 0);
         assert!(json.get("plugin_store_v2").is_some());

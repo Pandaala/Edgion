@@ -7,7 +7,7 @@ use crate::ai::{render_openai_error, AiProxyError};
 use crate::backends::policy::backend_traffic::authority::{render_authority, AuthorityError};
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
 use crate::backends::policy::backend_traffic::RetryBudget;
-use crate::backends::EdgionService;
+use crate::backends::ServiceBackendKind;
 use crate::backends::{get_peer, try_get_peer};
 use crate::ctx::BackendSource;
 use crate::observe::metrics::record_authority_rejected;
@@ -34,7 +34,7 @@ use pingora_proxy::Session;
 
 fn ai_predispatch_error(error: AiDispatchError) -> Option<AiProxyError> {
     match error {
-        AiDispatchError::Unavailable => Some(AiProxyError::ServiceUnavailable),
+        AiDispatchError::Unavailable => Some(AiProxyError::BackendUnavailable),
         AiDispatchError::Client(error) => Some(error),
         AiDispatchError::Rejected
         | AiDispatchError::InvalidConfiguration
@@ -425,7 +425,7 @@ fn apply_upstream_authority(
 ) -> pingora_core::Result<()> {
     if matches!(
         ctx.backend_context.as_ref().and_then(|context| context.source),
-        Some(BackendSource::AiService)
+        Some(BackendSource::AiBackend)
     ) {
         ctx.upstream_authority = None;
         return Ok(());
@@ -551,9 +551,9 @@ pub async fn upstream_peer_http(
                 .ai_attempt_runtime
                 .admit(crate::ai::attempt_runtime::AiAttemptAdmissionInput {
                     namespace: target.namespace.clone(),
-                    service_uid: target.service_uid.clone(),
+                    backend_uid: target.backend_uid.clone(),
                     credential_alias: target.credential_alias.clone(),
-                    service_name: target.service_key.clone(),
+                    backend_name: target.backend_key.clone(),
                     provider: target.provider,
                     pricing: target.pricing,
                     redis_ref: target.redis_ref.clone(),
@@ -578,7 +578,7 @@ pub async fn upstream_peer_http(
                     if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
                         return Err(response);
                     }
-                    let peer = try_ai_service_peer(edgion_http, ctx, &target).await;
+                    let peer = try_ai_backend_peer(edgion_http, ctx, &target).await;
                     if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
                         return Err(response);
                     }
@@ -606,7 +606,7 @@ pub async fn upstream_peer_http(
                         return Err(PingoraError::new(ErrorType::InternalError));
                     }
                 }
-                crate::ai::attempt_runtime::AiAttemptAdmission::SkipService => {
+                crate::ai::attempt_runtime::AiAttemptAdmission::SkipBackend => {
                     if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
                         return Err(response);
                     }
@@ -986,7 +986,7 @@ fn effective_backend_bound(
 
 /// Replace the normal backendRequest bound with an external-jump owner override.
 /// A defensive zero override is ignored because Pingora would interpret it as
-/// an immediate timeout; valid AI service timeouts are guaranteed positive on
+/// an immediate timeout; valid AI backend timeouts are guaranteed positive on
 /// the cold configuration path.
 #[inline]
 fn apply_upstream_read_timeout_override(
@@ -1203,7 +1203,7 @@ fn finish_static_peer(
     Ok(peer)
 }
 
-async fn try_ai_service_peer(
+async fn try_ai_backend_peer(
     edgion_http: &EdgionHttpProxy,
     ctx: &mut EdgionHttpContext,
     target: &AiPeerTarget,
@@ -1212,13 +1212,13 @@ async fn try_ai_service_peer(
         .await
         .map_err(|_| AiPeerPredispatchFailure::Endpoint)?;
     let (namespace, name) = target
-        .service_key
+        .backend_key
         .split_once('/')
-        .unwrap_or(("", target.service_key.as_str()));
+        .unwrap_or(("", target.backend_key.as_str()));
     ctx.backend_context = Some(crate::ctx::BackendContext {
-        source: Some(BackendSource::AiService),
-        rsc: Some(crate::Rsc::new("EdgionAIService", namespace, name)),
-        service_key: Some(target.service_key.clone()),
+        source: Some(BackendSource::AiBackend),
+        rsc: Some(crate::Rsc::new("EdgionBackend", namespace, name)),
+        service_key: Some(target.backend_key.clone()),
         service_kind: None,
         upstreams: Vec::new(),
         current_upstream_id: None,
@@ -1383,7 +1383,7 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
         (
             grpc_br.name.clone(),
             ns,
-            EdgionService::from_kind(grpc_br.kind.as_ref()),
+            ServiceBackendKind::from_kind(grpc_br.kind.as_ref()),
             idx,
         )
     } else if let Some(http_br) = ctx.selected_backend.as_ref() {
@@ -1395,9 +1395,9 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
             .to_string();
         let ns = http_br.namespace.clone().unwrap_or(route_ns);
         let service_kind = match &http_br.target {
-            CompiledBackendTarget::Service { .. } => EdgionService::from_kind(http_br.kind.as_ref()),
-            CompiledBackendTarget::EdgionAIService { .. } | CompiledBackendTarget::Invalid { .. } => {
-                EdgionService::Unsupported(
+            CompiledBackendTarget::Service { .. } => ServiceBackendKind::from_kind(http_br.kind.as_ref()),
+            CompiledBackendTarget::EdgionBackend { .. } | CompiledBackendTarget::Invalid { .. } => {
+                ServiceBackendKind::Unsupported(
                     http_br
                         .kind
                         .clone()
@@ -1573,7 +1573,7 @@ mod tests {
     use crate::ai::dispatch::AiDispatchError;
     use crate::ai::{render_openai_error, AiProxyError};
     use crate::backends::policy::backend_traffic::authority::AuthorityError;
-    use crate::backends::EdgionService;
+    use crate::backends::ServiceBackendKind;
     use crate::plugins::PluginRuntime;
     use crate::routes::http::match_unit::{CompiledBackend, CompiledBackendTarget};
     use crate::{BackendContext, BackendTlsInfo, EdgionHttpContext, UpstreamInfo};
@@ -1586,10 +1586,10 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
-    fn ai_unavailable_maps_to_fixed_openai_service_unavailable() {
+    fn ai_unavailable_maps_to_fixed_openai_backend_unavailable() {
         assert_eq!(
             ai_predispatch_error(AiDispatchError::Unavailable),
-            Some(AiProxyError::ServiceUnavailable)
+            Some(AiProxyError::BackendUnavailable)
         );
         assert_eq!(
             ai_predispatch_error(AiDispatchError::Client(AiProxyError::UnsupportedParameter)),
@@ -1604,7 +1604,7 @@ mod tests {
         assert_eq!(ai_predispatch_error(AiDispatchError::RequestDeadlineExceeded), None);
         assert_eq!(ai_predispatch_error(AiDispatchError::GrpcDeadlineExceeded), None);
 
-        let (status, body) = render_openai_error(AiProxyError::ServiceUnavailable);
+        let (status, body) = render_openai_error(AiProxyError::BackendUnavailable);
         let body: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(status, 503);
         assert_eq!(body["error"]["type"], "api_error");
@@ -1674,7 +1674,7 @@ mod tests {
 
         assert!(matches!(
             ctx.backend_context.as_ref().and_then(|context| context.service_kind.as_ref()),
-            Some(EdgionService::Unsupported(kind)) if kind == "Service"
+            Some(ServiceBackendKind::Unsupported(kind)) if kind == "Service"
         ));
     }
 
@@ -2139,6 +2139,9 @@ mod tests {
                     kind: "Service".to_string(),
                     name: "svc".to_string(),
                 }],
+                resolved_target_class: Some(
+                    edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass::Service,
+                ),
                 load_balancer: None,
                 health_check: None,
                 outlier_detection: None,

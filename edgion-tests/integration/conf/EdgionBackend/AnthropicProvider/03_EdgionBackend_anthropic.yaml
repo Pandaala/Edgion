@@ -1,0 +1,22 @@
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: anthropic-fixture-provider
+  namespace: edgion-test
+spec:
+  ai:
+    provider: Anthropic
+    endpoint: http://127.0.0.1:30001/anthropic/prefix
+    allowInsecureHttp: true
+    credentialPool:
+      credentials:
+        - name: primary
+          secretRef:
+            name: anthropic-provider-credential
+    models:
+      - name: claude-fixture
+        aliases:
+          - claude-alias
+    defaults:
+      streaming: true
+      maxOutputTokens: 64

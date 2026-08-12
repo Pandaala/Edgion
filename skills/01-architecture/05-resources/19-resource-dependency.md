@@ -17,7 +17,7 @@ flowchart LR
         Secret --> EdgionPlugins
         Secret --> BackendTLSPolicy
         Secret --> EdgionAcme
-        Secret --> EdgionAIService
+        Secret --> EdgionBackend
     end
 
     subgraph ConfigMapDeps
@@ -46,10 +46,10 @@ flowchart LR
     end
 
     subgraph AiDeps
-        HTTPRouteAI[HTTPRoute] -- "typed backendRef\nexistence / ReferenceGrant" --> EdgionAIService
-        EBTP[EdgionBackendTrafficPolicy] -- "typed same-namespace targetRef" --> EdgionAIService
-        EdgionAIService -- "apply/delete requeue\nai_service_ref_mgr" --> HTTPRouteAI
-        EdgionAIService -- "apply/delete requeue\nai_service_ref_mgr" --> EBTP
+        HTTPRouteAI[HTTPRoute] -- "typed backendRef\nexistence / ReferenceGrant" --> EdgionBackend
+        EBTP[EdgionBackendTrafficPolicy] -- "typed same-namespace targetRef" --> EdgionBackend
+        EdgionBackend -- "apply/delete requeue\nai_backend_ref_mgr" --> HTTPRouteAI
+        EdgionBackend -- "apply/delete requeue\nai_backend_ref_mgr" --> EBTP
         AiProxy[Rule-level EdgionPlugins / AiProxy] -- "selection algorithm only" --> HTTPRouteAI
     end
 ```
@@ -58,27 +58,27 @@ flowchart LR
 
 | Store | Writer | Reader |
 |-------|--------|--------|
-| **SecretStore** | SecretHandler | Gateway, EdgionTls, EdgionPlugins, BackendTLSPolicy, EdgionAcme, EdgionAIService |
+| **SecretStore** | SecretHandler | Gateway, EdgionTls, EdgionPlugins, BackendTLSPolicy, EdgionAcme, EdgionBackend |
 | **ConfigMapStore** | ConfigMapHandler | Gateway (frontend CA), BackendTLSPolicy (backend CA) |
 | **NamespaceStore** | K8s Namespace informer | Route family (allowedRoutes Selector) |
 | **ReferenceGrantStore** | ReferenceGrantHandler | Gateway, Route family (cross-ns authorization) |
-| **SecretRefManager** | Gateway/EdgionTls/EdgionPlugins/BackendTLSPolicy/EdgionAcme/EdgionAIService (register during parse) | SecretHandler/ConfigMapHandler (look up dependents on on_change) |
+| **SecretRefManager** | Gateway/EdgionTls/EdgionPlugins/BackendTLSPolicy/EdgionAcme/EdgionBackend (register during parse) | SecretHandler/ConfigMapHandler (look up dependents on on_change) |
 | **ServiceRefManager** | Route family (register backends during parse) | ServiceHandler (look up dependents on on_change), BackendTLSPolicy (read in resolve_ancestor_gateways) |
 | **CrossNsRefManager** | Gateway / Route family (register cross-ns references during parse) | ReferenceGrantHandler (look up dependents on on_change) |
 | **GatewayRouteIndex** | Route family / EdgionTls (write on on_change) | GatewayHandler (look up associated Routes on on_change), BackendTLSPolicy (read in resolve_ancestor_gateways) |
 | **RouteDelegationIndex** (`route_delegation_index`) | HTTPRoute (register delegation edges during parse: named children + wildcard namespaces, transitive) | HTTPRoute (on_change/on_delete: `parents_of()` requeues delegating parents; update_status: child-side `Accepted` for `kind: HTTPRoute` parentRefs) |
 | **RouteDelegationIndex** (`grpc_route_delegation_index`, second instance, same type, disjoint `"ns/name"` keys) | GRPCRoute (register delegation edges during parse: named children + wildcard namespaces, transitive) | GRPCRoute (on_change/on_delete: `parents_of()` requeues delegating parents; update_status: child-side `Accepted` for `kind: GRPCRoute` parentRefs) |
 | **BackendTLSPolicyTargetManager** | BackendTLSPolicy (register targetRef during parse) | BackendTLSPolicy (conflict detection in update_status) |
-| **AiServiceRefManager** | HTTPRoute and EdgionBackendTrafficPolicy (clear-before-add typed refs during parse) | EdgionAIService handler (requeue typed dependents on apply/delete) |
+| **AiBackendRefManager** | HTTPRoute and EdgionBackendTrafficPolicy (clear-before-add typed refs during parse) | EdgionBackend handler (requeue typed dependents on apply/delete) |
 | **PluginRefManager** | Gateway and HTTPRoute (register EdgionPlugins ExtensionRefs during parse) | EdgionPlugins handler (requeue typed dependents on apply/delete) |
-| **AiServiceStore** (Gateway ArcSwap runtime store) | EdgionAIService ConfigClient handler | AI attempt planner (single-snapshot typed backend lookup) |
+| **AiBackendStore** (Gateway ArcSwap runtime store) | EdgionBackend ConfigClient handler | AI attempt planner (single-snapshot typed backend lookup) |
 
 `HTTPRoute.backendRefs` is the only AI destination graph. Route reconcile validates supported kind,
 object existence, cross-namespace authorization, homogeneous AI forwarding, and exactly one
 rule-level AiProxy. Delegation carries terminal typed AI targets and their resolved namespace.
 AiProxy does not own a service reference or a second dependency graph.
 
-An existing EdgionAIService satisfies the route's `ResolvedRefs` independently of the service's
+An existing EdgionBackend satisfies the route's `ResolvedRefs` independently of the service's
 credential status. The service reports partial-good or zero-good credential resolution on its own
 conditions; the Gateway fails closed per request if the captured runtime snapshot has no usable
 credential.

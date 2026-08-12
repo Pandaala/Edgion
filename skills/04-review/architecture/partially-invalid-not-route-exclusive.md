@@ -15,10 +15,10 @@ The condition covers any resource whose spec holds a collection that can be *par
 resolved. Four emitter families exist today: `HTTPRoute` / `GRPCRoute` (per-rule backend
 refs), `EdgionPlugins` / `EdgionStreamPlugins` (inline IpRestriction and
 GlobalConnectionIpRestriction profile CIDR entries), `EdgionConfigData` (IpList entries), and
-`EdgionAIService` (provider credential pool).
+`EdgionBackend` (provider credential pool).
 
 Findings of the form "`PartiallyInvalid` is documented as HTTPRoute/GRPCRoute only, so the
-EdgionAIService handler violates the fixed condition vocabulary" are **not accepted** — the
+EdgionBackend handler violates the fixed condition vocabulary" are **not accepted** — the
 documentation was stale, and it has been corrected rather than the handler.
 
 ## Core Rationale
@@ -47,11 +47,11 @@ three IP emitters join their entry errors verbatim).
 The 🟡 rule in `00-design-rules.md` exists to stop authors inventing a new condition type per
 resource. A partially-resolvable collection is precisely the case the existing type covers, so
 reusing it is compliance, not deviation. The user-facing docs
-(`docs/{en,zh-CN}/ai-gateway/edgion-ai-service.md`, `.../observability.md`) already documented
-`PartiallyInvalid=True/InvalidCredentials` for EdgionAIService — the drift was confined to the
+(`docs/{en,zh-CN}/ai-gateway/edgion-backend.md`, `.../observability.md`) already documented
+`PartiallyInvalid=True/InvalidCredentials` for EdgionBackend — the drift was confined to the
 `skills/` layer.
 
-**4. What is genuinely new about EdgionAIService (and was worth documenting)**
+**4. What is genuinely new about EdgionBackend (and was worth documenting)**
 
 Two things, neither of them the condition type itself:
 
@@ -64,12 +64,12 @@ Two things, neither of them the condition type itself:
 
 ## Fix Suggestions Not Accepted
 
-- Remove the `PARTIALLY_INVALID` emit from `edgion_ai_service.rs` to satisfy the documented
+- Remove the `PARTIALLY_INVALID` emit from `edgion_backend.rs` to satisfy the documented
   "routes only" wording — inverts the fix direction; it would delete the operator's only
   signal that a usable credential subset is running degraded.
 - Invent a resource-specific condition type (e.g. `CredentialsPartiallyResolved`) — exactly
   the per-resource condition proliferation the vocabulary rule forbids.
-- Add `invalid_rule_indices` (or an analogue) to `EdgionAIService` for symmetry with routes —
+- Add `invalid_rule_indices` (or an analogue) to `EdgionBackend` for symmetry with routes —
   the field exists so the Gateway can skip rules by index; the AI credential pool has no such
   consumer, and the bounded message already names the omitted aliases.
 - Move the AI emit into `update_status()` "for consistency" — that hook is sync; the async
@@ -94,7 +94,7 @@ stays `True`; if that lands, refresh the matrix in §4.2 — it does not affect 
 - `skills/01-architecture/01-controller/10-status-management.md` §3 table and
   §4.2 "PartiallyInvalid on non-route resources"
 - `skills/00-design-rules.md` §Y (CRD status condition vocabulary)
-- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_ai_service.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_backend.rs`
   (`parse`), `.../status_utils.rs` (`INVALID_CREDENTIALS`, `partially_invalid_condition`)
 - Sibling emitters: `.../handlers/edgion_plugins.rs`, `.../edgion_stream_plugins.rs`,
   `.../edgion_config_data.rs` (all in `update_status`)

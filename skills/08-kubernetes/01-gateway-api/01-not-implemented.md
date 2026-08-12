@@ -173,7 +173,7 @@ attachment model the standard BackendTLSPolicy uses), covering load balancing
 (incl. consistent hash and panic threshold), active health check, and outlier
 detection (passive ejection), retry budgets, concurrency circuit breaking, and
 connection-establishment timeout. Homogeneous same-namespace targets may be
-core Services or `edgion.io/EdgionAIService`; the AI kind accepts only the
+core Services or `edgion.io/EdgionBackend`; the AI kind accepts only the
 resilience sections and is never a Route attachment. See
 [03-resources/20-edgion-backend-traffic-policy.md](../../02-features/03-resources/20-edgion-backend-traffic-policy.md).
 This is functionally equivalent in spirit to the standard BTP direction but is

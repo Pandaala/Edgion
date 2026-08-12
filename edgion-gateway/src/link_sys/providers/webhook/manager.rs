@@ -408,7 +408,7 @@ mod tests {
             conn: ExternalHttpConnection {
                 target: WebhookTarget {
                     service: WebhookServiceRef {
-                        kind: None, // None → EdgionService::Service → ResolvedTarget::Service
+                        kind: None, // None → ServiceBackendKind::Service → ResolvedTarget::Service
                         name: Some("backend".to_string()),
                         namespace: Some("ns1".to_string()),
                         port: Some(8080),

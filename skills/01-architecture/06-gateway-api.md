@@ -46,8 +46,8 @@ Edgion extension CRDs are installed via Edgion's own deployment manifest.
 | **EdgionConfigData** | edgion.io/v1alpha1 | Plugin metadata: describes plugin capabilities, parameter schema, and version information |
 | **LinkSys** | edgion.io/v1alpha1 | External system integration: connection configuration for ES, Redis, Etcd, Webhook, File, and other data sources |
 | **EdgionAcme** | edgion.io/v1alpha1 | ACME automatic certificate issuance configuration: Let's Encrypt integration, executed only on the Leader Controller |
-| **EdgionBackendTrafficPolicy** | edgion.io/v1 | Direct-backend policy attached through homogeneous same-namespace `targetRefs`: all sections for Service, resilience sections for EdgionAIService; never attached to a Route |
-| **EdgionAIService** | edgion.io/v1 | AI provider endpoint, model catalog, and bounded credential pool; referenced directly from `HTTPRoute.backendRefs` |
+| **EdgionBackendTrafficPolicy** | edgion.io/v1 | Direct-backend policy attached through homogeneous same-namespace `targetRefs`: all sections for Service, resilience sections for EdgionBackend; never attached to a Route |
+| **EdgionBackend** | edgion.io/v1 | AI provider endpoint, model catalog, and bounded credential pool; referenced directly from `HTTPRoute.backendRefs` |
 
 ## Conformance Testing
 
@@ -124,8 +124,8 @@ spec:
 
 For AI routing, the ExtensionRef attaches exactly one rule-level `AiProxy`. It stores only the
 `backendSelection` algorithm. The same rule's typed `HTTPRoute.backendRefs` remain the sole source
-of EdgionAIService candidates, declaration order, and weights. EBTP remains a direct backend policy
-for Service or EdgionAIService and does not attach to HTTPRoute.
+of EdgionBackend candidates, declaration order, and weights. EBTP remains a direct backend policy
+for Service or EdgionBackend and does not attach to HTTPRoute.
 
 ### 3. Custom CRDs
 

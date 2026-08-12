@@ -3,20 +3,20 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_ai_service::{AiProvider, AI_MODEL_NAME_MAX_BYTES};
+use edgion_resources::resources::edgion_backend::{AiProvider, AI_MODEL_NAME_MAX_BYTES};
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::resources::edgion_plugins::{
     AiBackendSelection, AiProxyConfig, OnUnknownModel, PluginValidation,
 };
 use serde_json::{Map, Value};
 
-use crate::ai::attempt::{AttemptScheduler, ServiceCredentials, MAX_AI_ROUTE_RETRIES};
+use crate::ai::attempt::{AttemptScheduler, BackendCredentials, MAX_AI_ROUTE_RETRIES};
 use crate::ai::quota::{CompiledAiQuotaPlan, QuotaAdmission, QuotaExceededAction};
 use crate::ai::routing::{invalid_weight_gate, CandidateEligibility, ConformanceGate, RouteCandidate};
 use crate::ai::{
-    get_adaptive_telemetry_store, global_ai_service_store, openai_error_response, AdaptiveTelemetryKey,
-    AdaptiveTelemetryStore, AiAttemptPlan, AiCandidateModel, AiPlanCandidate, AiPlanError, AiProxyError,
-    AiServiceStore, ReadyAiAttemptPlan,
+    get_adaptive_telemetry_store, global_ai_backend_store, openai_error_response, AdaptiveTelemetryKey,
+    AdaptiveTelemetryStore, AiAttemptPlan, AiBackendStore, AiCandidateModel, AiPlanCandidate, AiPlanError,
+    AiProxyError, ReadyAiAttemptPlan,
 };
 use crate::backends::policy::backend_traffic::get_backend_traffic_policy_store;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
@@ -25,11 +25,11 @@ use crate::routes::http::match_unit::CompiledBackendTarget;
 const DEFAULT_MAXIMUM_REQUEST_DURATION: Duration = Duration::from_secs(300);
 
 fn ai_candidate_spec(backend: &crate::routes::http::match_unit::CompiledBackend) -> Option<(usize, i32, String)> {
-    if !backend.is_permitted_ai_service() {
+    if !backend.is_permitted_ai_backend() {
         return None;
     }
     match &backend.target {
-        CompiledBackendTarget::EdgionAIService { namespace, name } => Some((
+        CompiledBackendTarget::EdgionBackend { namespace, name } => Some((
             backend.slot,
             backend.schema.weight.unwrap_or(1),
             format!("{namespace}/{name}"),
@@ -47,11 +47,17 @@ fn gate_candidate(
         order: u8::try_from(order).map_err(|_| ())?,
         weight: backend.schema.weight.unwrap_or(1),
         eligibility: CandidateEligibility {
-            valid_ref: backend.is_permitted_ai_service(),
+            valid_ref: backend.is_permitted_ai_backend(),
             ..CandidateEligibility::default()
         },
         adaptive: Default::default(),
         cost: None,
+    })
+}
+
+fn has_positive_weight_service_backend(backends: &[crate::routes::http::match_unit::CompiledBackend]) -> bool {
+    backends.iter().any(|backend| {
+        backend.schema.weight.unwrap_or(1) > 0 && matches!(backend.target, CompiledBackendTarget::Service { .. })
     })
 }
 
@@ -99,19 +105,19 @@ impl AiProxy {
             log.push("planned");
             PluginRunningResult::GoodNext
         } else {
-            Self::reject(session, log, "plan-locked", AiProxyError::ServiceUnavailable)
+            Self::reject(session, log, "plan-locked", AiProxyError::BackendUnavailable)
         }
     }
 
     async fn run_request_with_store_and_entropy(
         &self,
-        store: &AiServiceStore,
+        store: &AiBackendStore,
         entropy: u128,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
         if session.ctx().ai_attempt_plan.is_some() {
-            return Self::reject(session, log, "duplicate-ai-proxy", AiProxyError::ServiceUnavailable);
+            return Self::reject(session, log, "duplicate-ai-proxy", AiProxyError::BackendUnavailable);
         }
 
         let Some(route_unit) = session.ctx().route_unit.clone() else {
@@ -124,10 +130,7 @@ impl AiProxy {
             return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
         };
         let backends = route_unit.backends.clone();
-        if backends
-            .iter()
-            .any(|backend| matches!(backend.target, CompiledBackendTarget::Service { .. }))
-        {
+        if has_positive_weight_service_backend(&backends) {
             return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
         }
 
@@ -159,7 +162,7 @@ impl AiProxy {
             Err(crate::plugins::runtime::traits::session::BodyReadError::BufferLimitExceeded { .. }) => {
                 return Self::reject(session, log, "body-too-large", AiProxyError::RequestTooLarge);
             }
-            Err(_) => return Self::reject(session, log, "body-unavailable", AiProxyError::ServiceUnavailable),
+            Err(_) => return Self::reject(session, log, "body-unavailable", AiProxyError::BackendUnavailable),
         };
         let mut canonical = match canonical_openai_request(&body, self.config.inject_usage_tracking) {
             Ok(canonical) => canonical,
@@ -176,19 +179,19 @@ impl AiProxy {
                 .iter()
                 .zip(&resolved)
                 .filter(|((_, weight, _), _)| *weight > 0)
-                .all(|(_, service)| {
-                    service.as_ref().is_some_and(|service| {
-                        matches!(service.provider, AiProvider::OpenAI | AiProvider::OpenAICompatible)
+                .all(|(_, backend)| {
+                    backend.as_ref().is_some_and(|backend| {
+                        matches!(backend.provider, AiProvider::OpenAI | AiProvider::OpenAICompatible)
                     })
                 });
         let mut candidates = candidate_specs
             .into_iter()
             .zip(resolved)
             .enumerate()
-            .map(|(order, ((slot, weight, service_key), service))| {
-                let (namespace, name) = service_key.split_once('/').unwrap_or(("", service_key.as_str()));
+            .map(|(order, ((slot, weight, backend_key), backend))| {
+                let (namespace, name) = backend_key.split_once('/').unwrap_or(("", backend_key.as_str()));
                 let target = PolicyTargetKey {
-                    target_kind: PolicyTargetKind::EdgionAIService,
+                    target_kind: PolicyTargetKind::EdgionBackend,
                     namespace: namespace.to_string(),
                     name: name.to_string(),
                 };
@@ -197,10 +200,10 @@ impl AiProxy {
                     .as_ref()
                     .and_then(|policy| policy.ai_credential_outlier.clone())
                     .or_else(|| snapshot.credential_outlier_handle(&target));
-                let credential_outliers = service
+                let credential_outliers = backend
                     .as_ref()
-                    .map(|service| {
-                        service
+                    .map(|backend| {
+                        backend
                             .credential_pool
                             .credentials
                             .iter()
@@ -216,8 +219,8 @@ impl AiProxy {
                     slot,
                     order: u8::try_from(order).expect("AI route candidates are bounded before body read"),
                     weight,
-                    service_key,
-                    service,
+                    backend_key,
+                    backend,
                     model: None,
                     effective_policy,
                     adaptive: None,
@@ -227,13 +230,13 @@ impl AiProxy {
             .collect::<Vec<_>>();
         let any_available_service = candidates
             .iter()
-            .any(|candidate| candidate.weight > 0 && candidate.service.is_some());
+            .any(|candidate| candidate.weight > 0 && candidate.backend.is_some());
         let any_model_supported = candidates.iter().any(|candidate| {
             candidate.weight > 0
                 && candidate
-                    .service
+                    .backend
                     .as_ref()
-                    .is_some_and(|service| service.models.contains_key(&canonical.logical_model) || passthrough_allowed)
+                    .is_some_and(|backend| backend.models.contains_key(&canonical.logical_model) || passthrough_allowed)
         });
         let any_model_eligible = resolve_candidate_models(
             &mut candidates,
@@ -262,10 +265,10 @@ impl AiProxy {
             .iter()
             .map(|candidate| {
                 candidate
-                    .service
+                    .backend
                     .as_ref()
-                    .map(|service| {
-                        service
+                    .map(|backend| {
+                        backend
                             .credential_pool
                             .credentials
                             .iter()
@@ -275,9 +278,9 @@ impl AiProxy {
                     .unwrap_or_default()
             })
             .collect();
-        let services: Vec<_> = credential_weights
+        let backends: Vec<_> = credential_weights
             .iter()
-            .map(|weights| ServiceCredentials { weights })
+            .map(|weights| BackendCredentials { weights })
             .collect();
         let route_retries = session.ctx().retry_attempts().unwrap_or(0);
         let Ok(route_retries) = u8::try_from(route_retries) else {
@@ -286,7 +289,7 @@ impl AiProxy {
         if route_retries > MAX_AI_ROUTE_RETRIES {
             return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
         }
-        let Ok(scheduler) = AttemptScheduler::new(&services, route_retries) else {
+        let Ok(scheduler) = AttemptScheduler::new(&backends, route_retries) else {
             return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
         };
 
@@ -328,7 +331,7 @@ impl AiProxy {
                                 session,
                                 log,
                                 "quota-downgrade-model-unavailable",
-                                AiProxyError::ServiceUnavailable,
+                                AiProxyError::BackendUnavailable,
                             );
                         }
                         if canonical.replace_logical_model(model).is_err() {
@@ -336,7 +339,7 @@ impl AiProxy {
                                 session,
                                 log,
                                 "quota-downgrade-body-invalid",
-                                AiProxyError::ServiceUnavailable,
+                                AiProxyError::BackendUnavailable,
                             );
                         }
                         let admitted = quota
@@ -379,7 +382,7 @@ impl AiProxy {
                                 session,
                                 log,
                                 "quota-downgrade-header-failed",
-                                AiProxyError::ServiceUnavailable,
+                                AiProxyError::BackendUnavailable,
                             );
                         }
                         log.push("quota-downgraded");
@@ -410,7 +413,7 @@ impl AiProxy {
             candidates,
             scheduler,
             retry_cap_initialized: false,
-            service_snapshot: snapshot,
+            backend_snapshot: snapshot,
             quota,
             quota_status,
             terminate_on_over_limit: self
@@ -419,7 +422,7 @@ impl AiProxy {
                 .is_some_and(|quota| matches!(quota.on_exceeded(), QuotaExceededAction::Reject)),
         });
         if !session.set_ai_attempt_plan(plan) {
-            return Self::reject(session, log, "plan-locked", AiProxyError::ServiceUnavailable);
+            return Self::reject(session, log, "plan-locked", AiProxyError::BackendUnavailable);
         }
         log.push("planned");
         PluginRunningResult::GoodNext
@@ -427,7 +430,7 @@ impl AiProxy {
 
     async fn run_request_with_store(
         &self,
-        store: &AiServiceStore,
+        store: &AiBackendStore,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
@@ -453,10 +456,10 @@ struct CanonicalOpenAiRequest {
 
 impl CanonicalOpenAiRequest {
     fn replace_logical_model(&mut self, logical_model: &str) -> Result<(), AiProxyError> {
-        let mut value: Value = serde_json::from_slice(&self.body).map_err(|_| AiProxyError::ServiceUnavailable)?;
-        let object = value.as_object_mut().ok_or(AiProxyError::ServiceUnavailable)?;
+        let mut value: Value = serde_json::from_slice(&self.body).map_err(|_| AiProxyError::BackendUnavailable)?;
+        let object = value.as_object_mut().ok_or(AiProxyError::BackendUnavailable)?;
         object.insert("model".to_string(), Value::String(logical_model.to_string()));
-        let body = Bytes::from(serde_json::to_vec(&value).map_err(|_| AiProxyError::ServiceUnavailable)?);
+        let body = Bytes::from(serde_json::to_vec(&value).map_err(|_| AiProxyError::BackendUnavailable)?);
         let input_chars = checked_utf8_chars(&body)?;
         self.body = body;
         self.logical_model = logical_model.to_string();
@@ -473,11 +476,11 @@ fn resolve_candidate_models(
 ) -> bool {
     let mut any_eligible = false;
     for candidate in candidates {
-        candidate.model = candidate.service.as_ref().and_then(|service| {
-            if requested_streaming && !service.streaming {
+        candidate.model = candidate.backend.as_ref().and_then(|backend| {
+            if requested_streaming && !backend.streaming {
                 return None;
             }
-            service
+            backend
                 .models
                 .get(logical_model)
                 .map(|model| AiCandidateModel {
@@ -529,15 +532,15 @@ fn capture_adaptive_states(
         // Unknown-model passthrough is deliberately excluded: allowing
         // client-provided names to allocate global state is unbounded.
         let model_is_catalogued = candidate
-            .service
+            .backend
             .as_ref()
-            .is_some_and(|service| service.models.contains_key(logical_model));
+            .is_some_and(|backend| backend.models.contains_key(logical_model));
         if !model_is_catalogued || candidate.model.is_none() {
             continue;
         }
-        let (namespace, name) = candidate.service_key.split_once('/').unwrap_or(("", ""));
+        let (namespace, name) = candidate.backend_key.split_once('/').unwrap_or(("", ""));
         let target = PolicyTargetKey {
-            target_kind: PolicyTargetKind::EdgionAIService,
+            target_kind: PolicyTargetKind::EdgionBackend,
             namespace: namespace.to_string(),
             name: name.to_string(),
         };
@@ -585,7 +588,7 @@ fn canonical_openai_request(body: &[u8], inject_usage_tracking: bool) -> Result<
             return Err(AiProxyError::MalformedBody);
         };
         stream_options.insert("include_usage".to_string(), Value::Bool(true));
-        Bytes::from(serde_json::to_vec(&value).map_err(|_| AiProxyError::ServiceUnavailable)?)
+        Bytes::from(serde_json::to_vec(&value).map_err(|_| AiProxyError::BackendUnavailable)?)
     } else {
         Bytes::copy_from_slice(body)
     };
@@ -600,11 +603,11 @@ fn canonical_openai_request(body: &[u8], inject_usage_tracking: bool) -> Result<
 
 fn checked_utf8_chars(body: &[u8]) -> Result<u64, AiProxyError> {
     std::str::from_utf8(body)
-        .map_err(|_| AiProxyError::ServiceUnavailable)?
+        .map_err(|_| AiProxyError::BackendUnavailable)?
         .chars()
         .count()
         .try_into()
-        .map_err(|_| AiProxyError::ServiceUnavailable)
+        .map_err(|_| AiProxyError::BackendUnavailable)
 }
 
 #[async_trait]
@@ -614,7 +617,7 @@ impl RequestFilter for AiProxy {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        self.run_request_with_store(global_ai_service_store(), session, log)
+        self.run_request_with_store(global_ai_backend_store(), session, log)
             .await
     }
 }
@@ -625,12 +628,12 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use crate::ai::{ResolvedModel, RuntimeAiCredentialPool, RuntimeAiEndpoint, RuntimeAiService};
+    use crate::ai::{ResolvedModel, RuntimeAiBackend, RuntimeAiCredentialPool, RuntimeAiEndpoint};
     use crate::plugins::common::redis_rate_limiter::RedisRateLimiter;
     use crate::plugins::PluginRuntime;
     use crate::routes::http::match_unit::CompiledBackend;
     use edgion_resources::resources::common::RefDenied;
-    use edgion_resources::resources::edgion_ai_service::AiProvider;
+    use edgion_resources::resources::edgion_backend::AiProvider;
     use edgion_resources::resources::edgion_plugins::{AiBackendSelection, AiBackendSelectionConfig};
     use edgion_resources::HTTPBackendRef;
 
@@ -653,7 +656,7 @@ mod tests {
                 port: None,
                 weight: Some(1),
                 group: Some("edgion.io".to_string()),
-                kind: Some("EdgionAIService".to_string()),
+                kind: Some("EdgionBackend".to_string()),
                 filters: None,
                 backend_tls_policy: None,
                 ref_denied,
@@ -662,6 +665,35 @@ mod tests {
             0,
             Arc::new(PluginRuntime::new()),
         )
+    }
+
+    fn compiled_service_backend(weight: i32) -> CompiledBackend {
+        CompiledBackend::compile(
+            HTTPBackendRef {
+                name: "service".to_string(),
+                namespace: None,
+                port: Some(8080),
+                weight: Some(weight),
+                group: None,
+                kind: Some("Service".to_string()),
+                filters: None,
+                backend_tls_policy: None,
+                ref_denied: None,
+            },
+            "tenant-a",
+            1,
+            Arc::new(PluginRuntime::new()),
+        )
+    }
+
+    #[test]
+    fn zero_weight_service_slot_is_protocol_neutral_at_request_gate() {
+        let ai = compiled_ai_backend(None);
+        assert!(!has_positive_weight_service_backend(&[
+            ai.clone(),
+            compiled_service_backend(0),
+        ]));
+        assert!(has_positive_weight_service_backend(&[ai, compiled_service_backend(1),]));
     }
 
     #[test]
@@ -673,8 +705,8 @@ mod tests {
         }));
         let allowed = compiled_ai_backend(None);
 
-        assert!(!denied.is_permitted_ai_service());
-        assert!(allowed.is_permitted_ai_service());
+        assert!(!denied.is_permitted_ai_backend());
+        assert!(allowed.is_permitted_ai_backend());
         let gate_candidates = [gate_candidate(0, &denied).unwrap()];
         assert_eq!(invalid_weight_gate(&gate_candidates, 0), Ok(ConformanceGate::Invalid));
         assert!(ai_candidate_spec(&denied).is_none());
@@ -786,8 +818,8 @@ mod tests {
 
     #[test]
     fn downgrade_re_resolves_models_from_captured_candidates_without_passthrough() {
-        let service = Arc::new(RuntimeAiService {
-            uid: "service-uid".to_string(),
+        let backend = Arc::new(RuntimeAiBackend {
+            uid: "backend-uid".to_string(),
             provider: AiProvider::OpenAI,
             endpoint: RuntimeAiEndpoint {
                 domain: "example.test".to_string(),
@@ -826,8 +858,8 @@ mod tests {
             slot: 0,
             order: 0,
             weight: 1,
-            service_key: "tenant/service".to_string(),
-            service: Some(service),
+            backend_key: "tenant/backend".to_string(),
+            backend: Some(backend),
             model: None,
             effective_policy: None,
             adaptive: None,
@@ -843,7 +875,7 @@ mod tests {
         assert!(candidates[0].model.is_none());
 
         // Simulate the passthrough result without adding the client-provided
-        // name to the bounded service catalog.
+        // name to the bounded backend catalog.
         candidates[0].model = Some(AiCandidateModel {
             provider_model: "client-provided".to_string(),
             pricing: None,
@@ -873,9 +905,9 @@ mod tests {
             "route-uid".to_string(),
             "rule-a".to_string(),
             PolicyTargetKey {
-                target_kind: PolicyTargetKind::EdgionAIService,
+                target_kind: PolicyTargetKind::EdgionBackend,
                 namespace: "tenant".to_string(),
-                name: "service".to_string(),
+                name: "backend".to_string(),
             },
             "economy".to_string(),
         )
@@ -907,7 +939,7 @@ mod tests {
             candidates: Vec::new(),
             scheduler: AttemptScheduler::new(&[], 0).unwrap(),
             retry_cap_initialized: true,
-            service_snapshot: AiServiceStore::new().snapshot(),
+            backend_snapshot: AiBackendStore::new().snapshot(),
             quota: None,
             quota_status: None,
             terminate_on_over_limit: false,

@@ -98,7 +98,7 @@ state, and normal dispatch after corruption. Usage tests drive real malformed
 bytes through the decoder and cover every gate plus over-limit/degradation
 precedence and one-shot statuses.
 
-The `EdgionAIService/SingleProvider` integration fixture emits malformed,
+The `EdgionBackend/SingleProvider` integration fixture emits malformed,
 valid, malformed, then a delayed marker and `[DONE]`. The raw H1 test uses the
 real Redis-backed Reject quota route, requires the valid middle event, parses
 the final injected event as independent SSE, rejects the unreachable tail,

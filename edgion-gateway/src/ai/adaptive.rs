@@ -87,7 +87,7 @@ impl AdaptiveTelemetryKey {
         if terminal_route_uid.is_empty()
             || rule_name.is_empty()
             || logical_model.is_empty()
-            || target.target_kind != PolicyTargetKind::EdgionAIService
+            || target.target_kind != PolicyTargetKind::EdgionBackend
         {
             return None;
         }
@@ -476,7 +476,7 @@ pub fn current_unix_second() -> u64 {
 }
 
 /// One process-wide cold-path publisher. The caller owns the single spawned
-/// task and supplies the Gateway auxiliary-service shutdown receiver.
+/// task and supplies the Gateway auxiliary-backend shutdown receiver.
 pub async fn run_adaptive_telemetry_ticker(store: Arc<AdaptiveTelemetryStore>, mut shutdown: watch::Receiver<bool>) {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -540,9 +540,9 @@ impl RouteAdaptiveFacts {
                 .backend_refs
                 .iter()
                 .flatten()
-                .filter(|backend| backend.backend_kind() == HTTPBackendRefKind::EdgionAIService)
+                .filter(|backend| backend.backend_kind() == HTTPBackendRefKind::EdgionBackend)
                 .map(|backend| PolicyTargetKey {
-                    target_kind: PolicyTargetKind::EdgionAIService,
+                    target_kind: PolicyTargetKind::EdgionBackend,
                     namespace: backend.namespace.as_deref().unwrap_or(route_namespace).to_string(),
                     name: backend.name.clone(),
                 })
@@ -663,7 +663,7 @@ fn with_global_sources(
     index: &mut AdaptiveContributionIndex,
     route_keys: impl IntoIterator<Item = String>,
 ) -> HashSet<AdaptiveTelemetryKey> {
-    let services = super::global_ai_service_store().snapshot();
+    let backends = super::global_ai_backend_store().snapshot();
     let mut plugin_uses_adaptive = |plugin_key: &str| {
         crate::plugins::http::global_plugin_store()
             .with_plugin(plugin_key, |compiled| {
@@ -673,9 +673,9 @@ fn with_global_sources(
     };
     let mut logical_models = |target: &PolicyTargetKey| {
         let key = format!("{}/{}", target.namespace, target.name);
-        services
+        backends
             .get_by_key(&key)
-            .map(|service| service.models.keys().cloned().collect())
+            .map(|backend| backend.models.keys().cloned().collect())
     };
     for route_key in route_keys {
         index.recompute_route(&route_key, &mut plugin_uses_adaptive, &mut logical_models);
@@ -732,7 +732,7 @@ pub(crate) fn reconcile_all_adaptive_plugin_dependents() {
     GLOBAL_ADAPTIVE_TELEMETRY_STORE.reconcile_keys(&retained);
 }
 
-/// Re-evaluate routes that reference any changed EdgionAIService target.
+/// Re-evaluate routes that reference any changed EdgionBackend target.
 pub(crate) fn reconcile_adaptive_targets(targets: &[PolicyTargetKey]) {
     let mut index = GLOBAL_ADAPTIVE_CONTRIBUTIONS.lock();
     let route_keys: HashSet<_> = targets
@@ -782,7 +782,7 @@ mod tests {
             route_uid.to_string(),
             "rule-a".to_string(),
             PolicyTargetKey {
-                target_kind: PolicyTargetKind::EdgionAIService,
+                target_kind: PolicyTargetKind::EdgionBackend,
                 namespace: "default".to_string(),
                 name: "provider".to_string(),
             },
@@ -824,7 +824,7 @@ mod tests {
                     }],
                     "backendRefs": [{
                         "group": "edgion.io",
-                        "kind": "EdgionAIService",
+                        "kind": "EdgionBackend",
                         "name": "provider"
                     }],
                     "resolvedTerminalRouteUid": "route-uid",
@@ -1110,7 +1110,7 @@ mod tests {
     fn retained_keys_match_route_plugin_target_and_catalog_models() {
         let retained = collect_for_test(adaptive_route(), "route-ns/adaptive");
         let target = PolicyTargetKey {
-            target_kind: PolicyTargetKind::EdgionAIService,
+            target_kind: PolicyTargetKind::EdgionBackend,
             namespace: "route-ns".to_string(),
             name: "provider".to_string(),
         };
@@ -1143,7 +1143,7 @@ mod tests {
             .unwrap()[0]
             .namespace = Some("provider-ns".to_string());
         let explicit_target = PolicyTargetKey {
-            target_kind: PolicyTargetKind::EdgionAIService,
+            target_kind: PolicyTargetKind::EdgionBackend,
             namespace: "provider-ns".to_string(),
             name: "provider".to_string(),
         };

@@ -24,7 +24,7 @@ and key-construction rules.
   defaults to the route namespace, while a delegated plugin reference uses its
   resolved namespace.
 - `AdaptiveTelemetryKey::new` rejects every empty identity component and a
-  non-`EdgionAIService` target.
+  non-`EdgionBackend` target.
 - A state `Arc` must contain recorded telemetry before target removal is
   tested. After removal hides the key, the captured state remains readable and
   accepts later records, proving request plans survive cold-path cleanup.

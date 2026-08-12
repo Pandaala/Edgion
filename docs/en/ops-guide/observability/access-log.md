@@ -254,7 +254,7 @@ when later summaries were omitted to preserve either bound.
 | `attempts[]` field | Type | Description |
 |--------------------|------|-------------|
 | `number` | Integer | One-based dispatched-attempt number |
-| `service` | String | Bounded namespaced EdgionAIService key (`namespace/name`) |
+| `service` | String | Bounded namespaced EdgionBackend key (`namespace/name`) |
 | `provider` | String | Fixed provider enum |
 | `credential` | String | Non-secret configured credential alias; never provider credential or Secret data |
 | `status` | Integer | Provider HTTP status, when received |

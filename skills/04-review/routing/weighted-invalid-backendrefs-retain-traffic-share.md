@@ -4,7 +4,7 @@
 
 Ordinary HTTPRoute backend selection includes both compiled Service targets and invalid backendRef slots in its weighted selector. A selected invalid slot is forced to `EdgionService::Unsupported` from its compiled target classification before peer selection, preserving the failure share declared by its `weight` without reinterpreting only the raw `kind`. Silently removing invalid slots, redistributing their weight to healthy siblings, or routing an invalid-group Service-family name is not accepted.
 
-Valid `EdgionAIService` targets remain excluded from the ordinary selector because the AI dispatch plan owns their ordered, weighted selection. An invalid AI-shaped reference, such as one with a forbidden port, is an invalid slot and retains its failure share like any other invalid backendRef.
+Valid `EdgionBackend` targets remain excluded from the ordinary selector because the AI dispatch plan owns their ordered, weighted selection. An invalid AI-shaped reference, such as one with a forbidden port, is an invalid slot and retains its failure share like any other invalid backendRef.
 
 ## ServiceImport classification
 

@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SecretObjectReference {
     /// Group is the group of the referent. Defaults to `""` (core).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -68,6 +68,12 @@ mod tests {
     #[test]
     fn name_required() {
         let yaml = "namespace: credentials";
+        assert!(serde_yaml::from_str::<SecretObjectReference>(yaml).is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_fields() {
+        let yaml = "name: my-secret\nunknownField: forbidden";
         assert!(serde_yaml::from_str::<SecretObjectReference>(yaml).is_err());
     }
 

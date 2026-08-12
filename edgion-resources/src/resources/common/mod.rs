@@ -8,7 +8,7 @@ pub mod outbound_request;
 pub mod outbound_tls;
 pub mod secret_object_ref;
 pub mod secret_slot;
-pub mod service_kind;
+pub mod service_backend_kind;
 pub mod success;
 pub mod tls;
 
@@ -25,7 +25,7 @@ pub use outbound_request::{
 pub use outbound_tls::{OutboundTlsConfig, OutboundTlsLocal, OutboundTlsValidation};
 pub use secret_object_ref::SecretObjectReference;
 pub use secret_slot::SecretSlot;
-pub use service_kind::EdgionService;
+pub use service_backend_kind::ServiceBackendKind;
 pub use success::{classify_detail, validate_success, BodyPredicate, PredicateOp, SuccessOutcome, SuccessSpec};
 pub use tls::TlsConfig;
 

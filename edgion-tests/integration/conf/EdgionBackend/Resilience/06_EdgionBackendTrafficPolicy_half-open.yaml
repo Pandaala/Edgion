@@ -1,0 +1,17 @@
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: ai-resilience-half-open-primary
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - group: edgion.io
+      kind: EdgionBackend
+      name: resilience-half-open-primary
+  outlierDetection:
+    consecutiveErrors: 2
+    consecutiveGatewayErrors: 2
+    consecutiveLocalOriginFailures: 2
+    ejectionTime: 10s
+    maxEjectionTime: 10s
+    maxEjectionPercent: 100

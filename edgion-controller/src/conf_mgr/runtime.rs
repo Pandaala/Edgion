@@ -43,9 +43,9 @@ pub struct ControllerRuntime {
     pub(crate) cross_ns_ref_mgr: CrossNamespaceRefManager,
     pub(crate) service_ref_mgr: ServiceRefManager,
     /// Tracks HTTPRoutes and EdgionBackendTrafficPolicies that reference each
-    /// EdgionAIService. Source keys use `PolicyTargetKey::to_string()` so AI
+    /// EdgionBackend. Source keys use `PolicyTargetKey::to_string()` so backend
     /// targets cannot collide with same-named core Services.
-    pub(crate) ai_service_ref_mgr: BidirectionalRefManager<ResourceRef>,
+    pub(crate) backend_ref_mgr: BidirectionalRefManager<ResourceRef>,
     pub(crate) secret_ref_manager: SecretRefManager,
     pub(crate) secret_store: SecretStore,
     pub(crate) gateway_route_index: GatewayRouteIndex,
@@ -98,7 +98,7 @@ impl ControllerRuntime {
             ref_grant_store: ReferenceGrantStore::new(),
             cross_ns_ref_mgr: new_cross_ns_ref_manager(),
             service_ref_mgr: new_service_ref_manager(),
-            ai_service_ref_mgr: BidirectionalRefManager::with_component("ai_service_ref_mgr"),
+            backend_ref_mgr: BidirectionalRefManager::with_component("backend_ref_mgr"),
             secret_ref_manager: new_secret_ref_manager(),
             secret_store: SecretStore::new(),
             gateway_route_index: GatewayRouteIndex::new(),
@@ -151,8 +151,8 @@ impl ControllerRuntime {
         self.service_ref_mgr.clear();
         tracing::info!(component = "controller_runtime", "Cleared ServiceRefManager");
 
-        self.ai_service_ref_mgr.clear();
-        tracing::info!(component = "controller_runtime", "Cleared AiServiceRefManager");
+        self.backend_ref_mgr.clear();
+        tracing::info!(component = "controller_runtime", "Cleared BackendRefManager");
 
         self.secret_ref_manager.clear();
         tracing::info!(component = "controller_runtime", "Cleared SecretRefManager");

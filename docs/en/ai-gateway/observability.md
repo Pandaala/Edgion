@@ -23,7 +23,7 @@ omits a model label.
 | Serialized attempts section | 8 KiB |
 | Truncation marker | `attempts_truncated: true` |
 
-Each attempt may record attempt number, namespaced service key, provider enum, credential alias,
+Each attempt may record attempt number, namespaced backend key, provider enum, credential alias,
 status, fixed failure class, accepted Retry-After seconds, TTFT, reported or estimated tokens, and
 estimated cost.
 
@@ -56,6 +56,6 @@ Details: [Metrics](../ops-guide/observability/metrics.md) ·
 | HTTPRoute `Accepted=False/UnsupportedValue` | Invalid AI attachment, mixed backend kinds, unsupported backend filters, or too many retries — **and no rule of the route serves any more** (see [AI rule rejection](resilience.md#ai-rule-rejection)) |
 | HTTPRoute `PartiallyInvalid=True/RuleInvalid` | The same AI attachment errors, but other rules of the route still serve; the message reports `(N of M rules active)` |
 | HTTPRoute `ResolvedRefs=False` | Missing, unauthorized, or unsupported backendRef |
-| EdgionAIService `Accepted=False/Invalid` | Invalid endpoint, pool, model, or default |
-| EdgionAIService `ResolvedRefs=False` | At least one credential Secret is missing, denied, or invalid; the service stays active if another credential is usable |
-| EdgionAIService `PartiallyInvalid=True` | Usable subset is active; check bounded invalid credential aliases |
+| EdgionBackend `Accepted=False/Invalid` | Invalid endpoint, pool, model, or default |
+| EdgionBackend `ResolvedRefs=False` | At least one credential Secret is missing, denied, or invalid; the service stays active if another credential is usable |
+| EdgionBackend `PartiallyInvalid=True` | Usable subset is active; check bounded invalid credential aliases |

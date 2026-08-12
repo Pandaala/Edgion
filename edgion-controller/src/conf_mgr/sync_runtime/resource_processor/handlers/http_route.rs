@@ -8,7 +8,7 @@ use std::sync::Arc;
 use super::super::ref_grant::{is_cross_ns_ref_allowed, validate_http_route_if_enabled};
 use super::route_delegation::{flatten_route, populate_terminal_rule_identities, DelegationLookup};
 use super::{
-    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_policies_for_ai_targets,
+    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_policies_for_backend_targets,
     requeue_backend_policies_for_route, requeue_backend_policies_for_services, requeue_parent_gateways,
     update_gateway_route_index,
 };
@@ -17,7 +17,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResolvedRefsError, ResourceRef,
 };
 use crate::conf_mgr::ControllerRuntime;
-use edgion_resources::prelude_resources::HTTPRoute;
+use edgion_resources::prelude_resources::{EdgionBackend, HTTPRoute};
 use edgion_resources::resources::common::{ParentReference, RefDenied};
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::resources::edgion_plugins::{EdgionPlugin, EdgionPlugins};
@@ -221,23 +221,23 @@ impl HttpRouteHandler {
         }
     }
 
-    /// Replace this route's EdgionAIService dependency set and return the
+    /// Replace this route's EdgionBackend dependency set and return the
     /// old/new union plus the removed subset. The union is needed because an
     /// EBTP attached to either side may change the route's Gateway ancestors.
-    fn register_ai_service_refs(
+    fn register_backend_refs(
         route: &HTTPRoute,
         flattened_tuples: &[(Option<String>, Option<String>, Option<String>, String)],
         ctx: &HandlerContext,
-    ) -> AiRefDelta {
+    ) -> BackendRefDelta {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let resource_ref = Self::create_resource_ref(route);
-        let manager = &ctx.runtime().ai_service_ref_mgr;
+        let manager = &ctx.runtime().backend_ref_mgr;
         let old: HashSet<String> = manager.clear_resource_refs(&resource_ref).into_iter().collect();
         let canonical_key = |group: Option<&str>, kind: Option<&str>, namespace: Option<&str>, name: &str| {
-            if group == Some("edgion.io") && kind == Some("EdgionAIService") {
+            if group == Some("edgion.io") && kind == Some("EdgionBackend") {
                 Some(
                     PolicyTargetKey {
-                        target_kind: PolicyTargetKind::EdgionAIService,
+                        target_kind: PolicyTargetKind::EdgionBackend,
                         namespace: namespace.unwrap_or(route_ns).to_string(),
                         name: name.to_string(),
                     }
@@ -262,14 +262,16 @@ impl HttpRouteHandler {
             }
         }
         let new: HashSet<String> = if route.spec.resolved_rules.is_some() {
-            // FlattenOutcome preserves each declaring child namespace. Keep
-            // only tuples whose rule survived Controller-side AI validation.
+            // FlattenOutcome preserves each declaring child namespace and
+            // every terminal typed ref, including missing, denied, and refs
+            // from a rule later rejected by Controller-side AI validation.
+            // Keep those dependencies so a target or ReferenceGrant change
+            // can wake the route and rebuild the complete flattened result.
             flattened_tuples
                 .iter()
                 .filter_map(|(group, kind, namespace, name)| {
                     canonical_key(group.as_deref(), kind.as_deref(), namespace.as_deref(), name)
                 })
-                .filter(|key| effective.contains(key))
                 .collect()
         } else {
             effective
@@ -281,12 +283,12 @@ impl HttpRouteHandler {
         affected.sort_unstable();
         let mut dropped: Vec<String> = old.difference(&new).cloned().collect();
         dropped.sort_unstable();
-        AiRefDelta { affected, dropped }
+        BackendRefDelta { affected, dropped }
     }
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
-struct AiRefDelta {
+struct BackendRefDelta {
     affected: Vec<String>,
     dropped: Vec<String>,
 }
@@ -385,9 +387,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         if let Some(rules) = &mut route.spec.resolved_rules {
             let mut resolved_index = 0usize;
             rules.retain(|rule| {
-                let reason = ai_rule_invalid_reason(rule, route_ns, |namespace, name| {
-                    ai_proxy_admission_state(_ctx.runtime(), namespace, name)
-                });
+                let reason = ai_rule_invalid_reason_with_runtime(rule, route_ns, _ctx.runtime());
                 let keep = reason.is_none();
                 if let Some(reason) = reason {
                     delegation_outcome.issues.push(DelegationIssue::RuleDropped {
@@ -406,12 +406,12 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // every affected HTTPRoute through its normal workqueue.
         Self::register_plugin_refs(&route, _ctx);
 
-        let ai_ref_delta = Self::register_ai_service_refs(&route, &delegation_outcome.ai_service_backend_tuples, _ctx);
-        requeue_backend_policies_for_ai_targets(&ai_ref_delta.affected, _ctx).await;
+        let backend_ref_delta = Self::register_backend_refs(&route, &delegation_outcome.backend_tuples, _ctx);
+        requeue_backend_policies_for_backend_targets(&backend_ref_delta.affected, _ctx).await;
         tracing::debug!(
             route = %format!("{route_ns}/{}", route.metadata.name.as_deref().unwrap_or("")),
-            dropped_ai_services = ?ai_ref_delta.dropped,
-            "Replaced HTTPRoute EdgionAIService references"
+            dropped_backends = ?backend_ref_delta.dropped,
+            "Replaced HTTPRoute EdgionBackend references"
         );
 
         // Register Service backend references for cross-resource requeue, then
@@ -562,8 +562,8 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
         requeue_backend_policies_for_route(ResourceKind::HTTPRoute, route_ns, route_name, ctx).await;
-        let removed_ai_targets = ctx.runtime().ai_service_ref_mgr.clear_resource_refs(&resource_ref);
-        requeue_backend_policies_for_ai_targets(&removed_ai_targets, ctx).await;
+        let removed_backend_targets = ctx.runtime().backend_ref_mgr.clear_resource_refs(&resource_ref);
+        requeue_backend_policies_for_backend_targets(&removed_backend_targets, ctx).await;
         super::route_utils::clear_service_backend_refs(ResourceKind::HTTPRoute, route_ns, route_name, ctx.runtime());
 
         remove_from_gateway_route_index(ResourceKind::HTTPRoute, route_ns, route_name, ctx.runtime());
@@ -622,10 +622,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             .flatten()
             .enumerate()
             .filter_map(|(index, rule)| {
-                ai_rule_invalid_reason(rule, route_ns, |namespace, name| {
-                    ai_proxy_admission_state(_ctx.runtime(), namespace, name)
-                })
-                .map(|message| (index, message))
+                ai_rule_invalid_reason_with_runtime(rule, route_ns, _ctx.runtime()).map(|message| (index, message))
             })
             .collect();
 
@@ -873,20 +870,20 @@ fn validate_http_backend_refs(
                         });
                     }
                 }
-                HTTPBackendRefKind::EdgionAIService => {
+                HTTPBackendRefKind::EdgionBackend => {
                     if backend_ref.port.is_some() {
                         errors.push(ResolvedRefsError::InvalidKind {
-                            kind: "edgion.io/EdgionAIService with port".to_string(),
+                            kind: "edgion.io/EdgionBackend with port".to_string(),
                             name: backend_ref.name.clone(),
                         });
                         continue;
                     }
                     let exists = runtime
                         .processor_registry
-                        .get("EdgionAIService")
+                        .get("EdgionBackend")
                         .is_none_or(|processor| processor.contains_key(&format!("{namespace}/{}", backend_ref.name)));
                     if !exists {
-                        errors.push(ResolvedRefsError::EdgionAIServiceNotFound {
+                        errors.push(ResolvedRefsError::EdgionBackendNotFound {
                             namespace: namespace.to_string(),
                             name: backend_ref.name.clone(),
                         });
@@ -1091,11 +1088,16 @@ fn ai_rule_invalid_reason(
     route_namespace: &str,
     mut lookup: impl FnMut(&str, &str) -> Option<AiProxyAdmissionState>,
 ) -> Option<String> {
-    let backend_refs: Vec<_> = rule.backend_refs.iter().flatten().collect();
-    let ai_backends: Vec<_> = backend_refs
+    let positive_backend_refs: Vec<_> = rule
+        .backend_refs
+        .iter()
+        .flatten()
+        .filter(|backend_ref| backend_ref.weight.unwrap_or(1) > 0)
+        .collect();
+    let ai_backends: Vec<_> = positive_backend_refs
         .iter()
         .copied()
-        .filter(|backend_ref| backend_ref.backend_kind() == HTTPBackendRefKind::EdgionAIService)
+        .filter(|backend_ref| backend_ref.backend_kind() == HTTPBackendRefKind::EdgionBackend)
         .collect();
 
     let mut ai_proxy_count = 0usize;
@@ -1139,11 +1141,11 @@ fn ai_rule_invalid_reason(
         {
             return Some("AI routing retry.attempts must not exceed 7".to_string());
         }
-        if ai_backends.len() != backend_refs.len() {
-            return Some("EdgionAIService backends must not be mixed with other backend kinds".to_string());
+        if ai_backends.len() != positive_backend_refs.len() {
+            return Some("EdgionBackend backends must not be mixed with other backend kinds".to_string());
         }
         if ai_backends.iter().any(|backend_ref| backend_ref.port.is_some()) {
-            return Some("EdgionAIService backendRefs must not set port".to_string());
+            return Some("EdgionBackend backendRefs must not set port".to_string());
         }
         if let Some(filter) = ai_backends
             .iter()
@@ -1156,7 +1158,7 @@ fn ai_rule_invalid_reason(
             })
         {
             return Some(format!(
-                "EdgionAIService backendRefs do not support {:?} filters",
+                "EdgionBackend backendRefs do not support {:?} filters",
                 filter.filter_type
             ));
         }
@@ -1164,7 +1166,7 @@ fn ai_rule_invalid_reason(
 
     if ai_backends.is_empty() {
         return (ai_proxy_count > 0)
-            .then(|| "AiProxy requires a rule whose forwarding backends are all EdgionAIService".to_string());
+            .then(|| "AiProxy requires a rule whose forwarding backends are all EdgionBackend".to_string());
     }
     if let Some(key) = missing_plugin {
         return Some(format!(
@@ -1172,6 +1174,66 @@ fn ai_rule_invalid_reason(
         ));
     }
     (ai_proxy_count != 1).then(|| format!("AI routing requires exactly one enabled AiProxy (found {ai_proxy_count})"))
+}
+
+fn backend_variant_invalid_reason(
+    rule: &HTTPRouteRule,
+    route_namespace: &str,
+    runtime: &ControllerRuntime,
+) -> Option<String> {
+    let processor = runtime.processor_registry.get("EdgionBackend")?;
+    for backend_ref in rule.backend_refs.iter().flatten().filter(|backend_ref| {
+        backend_ref.weight.unwrap_or(1) > 0
+            && backend_ref.ref_denied.is_none()
+            && backend_ref.backend_kind() == HTTPBackendRefKind::EdgionBackend
+    }) {
+        let namespace = backend_ref.namespace.as_deref().unwrap_or(route_namespace);
+        let key = format!("{namespace}/{}", backend_ref.name);
+        let Some(raw) = processor.get_raw_any(&key) else {
+            continue;
+        };
+        let Ok(backend) = raw.downcast::<EdgionBackend>() else {
+            return Some("EdgionBackend target has an incompatible cached representation".to_string());
+        };
+        if backend.spec.ai.is_none() {
+            return Some("AiProxy requires every positive-weight EdgionBackend to configure spec.ai".to_string());
+        }
+    }
+    None
+}
+
+fn plugin_policy_blocks_rule(rule: &HTTPRouteRule, route_namespace: &str, runtime: &ControllerRuntime) -> bool {
+    rule.filters.iter().flatten().any(|filter| {
+        if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
+            return false;
+        }
+        let Some(extension_ref) = &filter.extension_ref else {
+            return false;
+        };
+        if !(extension_ref.group.is_empty() || extension_ref.group == "edgion.io")
+            || extension_ref.kind != "EdgionPlugins"
+        {
+            return false;
+        }
+        let namespace = extension_ref.resolved_namespace.as_deref().unwrap_or(route_namespace);
+        ai_proxy_admission_state(runtime, namespace, &extension_ref.name).is_some_and(|state| state.policy_blocked)
+    })
+}
+
+fn ai_rule_invalid_reason_with_runtime(
+    rule: &HTTPRouteRule,
+    route_namespace: &str,
+    runtime: &ControllerRuntime,
+) -> Option<String> {
+    // A PluginPolicy Block is a fail-close request gate. No backend admission
+    // finding may withdraw the rule and thereby remove that gate.
+    if plugin_policy_blocks_rule(rule, route_namespace, runtime) {
+        return None;
+    }
+    ai_rule_invalid_reason(rule, route_namespace, |namespace, name| {
+        ai_proxy_admission_state(runtime, namespace, name)
+    })
+    .or_else(|| backend_variant_invalid_reason(rule, route_namespace, runtime))
 }
 
 fn find_controller_invalid_rule_details(
@@ -1185,9 +1247,7 @@ fn find_controller_invalid_rule_details(
         if already_invalid.contains(&index) {
             continue;
         }
-        if let Some(reason) = ai_rule_invalid_reason(rule, route_ns, |namespace, name| {
-            ai_proxy_admission_state(runtime, namespace, name)
-        }) {
+        if let Some(reason) = ai_rule_invalid_reason_with_runtime(rule, route_ns, runtime) {
             details.push((index, reason));
         }
     }
@@ -1335,7 +1395,7 @@ spec:
   rules:
     - backendRefs:
         - group: edgion.io
-          kind: EdgionAIService
+          kind: EdgionBackend
           name: chat
       retry:
         attempts: 8
@@ -1475,7 +1535,7 @@ spec:
         }]);
         let pure_ai = ai_rule(
             serde_json::json!([{
-                "group": "edgion.io", "kind": "EdgionAIService", "name": "models"
+                "group": "edgion.io", "kind": "EdgionBackend", "name": "models"
             }]),
             extension_ref.clone(),
         );
@@ -1492,7 +1552,7 @@ spec:
 
         let mixed = ai_rule(
             serde_json::json!([
-                {"group": "edgion.io", "kind": "EdgionAIService", "name": "models"},
+                {"group": "edgion.io", "kind": "EdgionBackend", "name": "models"},
                 {"name": "ordinary", "port": 80}
             ]),
             extension_ref,
@@ -1501,15 +1561,102 @@ spec:
         assert!(reason.contains("must not be mixed"), "{reason}");
     }
 
+    #[test]
+    fn zero_weight_refs_do_not_participate_in_ai_homogeneity() {
+        let filters = serde_json::json!([{
+            "type": "ExtensionRef",
+            "extensionRef": {
+                "group": "edgion.io", "kind": "EdgionPlugins", "name": "ai"
+            }
+        }]);
+        let rule = ai_rule(
+            serde_json::json!([
+                {"group": "edgion.io", "kind": "EdgionBackend", "name": "models", "weight": 1},
+                {"name": "ordinary", "port": 80, "weight": 0}
+            ]),
+            filters,
+        );
+        assert!(ai_rule_invalid_reason(&rule, "parent", |_, _| Some(active_ai_proxies(1))).is_none());
+
+        let no_positive_backend = ai_rule(
+            serde_json::json!([
+                {"group": "edgion.io", "kind": "EdgionBackend", "name": "models", "weight": 0},
+                {"name": "ordinary", "port": 80, "weight": 1}
+            ]),
+            serde_json::json!([{
+                "type": "ExtensionRef",
+                "extensionRef": {
+                    "group": "edgion.io", "kind": "EdgionPlugins", "name": "ai"
+                }
+            }]),
+        );
+        assert!(
+            ai_rule_invalid_reason(&no_positive_backend, "parent", |_, _| { Some(active_ai_proxies(1)) }).is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn positive_weight_backend_requires_ai_capability() {
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+        use edgion_resources::resources::edgion_backend::EdgionBackendSpec;
+        use kube::api::ObjectMeta;
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        let processor = Arc::new(ResourceProcessor::<EdgionBackend>::new(
+            "EdgionBackend",
+            16,
+            Arc::new(EdgionBackendHandler::new()),
+            runtime.clone(),
+        ));
+        let raw = Arc::new(LocalRawStore::new());
+        raw.upsert(
+            "apps/models".to_string(),
+            Arc::new(EdgionBackend {
+                metadata: ObjectMeta {
+                    namespace: Some("apps".to_string()),
+                    name: Some("models".to_string()),
+                    ..Default::default()
+                },
+                spec: EdgionBackendSpec {
+                    ai: None,
+                    reconcile_outcome: None,
+                },
+                status: None,
+            }),
+        );
+        processor.set_raw_store(raw);
+        runtime.processor_registry.register(processor);
+
+        let positive = ai_rule(
+            serde_json::json!([{
+                "group": "edgion.io", "kind": "EdgionBackend", "name": "models", "weight": 1
+            }]),
+            serde_json::json!([]),
+        );
+        assert!(backend_variant_invalid_reason(&positive, "apps", &runtime).is_some());
+
+        let zero = ai_rule(
+            serde_json::json!([{
+                "group": "edgion.io", "kind": "EdgionBackend", "name": "models", "weight": 0
+            }]),
+            serde_json::json!([]),
+        );
+        assert!(backend_variant_invalid_reason(&zero, "apps", &runtime).is_none());
+    }
+
     #[tokio::test]
     async fn ai_proxy_admission_uses_policy_stamped_cache_and_preserves_block_gate() {
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendHandler;
         use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
         use crate::conf_mgr::sync_runtime::resource_processor::raw_store::LocalRawStore;
         use crate::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
+        use edgion_resources::resources::edgion_backend::EdgionBackendSpec;
         use edgion_resources::resources::edgion_plugins::{
             AiProxyConfig, EdgionPluginsSpec, MockConfig, RequestFilterEntry, UpstreamResponseEntry,
         };
         use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+        use kube::api::ObjectMeta;
 
         let runtime = Arc::new(ControllerRuntime::default());
         let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
@@ -1564,7 +1711,7 @@ spec:
 
         let rule = ai_rule(
             serde_json::json!([{
-                "group": "edgion.io", "kind": "EdgionAIService", "name": "models"
+                "group": "edgion.io", "kind": "EdgionBackend", "name": "models"
             }]),
             serde_json::json!([{
                 "type": "ExtensionRef",
@@ -1598,6 +1745,35 @@ spec:
             "Block must preserve the rule so the Gateway compiles PluginPolicyBlock"
         );
 
+        let backend_processor = Arc::new(ResourceProcessor::<EdgionBackend>::new(
+            "EdgionBackend",
+            16,
+            Arc::new(EdgionBackendHandler::new()),
+            runtime.clone(),
+        ));
+        let backend_raw_store = Arc::new(LocalRawStore::new());
+        backend_raw_store.upsert(
+            "apps/models".to_string(),
+            Arc::new(EdgionBackend {
+                metadata: ObjectMeta {
+                    namespace: Some("apps".to_string()),
+                    name: Some("models".to_string()),
+                    ..Default::default()
+                },
+                spec: EdgionBackendSpec {
+                    ai: None,
+                    reconcile_outcome: None,
+                },
+                status: None,
+            }),
+        );
+        backend_processor.set_raw_store(backend_raw_store);
+        runtime.processor_registry.register(backend_processor);
+        assert!(
+            ai_rule_invalid_reason_with_runtime(&rule, "apps", &runtime).is_none(),
+            "Block must also precede raw EdgionBackend capability admission"
+        );
+
         processor.save(blocked_other_plugin, None);
         assert_eq!(
             ai_proxy_admission_state(&runtime, "apps", "ai"),
@@ -1626,7 +1802,7 @@ spec:
                 "mixed backends",
                 ai_rule(
                     serde_json::json!([
-                        {"group": "edgion.io", "kind": "EdgionAIService", "name": "models"},
+                        {"group": "edgion.io", "kind": "EdgionBackend", "name": "models"},
                         {"name": "ordinary", "port": 80}
                     ]),
                     extension_ref.clone(),
@@ -1636,7 +1812,7 @@ spec:
                 "AI backend port",
                 ai_rule(
                     serde_json::json!([{
-                        "group": "edgion.io", "kind": "EdgionAIService", "name": "models", "port": 443
+                        "group": "edgion.io", "kind": "EdgionBackend", "name": "models", "port": 443
                     }]),
                     extension_ref.clone(),
                 ),
@@ -1645,7 +1821,7 @@ spec:
                 "AI backend filter",
                 ai_rule(
                     serde_json::json!([{
-                        "group": "edgion.io", "kind": "EdgionAIService", "name": "models",
+                        "group": "edgion.io", "kind": "EdgionBackend", "name": "models",
                         "filters": [{"type": "URLRewrite", "urlRewrite": {
                             "path": {"type": "ReplaceFullPath", "replaceFullPath": "/v2"}
                         }}]
@@ -1657,7 +1833,7 @@ spec:
                 "retry cap",
                 serde_json::from_value(serde_json::json!({
                     "backendRefs": [{
-                        "group": "edgion.io", "kind": "EdgionAIService", "name": "models"
+                        "group": "edgion.io", "kind": "EdgionBackend", "name": "models"
                     }],
                     "filters": extension_ref,
                     "retry": {"attempts": 8}
@@ -1674,7 +1850,7 @@ spec:
 
         let block_and_missing = ai_rule(
             serde_json::json!([{
-                "group": "edgion.io", "kind": "EdgionAIService", "name": "models"
+                "group": "edgion.io", "kind": "EdgionBackend", "name": "models"
             }]),
             serde_json::json!([
                 {"type": "ExtensionRef", "extensionRef": {
@@ -1704,7 +1880,7 @@ spec:
         }]);
         let allowed = ai_rule(
             serde_json::json!([{
-                "group": "edgion.io", "kind": "EdgionAIService", "name": "models",
+                "group": "edgion.io", "kind": "EdgionBackend", "name": "models",
                 "filters": [
                     {"type": "RequestHeaderModifier", "requestHeaderModifier": {"set": [{"name": "x-tenant", "value": "a"}]}},
                     {"type": "ResponseHeaderModifier", "responseHeaderModifier": {"set": [{"name": "x-ai", "value": "yes"}]}}
@@ -1716,7 +1892,7 @@ spec:
 
         let rejected = ai_rule(
             serde_json::json!([{
-                "group": "edgion.io", "kind": "EdgionAIService", "name": "models",
+                "group": "edgion.io", "kind": "EdgionBackend", "name": "models",
                 "filters": [{"type": "URLRewrite", "urlRewrite": {"path": {"type": "ReplaceFullPath", "replaceFullPath": "/v2"}}}]
             }]),
             extension_ref,
@@ -1729,7 +1905,7 @@ spec:
     fn ai_rule_rejects_more_than_seven_explicit_retries() {
         let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
             "backendRefs": [{
-                "group": "edgion.io", "kind": "EdgionAIService", "name": "models"
+                "group": "edgion.io", "kind": "EdgionBackend", "name": "models"
             }],
             "filters": [{
                 "type": "ExtensionRef",
@@ -1755,7 +1931,7 @@ spec:
             "spec": {
                 "resolvedRules": [{
                     "backendRefs": [{
-                        "group": "edgion.io", "kind": "EdgionAIService",
+                        "group": "edgion.io", "kind": "EdgionBackend",
                         "name": "models-a", "namespace": "child"
                     }],
                     "filters": [{
@@ -1773,14 +1949,14 @@ spec:
 
         let first_tuples = vec![(
             Some("edgion.io".to_string()),
-            Some("EdgionAIService".to_string()),
+            Some("EdgionBackend".to_string()),
             Some("child".to_string()),
             "models-a".to_string(),
         )];
-        let first = HttpRouteHandler::register_ai_service_refs(&route, &first_tuples, &ctx);
+        let first = HttpRouteHandler::register_backend_refs(&route, &first_tuples, &ctx);
         assert_eq!(
             first.affected,
-            vec!["edgion.io/EdgionAIService/child/models-a".to_string()]
+            vec!["edgion.io/EdgionBackend/child/models-a".to_string()]
         );
         HttpRouteHandler::register_plugin_refs(&route, &ctx);
         assert_eq!(
@@ -1793,14 +1969,14 @@ spec:
         resolved[0].filters = None;
         let second_tuples = vec![(
             Some("edgion.io".to_string()),
-            Some("EdgionAIService".to_string()),
+            Some("EdgionBackend".to_string()),
             Some("child".to_string()),
             "models-b".to_string(),
         )];
-        let second = HttpRouteHandler::register_ai_service_refs(&route, &second_tuples, &ctx);
+        let second = HttpRouteHandler::register_backend_refs(&route, &second_tuples, &ctx);
         assert_eq!(
             second.dropped,
-            vec!["edgion.io/EdgionAIService/child/models-a".to_string()]
+            vec!["edgion.io/EdgionBackend/child/models-a".to_string()]
         );
         assert_eq!(second.affected.len(), 2);
         HttpRouteHandler::register_plugin_refs(&route, &ctx);
@@ -1809,6 +1985,37 @@ spec:
             .plugin_ref_mgr
             .get_dependencies(&route_ref.key())
             .is_empty());
+    }
+
+    #[test]
+    fn flattened_backend_refs_remain_registered_after_rule_withdrawal() {
+        let ctx = make_ctx();
+        let route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"name": "parent", "namespace": "infra"},
+            "spec": {"resolvedRules": []}
+        }))
+        .unwrap();
+        let flattened_tuples = vec![(
+            Some("edgion.io".to_string()),
+            Some("EdgionBackend".to_string()),
+            Some("child".to_string()),
+            "missing-or-denied".to_string(),
+        )];
+
+        let delta = HttpRouteHandler::register_backend_refs(&route, &flattened_tuples, &ctx);
+
+        assert_eq!(
+            delta.affected,
+            vec!["edgion.io/EdgionBackend/child/missing-or-denied".to_string()]
+        );
+        assert_eq!(
+            ctx.runtime()
+                .backend_ref_mgr
+                .get_dependencies(&HttpRouteHandler::create_resource_ref(&route).key()),
+            delta.affected
+        );
     }
 
     #[tokio::test]

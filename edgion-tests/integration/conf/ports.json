@@ -320,16 +320,16 @@
     "HTTPRoute/SseStreaming": {
       "http": 31947
     },
-    "EdgionAIService/SingleProvider": {
+    "EdgionBackend/SingleProvider": {
       "http": 31945
     },
-    "EdgionAIService/AnthropicProvider": {
+    "EdgionBackend/AnthropicProvider": {
       "http": 31946
     },
-    "EdgionAIService/Resilience": {
+    "EdgionBackend/Resilience": {
       "http": 31949
     },
-    "EdgionAIService/CredentialExhaustion": {
+    "EdgionBackend/CredentialExhaustion": {
       "http": 31948
     }
   }

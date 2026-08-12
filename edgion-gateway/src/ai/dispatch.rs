@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use edgion_resources::resources::edgion_ai_service::AiProvider;
+use edgion_resources::resources::edgion_backend::AiProvider;
 use edgion_resources::resources::http_route::HTTPRouteFilterType;
 use pingora_proxy::ResponseBodySink;
 use serde_json::Value;
@@ -15,7 +15,7 @@ use crate::ai::anthropic::{
     prepare_anthropic_request, AnthropicRequestError, AnthropicResponseProcessor, ANTHROPIC_VERSION,
 };
 use crate::ai::attempt::{
-    AttemptScheduler, DispatchFailureKind, DispatchOutcome, NextStep, SchedulerEvent, ServiceCredentials,
+    AttemptScheduler, BackendCredentials, DispatchFailureKind, DispatchOutcome, NextStep, SchedulerEvent,
     MAX_AI_ROUTE_RETRIES,
 };
 use crate::ai::routing::{pick, CandidateEligibility, CostSnapshot, PickerInput, RouteCandidate};
@@ -36,17 +36,17 @@ pub struct AiPeerTarget {
     pub port: u16,
     pub use_tls: bool,
     pub sni: String,
-    pub service_key: String,
+    pub backend_key: String,
     pub backend_slot: usize,
     pub effective_policy: Option<Arc<EffectiveBackendTrafficPolicy>>,
     pub namespace: String,
-    pub service_uid: String,
+    pub backend_uid: String,
     pub credential_alias: String,
     pub provider: AiProviderLabel,
-    pub pricing: Option<edgion_resources::resources::edgion_ai_service::ParsedAiModelPricing>,
+    pub pricing: Option<edgion_resources::resources::edgion_backend::ParsedAiModelPricing>,
     pub redis_ref: Option<String>,
     pub on_redis_failure: edgion_resources::resources::edgion_plugins::OnRedisFailure,
-    pub credential_limits: Option<edgion_resources::resources::edgion_ai_service::AiCredentialLimits>,
+    pub credential_limits: Option<edgion_resources::resources::edgion_backend::AiCredentialLimits>,
     pub estimated_input_tokens: u64,
     pub max_output_tokens: u64,
     pub usage: Arc<AiUsageShared>,
@@ -231,7 +231,7 @@ pub fn handle_ai_predispatch_service_failure(ctx: &mut EdgionHttpContext) -> boo
     };
     let retry = match &mut plan {
         AiAttemptPlan::Ready(ready) if matches!(ready.scheduler.next_step(), NextStep::Dispatch(_)) => {
-            ready.scheduler.skip_predispatch_service().is_ok()
+            ready.scheduler.skip_predispatch_backend().is_ok()
         }
         _ => false,
     };
@@ -356,15 +356,15 @@ fn prepare_ready_attempt(
         .candidates
         .get(selected.candidate)
         .ok_or(AiDispatchError::InvalidConfiguration)?;
-    let backend = selected_backend(ctx, candidate.slot)?;
-    let service = candidate.service.as_ref().ok_or(AiDispatchError::Unavailable)?;
+    let selected_route_backend = selected_backend(ctx, candidate.slot)?;
+    let ai_backend = candidate.backend.as_ref().ok_or(AiDispatchError::Unavailable)?;
     let model = candidate.model.as_ref().ok_or(AiDispatchError::Unavailable)?;
-    let credential = service
+    let credential = ai_backend
         .credential_pool
         .credentials
         .get(selected.credential)
         .ok_or(AiDispatchError::InvalidConfiguration)?;
-    let (body, requested_streaming, anthropic_usage_chunk) = match service.provider {
+    let (body, requested_streaming, anthropic_usage_chunk) = match ai_backend.provider {
         AiProvider::OpenAI | AiProvider::OpenAICompatible => {
             let body = openai_provider_body(&plan.canonical_openai_body, &model.provider_model)?;
             (body, plan.requested_streaming, false)
@@ -380,7 +380,7 @@ fn prepare_ready_attempt(
             let translated = prepare_anthropic_request(
                 value,
                 &model.provider_model,
-                service.max_output_tokens,
+                ai_backend.max_output_tokens,
                 plan.inject_usage_tracking,
                 max_output_bytes,
             )
@@ -398,10 +398,10 @@ fn prepare_ready_attempt(
     if ctx.ai_request_baseline.is_none() {
         ctx.ai_request_baseline = Some(session.req_header().clone());
     }
-    apply_backend_request_headers(session, ctx, &backend)?;
+    apply_backend_request_headers(session, ctx, &selected_route_backend)?;
     let uri = provider_uri(
-        service.provider,
-        &service.endpoint.path_prefix,
+        ai_backend.provider,
+        &ai_backend.endpoint.path_prefix,
         &plan.canonical_path,
         plan.canonical_query.as_deref(),
     );
@@ -423,9 +423,9 @@ fn prepare_ready_attempt(
             .set_upstream_uri(&uri)
             .map_err(|_| AiDispatchError::InvalidConfiguration)?;
         adapter
-            .set_upstream_host(&service.endpoint.host)
+            .set_upstream_host(&ai_backend.endpoint.host)
             .map_err(|_| AiDispatchError::InvalidConfiguration)?;
-        match service.provider {
+        match ai_backend.provider {
             AiProvider::OpenAI | AiProvider::OpenAICompatible => {
                 let authorization = format!("Bearer {}", credential.credential);
                 adapter
@@ -455,7 +455,7 @@ fn prepare_ready_attempt(
             .and_then(|ai| ai.quota.as_ref())
             .map(|quota| quota.accumulator())
     });
-    let provider = provider_label(service.provider);
+    let provider = provider_label(ai_backend.provider);
     let context = AiRequestContext {
         provider,
         model: plan.logical_model.clone(),
@@ -466,7 +466,7 @@ fn prepare_ready_attempt(
         quota_status: plan.quota_status,
     };
     let mut response_processors: Vec<Box<dyn StreamingResponseProcessor>> = Vec::with_capacity(2);
-    if service.provider == AiProvider::Anthropic {
+    if ai_backend.provider == AiProvider::Anthropic {
         let created = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -482,7 +482,7 @@ fn prepare_ready_attempt(
         )));
     }
     let usage_processor = usage_processor_for_provider(
-        service.provider,
+        ai_backend.provider,
         Arc::clone(&usage),
         quota_accumulator,
         requested_streaming,
@@ -494,30 +494,30 @@ fn prepare_ready_attempt(
         eos: Arc::clone(&eos),
     });
 
-    ctx.selected_backend = Some(backend);
+    ctx.selected_backend = Some(selected_route_backend);
     let target = AiPeerTarget {
-        domain: service.endpoint.domain.clone(),
-        port: service.endpoint.port,
-        use_tls: service.endpoint.use_tls,
-        sni: service.endpoint.sni.clone(),
-        service_key: candidate.service_key.clone(),
+        domain: ai_backend.endpoint.domain.clone(),
+        port: ai_backend.endpoint.port,
+        use_tls: ai_backend.endpoint.use_tls,
+        sni: ai_backend.endpoint.sni.clone(),
+        backend_key: candidate.backend_key.clone(),
         backend_slot: candidate.slot,
         effective_policy: candidate.effective_policy.clone(),
         namespace: candidate
-            .service_key
+            .backend_key
             .split_once('/')
             .map(|(namespace, _)| namespace)
             .unwrap_or("default")
             .to_string(),
-        service_uid: service.uid.clone(),
+        backend_uid: ai_backend.uid.clone(),
         credential_alias: credential.name.clone(),
         provider,
         pricing: model.pricing,
-        redis_ref: service.credential_pool.redis_ref.clone(),
-        on_redis_failure: service.credential_pool.on_redis_failure.clone(),
+        redis_ref: ai_backend.credential_pool.redis_ref.clone(),
+        on_redis_failure: ai_backend.credential_pool.on_redis_failure.clone(),
         credential_limits: credential.limits.clone(),
         estimated_input_tokens: plan.input_chars.saturating_add(3) / 4,
-        max_output_tokens: effective_max_output_tokens(&plan.canonical_openai_body, service.max_output_tokens)?,
+        max_output_tokens: effective_max_output_tokens(&plan.canonical_openai_body, ai_backend.max_output_tokens)?,
         usage,
         eos,
         credential_outlier: candidate
@@ -526,7 +526,7 @@ fn prepare_ready_attempt(
             .cloned()
             .flatten(),
         adaptive: candidate.adaptive.clone(),
-        limiter_core: Arc::clone(&service.credential_pool.limiter_core),
+        limiter_core: Arc::clone(&ai_backend.credential_pool.limiter_core),
         ai_context: Some(context),
         response_processor: Some(response_processor),
     };
@@ -542,10 +542,10 @@ fn initialize_retry_cap(plan: &mut ReadyAiAttemptPlan, retry_cap: u8) -> Result<
         .iter()
         .map(|candidate| {
             candidate
-                .service
+                .backend
                 .as_ref()
-                .map(|service| {
-                    service
+                .map(|backend| {
+                    backend
                         .credential_pool
                         .credentials
                         .iter()
@@ -555,8 +555,8 @@ fn initialize_retry_cap(plan: &mut ReadyAiAttemptPlan, retry_cap: u8) -> Result<
                 .unwrap_or_default()
         })
         .collect();
-    let services: Vec<_> = weights.iter().map(|weights| ServiceCredentials { weights }).collect();
-    plan.scheduler = AttemptScheduler::new(&services, retry_cap).map_err(|_| AiDispatchError::InvalidConfiguration)?;
+    let backends: Vec<_> = weights.iter().map(|weights| BackendCredentials { weights }).collect();
+    plan.scheduler = AttemptScheduler::new(&backends, retry_cap).map_err(|_| AiDispatchError::InvalidConfiguration)?;
     plan.retry_cap_initialized = true;
     Ok(())
 }
@@ -575,9 +575,9 @@ fn openai_provider_body(canonical: &[u8], provider_model: &str) -> Result<Bytes,
 fn select_target(plan: &mut ReadyAiAttemptPlan, entropy: u128) -> Result<SelectedTarget, AiDispatchError> {
     loop {
         let service_step = match plan.scheduler.next_step() {
-            NextStep::PickService(step) => Some(step),
+            NextStep::PickBackend(step) => Some(step),
             NextStep::PickCredential(step) => {
-                let candidate_index = usize::from(step.service);
+                let candidate_index = usize::from(step.backend);
                 match select_credential(plan, candidate_index, entropy) {
                     Err(AiDispatchError::Unavailable) => continue,
                     result => return result,
@@ -586,15 +586,15 @@ fn select_target(plan: &mut ReadyAiAttemptPlan, entropy: u128) -> Result<Selecte
             NextStep::Stop(_) => return Err(AiDispatchError::Unavailable),
             _ => return Err(AiDispatchError::InvalidConfiguration),
         };
-        let service_step = service_step.expect("PickService branch supplies state");
+        let service_step = service_step.expect("PickBackend branch supplies state");
         let route_candidates: Vec<_> =
             plan.candidates
                 .iter()
                 .enumerate()
                 .map(|(index, candidate)| {
                     let dispatchable_credential =
-                        candidate.service.as_ref().is_some_and(|service| {
-                            service.credential_pool.credentials.iter().enumerate().any(
+                        candidate.backend.as_ref().is_some_and(|backend| {
+                            backend.credential_pool.credentials.iter().enumerate().any(
                                 |(credential_index, credential)| {
                                     credential.weight > 0
                                         && candidate
@@ -609,9 +609,9 @@ fn select_target(plan: &mut ReadyAiAttemptPlan, entropy: u128) -> Result<Selecte
                             input_price_micro_usd_per_million: pricing.input.get(),
                             output_price_micro_usd_per_million: pricing.output.get(),
                             service_max_output_tokens: candidate
-                                .service
+                                .backend
                                 .as_ref()
-                                .and_then(|service| service.max_output_tokens)
+                                .and_then(|backend| backend.max_output_tokens)
                                 .map(u64::from),
                         })
                     });
@@ -623,7 +623,7 @@ fn select_target(plan: &mut ReadyAiAttemptPlan, entropy: u128) -> Result<Selecte
                             valid_ref: true,
                             model_compatible: candidate.model.is_some(),
                             runtime_available: dispatchable_credential,
-                            untried: service_step.excluded_services & (1u16 << index) == 0,
+                            untried: service_step.excluded_backends & (1u16 << index) == 0,
                         },
                         adaptive: candidate
                             .adaptive
@@ -648,7 +648,7 @@ fn select_target(plan: &mut ReadyAiAttemptPlan, entropy: u128) -> Result<Selecte
             Err(crate::ai::routing::PickerError::NoEligibleCandidate) => {
                 let transition = plan
                     .scheduler
-                    .complete_service_scan()
+                    .complete_backend_scan()
                     .map_err(|_| AiDispatchError::InvalidConfiguration)?;
                 if matches!(transition.event, SchedulerEvent::RoundAdvanced { .. }) {
                     continue;
@@ -663,7 +663,7 @@ fn select_target(plan: &mut ReadyAiAttemptPlan, entropy: u128) -> Result<Selecte
             .position(|candidate| candidate.slot == usize::from(selected.slot))
             .ok_or(AiDispatchError::InvalidConfiguration)?;
         plan.scheduler
-            .select_service(u8::try_from(candidate_index).map_err(|_| AiDispatchError::InvalidConfiguration)?)
+            .select_backend(u8::try_from(candidate_index).map_err(|_| AiDispatchError::InvalidConfiguration)?)
             .map_err(|_| AiDispatchError::InvalidConfiguration)?;
         match select_credential(plan, candidate_index, entropy) {
             Err(AiDispatchError::Unavailable) => continue,
@@ -677,11 +677,11 @@ fn select_credential(
     candidate_index: usize,
     entropy: u128,
 ) -> Result<SelectedTarget, AiDispatchError> {
-    let service = plan.candidates[candidate_index]
-        .service
+    let backend = plan.candidates[candidate_index]
+        .backend
         .as_ref()
         .ok_or(AiDispatchError::Unavailable)?;
-    let eligible = service
+    let eligible = backend
         .credential_pool
         .credentials
         .iter()
@@ -703,11 +703,11 @@ fn select_credential(
         .map_err(|_| AiDispatchError::InvalidConfiguration)?;
     let target = match transition.event {
         SchedulerEvent::CredentialSelected { target } => target,
-        SchedulerEvent::ServiceExhausted { .. } => return Err(AiDispatchError::Unavailable),
+        SchedulerEvent::BackendExhausted { .. } => return Err(AiDispatchError::Unavailable),
         _ => return Err(AiDispatchError::InvalidConfiguration),
     };
     Ok(SelectedTarget {
-        candidate: usize::from(target.service),
+        candidate: usize::from(target.backend),
         credential: usize::from(target.credential),
     })
 }
@@ -716,7 +716,7 @@ fn selected_backend(ctx: &EdgionHttpContext, slot: usize) -> Result<CompiledBack
     ctx.route_unit
         .as_ref()
         .and_then(|route| route.backends.iter().find(|backend| backend.slot == slot))
-        .filter(|backend| backend.is_permitted_ai_service())
+        .filter(|backend| backend.is_permitted_ai_backend())
         .cloned()
         .ok_or(AiDispatchError::InvalidConfiguration)
 }
@@ -846,7 +846,7 @@ fn effective_max_output_tokens(body: &[u8], service_max: Option<u32>) -> Result<
     }
     Ok(match (request_output_bound(&value), service_max.map(u64::from)) {
         (Some(request), _) => request,
-        (None, Some(service)) => service,
+        (None, Some(backend)) => backend,
         (None, None) => 0,
     })
 }
@@ -879,17 +879,17 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::ai::attempt::{AttemptScheduler, ServiceCredentials};
+    use crate::ai::attempt::{AttemptScheduler, BackendCredentials};
     use crate::ai::{
-        AiCandidateModel, AiPlanCandidate, AiServiceStore, ReadyAiAttemptPlan, RuntimeAiCredential,
-        RuntimeAiCredentialPool, RuntimeAiEndpoint, RuntimeAiService,
+        AiBackendStore, AiCandidateModel, AiPlanCandidate, ReadyAiAttemptPlan, RuntimeAiBackend, RuntimeAiCredential,
+        RuntimeAiCredentialPool, RuntimeAiEndpoint,
     };
     use crate::backends::policy::backend_traffic::RetryBudget;
     use crate::plugins::PluginRuntime;
     use crate::routes::http::match_unit::{HttpRouteRuleUnit, MatchSpecificity};
     use crate::{MatchInfo, Rsc};
     use edgion_resources::resources::common::RefDenied;
-    use edgion_resources::resources::edgion_ai_service::AiCredentialLimits;
+    use edgion_resources::resources::edgion_backend::AiCredentialLimits;
     use edgion_resources::resources::edgion_backend_traffic_policy::{BudgetDetails, RetryConstraintConfig};
     use edgion_resources::resources::edgion_plugins::{AiBackendSelection, OnRedisFailure};
     use edgion_resources::{HTTPBackendRef, HTTPRouteMatch, HTTPRouteRule, ParsedRouteTimeouts, RouteTimeout};
@@ -897,8 +897,8 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     fn candidate_scheduler() -> AttemptScheduler {
-        let mut scheduler = AttemptScheduler::new(&[ServiceCredentials { weights: &[1] }], 0).unwrap();
-        scheduler.select_service(0).unwrap();
+        let mut scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &[1] }], 0).unwrap();
+        scheduler.select_backend(0).unwrap();
         scheduler.select_credential(1, 0).unwrap();
         scheduler
     }
@@ -917,7 +917,7 @@ mod tests {
             candidates: Vec::new(),
             scheduler: candidate_scheduler(),
             retry_cap_initialized: true,
-            service_snapshot: AiServiceStore::new().snapshot(),
+            backend_snapshot: AiBackendStore::new().snapshot(),
             quota: None,
             quota_status: None,
             terminate_on_over_limit: false,
@@ -926,8 +926,8 @@ mod tests {
 
     fn candidate_plan_with_retries(retries: u8) -> ReadyAiAttemptPlan {
         let mut plan = candidate_plan();
-        plan.scheduler = AttemptScheduler::new(&[ServiceCredentials { weights: &[1, 1] }], retries).unwrap();
-        plan.scheduler.select_service(0).unwrap();
+        plan.scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &[1, 1] }], retries).unwrap();
+        plan.scheduler.select_backend(0).unwrap();
         plan.scheduler.select_credential(u16::MAX, 0).unwrap();
         plan
     }
@@ -956,15 +956,15 @@ mod tests {
         let aliases: Vec<String> = credentials.iter().map(|credential| credential.name.clone()).collect();
         let outlier_store = crate::ai::AiCredentialOutlierStore::new();
         let target = edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey {
-            target_kind: edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind::EdgionAIService,
+            target_kind: edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind::EdgionBackend,
             namespace: "default".to_string(),
             name: "provider".to_string(),
         };
-        outlier_store.configure_service(target.clone(), None, aliases.clone());
+        outlier_store.configure_backend(target.clone(), None, aliases.clone());
         let outlier_service = outlier_store.current_handle(&target).unwrap();
         let credential_outliers = aliases.iter().map(|alias| outlier_service.capture(alias)).collect();
-        let service = Arc::new(RuntimeAiService {
-            uid: "service-uid".to_string(),
+        let backend = Arc::new(RuntimeAiBackend {
+            uid: "backend-uid".to_string(),
             provider: AiProvider::OpenAICompatible,
             endpoint: RuntimeAiEndpoint {
                 domain: "provider.example".to_string(),
@@ -985,13 +985,13 @@ mod tests {
             models: HashMap::new(),
         });
         let mut plan = candidate_plan();
-        plan.scheduler = AttemptScheduler::new(&[ServiceCredentials { weights: &weights }], 0).unwrap();
+        plan.scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &weights }], 0).unwrap();
         plan.candidates = vec![AiPlanCandidate {
             slot: 0,
             order: 0,
             weight: 1,
-            service_key: "default/provider".to_string(),
-            service: Some(service),
+            backend_key: "default/provider".to_string(),
+            backend: Some(backend),
             model: Some(AiCandidateModel {
                 provider_model: "provider-model".to_string(),
                 pricing: None,
@@ -1010,7 +1010,7 @@ mod tests {
             port: None,
             weight: Some(1),
             group: Some("edgion.io".to_string()),
-            kind: Some("EdgionAIService".to_string()),
+            kind: Some("EdgionBackend".to_string()),
             filters: None,
             backend_tls_policy: None,
             ref_denied: Some(RefDenied {
@@ -1148,7 +1148,7 @@ mod tests {
             panic!("deadline gate must preserve the ready plan");
         };
         assert_eq!(plan.scheduler.dispatch_count(), 0);
-        assert!(matches!(plan.scheduler.next_step(), NextStep::PickService(_)));
+        assert!(matches!(plan.scheduler.next_step(), NextStep::PickBackend(_)));
     }
 
     #[tokio::test]
@@ -1172,7 +1172,7 @@ mod tests {
             panic!("deadline gate must preserve the ready plan");
         };
         assert_eq!(plan.scheduler.dispatch_count(), 0);
-        assert!(matches!(plan.scheduler.next_step(), NextStep::PickService(_)));
+        assert!(matches!(plan.scheduler.next_step(), NextStep::PickBackend(_)));
     }
 
     #[test]
@@ -1456,7 +1456,7 @@ mod tests {
         plan.retry_cap_initialized = false;
         initialize_retry_cap(&mut plan, 3).unwrap();
         assert_eq!(plan.scheduler.max_dispatches(), 4);
-        plan.scheduler.select_service(0).unwrap();
+        plan.scheduler.select_backend(0).unwrap();
         plan.scheduler.select_credential(1, 0).unwrap();
         plan.scheduler.start_dispatch().unwrap();
 
@@ -1472,17 +1472,17 @@ mod tests {
         let mut plan = candidate_plan();
         plan.scheduler = AttemptScheduler::new(
             &[
-                ServiceCredentials {
+                BackendCredentials {
                     weights: &first_weights,
                 },
-                ServiceCredentials {
+                BackendCredentials {
                     weights: &second_weights,
                 },
             ],
             0,
         )
         .unwrap();
-        plan.scheduler.select_service(0).unwrap();
+        plan.scheduler.select_backend(0).unwrap();
         plan.scheduler.select_credential(u16::MAX, 0).unwrap();
         let mut ctx = EdgionHttpContext::new();
         ctx.ai_attempt_plan = Some(AiAttemptPlan::Ready(plan));
@@ -1491,12 +1491,12 @@ mod tests {
         let Some(AiAttemptPlan::Ready(ready)) = ctx.ai_attempt_plan.as_mut() else {
             panic!("ready plan must remain installed");
         };
-        assert!(matches!(ready.scheduler.next_step(), NextStep::PickService(_)));
+        assert!(matches!(ready.scheduler.next_step(), NextStep::PickBackend(_)));
         assert_eq!(
-            ready.scheduler.select_service(0),
-            Err(crate::ai::attempt::SchedulerError::ServiceAlreadyExcluded)
+            ready.scheduler.select_backend(0),
+            Err(crate::ai::attempt::SchedulerError::BackendAlreadyExcluded)
         );
-        assert!(ready.scheduler.select_service(1).is_ok());
+        assert!(ready.scheduler.select_backend(1).is_ok());
         assert_eq!(ready.scheduler.dispatch_count(), 0);
     }
 

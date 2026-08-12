@@ -30,7 +30,7 @@ pub struct ConfigClient {
     edgion_stream_plugins: ClientCache<EdgionStreamPlugins>,
     backend_tls_policies: ClientCache<BackendTLSPolicy>,
     edgion_config_data: ClientCache<EdgionConfigData>,
-    edgion_ai_services: ClientCache<EdgionAIService>,
+    edgion_backends: ClientCache<EdgionBackend>,
     edgion_acme: ClientCache<EdgionAcme>,
     edgion_backend_traffic_policy: ClientCache<EdgionBackendTrafficPolicy>,
     // secrets: ClientCache<Secret>,  // Secret now follows related resources
@@ -138,9 +138,9 @@ impl ConfigClient {
                 ed_cache.set_conf_processor(ed_handler);
                 ed_cache
             },
-            edgion_ai_services: {
+            edgion_backends: {
                 let cache = ClientCache::new(client_id.clone(), client_name.clone());
-                cache.set_conf_processor(crate::ai::create_ai_service_handler());
+                cache.set_conf_processor(crate::ai::create_ai_backend_handler());
                 cache
             },
             edgion_acme: edgion_acme_cache,
@@ -228,8 +228,8 @@ impl ConfigClient {
 
     /// Typed accessor retained for Admin redaction tests.
     #[cfg(test)]
-    pub fn edgion_ai_services(&self) -> &ClientCache<EdgionAIService> {
-        &self.edgion_ai_services
+    pub fn edgion_backends(&self) -> &ClientCache<EdgionBackend> {
+        &self.edgion_backends
     }
 
     /// Get the DynClientCache for a given ResourceKind.
@@ -259,7 +259,7 @@ impl ConfigClient {
             ResourceKind::EdgionStreamPlugins => Some(&self.edgion_stream_plugins),
             ResourceKind::BackendTLSPolicy => Some(&self.backend_tls_policies),
             ResourceKind::EdgionConfigData => Some(&self.edgion_config_data),
-            ResourceKind::EdgionAIService => Some(&self.edgion_ai_services),
+            ResourceKind::EdgionBackend => Some(&self.edgion_backends),
             // These are intentionally not cached on Gateway side
             ResourceKind::Secret => None,
             ResourceKind::ConfigMap => None,

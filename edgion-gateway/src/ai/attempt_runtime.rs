@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use edgion_resources::resources::edgion_ai_service::{AiCredentialLimits, ParsedAiModelPricing};
+use edgion_resources::resources::edgion_backend::{AiCredentialLimits, ParsedAiModelPricing};
 use edgion_resources::resources::edgion_plugins::OnRedisFailure;
 
 use crate::backends::outlier_detection::{EjectionAdmission, FailureClass, HalfOpenProbe};
@@ -26,14 +26,14 @@ const SETTLEMENT_GRACE: Duration = Duration::from_secs(5);
 const REDIS_OPERATION_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_PENDING_SETTLEMENTS: usize = super::attempt::MAX_AI_DISPATCH_ATTEMPTS as usize;
 pub const MAX_AI_ATTEMPT_LOG_BYTES: usize = 8 * 1024;
-const MAX_SERVICE_KEY_BYTES: usize = 63 + 1 + 253;
+const MAX_BACKEND_KEY_BYTES: usize = 63 + 1 + 253;
 const MAX_CREDENTIAL_ALIAS_BYTES: usize = 64;
 
 pub struct AiAttemptAdmissionInput {
     pub namespace: String,
-    pub service_uid: String,
+    pub backend_uid: String,
     pub credential_alias: String,
-    pub service_name: String,
+    pub backend_name: String,
     pub provider: AiProviderLabel,
     pub pricing: Option<ParsedAiModelPricing>,
     pub redis_ref: Option<String>,
@@ -45,14 +45,14 @@ pub struct AiAttemptAdmissionInput {
     pub eos: Arc<AtomicBool>,
     pub outlier: Option<AiCredentialOutlierHandle>,
     pub adaptive: Option<Arc<AdaptiveTelemetryState>>,
-    pub circuit_breaker: Option<Arc<crate::ai::circuit_breaker::AiServiceCircuitBreaker>>,
+    pub circuit_breaker: Option<Arc<crate::ai::circuit_breaker::AiBackendCircuitBreaker>>,
     pub limiter_core: Arc<RedisRateLimiter>,
 }
 
 pub enum AiAttemptAdmission {
     Ready(AiAttemptRuntime),
     Skip,
-    SkipService,
+    SkipBackend,
     DependencyDenied,
 }
 
@@ -68,7 +68,7 @@ pub struct AiAttemptRuntime {
     usage: Arc<AiUsageShared>,
     eos: Arc<AtomicBool>,
     estimated_input_tokens: u64,
-    service_name: String,
+    backend_name: String,
     provider: AiProviderLabel,
     credential_alias: String,
     pricing: Option<ParsedAiModelPricing>,
@@ -77,7 +77,7 @@ pub struct AiAttemptRuntime {
     retry_after_seconds: Option<u64>,
     dispatched: bool,
     verdict_recorded: bool,
-    _circuit_breaker: Option<crate::ai::circuit_breaker::AiServiceCircuitBreakerPermit>,
+    _circuit_breaker: Option<crate::ai::circuit_breaker::AiBackendCircuitBreakerPermit>,
 }
 
 impl AiAttemptRuntime {
@@ -190,7 +190,7 @@ impl AiAttemptRuntime {
         usage.input_tokens.checked_add(usage.output_tokens)?;
         Some(GenAiAttempt {
             number,
-            service: bounded_string(&self.service_name, MAX_SERVICE_KEY_BYTES),
+            backend: bounded_string(&self.backend_name, MAX_BACKEND_KEY_BYTES),
             provider: self.provider.as_str(),
             credential: bounded_string(&self.credential_alias, MAX_CREDENTIAL_ALIAS_BYTES),
             status: self.status,
@@ -265,7 +265,7 @@ impl AiAttemptRuntimeState {
         let circuit_breaker = match input.circuit_breaker.as_ref() {
             Some(state) => match state.try_acquire() {
                 Some(permit) => Some(permit),
-                None => return AiAttemptAdmission::SkipService,
+                None => return AiAttemptAdmission::SkipBackend,
             },
             None => None,
         };
@@ -299,7 +299,7 @@ impl AiAttemptRuntimeState {
             usage: input.usage,
             eos: input.eos,
             estimated_input_tokens: input.estimated_input_tokens,
-            service_name: bounded_string(&input.service_name, MAX_SERVICE_KEY_BYTES),
+            backend_name: bounded_string(&input.backend_name, MAX_BACKEND_KEY_BYTES),
             provider: input.provider,
             credential_alias: bounded_string(&input.credential_alias, MAX_CREDENTIAL_ALIAS_BYTES),
             pricing: input.pricing,
@@ -625,7 +625,7 @@ async fn reserve(
     let keys = build_credential_reservation_keys(
         KEY_PREFIX,
         input.namespace.as_bytes(),
-        input.service_uid.as_bytes(),
+        input.backend_uid.as_bytes(),
         input.credential_alias.as_bytes(),
         window_id,
         request_id.as_bytes(),
@@ -710,14 +710,14 @@ mod tests {
 
         let store = crate::ai::credential_outlier::AiCredentialOutlierStore::new();
         let target = PolicyTargetKey {
-            target_kind: PolicyTargetKind::EdgionAIService,
+            target_kind: PolicyTargetKind::EdgionBackend,
             namespace: "default".to_string(),
             name: "provider".to_string(),
         };
-        store.configure_service(target.clone(), None, ["primary".to_string()]);
+        store.configure_backend(target.clone(), None, ["primary".to_string()]);
         store
             .current_handle(&target)
-            .and_then(|service| service.capture("primary"))
+            .and_then(|backend| backend.capture("primary"))
             .expect("credential handle")
     }
 
@@ -728,9 +728,9 @@ mod tests {
     ) -> AiAttemptAdmissionInput {
         AiAttemptAdmissionInput {
             namespace: "default".to_string(),
-            service_uid: "service-uid".to_string(),
+            backend_uid: "backend-uid".to_string(),
             credential_alias: "primary".to_string(),
-            service_name: "default/provider".to_string(),
+            backend_name: "default/provider".to_string(),
             provider: AiProviderLabel::OpenAiCompatible,
             pricing: None,
             redis_ref: None,
@@ -761,7 +761,7 @@ mod tests {
             usage,
             eos: latch,
             estimated_input_tokens: input,
-            service_name: "default/provider".to_string(),
+            backend_name: "default/provider".to_string(),
             provider: AiProviderLabel::OpenAiCompatible,
             credential_alias: "primary".to_string(),
             pricing: None,
@@ -800,11 +800,11 @@ mod tests {
 
         let store = crate::ai::credential_outlier::AiCredentialOutlierStore::new();
         let target = PolicyTargetKey {
-            target_kind: PolicyTargetKind::EdgionAIService,
+            target_kind: PolicyTargetKind::EdgionBackend,
             namespace: "default".to_string(),
             name: "provider".to_string(),
         };
-        store.configure_service(
+        store.configure_backend(
             target.clone(),
             Some(OutlierDetectionResolved {
                 consecutive_errors: 1,
@@ -818,7 +818,7 @@ mod tests {
         );
         let handle = store
             .current_handle(&target)
-            .and_then(|service| service.capture("primary"))
+            .and_then(|backend| backend.capture("primary"))
             .expect("credential handle");
         handle.force_expired_cooldown_for_test();
         let EjectionAdmission::Probe(probe) = handle.admit() else {
@@ -934,7 +934,7 @@ mod tests {
                 format!("route-{suffix}"),
                 "rule-a".to_string(),
                 PolicyTargetKey {
-                    target_kind: PolicyTargetKind::EdgionAIService,
+                    target_kind: PolicyTargetKind::EdgionBackend,
                     namespace: "default".to_string(),
                     name: "provider".to_string(),
                 },
@@ -1171,7 +1171,7 @@ mod tests {
     fn serialized_attempt_has_only_the_safe_bounded_schema() {
         let entry = GenAiAttempt {
             number: 1,
-            service: "default/service-a".to_string(),
+            backend: "default/backend-a".to_string(),
             provider: "openai",
             credential: "primary".to_string(),
             status: Some(429),
@@ -1196,7 +1196,7 @@ mod tests {
                 "output_tokens",
                 "provider",
                 "retry_after_seconds",
-                "service",
+                "backend",
                 "status",
                 "ttft_ms",
                 "usage_source",
@@ -1221,19 +1221,19 @@ mod tests {
         let mut state = AiAttemptRuntimeState::default();
         for _ in 0..MAX_PENDING_SETTLEMENTS {
             let mut current = attempt(1, 0, false);
-            current.service_name = "s".repeat(2_000);
+            current.backend_name = "s".repeat(2_000);
             current.credential_alias = "c".repeat(2_000);
             state.install(current);
             state.mark_dispatched();
             state.finish_failure(AiAttemptFailure::Ambiguous(FailureClass::LocalOrigin));
         }
         assert_eq!(state.attempts().len(), MAX_PENDING_SETTLEMENTS);
-        // With eight entries and the production service/credential field
+        // With eight entries and the production backend/credential field
         // bounds, the 8 KiB cap is currently defense-in-depth against future
         // schema growth rather than a separately reachable branch.
         assert!(serde_json::to_vec(state.attempts()).unwrap().len() <= MAX_AI_ATTEMPT_LOG_BYTES);
         assert!(state.attempts().iter().all(|entry| {
-            entry.service.len() <= MAX_SERVICE_KEY_BYTES && entry.credential.len() <= MAX_CREDENTIAL_ALIAS_BYTES
+            entry.backend.len() <= MAX_BACKEND_KEY_BYTES && entry.credential.len() <= MAX_CREDENTIAL_ALIAS_BYTES
         }));
 
         state.install(attempt(1, 0, false));

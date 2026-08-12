@@ -4,14 +4,14 @@ use std::fmt;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use edgion_resources::resources::edgion_ai_service::ParsedAiModelPricing;
+use edgion_resources::resources::edgion_backend::ParsedAiModelPricing;
 use edgion_resources::resources::edgion_plugins::AiBackendSelection;
 
 use crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy;
 
 use super::attempt::AttemptScheduler;
 use super::quota::AiQuotaRequest;
-use super::{AdaptiveTelemetryState, AiCredentialOutlierHandle, AiServiceSnapshot, RuntimeAiService};
+use super::{AdaptiveTelemetryState, AiBackendSnapshot, AiCredentialOutlierHandle, RuntimeAiBackend};
 
 /// A fixed failure sampled before AI request processing begins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,7 +20,7 @@ pub enum AiPlanError {
     InvalidRouteConfiguration,
 }
 
-/// Candidate-local model resolution from one service-store generation.
+/// Candidate-local model resolution from one backend-store generation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AiCandidateModel {
     pub provider_model: String,
@@ -33,14 +33,14 @@ pub struct AiPlanCandidate {
     pub slot: usize,
     pub order: u8,
     pub weight: i32,
-    pub service_key: String,
-    pub service: Option<Arc<RuntimeAiService>>,
+    pub backend_key: String,
+    pub backend: Option<Arc<RuntimeAiBackend>>,
     pub model: Option<AiCandidateModel>,
     pub effective_policy: Option<Arc<EffectiveBackendTrafficPolicy>>,
     /// Route/rule/target/model telemetry generation captured with this plan.
     pub adaptive: Option<Arc<AdaptiveTelemetryState>>,
     /// Credential state captured from the candidate's exact EBTP policy
-    /// generation. Indices align with `service.credential_pool.credentials`.
+    /// generation. Indices align with `backend.credential_pool.credentials`.
     pub credential_outliers: Vec<Option<AiCredentialOutlierHandle>>,
 }
 
@@ -50,8 +50,8 @@ impl fmt::Debug for AiPlanCandidate {
             .field("slot", &self.slot)
             .field("order", &self.order)
             .field("weight", &self.weight)
-            .field("service_key", &self.service_key)
-            .field("service_available", &self.service.is_some())
+            .field("backend_key", &self.backend_key)
+            .field("backend_available", &self.backend.is_some())
             .field("model", &self.model)
             .field("effective_policy", &self.effective_policy.is_some())
             .field("adaptive", &self.adaptive.is_some())
@@ -82,7 +82,7 @@ pub struct ReadyAiAttemptPlan {
     pub scheduler: AttemptScheduler,
     pub retry_cap_initialized: bool,
     /// Keeps the complete captured generation alive for request stability.
-    pub service_snapshot: AiServiceSnapshot,
+    pub backend_snapshot: AiBackendSnapshot,
     pub quota: Option<AiQuotaRequest>,
     pub quota_status: Option<&'static str>,
     /// Resolved from the compiled `AiTokenQuotaConfig.onExceeded`: `true`

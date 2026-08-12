@@ -1,4 +1,4 @@
-//! Resolver for the fixed `EdgionAIService` provider API-key Secret shape.
+//! Resolver for the fixed `EdgionBackend.spec.ai` provider API-key Secret shape.
 
 use std::collections::BTreeMap;
 

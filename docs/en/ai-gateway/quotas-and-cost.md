@@ -12,7 +12,7 @@ quota Redis work.
 
 `identityModel` uses the exact client-requested logical model name. The
 canonical name and every configured alias therefore have separate buckets,
-even when one EdgionAIService maps them to the same provider model. A model can
+even when one EdgionBackend maps them to the same provider model. A model can
 have up to 32 aliases, so one identity can consume the configured limit once
 for each of up to 33 declared names. Use `identity` for one cap shared across
 all names, or avoid aliases on quota-controlled models. `Downgrade` requires
@@ -120,7 +120,7 @@ Alert on:
 
 ## Estimated cost
 
-Configure optional `models[].pricing` on EdgionAIService:
+Configure optional `models[].pricing` on EdgionBackend:
 
 | Field | Description |
 |-------|-------------|

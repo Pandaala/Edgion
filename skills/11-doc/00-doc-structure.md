@@ -106,7 +106,7 @@ The document you're writing is about…
 ├── First-time user contact, quick onboarding?
 │   └── getting-started/
 │
-├── AI / LLM gateway features (EdgionAIService, AiProxy, AI resilience, GenAI usage)?
+├── AI / LLM gateway features (EdgionBackend, AiProxy, AI resilience, GenAI usage)?
 │   └── ai-gateway/
 │   ├── Keep the EdgionPlugins `ai-proxy.md` page as a short pointer into this column
 │   └── Do not grow AI product docs under filters/edgion-plugins alone

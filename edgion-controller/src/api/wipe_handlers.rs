@@ -6,7 +6,7 @@
 //!                     EdgionPlugins, EdgionStreamPlugins, BackendTLSPolicy,
 //!                     EdgionBackendTrafficPolicy
 //! Tier 2 (config):    Gateway, GatewayClass, EdgionGatewayConfig, EdgionTls, EdgionAcme,
-//!                     EdgionConfigData, LinkSys, EdgionAIService, ReferenceGrant
+//!                     EdgionConfigData, LinkSys, EdgionBackend, ReferenceGrant
 //! Tier 3 (low-level): Service, EndpointSlice, Secret, ConfigMap
 
 use crate::api::types::AdminState;
@@ -53,7 +53,7 @@ const TIER_2: &[ResourceKind] = &[
     ResourceKind::EdgionAcme,
     ResourceKind::EdgionConfigData,
     ResourceKind::LinkSys,
-    ResourceKind::EdgionAIService,
+    ResourceKind::EdgionBackend,
     ResourceKind::ReferenceGrant,
 ];
 

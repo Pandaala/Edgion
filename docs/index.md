@@ -20,7 +20,7 @@ features:
   - title: Gateway API v1
     details: Full conformance with Kubernetes Gateway API v1. GatewayClass, Gateway, HTTPRoute, GRPCRoute, TCPRoute, UDPRoute all supported.
   - title: AI Gateway
-    details: OpenAI-compatible LLM routing with EdgionAIService, credential pools, intelligent selection, bounded failover, usage, and cost accounting.
+    details: OpenAI-compatible LLM routing with EdgionBackend, credential pools, intelligent selection, bounded failover, usage, and cost accounting.
   - title: Multi-Protocol
     details: HTTP/1.1, HTTP/2, gRPC, TCP, UDP, WebSocket, TLS termination, mTLS, ACME automatic certificate.
   - title: Rich Plugin System

@@ -12,9 +12,10 @@
 
 | 文档 | 说明 |
 |------|------|
-| [快速开始](./quick-start.md) | Secret → EdgionAIService → AiProxy → HTTPRoute → OpenAI SDK |
-| [概念](./concepts.md) | HTTPRoute、EdgionAIService、AiProxy、EBTP 的职责划分 |
-| [EdgionAIService](./edgion-ai-service.md) | 提供商 Endpoint、模型目录与类型化 AI 后端 |
+| [快速开始](./quick-start.md) | Secret → EdgionBackend → AiProxy → HTTPRoute → OpenAI SDK |
+| [概念](./concepts.md) | HTTPRoute、EdgionBackend、AiProxy、EBTP 的职责划分 |
+| [EdgionBackend](./edgion-backend.md) | 提供商 Endpoint、模型目录与类型化 AI 后端 |
+| [迁移](./edgion-backend-migration.md) | 停机切换与全图回滚 |
 | [路由与选择](./routing.md) | Weighted、Priority、LowestLatency、LowestUsage、CostWeighted |
 | [凭据与限额](./credentials-and-limits.md) | 凭据池、RPM/TPM 预留、轮转与冷却 |
 | [弹性与故障切换](./resilience.md) | 凭据优先重试、SSE 承诺、outlier half-open、EBTP |
@@ -25,7 +26,7 @@
 ## 能力一览
 
 - **统一 OpenAI 客户端面** — 同一 base URL 覆盖 OpenAI、OpenAI-compatible 与 Anthropic
-- **类型化 AI 后端** — HTTPRoute `backendRefs` 直接引用 `edgion.io/EdgionAIService`
+- **类型化 AI 后端** — HTTPRoute `backendRefs` 直接引用 `edgion.io/EdgionBackend`
 - **凭据隔离** — Secret 凭据池按权重轮转；RPM/TPM 走 Redis
 - **智能选择** — 五种 `backendSelection`，AiProxy 不内嵌提供商列表
 - **有界弹性** — 共享尝试上限、凭据优先轮次、不在流中途切换后端

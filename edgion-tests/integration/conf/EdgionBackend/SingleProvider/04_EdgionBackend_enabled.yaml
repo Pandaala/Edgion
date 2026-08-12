@@ -1,0 +1,98 @@
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: fixture-provider
+  namespace: edgion-test
+spec:
+  ai:
+    provider: OpenAICompatible
+    endpoint: http://127.0.0.1:30001/ai/prefix
+    allowInsecureHttp: true
+    credentialPool:
+      credentials:
+        - name: primary
+          secretRef:
+            name: ai-provider-credential
+    models:
+      - name: fixture-model
+        aliases:
+          - fixture-alias
+        pricing:
+          inputPerMillionUsd: "10"
+          outputPerMillionUsd: "20"
+      - name: premium-model
+      - name: economy-model
+    defaults:
+      streaming: true
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: fixture-provider-streaming-disabled
+  namespace: edgion-test
+spec:
+  ai:
+    provider: OpenAICompatible
+    endpoint: http://127.0.0.1:30001/ai/prefix
+    allowInsecureHttp: true
+    credentialPool:
+      credentials:
+        - name: primary
+          secretRef:
+            name: ai-provider-credential
+    models:
+      - name: fixture-model
+    defaults:
+      streaming: false
+---
+# Declares a per-credential TPM limit, so every request reserves
+# `estimated input + defaults.maxOutputTokens` against one shared credential
+# bucket and settles it when the attempt ends. Sized so exactly one
+# outstanding reservation fits: a second request is admitted only if the
+# first one's reservation was reconciled down to what was really consumed.
+# That makes the D2 leak (a gateway-terminated stream retaining its whole
+# reservation for the rest of the window) observable from the outside as a
+# denial for the next, unrelated tenant.
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: fixture-provider-credential-tpm
+  namespace: edgion-test
+spec:
+  ai:
+    provider: OpenAICompatible
+    endpoint: http://127.0.0.1:30001/ai/prefix
+    allowInsecureHttp: true
+    credentialPool:
+      redisRef: default/redis-test
+      credentials:
+        - name: primary
+          secretRef:
+            name: ai-provider-credential
+          limits:
+            tokensPerMinute: 6000
+    models:
+      - name: fixture-model
+    defaults:
+      streaming: true
+      maxOutputTokens: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: fixture-provider-retryable
+  namespace: edgion-test
+spec:
+  ai:
+    provider: OpenAICompatible
+    endpoint: http://127.0.0.1:30001/ai/fail-503
+    allowInsecureHttp: true
+    credentialPool:
+      credentials:
+        - name: retry-primary
+          secretRef:
+            name: ai-provider-credential
+    models:
+      - name: fixture-model
+    defaults:
+      streaming: true

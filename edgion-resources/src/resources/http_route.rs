@@ -386,10 +386,10 @@ pub struct HTTPBackendRef {
 pub enum HTTPBackendRefKind {
     /// A Kubernetes Service backend (Gateway API default or an Edgion Service-family
     /// kind such as `ServiceExternalName` / `ServiceClusterIp`). Peer selection still
-    /// uses the concrete `kind` string via `EdgionService::from_kind`.
+    /// uses the concrete `kind` string via `ServiceBackendKind::from_kind`.
     Service,
     /// An Edgion AI provider-service resource.
-    EdgionAIService,
+    EdgionBackend,
     /// A child HTTPRoute expanded by Controller-side route delegation.
     RouteDelegation,
     /// Any other group/kind combination.
@@ -417,7 +417,7 @@ impl HTTPBackendRef {
     pub fn backend_kind(&self) -> HTTPBackendRefKind {
         match (self.group.as_deref(), self.kind.as_deref()) {
             (None | Some("") | Some("core"), kind) if is_service_family_kind(kind) => HTTPBackendRefKind::Service,
-            (Some(EDGION_API_GROUP), Some("EdgionAIService")) => HTTPBackendRefKind::EdgionAIService,
+            (Some(EDGION_API_GROUP), Some("EdgionBackend")) => HTTPBackendRefKind::EdgionBackend,
             (Some(GATEWAY_API_GROUP), Some("HTTPRoute")) => HTTPBackendRefKind::RouteDelegation,
             _ => HTTPBackendRefKind::Unsupported,
         }
@@ -1326,8 +1326,8 @@ mod tests {
         }
 
         assert_eq!(
-            backend_ref(Some(EDGION_API_GROUP), Some("EdgionAIService")).backend_kind(),
-            HTTPBackendRefKind::EdgionAIService
+            backend_ref(Some(EDGION_API_GROUP), Some("EdgionBackend")).backend_kind(),
+            HTTPBackendRefKind::EdgionBackend
         );
         assert_eq!(
             backend_ref(Some(GATEWAY_API_GROUP), Some("HTTPRoute")).backend_kind(),
@@ -1336,8 +1336,8 @@ mod tests {
 
         for (group, kind) in [
             (Some(EDGION_API_GROUP), None),
-            (None, Some("EdgionAIService")),
-            (Some("core"), Some("EdgionAIService")),
+            (None, Some("EdgionBackend")),
+            (Some("core"), Some("EdgionBackend")),
             (Some(GATEWAY_API_GROUP), Some("Service")),
             (Some(EDGION_API_GROUP), Some("HTTPRoute")),
             (Some("example.io"), Some("Widget")),

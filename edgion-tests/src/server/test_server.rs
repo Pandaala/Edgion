@@ -105,7 +105,7 @@ static AI_LONG_STREAM_OBSERVATIONS: std::sync::LazyLock<
 
 #[derive(Debug, serde::Serialize)]
 struct AiCredentialExhaustionObservation {
-    service: &'static str,
+    backend: &'static str,
     credential_generation: &'static str,
 }
 
@@ -1492,20 +1492,20 @@ async fn ai_provider_handler(
     let streaming = force_sse || json.get("stream").and_then(serde_json::Value::as_bool) == Some(true);
 
     if let Some(trace_id) = trace_id.as_deref() {
-        let exhaustion_service = if path.starts_with("credential-exhaustion-primary/") {
+        let exhaustion_backend = if path.starts_with("credential-exhaustion-primary/") {
             Some("primary")
         } else if path.starts_with("credential-exhaustion-secondary/") {
             Some("secondary")
         } else {
             None
         };
-        if let Some(service) = exhaustion_service {
+        if let Some(backend) = exhaustion_backend {
             AI_CREDENTIAL_EXHAUSTION_OBSERVATIONS
                 .lock()
                 .entry(trace_id.to_string())
                 .or_default()
                 .push(AiCredentialExhaustionObservation {
-                    service,
+                    backend,
                     credential_generation: observation.credential_generation,
                 });
         }

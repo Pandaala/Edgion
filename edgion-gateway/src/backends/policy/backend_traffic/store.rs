@@ -1,20 +1,20 @@
 //! Runtime store + conflict arbitration for `EdgionBackendTrafficPolicy`.
 //!
 //! Holds the synced policy cache and resolves oldest-wins policy independently
-//! per typed Service or EdgionAIService destination. Service-only LB, health,
+//! per typed Service or EdgionBackend destination. Service-only LB, health,
 //! panic-threshold, and authority consumers retain their existing string-keyed
 //! stores; connection, retry, circuit, and outlier configuration is also
 //! published in one typed immutable snapshot for AI request capture.
 
 use super::retry_budget::RetryBudget;
-use crate::ai::{get_ai_credential_outlier_store, AiCredentialOutlierServiceHandle};
+use crate::ai::{get_ai_credential_outlier_store, AiCredentialOutlierBackendHandle};
 use crate::backends::health::check::{get_hc_config_store, get_health_check_manager};
 use crate::backends::outlier_detection::get_outlier_detection_store;
 use crate::backends::panic_threshold::get_panic_threshold_store;
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use edgion_resources::resources::edgion_backend_traffic_policy::{
-    precedence_key, PolicyTargetKey, PolicyTargetKind, RetryConstraintConfig,
+    precedence_key, PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass, RetryConstraintConfig,
 };
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::resources::outlier_detection::OutlierDetectionResolved;
@@ -57,7 +57,7 @@ pub struct BackendTrafficPolicyStore {
     /// Per-service circuit-breaker concurrency cap (read on the request path).
     circuit_breakers: DashMap<PolicyTargetKey, u32>,
     service_circuit_breakers: DashMap<String, u32>,
-    ai_circuit_breakers: DashMap<PolicyTargetKey, (u32, Arc<crate::ai::circuit_breaker::AiServiceCircuitBreaker>)>,
+    ai_circuit_breakers: DashMap<PolicyTargetKey, (u32, Arc<crate::ai::circuit_breaker::AiBackendCircuitBreaker>)>,
     /// Per-service resolved HTTP upstream connect deadline (read on the request path).
     connect_timeouts: DashMap<PolicyTargetKey, std::time::Duration>,
     service_connect_timeouts: DashMap<String, std::time::Duration>,
@@ -74,8 +74,8 @@ pub struct EffectiveBackendTrafficPolicy {
     pub outlier_detection: Option<OutlierDetectionResolved>,
     /// Exact AI credential-outlier policy generation for request capture.
     /// `None` for core Service targets.
-    pub ai_credential_outlier: Option<Arc<AiCredentialOutlierServiceHandle>>,
-    pub ai_circuit_breaker: Option<Arc<crate::ai::circuit_breaker::AiServiceCircuitBreaker>>,
+    pub ai_credential_outlier: Option<Arc<AiCredentialOutlierBackendHandle>>,
+    pub ai_circuit_breaker: Option<Arc<crate::ai::circuit_breaker::AiBackendCircuitBreaker>>,
 }
 
 fn effective_snapshot_eq(
@@ -136,7 +136,18 @@ impl BackendTrafficPolicyStore {
     /// attachment is enforced by the schema.
     fn policy_target_keys(policy: &EdgionBackendTrafficPolicy) -> Vec<PolicyTargetKey> {
         let ns = policy.metadata.namespace.clone().unwrap_or_default();
-        policy.spec.canonical_target_keys(&ns).unwrap_or_default()
+        let Some(resolved_class) = policy.spec.resolved_target_class else {
+            return Vec::new();
+        };
+        let keys = policy.spec.canonical_target_keys(&ns).unwrap_or_default();
+        let matches_resolved_class = keys.iter().all(|key| {
+            matches!(
+                (resolved_class, key.target_kind),
+                (ResolvedPolicyTargetClass::Service, PolicyTargetKind::Service)
+                    | (ResolvedPolicyTargetClass::Ai, PolicyTargetKind::EdgionBackend)
+            )
+        });
+        matches_resolved_class.then_some(keys).unwrap_or_default()
     }
 
     fn service_target(service_key: &str) -> PolicyTargetKey {
@@ -182,7 +193,7 @@ impl BackendTrafficPolicyStore {
             .map(|entry| *entry.value())
     }
 
-    /// Effective policy for a typed Service or EdgionAIService destination.
+    /// Effective policy for a typed Service or EdgionBackend destination.
     /// Callers capture the returned Arc once and use it for the whole request.
     pub fn get_effective(&self, target: &PolicyTargetKey) -> Option<Arc<EffectiveBackendTrafficPolicy>> {
         self.effective.load().get(target).cloned()
@@ -336,7 +347,7 @@ impl BackendTrafficPolicyStore {
                 match &policy.spec.circuit_breaker {
                     Some(cb) => {
                         self.circuit_breakers.insert(target.clone(), cb.max_parallel_requests);
-                        if target.target_kind == PolicyTargetKind::EdgionAIService {
+                        if target.target_kind == PolicyTargetKind::EdgionBackend {
                             let unchanged = self
                                 .ai_circuit_breakers
                                 .get(target)
@@ -346,7 +357,7 @@ impl BackendTrafficPolicyStore {
                                     target.clone(),
                                     (
                                         cb.max_parallel_requests,
-                                        crate::ai::circuit_breaker::AiServiceCircuitBreaker::new(
+                                        crate::ai::circuit_breaker::AiBackendCircuitBreaker::new(
                                             cb.max_parallel_requests,
                                         ),
                                     ),
@@ -380,7 +391,7 @@ impl BackendTrafficPolicyStore {
                 }
 
                 self.applied.insert(target.clone(), policy_key_str.clone());
-                let ai_credential_outlier = (target.target_kind == PolicyTargetKind::EdgionAIService)
+                let ai_credential_outlier = (target.target_kind == PolicyTargetKind::EdgionBackend)
                     .then(|| {
                         get_ai_credential_outlier_store().publish_policy(target.clone(), normalized_outlier.clone())
                     })
@@ -415,7 +426,7 @@ impl BackendTrafficPolicyStore {
                 self.ai_circuit_breakers.remove(target);
                 self.connect_timeouts.remove(target);
                 self.applied.remove(target);
-                if target.target_kind == PolicyTargetKind::EdgionAIService {
+                if target.target_kind == PolicyTargetKind::EdgionBackend {
                     // No EBTP still needs a discoverable default generation for
                     // Retry-After cooldowns. Existing captured generations remain
                     // alive through their request-owned Arcs.
@@ -450,7 +461,7 @@ impl BackendTrafficPolicyStore {
     }
 
     /// Service-only compatibility seam used by existing LB/health/authority
-    /// consumers. It cannot observe an equally named EdgionAIService policy.
+    /// consumers. It cannot observe an equally named EdgionBackend policy.
     pub fn reapply_service(&self, service_key: &str) -> bool {
         self.reapply_target(&Self::service_target(service_key))
     }
@@ -582,6 +593,7 @@ mod tests {
                     kind: "Service".to_string(),
                     name: svc.to_string(),
                 }],
+                resolved_target_class: Some(ResolvedPolicyTargetClass::Service),
                 retry_constraint: None,
                 load_balancer,
                 health_check,
@@ -610,9 +622,10 @@ mod tests {
             spec: EdgionBackendTrafficPolicySpec {
                 target_refs: vec![PolicyTargetRef {
                     group: "edgion.io".to_string(),
-                    kind: "EdgionAIService".to_string(),
+                    kind: "EdgionBackend".to_string(),
                     name: target.to_string(),
                 }],
+                resolved_target_class: Some(ResolvedPolicyTargetClass::Ai),
                 retry_constraint: Some(RetryConstraintConfig {
                     budget: BudgetDetails {
                         percent,
@@ -837,6 +850,7 @@ mod tests {
                     kind: "Service".to_string(),
                     name: "svc".to_string(),
                 }],
+                resolved_target_class: Some(ResolvedPolicyTargetClass::Service),
                 retry_constraint: None,
                 load_balancer: Some(LoadBalancerConfig {
                     r#type: LoadBalancerType::ConsistentHash,
@@ -860,6 +874,80 @@ mod tests {
         store.reapply_service(key);
         assert_eq!(store.get_lb_policy(key), None, "invalid policy contributes nothing");
         assert!(get_hc_config_store().resolve(key).is_none());
+    }
+
+    #[test]
+    fn resolved_marker_withdrawal_promotes_sibling_and_restore_reinstates_oldest() {
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = BackendTrafficPolicyStore::new();
+        let target = "marker/svc";
+        let older = policy(
+            "marker",
+            "older",
+            "svc",
+            Some(ts("2026-01-01T00:00:00Z")),
+            Some(LoadBalancerType::LeastConn),
+            None,
+            false,
+            false,
+        );
+        let newer = policy(
+            "marker",
+            "newer",
+            "svc",
+            Some(ts("2026-02-01T00:00:00Z")),
+            Some(LoadBalancerType::Ewma),
+            None,
+            false,
+            false,
+        );
+        store.full_set_policies(HashMap::from([
+            ("marker/older".to_string(), older.clone()),
+            ("marker/newer".to_string(), newer),
+        ]));
+        assert_eq!(store.get_lb_policy(target), Some(ParsedLBPolicy::LeastConn));
+
+        let mut withdrawn = (*older).clone();
+        withdrawn.spec.resolved_target_class = None;
+        store.partial_update_policies(
+            HashMap::new(),
+            HashMap::from([("marker/older".to_string(), Arc::new(withdrawn))]),
+            HashSet::new(),
+        );
+        assert_eq!(store.get_lb_policy(target), Some(ParsedLBPolicy::Ewma));
+
+        store.partial_update_policies(
+            HashMap::new(),
+            HashMap::from([("marker/older".to_string(), older)]),
+            HashSet::new(),
+        );
+        assert_eq!(store.get_lb_policy(target), Some(ParsedLBPolicy::LeastConn));
+    }
+
+    #[test]
+    fn forged_mismatched_resolved_marker_contributes_nothing() {
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = BackendTrafficPolicyStore::new();
+        let mut forged = (*policy(
+            "marker-mismatch",
+            "forged",
+            "svc",
+            Some(ts("2026-01-01T00:00:00Z")),
+            Some(LoadBalancerType::LeastConn),
+            None,
+            false,
+            false,
+        ))
+        .clone();
+        forged.spec.resolved_target_class = Some(ResolvedPolicyTargetClass::Ai);
+        assert_eq!(
+            store.full_set_policies(HashMap::from([(
+                "marker-mismatch/forged".to_string(),
+                Arc::new(forged),
+            )])),
+            0
+        );
+        assert_eq!(store.get_lb_policy("marker-mismatch/svc"), None);
     }
 
     // (f) full_set_policies (full-resync path): a resync that drops a policy must
@@ -1138,7 +1226,7 @@ mod tests {
             name: "shared".to_string(),
         };
         let ai_target = PolicyTargetKey {
-            target_kind: PolicyTargetKind::EdgionAIService,
+            target_kind: PolicyTargetKind::EdgionBackend,
             namespace: "typed".to_string(),
             name: "shared".to_string(),
         };
@@ -1191,7 +1279,7 @@ mod tests {
     fn equivalent_ai_update_keeps_retry_handle_and_field_update_is_atomic() {
         let store = BackendTrafficPolicyStore::new();
         let target = PolicyTargetKey {
-            target_kind: PolicyTargetKind::EdgionAIService,
+            target_kind: PolicyTargetKind::EdgionBackend,
             namespace: "typed-update".to_string(),
             name: "models".to_string(),
         };

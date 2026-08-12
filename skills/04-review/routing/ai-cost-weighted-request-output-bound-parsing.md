@@ -39,7 +39,7 @@ defect.
 `pick_cost_weighted` (`ai/routing.rs`) takes
 `request_max_output_tokens.or(service_max_output_tokens)` and returns
 `PickerError::MissingCostInput` when both are absent.
-`defaults.maxOutputTokens` is optional — `EdgionAiService::validate` only forces
+`defaults.maxOutputTokens` is optional — `EdgionBackend::validate` only forces
 it when a credential declares `tokensPerMinute`. So the legal combination
 "`backendSelection: CostWeighted` + no service default + a client sending only
 `max_completion_tokens`" produced `AiDispatchError::InvalidConfiguration`, which

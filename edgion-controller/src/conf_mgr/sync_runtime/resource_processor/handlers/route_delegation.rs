@@ -29,8 +29,8 @@ use edgion_resources::resources::http_route::{
 
 /// `(group, kind, namespace(explicit), name)` of a Service backendRef.
 pub type ServiceBackendTuple = (Option<String>, Option<String>, Option<String>, String);
-/// `(group, kind, namespace(explicit), name)` of an EdgionAIService backendRef.
-pub type AiServiceBackendTuple = (Option<String>, Option<String>, Option<String>, String);
+/// `(group, kind, namespace(explicit), name)` of an EdgionBackend backendRef.
+pub type EdgionBackendTuple = (Option<String>, Option<String>, Option<String>, String);
 
 /// Maximum delegation chain depth (number of delegation edges from the root).
 pub const MAX_DELEGATION_DEPTH: usize = 8;
@@ -96,9 +96,9 @@ pub struct FlattenOutcome {
     /// `(group, kind, namespace(explicit), name)` of Service backendRefs in
     /// the flattened rules, for ServiceRefManager registration on the parent.
     pub service_backend_tuples: Vec<ServiceBackendTuple>,
-    /// EdgionAIService backendRefs in flattened rules, with the declaring
+    /// EdgionBackend backendRefs in flattened rules, with the declaring
     /// child namespace made explicit for the parent's reverse-ref index.
-    pub ai_service_backend_tuples: Vec<AiServiceBackendTuple>,
+    pub backend_tuples: Vec<EdgionBackendTuple>,
     /// Namespaces referenced cross-namespace by flattened Service backendRefs
     /// (target ns ≠ declaring child ns), for CrossNsRefManager registration on
     /// the parent so ReferenceGrant changes requeue it.
@@ -119,7 +119,7 @@ impl FlattenOutcome {
             named_children: HashSet::new(),
             wildcard_namespaces: HashSet::new(),
             service_backend_tuples: Vec::new(),
-            ai_service_backend_tuples: Vec::new(),
+            backend_tuples: Vec::new(),
             cross_ns_target_namespaces: HashSet::new(),
             expanded_children: HashSet::new(),
         }
@@ -164,7 +164,7 @@ struct FlattenCtx<'a> {
     named_children: HashSet<String>,
     wildcard_namespaces: HashSet<String>,
     service_backend_tuples: Vec<ServiceBackendTuple>,
-    ai_service_backend_tuples: Vec<AiServiceBackendTuple>,
+    backend_tuples: Vec<EdgionBackendTuple>,
     cross_ns_target_namespaces: HashSet<String>,
     expanded_children: HashSet<String>,
     /// Route keys on the current DFS path (root first), for cycle detection.
@@ -198,7 +198,7 @@ pub fn flatten_route(parent: &HTTPRoute, lookup: &dyn DelegationLookup) -> Flatt
         named_children: HashSet::new(),
         wildcard_namespaces: HashSet::new(),
         service_backend_tuples: Vec::new(),
-        ai_service_backend_tuples: Vec::new(),
+        backend_tuples: Vec::new(),
         cross_ns_target_namespaces: HashSet::new(),
         expanded_children: HashSet::new(),
         path: vec![parent_key],
@@ -276,7 +276,7 @@ pub fn flatten_route(parent: &HTTPRoute, lookup: &dyn DelegationLookup) -> Flatt
         named_children: ctx.named_children,
         wildcard_namespaces: ctx.wildcard_namespaces,
         service_backend_tuples: ctx.service_backend_tuples,
-        ai_service_backend_tuples: ctx.ai_service_backend_tuples,
+        backend_tuples: ctx.backend_tuples,
         cross_ns_target_namespaces: ctx.cross_ns_target_namespaces,
         expanded_children: ctx.expanded_children,
     }
@@ -965,7 +965,7 @@ fn collect_backend_tuples(ctx: &mut FlattenCtx, implicit_ns: &str, rule: &HTTPRo
         );
         match br.backend_kind() {
             HTTPBackendRefKind::Service => ctx.service_backend_tuples.push(tuple),
-            HTTPBackendRefKind::EdgionAIService => ctx.ai_service_backend_tuples.push(tuple),
+            HTTPBackendRefKind::EdgionBackend => ctx.backend_tuples.push(tuple),
             HTTPBackendRefKind::RouteDelegation | HTTPBackendRefKind::Unsupported => {}
         }
     }

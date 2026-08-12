@@ -1,15 +1,15 @@
 # AI Gateway 快速开始
 
-创建 Secret、一个或多个 `EdgionAIService`、Rule 级 `AiProxy` 插件和 HTTPRoute，然后让
+创建 Secret、一个或多个 `EdgionBackend`、Rule 级 `AiProxy` 插件和 HTTPRoute，然后让
 OpenAI SDK 指向该 Route hostname。
 
 ## 最短路径
 
 1. 把提供商密钥写入 Secret，键名为 `api-key`。
-2. 创建 `EdgionAIService`，引用该 Secret，并声明至少一个模型（及可选的客户端别名）。
+2. 创建 `EdgionBackend`，引用该 Secret，并声明至少一个模型（及可选的客户端别名）。
 3. 创建恰好启用一个 `AiProxy` 的 `EdgionPlugins`。
 4. 通过 `ExtensionRef` 把该插件挂到 HTTPRoute Rule，且该 Rule 只转发到
-   `edgion.io/EdgionAIService`。
+   `edgion.io/EdgionBackend`。
 5. 用任意兼容 OpenAI 的客户端调用 `/v1/chat/completions`。
 
 ```python
@@ -57,42 +57,44 @@ stringData:
   api-key: replace-with-fallback-provider-key
 ---
 apiVersion: edgion.io/v1
-kind: EdgionAIService
+kind: EdgionBackend
 metadata:
   name: primary-provider
   namespace: production
 spec:
-  provider: OpenAI
-  credentialPool:
-    credentials:
-      - name: primary-account
-        secretRef:
-          name: primary-key
-  models:
-    - name: provider-chat-v2
-      aliases: [chat]
-  defaults:
-    streaming: true
-    maxOutputTokens: 4096
+  ai:
+    provider: OpenAI
+    credentialPool:
+      credentials:
+        - name: primary-account
+          secretRef:
+            name: primary-key
+    models:
+      - name: provider-chat-v2
+        aliases: [chat]
+    defaults:
+      streaming: true
+      maxOutputTokens: 4096
 ---
 apiVersion: edgion.io/v1
-kind: EdgionAIService
+kind: EdgionBackend
 metadata:
   name: fallback-provider
   namespace: production
 spec:
-  provider: Anthropic
-  credentialPool:
-    credentials:
-      - name: fallback-account
-        secretRef:
-          name: fallback-key
-  models:
-    - name: claude-example
-      aliases: [chat]
-  defaults:
-    streaming: true
-    maxOutputTokens: 4096
+  ai:
+    provider: Anthropic
+    credentialPool:
+      credentials:
+        - name: fallback-account
+          secretRef:
+            name: fallback-key
+    models:
+      - name: claude-example
+        aliases: [chat]
+    defaults:
+      streaming: true
+      maxOutputTokens: 4096
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -132,11 +134,11 @@ spec:
             name: ai-proxy
       backendRefs:
         - group: edgion.io
-          kind: EdgionAIService
+          kind: EdgionBackend
           name: primary-provider
           weight: 80
         - group: edgion.io
-          kind: EdgionAIService
+          kind: EdgionBackend
           name: fallback-provider
           weight: 20
       timeouts:

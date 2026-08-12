@@ -1,6 +1,6 @@
 //! EdgionBackendTrafficPolicy — per-destination traffic policy (LB algorithm,
 //! active health check, outlier detection, panic threshold) attached to
-//! Services or EdgionAIService resources via targetRefs. Design:
+//! Services or EdgionBackend resources via targetRefs. Design:
 //! docs/superpowers/specs/2026-07-10-edgion-backend-traffic-policy-design.md
 
 use super::circuit_breaker::CircuitBreakerConfig;
@@ -28,9 +28,14 @@ use std::fmt;
 )]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionBackendTrafficPolicySpec {
-    /// Homogeneous Service or EdgionAIService targets in the policy namespace.
+    /// Homogeneous Service or EdgionBackend targets in the policy namespace.
     #[schemars(length(min = 1))]
     pub target_refs: Vec<PolicyTargetRef>,
+    /// Controller-resolved homogeneous target capability. Input values are
+    /// cleared and recomputed before publication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_target_class: Option<ResolvedPolicyTargetClass>,
     /// Load-balancing algorithm and panic threshold. Service targets only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load_balancer: Option<LoadBalancerConfig>,
@@ -50,7 +55,7 @@ pub struct EdgionBackendTrafficPolicySpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_constraint: Option<RetryConstraintConfig>,
     /// Circuit breaker: hard cap on concurrent in-flight requests per Service
-    /// endpoint or per EdgionAIService. Absent = no concurrency cap.
+    /// endpoint or per EdgionBackend. Absent = no concurrency cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub circuit_breaker: Option<CircuitBreakerConfig>,
     /// Per-target connection tuning override. Currently only connectTimeout.
@@ -143,7 +148,7 @@ pub struct PolicyTargetRef {
     /// Group of the referent. Empty string (default) = core API group.
     #[serde(default)]
     pub group: String,
-    /// Kind of the referent: "Service" or "EdgionAIService".
+    /// Kind of the referent: "Service" or "EdgionBackend".
     pub kind: String,
     /// Name of the referent (same namespace as the policy).
     pub name: String,
@@ -153,21 +158,29 @@ pub struct PolicyTargetRef {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PolicyTargetKind {
     Service,
-    EdgionAIService,
+    EdgionBackend,
+}
+
+/// Controller-resolved capability for one atomically publishable policy.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ResolvedPolicyTargetClass {
+    Service,
+    Ai,
 }
 
 impl PolicyTargetKind {
     pub const fn group(self) -> &'static str {
         match self {
             Self::Service => "",
-            Self::EdgionAIService => "edgion.io",
+            Self::EdgionBackend => "edgion.io",
         }
     }
 
     pub const fn kind(self) -> &'static str {
         match self {
             Self::Service => "Service",
-            Self::EdgionAIService => "EdgionAIService",
+            Self::EdgionBackend => "EdgionBackend",
         }
     }
 }
@@ -201,9 +214,9 @@ impl PolicyTargetRef {
     pub fn target_kind(&self) -> Result<PolicyTargetKind, String> {
         match (self.group.as_str(), self.kind.as_str()) {
             ("" | "core", "Service") => Ok(PolicyTargetKind::Service),
-            ("edgion.io", "EdgionAIService") => Ok(PolicyTargetKind::EdgionAIService),
+            ("edgion.io", "EdgionBackend") => Ok(PolicyTargetKind::EdgionBackend),
             _ => Err(format!(
-                "targetRef {}/{} {}: supported targets are core-group Service or edgion.io/EdgionAIService",
+                "targetRef {}/{} {}: supported targets are core-group Service or edgion.io/EdgionBackend",
                 self.group, self.kind, self.name
             )),
         }
@@ -318,27 +331,27 @@ impl EdgionBackendTrafficPolicySpec {
             errors.push("targetRefs must all have the same target kind".to_string());
         }
 
-        let targets_ai_service = target_kinds.len() == 1 && target_kinds.contains(&PolicyTargetKind::EdgionAIService);
-        if targets_ai_service {
+        let targets_ai = target_kinds.len() == 1 && target_kinds.contains(&PolicyTargetKind::EdgionBackend);
+        if targets_ai {
             if self.target_refs.len() > 16 {
-                errors.push("EdgionAIService targetRefs must contain at most 16 entries".to_string());
+                errors.push("EdgionBackend targetRefs must contain at most 16 entries".to_string());
             }
             for (target_kind, target_name) in duplicate_targets {
                 errors.push(format!(
-                    "EdgionAIService targetRefs must not contain duplicate target {}/{} {}",
+                    "EdgionBackend targetRefs must not contain duplicate target {}/{} {}",
                     target_kind.group(),
                     target_kind.kind(),
                     target_name
                 ));
             }
             if self.load_balancer.is_some() {
-                errors.push("loadBalancer is not supported for EdgionAIService targets".to_string());
+                errors.push("loadBalancer is not supported for EdgionBackend targets".to_string());
             }
             if self.health_check.is_some() {
-                errors.push("healthCheck is not supported for EdgionAIService targets".to_string());
+                errors.push("healthCheck is not supported for EdgionBackend targets".to_string());
             }
             if self.upstream_authority.is_some() {
-                errors.push("upstreamAuthority is not supported for EdgionAIService targets".to_string());
+                errors.push("upstreamAuthority is not supported for EdgionBackend targets".to_string());
             }
         }
         if let Some(lb) = &self.load_balancer {
@@ -537,6 +550,18 @@ outlierDetection:
     }
 
     #[test]
+    fn resolved_target_class_is_transport_only_and_not_schema_visible() {
+        let forged: EdgionBackendTrafficPolicySpec =
+            serde_yaml::from_str("targetRefs:\n  - kind: Service\n    name: payments\nresolvedTargetClass: ai\n")
+                .expect("transport-shaped input can carry the marker for controller clearing tests");
+        assert_eq!(forged.resolved_target_class, Some(ResolvedPolicyTargetClass::Ai));
+        assert_eq!(serde_json::to_value(&forged).unwrap()["resolvedTargetClass"], "ai");
+
+        let schema = serde_json::to_value(schemars::schema_for!(EdgionBackendTrafficPolicySpec)).unwrap();
+        assert!(schema["properties"].get("resolvedTargetClass").is_none());
+    }
+
+    #[test]
     fn canonical_target_keys_preserve_target_type() {
         let service = PolicyTargetRef {
             group: "core".to_string(),
@@ -545,19 +570,19 @@ outlierDetection:
         }
         .canonical_key("app")
         .expect("core Service target");
-        let ai_service = PolicyTargetRef {
+        let ai_backend = PolicyTargetRef {
             group: "edgion.io".to_string(),
-            kind: "EdgionAIService".to_string(),
+            kind: "EdgionBackend".to_string(),
             name: "shared".to_string(),
         }
         .canonical_key("app")
-        .expect("EdgionAIService target");
+        .expect("EdgionBackend target");
 
         assert_eq!(service.target_kind, PolicyTargetKind::Service);
         assert_eq!(service.to_string(), "/Service/app/shared");
-        assert_eq!(ai_service.target_kind, PolicyTargetKind::EdgionAIService);
-        assert_eq!(ai_service.to_string(), "edgion.io/EdgionAIService/app/shared");
-        assert_ne!(service, ai_service);
+        assert_eq!(ai_backend.target_kind, PolicyTargetKind::EdgionBackend);
+        assert_eq!(ai_backend.to_string(), "edgion.io/EdgionBackend/app/shared");
+        assert_ne!(service, ai_backend);
     }
 
     #[test]
@@ -580,7 +605,7 @@ outlierDetection:
         assert!(duplicate_service.get_validation_errors().is_empty());
 
         let ai_refs =
-            (0..17).map(|index| format!("  - group: edgion.io\n    kind: EdgionAIService\n    name: ai-{index}"));
+            (0..17).map(|index| format!("  - group: edgion.io\n    kind: EdgionBackend\n    name: ai-{index}"));
         let too_many_ai: EdgionBackendTrafficPolicySpec =
             serde_yaml::from_str(&format!("targetRefs:\n{}", ai_refs.collect::<Vec<_>>().join("\n"))).unwrap();
         assert!(too_many_ai
@@ -589,7 +614,7 @@ outlierDetection:
             .any(|error| error.contains("at most 16")));
 
         let duplicate_ai: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
-            "targetRefs:\n  - group: edgion.io\n    kind: EdgionAIService\n    name: shared\n  - group: edgion.io\n    kind: EdgionAIService\n    name: shared",
+            "targetRefs:\n  - group: edgion.io\n    kind: EdgionBackend\n    name: shared\n  - group: edgion.io\n    kind: EdgionBackend\n    name: shared",
         )
         .unwrap();
         assert!(duplicate_ai
@@ -598,7 +623,7 @@ outlierDetection:
             .any(|error| error.contains("duplicate target")));
 
         let mixed: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
-            "targetRefs:\n  - kind: Service\n    name: backend\n  - group: edgion.io\n    kind: EdgionAIService\n    name: provider",
+            "targetRefs:\n  - kind: Service\n    name: backend\n  - group: edgion.io\n    kind: EdgionBackend\n    name: provider",
         )
         .unwrap();
         assert!(mixed
@@ -610,7 +635,7 @@ outlierDetection:
     #[test]
     fn ai_targets_enforce_policy_field_matrix() {
         let allowed: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
-            "targetRefs:\n  - group: edgion.io\n    kind: EdgionAIService\n    name: provider\nconnection:\n  connectTimeout: 2s\nretryConstraint: {}\ncircuitBreaker:\n  maxParallelRequests: 20\noutlierDetection:\n  consecutiveErrors: 5",
+            "targetRefs:\n  - group: edgion.io\n    kind: EdgionBackend\n    name: provider\nconnection:\n  connectTimeout: 2s\nretryConstraint: {}\ncircuitBreaker:\n  maxParallelRequests: 20\noutlierDetection:\n  consecutiveErrors: 5",
         )
         .unwrap();
         assert!(allowed.get_validation_errors().is_empty());
@@ -620,14 +645,13 @@ outlierDetection:
             "healthCheck:\n  active: {}",
             "upstreamAuthority:\n  pattern: '*.example.com'\n  template: '${ctx:tenant}.example.com'",
         ] {
-            let yaml = format!(
-                "targetRefs:\n  - group: edgion.io\n    kind: EdgionAIService\n    name: provider\n{forbidden}"
-            );
+            let yaml =
+                format!("targetRefs:\n  - group: edgion.io\n    kind: EdgionBackend\n    name: provider\n{forbidden}");
             let spec: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(&yaml).unwrap();
             assert!(
                 spec.get_validation_errors()
                     .iter()
-                    .any(|error| error.contains("not supported for EdgionAIService targets")),
+                    .any(|error| error.contains("not supported for EdgionBackend targets")),
                 "field must be rejected: {forbidden}"
             );
         }
@@ -842,6 +866,7 @@ outlierDetection:
                 kind: "Service".to_string(),
                 name: "sandbox-gw".to_string(),
             }],
+            resolved_target_class: None,
             load_balancer: None,
             health_check: hc.then(|| ServiceHealthCheck {
                 active: Some(ActiveHealthCheckConfig::default()),

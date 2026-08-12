@@ -33,7 +33,7 @@ pub use policy::{
 pub use port_resolver::resolve_target_port_key;
 pub use preload::preload_load_balancers;
 pub use selector::{get_backends_for_service_key, select_roundrobin_backend_key};
-pub use service_kind::EdgionService;
+pub use service_kind::ServiceBackendKind;
 pub use validation::validate_endpoint_in_route;
 
 use crate::link_sys::get_global_link_sys_store;
@@ -114,7 +114,7 @@ pub(crate) async fn try_get_peer(
     let backend_app_protocol = detect_backend_app_protocol_key(&service_key, br_port);
 
     match service_type {
-        EdgionService::Service => {
+        ServiceBackendKind::Service => {
             if !get_global_service_store().contains(&service_key) {
                 return Err(EdgionStatus::BackendServiceNotFound);
             }
@@ -143,7 +143,7 @@ pub(crate) async fn try_get_peer(
             )
         }
 
-        EdgionService::ServiceClusterIp => {
+        ServiceBackendKind::ServiceClusterIp => {
             let svc_store = get_global_service_store();
             let service = svc_store
                 .get(&service_key)
@@ -189,7 +189,7 @@ pub(crate) async fn try_get_peer(
             Ok(peer)
         }
 
-        EdgionService::ServiceExternalName => {
+        ServiceBackendKind::ServiceExternalName => {
             let svc_store = get_global_service_store();
             let service = svc_store
                 .get(&service_key)
@@ -309,11 +309,11 @@ pub(crate) async fn try_get_peer(
             }
         }
 
-        EdgionService::ServiceImport => Err(EdgionStatus::BackendServiceImportNotImplemented),
+        ServiceBackendKind::ServiceImport => Err(EdgionStatus::BackendServiceImportNotImplemented),
 
-        EdgionService::Unsupported(_) => Err(EdgionStatus::BackendUnsupportedKind),
+        ServiceBackendKind::Unsupported(_) => Err(EdgionStatus::BackendUnsupportedKind),
 
-        EdgionService::ServiceEndpointSlice => {
+        ServiceBackendKind::ServiceEndpointSlice => {
             // Only ConsistentHash consumes the client IP; skip the clone (and its
             // allocation) for the RR/LeastConn/Ewma hot paths.
             let client_ip = if matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {

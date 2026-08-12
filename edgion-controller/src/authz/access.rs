@@ -30,7 +30,7 @@ const RESOURCE_KINDS: [ResourceKind; 22] = [
     ResourceKind::EdgionAcme,
     ResourceKind::ConfigMap,
     ResourceKind::EdgionBackendTrafficPolicy,
-    ResourceKind::EdgionAIService,
+    ResourceKind::EdgionBackend,
 ];
 
 /// Compile-time guard that `RESOURCE_KINDS` still covers every `ResourceKind`.
@@ -69,7 +69,7 @@ const fn _resource_kinds_catalog_is_exhaustive(kind: ResourceKind) {
         | ResourceKind::EdgionAcme
         | ResourceKind::ConfigMap
         | ResourceKind::EdgionBackendTrafficPolicy
-        | ResourceKind::EdgionAIService => {}
+        | ResourceKind::EdgionBackend => {}
     }
 }
 

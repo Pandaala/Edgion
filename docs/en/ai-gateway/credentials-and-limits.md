@@ -1,6 +1,6 @@
 # Credentials and Limits
 
-Each `EdgionAIService` owns a credential pool for one provider endpoint. Credentials are
+Each `EdgionBackend` owns a credential pool for one provider endpoint. Credentials are
 Secret-backed; only configured aliases appear in status and access logs.
 
 ## Credential parameters
@@ -14,7 +14,7 @@ Secret-backed; only configured aliases appear in status and access logs.
 | `credentials[].limits.requestsPerMinute` | Integer | none | Optional distributed RPM limit |
 | `credentials[].limits.tokensPerMinute` | Integer | none | Optional distributed TPM limit |
 
-Never put provider keys in EdgionAIService, EdgionPlugins, HTTPRoute, or application configuration.
+Never put provider keys in EdgionBackend, EdgionPlugins, HTTPRoute, or application configuration.
 
 ## Redis requirements
 

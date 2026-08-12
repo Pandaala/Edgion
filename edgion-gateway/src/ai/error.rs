@@ -9,7 +9,7 @@ use crate::plugins::runtime::PluginSession;
 pub enum AiProxyError {
     ModelNotFound,
     StreamingDisabled,
-    ServiceUnavailable,
+    BackendUnavailable,
     MalformedBody,
     UnsupportedParameter,
     MissingRequiredParameter,
@@ -30,13 +30,13 @@ impl AiProxyError {
             ),
             Self::StreamingDisabled => (
                 400,
-                "Streaming is not enabled for this AI service.",
+                "Streaming is not enabled for this AI backend.",
                 "invalid_request_error",
                 "streaming_not_supported",
             ),
-            Self::ServiceUnavailable => (
+            Self::BackendUnavailable => (
                 503,
-                "The AI service is temporarily unavailable.",
+                "The AI backend is temporarily unavailable.",
                 "api_error",
                 "service_unavailable",
             ),
@@ -48,19 +48,19 @@ impl AiProxyError {
             ),
             Self::UnsupportedParameter => (
                 400,
-                "The request contains a parameter that is not supported by this AI service.",
+                "The request contains a parameter that is not supported by this AI backend.",
                 "invalid_request_error",
                 "unsupported_parameter",
             ),
             Self::MissingRequiredParameter => (
                 400,
-                "The request is missing a parameter required by this AI service.",
+                "The request is missing a parameter required by this AI backend.",
                 "invalid_request_error",
                 "missing_required_parameter",
             ),
             Self::UnsupportedEndpoint => (
                 404,
-                "This AI service supports only the Chat Completions endpoint.",
+                "This AI backend supports only the Chat Completions endpoint.",
                 "invalid_request_error",
                 "unsupported_endpoint",
             ),
@@ -161,7 +161,7 @@ mod tests {
                 "streaming_not_supported",
             ),
             (
-                AiProxyError::ServiceUnavailable,
+                AiProxyError::BackendUnavailable,
                 503,
                 "api_error",
                 "service_unavailable",
