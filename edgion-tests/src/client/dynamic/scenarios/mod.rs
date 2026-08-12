@@ -2,6 +2,7 @@
 
 pub mod ai_backend_lifecycle;
 pub mod ai_backend_secret_rotation;
+pub mod ai_backend_weighted;
 pub mod basic_auth_dynamic;
 pub mod body_dynamic;
 pub mod btlsp_ref_flap;

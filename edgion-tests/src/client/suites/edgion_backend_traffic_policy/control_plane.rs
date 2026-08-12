@@ -99,6 +99,27 @@ async fn cleanup_policies(ctx: &TestContext, names: &[&str]) {
     }
 }
 
+fn service_yaml(name: &str) -> String {
+    format!(
+        "apiVersion: v1\nkind: Service\nmetadata:\n  name: {name}\n  namespace: {NS}\nspec:\n  ports:\n    - port: 8080\n      protocol: TCP\n"
+    )
+}
+
+async fn prepare_services(ctx: &TestContext, names: &[&str]) -> Result<(), String> {
+    for name in names {
+        ctx.apply_yaml(&service_yaml(name))
+            .await
+            .map_err(|e| format!("apply Service {name} failed: {e}"))?;
+    }
+    Ok(())
+}
+
+async fn cleanup_services(ctx: &TestContext, names: &[&str]) {
+    for name in names {
+        let _ = ctx.delete_resource("Service", NS, name).await;
+    }
+}
+
 impl EdgionBackendTrafficPolicyTestSuite {
     // (3) LB algorithm selection: each LB type resolves into the gateway
     // store's lb_policies map, and a service with no policy has no entry
@@ -112,7 +133,12 @@ impl EdgionBackendTrafficPolicyTestSuite {
                     let start = Instant::now();
                     let client = admin_client();
                     let names = ["ebtp-lc-policy", "ebtp-ewma-policy", "ebtp-ch-policy"];
+                    let services = ["ebtp-lc-svc", "ebtp-ewma-svc", "ebtp-ch-svc", "ebtp-nopolicy-svc"];
                     cleanup_policies(&ctx, &names).await;
+                    if let Err(e) = prepare_services(&ctx, &services).await {
+                        cleanup_services(&ctx, &services).await;
+                        return TestResult::failed(start.elapsed(), e);
+                    }
 
                     let apply = [
                         lb_policy_yaml("ebtp-lc-policy", "ebtp-lc-svc", "  loadBalancer:\n    type: LeastConn\n"),
@@ -126,6 +152,7 @@ impl EdgionBackendTrafficPolicyTestSuite {
                     for y in &apply {
                         if let Err(e) = ctx.apply_yaml(y).await {
                             cleanup_policies(&ctx, &names).await;
+                            cleanup_services(&ctx, &services).await;
                             return TestResult::failed(start.elapsed(), format!("apply failed: {}", e));
                         }
                     }
@@ -146,6 +173,7 @@ impl EdgionBackendTrafficPolicyTestSuite {
                         poll_lb(&client, &service_key("ebtp-nopolicy-svc"), |v| v.is_none(), 5).await;
 
                     cleanup_policies(&ctx, &names).await;
+                    cleanup_services(&ctx, &services).await;
 
                     if ok_lc && ok_ewma && ok_ch && ok_none {
                         TestResult::passed_with_message(
@@ -186,17 +214,24 @@ impl EdgionBackendTrafficPolicyTestSuite {
                     let winner = "ebtp-conflict-a-win";
                     let loser = "ebtp-conflict-z-lose";
                     cleanup_policies(&ctx, &[winner, loser]).await;
+                    if let Err(e) = prepare_services(&ctx, &[svc]).await {
+                        cleanup_services(&ctx, &[svc]).await;
+                        return TestResult::failed(start.elapsed(), e);
+                    }
 
                     // Apply winner (Ewma) first.
                     if let Err(e) = ctx
                         .apply_yaml(&lb_policy_yaml(winner, svc, "  loadBalancer:\n    type: Ewma\n"))
                         .await
                     {
+                        cleanup_policies(&ctx, &[winner, loser]).await;
+                        cleanup_services(&ctx, &[svc]).await;
                         return TestResult::failed(start.elapsed(), format!("apply winner failed: {}", e));
                     }
                     let (ok_w, _) = poll_lb(&client, &service_key(svc), |v| v == Some("Ewma"), 30).await;
                     if !ok_w {
                         cleanup_policies(&ctx, &[winner, loser]).await;
+                        cleanup_services(&ctx, &[svc]).await;
                         return TestResult::failed(
                             start.elapsed(),
                             "winner policy did not resolve to Ewma".to_string(),
@@ -209,12 +244,14 @@ impl EdgionBackendTrafficPolicyTestSuite {
                         .await
                     {
                         cleanup_policies(&ctx, &[winner, loser]).await;
+                        cleanup_services(&ctx, &[svc]).await;
                         return TestResult::failed(start.elapsed(), format!("apply loser failed: {}", e));
                     }
                     // Give the conflict a chance to (wrongly) flip, then assert Ewma held.
                     let (still_ewma, got) = poll_lb(&client, &service_key(svc), |v| v == Some("Ewma"), 10).await;
                     if !still_ewma {
                         cleanup_policies(&ctx, &[winner, loser]).await;
+                        cleanup_services(&ctx, &[svc]).await;
                         return TestResult::failed(
                             start.elapsed(),
                             format!("oldest-wins violated: expected Ewma held, got {:?}", got),
@@ -224,11 +261,13 @@ impl EdgionBackendTrafficPolicyTestSuite {
                     // Delete the winner -> the loser (LeastConn) is promoted.
                     if let Err(e) = ctx.delete_resource(KIND, NS, winner).await {
                         cleanup_policies(&ctx, &[winner, loser]).await;
+                        cleanup_services(&ctx, &[svc]).await;
                         return TestResult::failed(start.elapsed(), format!("delete winner failed: {}", e));
                     }
                     let (promoted, got_p) = poll_lb(&client, &service_key(svc), |v| v == Some("LeastConn"), 30).await;
 
                     cleanup_policies(&ctx, &[winner, loser]).await;
+                    cleanup_services(&ctx, &[svc]).await;
 
                     if promoted {
                         TestResult::passed_with_message(
@@ -258,17 +297,24 @@ impl EdgionBackendTrafficPolicyTestSuite {
                     let name = "ebtp-hot-policy";
                     let svc = "ebtp-hot-svc";
                     cleanup_policies(&ctx, &[name]).await;
+                    if let Err(e) = prepare_services(&ctx, &[svc]).await {
+                        cleanup_services(&ctx, &[svc]).await;
+                        return TestResult::failed(start.elapsed(), e);
+                    }
 
                     // Create -> LeastConn.
                     if let Err(e) = ctx
                         .apply_yaml(&lb_policy_yaml(name, svc, "  loadBalancer:\n    type: LeastConn\n"))
                         .await
                     {
+                        cleanup_policies(&ctx, &[name]).await;
+                        cleanup_services(&ctx, &[svc]).await;
                         return TestResult::failed(start.elapsed(), format!("create apply failed: {}", e));
                     }
                     let (created, _) = poll_lb(&client, &service_key(svc), |v| v == Some("LeastConn"), 30).await;
                     if !created {
                         cleanup_policies(&ctx, &[name]).await;
+                        cleanup_services(&ctx, &[svc]).await;
                         return TestResult::failed(start.elapsed(), "create did not resolve to LeastConn".to_string());
                     }
 
@@ -278,19 +324,23 @@ impl EdgionBackendTrafficPolicyTestSuite {
                         .await
                     {
                         cleanup_policies(&ctx, &[name]).await;
+                        cleanup_services(&ctx, &[svc]).await;
                         return TestResult::failed(start.elapsed(), format!("edit apply failed: {}", e));
                     }
                     let (edited, _) = poll_lb(&client, &service_key(svc), |v| v == Some("Ewma"), 30).await;
                     if !edited {
                         cleanup_policies(&ctx, &[name]).await;
+                        cleanup_services(&ctx, &[svc]).await;
                         return TestResult::failed(start.elapsed(), "edit did not flip store to Ewma".to_string());
                     }
 
                     // Delete -> entry removed (RoundRobin default).
                     if let Err(e) = ctx.delete_resource(KIND, NS, name).await {
+                        cleanup_services(&ctx, &[svc]).await;
                         return TestResult::failed(start.elapsed(), format!("delete failed: {}", e));
                     }
                     let (deleted, got) = poll_lb(&client, &service_key(svc), |v| v.is_none(), 30).await;
+                    cleanup_services(&ctx, &[svc]).await;
 
                     if deleted {
                         TestResult::passed_with_message(
@@ -323,9 +373,15 @@ impl EdgionBackendTrafficPolicyTestSuite {
                     let name = "ebtp-full-policy";
                     let svc = "ebtp-full-svc";
                     cleanup_policies(&ctx, &[name]).await;
+                    if let Err(e) = prepare_services(&ctx, &[svc]).await {
+                        cleanup_services(&ctx, &[svc]).await;
+                        return TestResult::failed(start.elapsed(), e);
+                    }
 
                     let body = "  loadBalancer:\n    type: LeastConn\n    panicThreshold: 40\n  healthCheck:\n    active:\n      type: http\n      path: /health\n      interval: 1s\n      expectedStatuses:\n        - 200\n  outlierDetection:\n    consecutiveErrors: 3\n    ejectionTime: 3s\n";
                     if let Err(e) = ctx.apply_yaml(&lb_policy_yaml(name, svc, body)).await {
+                        cleanup_policies(&ctx, &[name]).await;
+                        cleanup_services(&ctx, &[svc]).await;
                         return TestResult::failed(start.elapsed(), format!("apply failed: {}", e));
                     }
 
@@ -333,12 +389,14 @@ impl EdgionBackendTrafficPolicyTestSuite {
                     let (synced, _) = poll_lb(&client, &service_key(svc), |v| v == Some("LeastConn"), 30).await;
                     if !synced {
                         cleanup_policies(&ctx, &[name]).await;
+                        cleanup_services(&ctx, &[svc]).await;
                         return TestResult::failed(start.elapsed(), "policy did not sync to the gateway".to_string());
                     }
 
                     // Assert the full spec round-tripped via the configclient list.
                     let listed = gw_get_json(&client, "/configclient/edgionbackendtrafficpolicy/list").await;
                     cleanup_policies(&ctx, &[name]).await;
+                    cleanup_services(&ctx, &[svc]).await;
                     let listed = match listed {
                         Ok(v) => v,
                         Err(e) => return TestResult::failed(start.elapsed(), e),
@@ -360,18 +418,19 @@ impl EdgionBackendTrafficPolicyTestSuite {
                     let has_hc = p.pointer("/spec/healthCheck/active").is_some();
                     let has_od = p.pointer("/spec/outlierDetection").is_some();
                     let has_pt = p.pointer("/spec/loadBalancer/panicThreshold").is_some();
-                    if has_hc && has_od && has_pt {
+                    let resolved_as_service =
+                        p.pointer("/spec/resolvedTargetClass").and_then(Value::as_str) == Some("service");
+                    if has_hc && has_od && has_pt && resolved_as_service {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "full policy round-tripped: healthCheck+outlierDetection+panicThreshold all present"
-                                .to_string(),
+                            "full policy round-tripped with service target marker: healthCheck+outlierDetection+panicThreshold all present".to_string(),
                         )
                     } else {
                         TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "synced policy missing sections: healthCheck={}, outlierDetection={}, panicThreshold={}",
-                                has_hc, has_od, has_pt
+                                "synced policy mismatch: healthCheck={}, outlierDetection={}, panicThreshold={}, resolvedTargetClass=service:{}",
+                                has_hc, has_od, has_pt, resolved_as_service
                             ),
                         )
                     }

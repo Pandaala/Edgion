@@ -41,13 +41,14 @@ fn ai_candidate_spec(backend: &crate::routes::http::match_unit::CompiledBackend)
 fn gate_candidate(
     order: usize,
     backend: &crate::routes::http::match_unit::CompiledBackend,
+    runtime_available: bool,
 ) -> Result<RouteCandidate, ()> {
     Ok(RouteCandidate {
         slot: u8::try_from(backend.slot).map_err(|_| ())?,
         order: u8::try_from(order).map_err(|_| ())?,
         weight: backend.schema.weight.unwrap_or(1),
         eligibility: CandidateEligibility {
-            valid_ref: backend.is_permitted_ai_backend(),
+            valid_ref: backend.is_permitted_ai_backend() && runtime_available,
             ..CandidateEligibility::default()
         },
         adaptive: Default::default(),
@@ -134,9 +135,17 @@ impl AiProxy {
             return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
         }
 
+        // Capture one runtime generation before the conformance gate. A
+        // syntactically valid EdgionBackend ref whose current runtime object is
+        // missing/unresolved remains an invalid weighted slot; its share must
+        // fail closed instead of being redistributed to healthy candidates.
+        let snapshot = store.snapshot();
         let mut gate_candidates = Vec::with_capacity(backends.len());
         for (order, backend) in backends.iter().enumerate() {
-            let Ok(candidate) = gate_candidate(order, backend) else {
+            let runtime_available = ai_candidate_spec(backend)
+                .and_then(|(_, _, key)| snapshot.get_by_key(&key))
+                .is_some();
+            let Ok(candidate) = gate_candidate(order, backend, runtime_available) else {
                 return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
             };
             gate_candidates.push(candidate);
@@ -169,7 +178,6 @@ impl AiProxy {
             Err(error) => return Self::reject(session, log, "request-invalid", error),
         };
 
-        let snapshot = store.snapshot();
         let policy_store = get_backend_traffic_policy_store();
         let adaptive_store = get_adaptive_telemetry_store();
         let candidate_specs: Vec<_> = backends.iter().filter_map(ai_candidate_spec).collect();
@@ -707,13 +715,20 @@ mod tests {
 
         assert!(!denied.is_permitted_ai_backend());
         assert!(allowed.is_permitted_ai_backend());
-        let gate_candidates = [gate_candidate(0, &denied).unwrap()];
+        let gate_candidates = [gate_candidate(0, &denied, false).unwrap()];
         assert_eq!(invalid_weight_gate(&gate_candidates, 0), Ok(ConformanceGate::Invalid));
         assert!(ai_candidate_spec(&denied).is_none());
         assert_eq!(
             ai_candidate_spec(&allowed),
             Some((0, 1, "tenant-b/provider".to_string()))
         );
+    }
+
+    #[test]
+    fn missing_runtime_backend_keeps_its_invalid_weight_share() {
+        let declared = compiled_ai_backend(None);
+        let gate_candidates = [gate_candidate(0, &declared, false).unwrap()];
+        assert_eq!(invalid_weight_gate(&gate_candidates, 0), Ok(ConformanceGate::Invalid));
     }
 
     #[test]
