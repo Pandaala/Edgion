@@ -21,6 +21,7 @@ use crate::ai::{
     AdaptiveTelemetryStore, AiAttemptPlan, AiBackendStore, AiCandidateModel, AiPlanCandidate, AiPlanError,
     AiProxyError, ReadyAiAttemptPlan,
 };
+use crate::backends::policy::backend_tls::get_global_backend_tls_policy_store;
 use crate::backends::policy::backend_traffic::get_backend_traffic_policy_store;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::routes::http::match_unit::CompiledBackendTarget;
@@ -333,6 +334,8 @@ impl AiProxy {
         }
 
         let policy_store = get_backend_traffic_policy_store();
+        let policy_snapshot = policy_store.snapshot();
+        let backend_tls_snapshot = get_global_backend_tls_policy_store().snapshot();
         let adaptive_store = get_adaptive_telemetry_store();
         let candidate_specs: Vec<_> = backends
             .iter()
@@ -358,17 +361,19 @@ impl AiProxy {
             .zip(resolved)
             .enumerate()
             .map(|(order, ((logical, slot, weight, backend_key), backend))| {
-                let (namespace, name) = backend_key.split_once('/').unwrap_or(("", backend_key.as_str()));
-                let target = PolicyTargetKey {
-                    target_kind: PolicyTargetKind::EdgionBackend,
-                    namespace: namespace.to_string(),
-                    name: name.to_string(),
-                };
-                let effective_policy = policy_store.get_effective(&target);
+                let target = logical.policy_target_key();
+                let effective_policy = target.as_ref().and_then(|target| policy_snapshot.get_effective(target));
+                let backend_tls_policy = target
+                    .as_ref()
+                    .and_then(|target| backend_tls_snapshot.get_policy(target, None));
                 let outlier_generation = effective_policy
                     .as_ref()
                     .and_then(|policy| policy.ai_credential_outlier.clone())
-                    .or_else(|| snapshot.credential_outlier_handle(&target));
+                    .or_else(|| {
+                        target
+                            .as_ref()
+                            .and_then(|target| snapshot.credential_outlier_handle(target))
+                    });
                 let credential_outliers = backend
                     .as_ref()
                     .map(|backend| {
@@ -393,6 +398,7 @@ impl AiProxy {
                     backend,
                     model: None,
                     effective_policy,
+                    backend_tls_policy,
                     adaptive: None,
                     credential_outliers,
                 }
@@ -1155,6 +1161,7 @@ mod tests {
             backend: Some(backend),
             model: None,
             effective_policy: None,
+            backend_tls_policy: None,
             adaptive: None,
             credential_outliers: Vec::new(),
         }];

@@ -2,8 +2,9 @@
 //!
 //! Handles BackendTLSPolicy resources with Gateway API standard status management.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use k8s_openapi::ByteString;
 
@@ -14,30 +15,75 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 };
 use chrono::{DateTime, Utc};
 use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
-use edgion_resources::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3};
+use edgion_resources::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3, EdgionBackend};
 use edgion_resources::resources::backend_tls_policy::{
     BackendTLSPolicyCACertificateRef, BackendTLSPolicyStatus, BackendTLSPolicyTargetRef, BtpSpecView,
 };
 use edgion_resources::resources::common::{is_core_api_group, ParentReference, PolicyAncestorStatus};
-use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+use edgion_resources::resources::edgion_backend_traffic_policy::{
+    PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass,
+};
 use edgion_resources::ResourceKind;
 
-fn ebtp_service_target_key(namespace: &str, name: &str) -> String {
+#[cfg(test)]
+fn service_target_key(namespace: &str, name: &str) -> PolicyTargetKey {
     PolicyTargetKey {
         target_kind: PolicyTargetKind::Service,
         namespace: namespace.to_string(),
         name: name.to_string(),
     }
-    .to_string()
 }
 
 fn btp_target_base_key(key: &str) -> &str {
     key.split("::").next().unwrap_or(key)
 }
 
-fn ebtp_service_target_key_from_btp_key(key: &str) -> Option<String> {
-    let (namespace, name) = btp_target_base_key(key).split_once('/')?;
-    Some(ebtp_service_target_key(namespace, name))
+#[derive(Default)]
+struct PolicyTargetEvaluation {
+    target: Option<PolicyTargetKey>,
+    target_class: Option<ResolvedPolicyTargetClass>,
+    missing_targets: BTreeSet<PolicyTargetKey>,
+    errors: Vec<String>,
+}
+
+fn raw_service_exists(target: &PolicyTargetKey, ctx: &HandlerContext) -> bool {
+    let Some(processor) = ctx.runtime().processor_registry.get("Service") else {
+        return true;
+    };
+    processor
+        .get_raw_any(&format!("{}/{}", target.namespace, target.name))
+        .and_then(|raw| raw.downcast::<Service>().ok())
+        .is_some()
+}
+
+fn raw_backend_capability(
+    target: &PolicyTargetKey,
+    ctx: &HandlerContext,
+) -> Result<Option<ResolvedPolicyTargetClass>, String> {
+    let Some(processor) = ctx.runtime().processor_registry.get("EdgionBackend") else {
+        return Ok(Some(ResolvedPolicyTargetClass::Ai));
+    };
+    let key = format!("{}/{}", target.namespace, target.name);
+    let Some(raw) = processor.get_raw_any(&key) else {
+        return Ok(None);
+    };
+    let backend = raw
+        .downcast::<EdgionBackend>()
+        .map_err(|_| format!("EdgionBackend {key} has an incompatible cached representation"))?;
+    let Some(ai) = backend.spec.ai.as_ref() else {
+        return Err(format!(
+            "EdgionBackend {key} does not configure a supported spec.ai variant"
+        ));
+    };
+    let endpoint = ai
+        .effective_endpoint()
+        .map_err(|_| format!("EdgionBackend {key} has an invalid AI endpoint"))?;
+    if endpoint.scheme() != "https" {
+        return Err(format!(
+            "EdgionBackend {key} must use an HTTPS endpoint for BackendTLSPolicy"
+        ));
+    }
+    Ok(Some(ResolvedPolicyTargetClass::Ai))
 }
 
 /// Decide whether sibling BackendTLSPolicies (those targeting the same
@@ -89,12 +135,14 @@ fn should_requeue_siblings(
 async fn requeue_dependent_ebtps(meta: &ObjectMeta, target_refs: &[BackendTLSPolicyTargetRef], ctx: &HandlerContext) {
     let ns = meta.namespace.as_deref().unwrap_or("default");
     for target_ref in target_refs {
-        let target_key = ebtp_service_target_key(ns, &target_ref.name);
+        let Ok(target_key) = target_ref.canonical_key(ns) else {
+            continue;
+        };
         for ebtp_ref in ctx
             .runtime()
             .edgion_backend_traffic_policy
             .target_mgr()
-            .get_refs(&target_key)
+            .get_refs(&target_key.to_string())
         {
             ctx.requeue(ebtp_ref.kind_str(), ebtp_ref.resource_key()).await;
         }
@@ -122,6 +170,10 @@ impl BackendTlsPolicyHandler {
     fn validate_policy<S: BtpSpecView>(&self, spec: &S) -> Vec<String> {
         let mut errors = Vec::new();
 
+        if spec.target_refs().len() != 1 {
+            errors.push("targetRefs must contain exactly one targetRef".to_string());
+        }
+
         let validation = spec.validation();
         let has_ca_refs = validation
             .ca_certificate_refs
@@ -137,7 +189,90 @@ impl BackendTlsPolicyHandler {
             errors.push("must specify either caCertificateRefs or wellKnownCACertificates".to_string());
         }
 
+        if let Some(refs) = &validation.ca_certificate_refs {
+            for ca_ref in refs {
+                if ca_ref.namespace.is_some() {
+                    errors.push(format!(
+                        "caCertificateRef {}/{} must not specify namespace; BackendTLSPolicy references are same-namespace",
+                        ca_ref.kind, ca_ref.name
+                    ));
+                }
+            }
+        }
+
         errors
+    }
+
+    fn evaluate_target<S: BtpSpecView>(
+        &self,
+        meta: &ObjectMeta,
+        spec: &S,
+        ctx: &HandlerContext,
+    ) -> PolicyTargetEvaluation {
+        let mut evaluation = PolicyTargetEvaluation {
+            errors: self.validate_policy(spec),
+            ..PolicyTargetEvaluation::default()
+        };
+        if spec.target_refs().len() != 1 {
+            return evaluation;
+        }
+
+        let namespace = meta.namespace.as_deref().unwrap_or("default");
+        let target_ref = &spec.target_refs()[0];
+        let target = match target_ref.canonical_key(namespace) {
+            Ok(target) => target,
+            Err(error) => {
+                evaluation.errors.push(error);
+                return evaluation;
+            }
+        };
+        if target.target_kind == PolicyTargetKind::EdgionBackend && target_ref.section_name.is_some() {
+            evaluation
+                .errors
+                .push("sectionName is not supported for EdgionBackend targets".to_string());
+        }
+
+        match target.target_kind {
+            PolicyTargetKind::Service => {
+                if raw_service_exists(&target, ctx) {
+                    evaluation.target_class = Some(ResolvedPolicyTargetClass::Service);
+                } else {
+                    evaluation.missing_targets.insert(target.clone());
+                }
+            }
+            PolicyTargetKind::EdgionBackend => match raw_backend_capability(&target, ctx) {
+                Ok(Some(class)) => evaluation.target_class = Some(class),
+                Ok(None) => {
+                    evaluation.missing_targets.insert(target.clone());
+                }
+                Err(error) => evaluation.errors.push(error),
+            },
+        }
+        evaluation.target = Some(target);
+        if !evaluation.errors.is_empty() || !evaluation.missing_targets.is_empty() {
+            evaluation.target_class = None;
+        }
+        evaluation
+    }
+
+    fn all_runtime_refs_resolved<S: BtpSpecView>(spec: &S) -> bool {
+        let ca_resolved = spec.use_system_ca()
+            || spec.validation().ca_certificate_refs.as_ref().is_some_and(|refs| {
+                !refs.is_empty()
+                    && refs.iter().all(|ca_ref| {
+                        (Self::is_secret_ref(ca_ref) || Self::is_configmap_ref(ca_ref))
+                            && ca_ref.namespace.is_none()
+                            && Self::is_ca_resolved(spec, &ca_ref.name)
+                    })
+            });
+        let client_resolved = match spec.client_certificate_secret_ref() {
+            Ok(Some(_)) => spec
+                .resolved_client_certificate()
+                .is_some_and(Self::secret_has_client_cert_pair),
+            Ok(None) => true,
+            Err(_) => false,
+        };
+        ca_resolved && client_resolved
     }
 
     async fn parse_policy(&self, mut btp: BackendTLSPolicy, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicy> {
@@ -146,18 +281,6 @@ impl BackendTlsPolicyHandler {
             btp.metadata.namespace.clone(),
             btp.metadata.name.clone().unwrap_or_default(),
         );
-
-        // Gateway API v1.5 restricts BackendTLSPolicy to a single targetRef.
-        // Warn if multiple are provided; only the first will be effective for matching.
-        if btp.spec.target_refs.len() > 1 {
-            tracing::warn!(
-                policy = %resource_ref.key(),
-                count = btp.spec.target_refs.len(),
-                "BackendTLSPolicy has {} targetRefs, but Gateway API v1.5 requires exactly one; \
-                 only the first targetRef is guaranteed to be conformant",
-                btp.spec.target_refs.len()
-            );
-        }
 
         // --- Conflict detection: register target refs ---
         // The snapshot → clear → re-register sequence below is not atomic at
@@ -180,72 +303,38 @@ impl BackendTlsPolicyHandler {
         let policy_resource_key = resource_ref.resource_key();
         let old_timestamp = ctx.runtime().backend_tls_policy.timestamp_of(&policy_resource_key);
 
-        // Clear old target registrations and re-register with current targetRefs.
+        // Clear every controller-owned staging field and dependency edge before
+        // rebuilding the current generation. A delete->create coalesced by the
+        // workqueue must not retain a previous target, marker, or Secret.
         target_manager.clear_resource_refs(&resource_ref);
-
-        let policy_ns_str = btp.metadata.namespace.as_deref().unwrap_or("default");
-        let mut new_target_keys = Vec::with_capacity(btp.spec.target_refs.len());
-        for target_ref in &btp.spec.target_refs {
-            let target_key =
-                make_target_conflict_key(policy_ns_str, &target_ref.name, target_ref.section_name.as_deref());
-            target_manager.add_ref(target_key.clone(), resource_ref.clone());
-            new_target_keys.push(target_key);
-        }
-        new_target_keys.sort();
-
-        // Store creation timestamp for conflict precedence sorting.
-        let new_timestamp = btp.metadata.creation_timestamp.as_ref().map(|t| t.0);
-        ctx.runtime()
-            .backend_tls_policy
-            .set_timestamp(&policy_resource_key, new_timestamp);
-
-        // Requeue siblings only when a precedence-relevant input changed
-        // (target set or creation_timestamp); skip no-op updates to prevent
-        // the A→B→A→B ping-pong between conflicting policies.
-        if should_requeue_siblings(&old_target_keys, &new_target_keys, old_timestamp, new_timestamp) {
-            for sibling in &old_siblings {
-                ctx.requeue(sibling.kind_str(), sibling.resource_key()).await;
-            }
-            // Also requeue NEW siblings — they may now conflict with this policy.
-            let new_siblings = ctx.runtime().backend_tls_policy.get_siblings(&resource_ref);
-            for sibling in &new_siblings {
-                if !old_siblings.contains(sibling) {
-                    ctx.requeue(sibling.kind_str(), sibling.resource_key()).await;
-                }
-            }
-        }
-
-        // Requeue EdgionBackendTrafficPolicies bound to a Service this policy no
-        // longer targets. `on_change_policy`'s `requeue_dependent_ebtps` only sees
-        // the CURRENT targetRefs, so an EBTP whose `upstreamAuthority` cross-object
-        // rule conflicted with this policy on a dropped target would keep a stale
-        // Accepted=False — a coalesced delete->recreate skips `on_delete_policy`,
-        // and a plain retarget never notifies the old target's EBTPs otherwise.
-        // Diff BackendTLSPolicy's section-aware keys first, then translate each
-        // dropped Service to the typed key used by the EBTP conflict index.
-        {
-            let new_base: std::collections::HashSet<&str> =
-                new_target_keys.iter().map(|k| btp_target_base_key(k)).collect();
-            let ebtp_target_mgr = ctx.runtime().edgion_backend_traffic_policy.target_mgr();
-            for dropped_base in old_target_keys
-                .iter()
-                .map(|k| btp_target_base_key(k))
-                .filter(|k| !new_base.contains(k))
-                .collect::<std::collections::HashSet<&str>>()
-            {
-                let Some(target_key) = ebtp_service_target_key_from_btp_key(dropped_base) else {
-                    continue;
-                };
-                for ebtp_ref in ebtp_target_mgr.get_refs(&target_key) {
-                    ctx.requeue(ebtp_ref.kind_str(), ebtp_ref.resource_key()).await;
-                }
-            }
-        }
-
+        ctx.runtime().service_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().backend_ref_mgr.clear_resource_refs(&resource_ref);
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
 
+        btp.spec.resolved_target_class = None;
         btp.spec.resolved_ca_certificates = None;
         btp.spec.resolved_client_certificate = None;
+
+        // Register a syntactically canonical target dependency before checking
+        // existence. Creation of a currently-missing target must wake this policy.
+        let policy_ns_str = btp.metadata.namespace.as_deref().unwrap_or("default");
+        for target in btp
+            .spec
+            .target_refs
+            .iter()
+            .filter_map(|target_ref| target_ref.canonical_key(policy_ns_str).ok())
+        {
+            match target.target_kind {
+                PolicyTargetKind::Service => ctx
+                    .runtime()
+                    .service_ref_mgr
+                    .add_ref(format!("{}/{}", target.namespace, target.name), resource_ref.clone()),
+                PolicyTargetKind::EdgionBackend => ctx
+                    .runtime()
+                    .backend_ref_mgr
+                    .add_ref(target.to_string(), resource_ref.clone()),
+            }
+        }
 
         btp.spec.use_system_ca = btp.spec.validation.well_known_ca_certificates.is_some();
 
@@ -254,6 +343,9 @@ impl BackendTlsPolicyHandler {
 
         if let Some(refs) = &btp.spec.validation.ca_certificate_refs {
             for ca_ref in refs {
+                if ca_ref.namespace.is_some() {
+                    continue;
+                }
                 if Self::is_secret_ref(ca_ref) {
                     let secret_key = format_secret_key(policy_ns, &ca_ref.name);
                     ctx.secret_ref_manager()
@@ -347,6 +439,53 @@ impl BackendTlsPolicyHandler {
             }
         }
 
+        let evaluation = self.evaluate_target(&btp.metadata, &btp.spec, ctx);
+        let mut new_target_keys = Vec::new();
+        if evaluation.target_class.is_some() && Self::all_runtime_refs_resolved(&btp.spec) {
+            if let Some(target) = &evaluation.target {
+                let section = btp.spec.target_refs[0].section_name.as_deref();
+                let conflict_key = make_target_conflict_key(target, section);
+                target_manager.add_ref(conflict_key.clone(), resource_ref.clone());
+                new_target_keys.push(conflict_key);
+                btp.spec.resolved_target_class = evaluation.target_class;
+            }
+        }
+        new_target_keys.sort();
+
+        let new_timestamp = btp.metadata.creation_timestamp.as_ref().map(|t| t.0);
+        ctx.runtime()
+            .backend_tls_policy
+            .set_timestamp(&policy_resource_key, new_timestamp);
+
+        if should_requeue_siblings(&old_target_keys, &new_target_keys, old_timestamp, new_timestamp) {
+            for sibling in &old_siblings {
+                ctx.requeue(sibling.kind_str(), sibling.resource_key()).await;
+            }
+            for sibling in ctx.runtime().backend_tls_policy.get_siblings(&resource_ref) {
+                if !old_siblings.contains(&sibling) {
+                    ctx.requeue(sibling.kind_str(), sibling.resource_key()).await;
+                }
+            }
+        }
+
+        // Notify EBTPs for targets dropped by retargeting or by loss of
+        // eligibility. Conflict keys are typed target identities plus an
+        // optional section suffix, so their base is directly reusable by the
+        // EBTP target index.
+        let new_base: std::collections::HashSet<&str> =
+            new_target_keys.iter().map(|key| btp_target_base_key(key)).collect();
+        let ebtp_target_mgr = ctx.runtime().edgion_backend_traffic_policy.target_mgr();
+        for dropped_target in old_target_keys
+            .iter()
+            .map(|key| btp_target_base_key(key))
+            .filter(|key| !new_base.contains(key))
+            .collect::<std::collections::HashSet<&str>>()
+        {
+            for ebtp_ref in ebtp_target_mgr.get_refs(dropped_target) {
+                ctx.requeue(ebtp_ref.kind_str(), ebtp_ref.resource_key()).await;
+            }
+        }
+
         ProcessResult::Continue(btp)
     }
 
@@ -374,7 +513,9 @@ impl BackendTlsPolicyHandler {
             .backend_tls_policy
             .remove_timestamp(&resource_ref.resource_key());
 
-        // Clear secret refs.
+        // Clear target and Secret dependency edges.
+        ctx.runtime().service_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().backend_ref_mgr.clear_resource_refs(&resource_ref);
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
 
         tracing::debug!(
@@ -399,10 +540,15 @@ impl BackendTlsPolicyHandler {
         meta: &ObjectMeta,
         spec: &S,
         status: &mut Option<BackendTLSPolicyStatus>,
-        _ctx: &HandlerContext,
+        ctx: &HandlerContext,
         validation_errors: &[String],
     ) {
         let generation = meta.generation;
+        let evaluation = self.evaluate_target(meta, spec, ctx);
+        let mut target_errors = validation_errors.to_vec();
+        target_errors.extend(evaluation.errors.iter().cloned());
+        target_errors.sort();
+        target_errors.dedup();
 
         // --- Classify CA reference errors with precise reasons ---
         let mut kind_errors = Vec::new(); // → reason: InvalidKind
@@ -460,20 +606,20 @@ impl BackendTlsPolicyHandler {
         };
 
         // --- Conflict detection ---
-        let is_conflicted = if validation_errors.is_empty() {
+        let is_conflicted = if target_errors.is_empty() && Self::all_runtime_refs_resolved(spec) {
             let policy_ns = meta.namespace.as_deref().unwrap_or("default");
             let policy_key = format!("{}/{}", policy_ns, meta.name.as_deref().unwrap_or(""));
-            spec.target_refs().iter().any(|target_ref| {
-                let target_key =
-                    make_target_conflict_key(policy_ns, &target_ref.name, target_ref.section_name.as_deref());
-                !_ctx.runtime().backend_tls_policy.is_winner(&policy_key, &target_key)
+            evaluation.target.as_ref().is_some_and(|target| {
+                let section = spec.target_refs()[0].section_name.as_deref();
+                let target_key = make_target_conflict_key(target, section);
+                !ctx.runtime().backend_tls_policy.is_winner(&policy_key, &target_key)
             })
         } else {
             false
         };
 
         // --- Resolve ancestor Gateways ---
-        let ancestor_gateways = Self::resolve_ancestor_gateways(meta, spec.target_refs(), _ctx);
+        let ancestor_gateways = Self::resolve_ancestor_gateways(meta, &evaluation, ctx);
 
         let status = status.get_or_insert_with(|| BackendTLSPolicyStatus { ancestors: vec![] });
 
@@ -494,6 +640,12 @@ impl BackendTlsPolicyHandler {
         // conditions forward so update_condition can keep lastTransitionTime
         // stable when the status does not actually flip.
         let old_ancestors = std::mem::take(&mut status.ancestors);
+        status.ancestors.extend(
+            old_ancestors
+                .iter()
+                .filter(|ancestor| ancestor.controller_name != self.controller_name)
+                .cloned(),
+        );
 
         for gw_ref in &gateway_refs {
             // Match on controller_name + kind as well: in K8s mode the watched
@@ -512,13 +664,23 @@ impl BackendTlsPolicyHandler {
                 .unwrap_or_default();
 
             // Accepted condition — priority: Invalid > NoValidCACertificate > Conflicted > Accepted
-            if !validation_errors.is_empty() {
+            if !evaluation.missing_targets.is_empty() {
+                update_condition(
+                    &mut conditions,
+                    condition_true(
+                        condition_types::ACCEPTED,
+                        condition_reasons::ACCEPTED,
+                        "Policy accepted pending target resolution",
+                        generation,
+                    ),
+                );
+            } else if !target_errors.is_empty() {
                 update_condition(
                     &mut conditions,
                     condition_false(
                         condition_types::ACCEPTED,
                         condition_reasons::INVALID,
-                        validation_errors.join("; "),
+                        target_errors.join("; "),
                         generation,
                     ),
                 );
@@ -555,7 +717,17 @@ impl BackendTlsPolicyHandler {
             }
 
             // ResolvedRefs condition — use precise reason per Gateway API conformance
-            if !kind_errors.is_empty() {
+            if !evaluation.missing_targets.is_empty() {
+                update_condition(
+                    &mut conditions,
+                    condition_false(
+                        condition_types::RESOLVED_REFS,
+                        "TargetNotFound",
+                        "Policy target was not found",
+                        generation,
+                    ),
+                );
+            } else if !kind_errors.is_empty() {
                 update_condition(
                     &mut conditions,
                     condition_false(
@@ -630,13 +802,13 @@ impl BackendTlsPolicyHandler {
     /// per Gateway API `+kubebuilder:validation:MaxItems=16` on `status.ancestors`.
     fn resolve_ancestor_gateways(
         meta: &ObjectMeta,
-        target_refs: &[BackendTLSPolicyTargetRef],
+        evaluation: &PolicyTargetEvaluation,
         ctx: &HandlerContext,
     ) -> Vec<(String, String)> {
         let policy_ns = meta.namespace.as_deref().unwrap_or("default");
         let policy_key = format!("{}/{}", policy_ns, meta.name.as_deref().unwrap_or(""));
-        let names: Vec<&str> = target_refs.iter().map(|tr| tr.name.as_str()).collect();
-        super::resolve_policy_ancestor_gateways(policy_ns, &names, &policy_key, ctx)
+        let targets: Vec<PolicyTargetKey> = evaluation.target.iter().cloned().collect();
+        super::resolve_policy_ancestor_gateways_for_targets(&targets, &policy_key, ctx)
             .into_keys()
             .filter_map(|k| k.split_once('/').map(|(ns, name)| (ns.to_string(), name.to_string())))
             .collect()
@@ -669,8 +841,8 @@ impl BackendTlsPolicyHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
-    fn validate(&self, btp: &BackendTLSPolicy, _ctx: &HandlerContext) -> Vec<String> {
-        self.validate_policy(&btp.spec)
+    fn validate(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) -> Vec<String> {
+        self.evaluate_target(&btp.metadata, &btp.spec, ctx).errors
     }
 
     async fn parse(&self, btp: BackendTLSPolicy, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicy> {
@@ -714,8 +886,8 @@ impl Default for BackendTlsPolicyAlpha3Handler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<BackendTLSPolicyAlpha3> for BackendTlsPolicyAlpha3Handler {
-    fn validate(&self, btp: &BackendTLSPolicyAlpha3, _ctx: &HandlerContext) -> Vec<String> {
-        self.inner.validate_policy(&btp.spec)
+    fn validate(&self, btp: &BackendTLSPolicyAlpha3, ctx: &HandlerContext) -> Vec<String> {
+        self.inner.evaluate_target(&btp.metadata, &btp.spec, ctx).errors
     }
 
     async fn parse(&self, btp: BackendTLSPolicyAlpha3, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicyAlpha3> {
@@ -845,12 +1017,109 @@ mod tests {
                     well_known_ca_certificates: Some(WellKnownCACertificates::System),
                 },
                 options: None,
+                resolved_target_class: None,
                 resolved_ca_certificates: None,
                 resolved_client_certificate: None,
                 use_system_ca: false,
             },
             status: None,
         }
+    }
+
+    #[tokio::test]
+    async fn ai_target_publishes_typed_marker_and_dependency() {
+        let (ctx, runtime) = make_ctx();
+        let handler = BackendTlsPolicyHandler::default();
+        let mut policy = make_btp("ns", "ai-tls", "models", "2026-01-01T00:00:00+00:00");
+        policy.spec.target_refs[0].group = "edgion.io".to_string();
+        policy.spec.target_refs[0].kind = "EdgionBackend".to_string();
+
+        let ProcessResult::Continue(parsed) = handler.parse_policy(policy, &ctx).await else {
+            panic!("policy should continue");
+        };
+        assert_eq!(parsed.spec.resolved_target_class, Some(ResolvedPolicyTargetClass::Ai));
+        let target = parsed.spec.target_refs[0].canonical_key("ns").unwrap();
+        assert_eq!(
+            runtime.backend_ref_mgr.get_dependencies("BackendTLSPolicy/ns/ai-tls"),
+            vec![target.to_string()]
+        );
+        assert_eq!(
+            runtime
+                .backend_tls_policy
+                .target_mgr()
+                .get_dependencies("BackendTLSPolicy/ns/ai-tls"),
+            vec![target.to_string()]
+        );
+    }
+
+    #[test]
+    fn ai_target_rejects_section_and_wrong_variant_identity() {
+        let (ctx, _) = make_ctx();
+        let handler = BackendTlsPolicyHandler::default();
+        let mut policy = make_btp("ns", "ai-tls", "models", "2026-01-01T00:00:00+00:00");
+        policy.spec.target_refs[0].group = "edgion.io".to_string();
+        policy.spec.target_refs[0].kind = "EdgionBackend".to_string();
+        policy.spec.target_refs[0].section_name = Some("unused".to_string());
+        assert!(handler
+            .validate(&policy, &ctx)
+            .iter()
+            .any(|error| error.contains("sectionName is not supported")));
+
+        policy.spec.target_refs[0].section_name = None;
+        policy.spec.target_refs[0].group = "example.io".to_string();
+        assert!(handler
+            .validate(&policy, &ctx)
+            .iter()
+            .any(|error| error.contains("supported targets")));
+    }
+
+    #[test]
+    fn direct_ca_namespace_and_duplicate_targets_are_rejected() {
+        let (ctx, _) = make_ctx();
+        let handler = BackendTlsPolicyHandler::default();
+        let mut policy = make_btp("ns", "tls", "svc", "2026-01-01T00:00:00+00:00");
+        policy.spec.validation.well_known_ca_certificates = None;
+        policy.spec.validation.ca_certificate_refs = Some(vec![BackendTLSPolicyCACertificateRef {
+            group: String::new(),
+            kind: "Secret".to_string(),
+            name: "ca".to_string(),
+            namespace: Some("other".to_string()),
+        }]);
+        policy.spec.target_refs.push(policy.spec.target_refs[0].clone());
+        let errors = handler.validate(&policy, &ctx);
+        assert!(errors.iter().any(|error| error.contains("exactly one")));
+        assert!(errors.iter().any(|error| error.contains("must not specify namespace")));
+    }
+
+    #[test]
+    fn status_rebuild_preserves_foreign_controller_ancestors() {
+        let (ctx, _) = make_ctx();
+        let handler = BackendTlsPolicyHandler::default();
+        let mut policy = make_btp("ns", "tls", "svc", "2026-01-01T00:00:00+00:00");
+        let foreign = PolicyAncestorStatus {
+            ancestor_ref: ParentReference {
+                group: Some("gateway.networking.k8s.io".to_string()),
+                kind: Some("Gateway".to_string()),
+                namespace: Some("ns".to_string()),
+                name: "foreign".to_string(),
+                section_name: None,
+                port: None,
+            },
+            controller_name: "example.io/other-controller".to_string(),
+            conditions: Vec::new(),
+        };
+        policy.status = Some(BackendTLSPolicyStatus {
+            ancestors: vec![foreign.clone()],
+        });
+
+        handler.update_policy_status(&policy.metadata, &policy.spec, &mut policy.status, &ctx, &[]);
+
+        assert!(policy
+            .status
+            .unwrap()
+            .ancestors
+            .iter()
+            .any(|ancestor| ancestor.controller_name == foreign.controller_name));
     }
 
     /// Regression test for the precedence-staleness bug.
@@ -886,7 +1155,7 @@ mod tests {
         let _ = handler.parse_policy(winner, &ctx).await;
         let _ = handler.parse_policy(sibling, &ctx).await;
 
-        let target_key = make_target_conflict_key("ns", "my-svc", None);
+        let target_key = make_target_conflict_key(&service_target_key("ns", "my-svc"), None);
         assert!(
             runtime.backend_tls_policy.is_winner("ns/winner", &target_key),
             "older winner should be the precedence winner before the recreate"
@@ -981,7 +1250,7 @@ mod tests {
         runtime
             .edgion_backend_traffic_policy
             .target_mgr()
-            .add_ref(ebtp_service_target_key("ns", "svc-a"), ebtp_ref.clone());
+            .add_ref(service_target_key("ns", "svc-a").to_string(), ebtp_ref.clone());
 
         let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
         let handler = BackendTlsPolicyHandler::default();
@@ -1028,7 +1297,7 @@ mod tests {
     #[test]
     fn get_siblings_returns_other_policies_targeting_same_service() {
         let runtime = ControllerRuntime::default();
-        let target_key = make_target_conflict_key("ns", "my-svc", None);
+        let target_key = make_target_conflict_key(&service_target_key("ns", "my-svc"), None);
 
         let winner = ResourceRef::new(
             ResourceKind::BackendTLSPolicy,

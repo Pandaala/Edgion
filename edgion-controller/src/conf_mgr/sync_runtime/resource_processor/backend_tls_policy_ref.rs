@@ -9,6 +9,7 @@
 //! and ServiceRefManager.
 
 use chrono::{DateTime, Utc};
+use edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 
@@ -163,17 +164,19 @@ impl Default for BackendTLSPolicyState {
 /// Policies sharing the same conflict key are in conflict with each other.
 /// Different `section_name` values produce different keys (no conflict).
 ///
-/// Format: `"namespace/name"` or `"namespace/name::sectionName"`
-pub fn make_target_conflict_key(namespace: &str, name: &str, section_name: Option<&str>) -> String {
+/// Format: `"group/kind/namespace/name"` or
+/// `"group/kind/namespace/name::sectionName"`.
+pub fn make_target_conflict_key(target: &PolicyTargetKey, section_name: Option<&str>) -> String {
     match section_name {
-        Some(sn) => format!("{}/{}::{}", namespace, name, sn),
-        None => format!("{}/{}", namespace, name),
+        Some(sn) => format!("{target}::{sn}"),
+        None => target.to_string(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind;
     use edgion_resources::ResourceKind;
 
     /// Parse an RFC3339 literal into the `DateTime<Utc>` the store now holds.
@@ -189,11 +192,19 @@ mod tests {
         BackendTLSPolicyState::new()
     }
 
+    fn service_target(ns: &str, name: &str) -> PolicyTargetKey {
+        PolicyTargetKey {
+            target_kind: PolicyTargetKind::Service,
+            namespace: ns.to_string(),
+            name: name.to_string(),
+        }
+    }
+
     /// Set up two conflicting policies for testing on a given state instance.
     fn setup_two_policies(state: &BackendTLSPolicyState, ns: &str) -> (ResourceRef, ResourceRef) {
         let policy_a = make_policy_ref(ns, "policy-a");
         let policy_b = make_policy_ref(ns, "policy-b");
-        let target_key = make_target_conflict_key(ns, "my-service", None);
+        let target_key = make_target_conflict_key(&service_target(ns, "my-service"), None);
 
         state.target_mgr().add_ref(target_key.clone(), policy_a.clone());
         state.target_mgr().add_ref(target_key, policy_b.clone());
@@ -206,14 +217,14 @@ mod tests {
 
     #[test]
     fn test_make_target_conflict_key_no_section() {
-        let key = make_target_conflict_key("ns-key1", "my-service", None);
-        assert_eq!(key, "ns-key1/my-service");
+        let key = make_target_conflict_key(&service_target("ns-key1", "my-service"), None);
+        assert_eq!(key, "/Service/ns-key1/my-service");
     }
 
     #[test]
     fn test_make_target_conflict_key_with_section() {
-        let key = make_target_conflict_key("ns-key2", "my-service", Some("port-80"));
-        assert_eq!(key, "ns-key2/my-service::port-80");
+        let key = make_target_conflict_key(&service_target("ns-key2", "my-service"), Some("port-80"));
+        assert_eq!(key, "/Service/ns-key2/my-service::port-80");
     }
 
     #[test]
@@ -222,7 +233,7 @@ mod tests {
         let state = make_state();
 
         let policy = make_policy_ref(ns, "only-policy");
-        let target_key = make_target_conflict_key(ns, "svc", None);
+        let target_key = make_target_conflict_key(&service_target(ns, "svc"), None);
         state.target_mgr().add_ref(target_key.clone(), policy);
 
         assert!(state.is_winner(&format!("{}/only-policy", ns), &target_key));
@@ -233,7 +244,7 @@ mod tests {
         let ns = "ns-older";
         let state = make_state();
         let (_policy_a, _policy_b) = setup_two_policies(&state, ns);
-        let target_key = make_target_conflict_key(ns, "my-service", None);
+        let target_key = make_target_conflict_key(&service_target(ns, "my-service"), None);
 
         assert!(state.is_winner(&format!("{}/policy-a", ns), &target_key));
         assert!(!state.is_winner(&format!("{}/policy-b", ns), &target_key));
@@ -246,7 +257,7 @@ mod tests {
 
         let policy_a = make_policy_ref(ns, "alpha");
         let policy_b = make_policy_ref(ns, "beta");
-        let target_key = make_target_conflict_key(ns, "svc", None);
+        let target_key = make_target_conflict_key(&service_target(ns, "svc"), None);
 
         state.target_mgr().add_ref(target_key.clone(), policy_a.clone());
         state.target_mgr().add_ref(target_key.clone(), policy_b.clone());
@@ -267,8 +278,8 @@ mod tests {
         let policy_a = make_policy_ref(ns, "policy-a");
         let policy_b = make_policy_ref(ns, "policy-b");
 
-        let key_80 = make_target_conflict_key(ns, "svc", Some("port-80"));
-        let key_443 = make_target_conflict_key(ns, "svc", Some("port-443"));
+        let key_80 = make_target_conflict_key(&service_target(ns, "svc"), Some("port-80"));
+        let key_443 = make_target_conflict_key(&service_target(ns, "svc"), Some("port-443"));
 
         state.target_mgr().add_ref(key_80.clone(), policy_a);
         state.target_mgr().add_ref(key_443.clone(), policy_b);
@@ -299,7 +310,7 @@ mod tests {
         let state = make_state();
 
         let policy = make_policy_ref(ns, "lonely");
-        let target_key = make_target_conflict_key(ns, "svc", None);
+        let target_key = make_target_conflict_key(&service_target(ns, "svc"), None);
         state.target_mgr().add_ref(target_key, policy.clone());
 
         assert!(state.get_siblings(&policy).is_empty());

@@ -130,15 +130,11 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
         });
     }
 
-    // Query BackendTLSPolicy using route namespace for proper namespace inheritance
-    let service_name = &backend_ref.name;
-    let service_namespace = backend_ref
-        .namespace
-        .as_deref()
-        .or(Some(grpc_route_unit.matched_info.rsc.ns.as_str()));
-
+    let target = backend_ref
+        .policy_target_key(&grpc_route_unit.matched_info.rsc.ns)
+        .ok_or_else(EdError::BackendNotFound)?;
     backend_ref.schema.backend_tls_policy =
-        crate::backends::query_backend_tls_policy_for_service(service_name, service_namespace, backend_ref.port);
+        crate::backends::policy::query_backend_tls_policy_for_target(&target, backend_ref.port);
 
     // Run backend-level request plugins.
     // TODO: evaluate whether backend plugins should run before route-level plugins

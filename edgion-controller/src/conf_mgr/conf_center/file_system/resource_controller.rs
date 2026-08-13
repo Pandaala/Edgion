@@ -887,6 +887,9 @@ mod tests {
                     name: "backend".to_string(),
                     section_name: None,
                 }],
+                resolved_target_class: Some(
+                    edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass::Service,
+                ),
                 validation: BackendTLSPolicyValidation {
                     ca_certificate_refs: None,
                     hostname: "backend.default.svc".to_string(),
@@ -909,6 +912,7 @@ mod tests {
             metadata: policy.metadata.clone(),
             spec: BackendTLSPolicyAlpha3Spec {
                 target_refs: policy.spec.target_refs.clone(),
+                resolved_target_class: policy.spec.resolved_target_class,
                 validation: policy.spec.validation.clone(),
                 options: policy.spec.options.clone(),
                 resolved_ca_certificates: policy.spec.resolved_ca_certificates.clone(),

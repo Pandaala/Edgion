@@ -8,75 +8,35 @@ pub use backend_tls::{
 pub use backend_traffic::{create_backend_traffic_policy_handler, get_backend_traffic_policy_store, resolve_lb_policy};
 
 use crate::backends::port_resolver::resolve_port_name;
+use crate::backends::LogicalBackendHandle;
+#[cfg(test)]
+use edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass;
+use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::resources::BackendTLSPolicy;
 use std::sync::Arc;
 
-/// Query BackendTLSPolicy for a given Service, optionally scoped to a specific port.
-///
-/// When `port` is provided, resolves the port number to a port name via the Service
-/// spec, then applies Gateway API sectionName matching:
-///   1. Prefer policies whose targetRef.sectionName matches the port name (most specific).
-///   2. Fall back to policies with no sectionName (applies to entire Service).
-///
-/// When `port` is None, returns the highest-priority policy regardless of sectionName.
-pub fn query_backend_tls_policy_for_service(
-    name: &str,
-    namespace: Option<&str>,
+/// Query BackendTLSPolicy from the proof-carrying logical backend selected by
+/// the route runtime. Denied and invalid slots cannot yield a policy key.
+pub fn query_backend_tls_policy_for_logical_backend(
+    logical: &LogicalBackendHandle,
     port: Option<i32>,
 ) -> Option<Arc<BackendTLSPolicy>> {
-    let policy_store = get_global_backend_tls_policy_store();
-    let policies = policy_store.get_policies_for_target(name, namespace);
-
-    if policies.is_empty() {
+    let target = logical.policy_target_key()?;
+    if target.target_kind != PolicyTargetKind::Service {
         return None;
     }
-
-    let port_name = port.and_then(|p| resolve_port_name(name, namespace, p));
-
-    select_policy_for_service(&policies, name, port_name.as_deref()).cloned()
+    query_backend_tls_policy_for_target(&target, port)
 }
 
-/// Pick the best-matching policy from the reverse-index candidate list for one Service.
-///
-/// `candidates` are the policies the reverse index already associated with the queried
-/// Service, sorted by Gateway API precedence. Because a policy lands in this Service's
-/// bucket only when one of its targetRefs has `policy_ns/name == query_ns/name`, every
-/// candidate is guaranteed to share the queried namespace — so isolating the targetRefs
-/// that point at this Service only needs a `tr.name == name` check (no namespace rebuild).
-///
-/// Matching order:
-///   1. A targetRef at this Service whose sectionName matches `port_name` (most specific).
-///   2. A targetRef at this Service with no sectionName (whole-Service).
-///   3. The highest-precedence candidate as a last resort.
-///
-/// Only targetRefs aimed at the queried Service are considered, so a multi-Service policy
-/// cannot leak another Service's sectionName scope into this lookup.
-fn select_policy_for_service<'a>(
-    candidates: &'a [Arc<BackendTLSPolicy>],
-    name: &str,
-    port_name: Option<&str>,
-) -> Option<&'a Arc<BackendTLSPolicy>> {
-    if let Some(pn) = port_name {
-        if let Some(exact) = candidates.iter().find(|pol| {
-            pol.spec
-                .target_refs
-                .iter()
-                .any(|tr| tr.name == name && tr.section_name.as_deref() == Some(pn))
-        }) {
-            return Some(exact);
-        }
-    }
-
-    if let Some(wildcard) = candidates.iter().find(|pol| {
-        pol.spec
-            .target_refs
-            .iter()
-            .any(|tr| tr.name == name && tr.section_name.is_none())
-    }) {
-        return Some(wildcard);
-    }
-
-    candidates.first()
+/// Typed policy lookup shared by canonical HTTP and gRPC backend proofs.
+pub(crate) fn query_backend_tls_policy_for_target(
+    target: &PolicyTargetKey,
+    port: Option<i32>,
+) -> Option<Arc<BackendTLSPolicy>> {
+    let port_name = port.and_then(|port| resolve_port_name(&target.name, Some(&target.namespace), port));
+    get_global_backend_tls_policy_store()
+        .snapshot()
+        .get_policy(target, port_name.as_deref())
 }
 
 #[cfg(test)]
@@ -103,6 +63,7 @@ mod tests {
                         section_name: section.map(|s| s.to_string()),
                     })
                     .collect(),
+                resolved_target_class: Some(ResolvedPolicyTargetClass::Service),
                 validation: BackendTLSPolicyValidation {
                     ca_certificate_refs: None,
                     hostname: "backend.example.com".to_string(),
@@ -118,12 +79,29 @@ mod tests {
         })
     }
 
-    fn selected_name<'a>(
-        candidates: &'a [Arc<BackendTLSPolicy>],
-        name: &str,
-        port_name: Option<&str>,
-    ) -> Option<&'a str> {
-        select_policy_for_service(candidates, name, port_name).and_then(|p| p.metadata.name.as_deref())
+    fn selected_name(candidates: &[Arc<BackendTLSPolicy>], name: &str, port_name: Option<&str>) -> Option<String> {
+        let snapshot = BackendTLSPolicyStore::new();
+        let data = candidates
+            .iter()
+            .map(|policy| {
+                (
+                    format!("default/{}", policy.metadata.name.as_deref().unwrap_or("")),
+                    Arc::clone(policy),
+                )
+            })
+            .collect();
+        snapshot.replace_all(data);
+        snapshot
+            .snapshot()
+            .get_policy(
+                &PolicyTargetKey {
+                    target_kind: PolicyTargetKind::Service,
+                    namespace: "default".to_string(),
+                    name: name.to_string(),
+                },
+                port_name,
+            )
+            .and_then(|p| p.metadata.name.clone())
     }
 
     // A policy whose only "svc-a" ref is section-scoped must not win the whole-Service
@@ -135,7 +113,7 @@ mod tests {
             policy("cross", &[("svc-a", Some("https")), ("svc-b", None)]),
             policy("whole-a", &[("svc-a", None)]),
         ];
-        assert_eq!(selected_name(&candidates, "svc-a", None), Some("whole-a"));
+        assert_eq!(selected_name(&candidates, "svc-a", None).as_deref(), Some("whole-a"));
     }
 
     // The exact (sectionName == port_name) match must also ignore a ref that points at a
@@ -146,14 +124,20 @@ mod tests {
             policy("cross", &[("svc-a", Some("https")), ("svc-b", Some("grpc"))]),
             policy("grpc-a", &[("svc-a", Some("grpc"))]),
         ];
-        assert_eq!(selected_name(&candidates, "svc-a", Some("grpc")), Some("grpc-a"));
+        assert_eq!(
+            selected_name(&candidates, "svc-a", Some("grpc")).as_deref(),
+            Some("grpc-a")
+        );
     }
 
     // Regression guard: a legitimate whole-Service policy still matches any port.
     #[test]
     fn whole_service_policy_matches_any_port() {
         let candidates = vec![policy("whole-a", &[("svc-a", None)])];
-        assert_eq!(selected_name(&candidates, "svc-a", Some("https")), Some("whole-a"));
+        assert_eq!(
+            selected_name(&candidates, "svc-a", Some("https")).as_deref(),
+            Some("whole-a")
+        );
     }
 
     // Regression guard: an exact port match is preferred over the whole-Service fallback.
@@ -163,6 +147,9 @@ mod tests {
             policy("https-a", &[("svc-a", Some("https"))]),
             policy("whole-a", &[("svc-a", None)]),
         ];
-        assert_eq!(selected_name(&candidates, "svc-a", Some("https")), Some("https-a"));
+        assert_eq!(
+            selected_name(&candidates, "svc-a", Some("https")).as_deref(),
+            Some("https-a")
+        );
     }
 }

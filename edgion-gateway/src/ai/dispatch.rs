@@ -361,6 +361,7 @@ fn prepare_ready_attempt(
         candidate.logical.clone(),
         Arc::clone(ai_backend),
         candidate.effective_policy.clone(),
+        candidate.backend_tls_policy.clone(),
         candidate.adaptive.clone(),
         credential_outlier.clone(),
         selected.credential,
@@ -963,6 +964,7 @@ mod tests {
                 pricing: None,
             }),
             effective_policy: None,
+            backend_tls_policy: None,
             adaptive: None,
             credential_outliers,
         }];

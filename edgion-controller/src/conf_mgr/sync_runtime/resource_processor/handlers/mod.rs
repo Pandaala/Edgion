@@ -133,20 +133,20 @@ pub(crate) fn remove_from_gateway_route_index(
     runtime.gateway_route_index.remove_route(route_kind, &route_key);
 }
 
-/// Collect BackendTLSPolicy refs registered against a backend Service, matching
-/// both the bare `"ns/svc"` target key and any section-scoped
-/// `"ns/svc::sectionName"` key.
+/// Collect BackendTLSPolicy refs registered against a typed target, matching
+/// both the bare canonical key and section-scoped keys.
 ///
 /// BTP target registrations may carry a `::sectionName` suffix
 /// (`make_target_conflict_key`), which a plain `get_refs("ns/svc")` exact lookup
 /// would miss. Reduce every registered target key to its base form before
 /// matching — the same reduction the EBTP requeue block in
 /// `backend_tls_policy.rs` uses.
-fn btp_refs_for_service(target_manager: &SecretRefManager, service_key: &str) -> Vec<ResourceRef> {
+fn btp_refs_for_target(target_manager: &SecretRefManager, target: &PolicyTargetKey) -> Vec<ResourceRef> {
+    let canonical = target.to_string();
     let mut refs = Vec::new();
     for target_key in target_manager.all_source_keys() {
         let base = target_key.split("::").next().unwrap_or(&target_key);
-        if base == service_key {
+        if base == canonical {
             refs.extend(target_manager.get_refs(&target_key));
         }
     }
@@ -217,25 +217,8 @@ pub(crate) fn resolve_policy_ancestor_gateways_for_targets(
     map
 }
 
-/// Resolve the ancestor Gateways for a Service-targeting policy, per
-/// GEP-2648: the ancestor of a direct policy is the Gateway the traffic
-/// enters through.
-///
-/// Chain (all in-memory, workqueue Rule 5 safe):
-///   targetRef(Service) -> ServiceRefManager (service -> routes)
-///                      -> GatewayRouteIndex (route -> gateways)
-///
-/// Returns gateway key -> the target Service keys ("ns/svc") whose routes
-/// attach to that gateway, so callers can compute per-ancestor conditions
-/// (e.g. Conflicted only on the ancestors the conflicted Service reaches).
-/// Sorted (BTreeMap) and capped at 16 ancestors per the Gateway API
-/// `maxItems=16` on `status.ancestors`; truncation keeps the smallest keys
-/// so the same 16 are selected on every reconcile.
-///
-/// Non-route refs under a Service key (policies register there too for
-/// Service-change requeue) resolve to zero gateways in the route index and
-/// therefore drop out naturally.
-pub(crate) fn resolve_policy_ancestor_gateways(
+#[cfg(test)]
+fn resolve_policy_ancestor_gateways(
     policy_ns: &str,
     target_service_names: &[&str],
     policy_key: &str,
@@ -280,7 +263,15 @@ pub(crate) async fn requeue_backend_policies_for_route(
 
     let target_manager = ctx.runtime().backend_tls_policy.target_mgr();
     for service_key in &service_keys {
-        let btps = btp_refs_for_service(target_manager, service_key);
+        let Some((namespace, name)) = service_key.split_once('/') else {
+            continue;
+        };
+        let target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::Service,
+            namespace: namespace.to_string(),
+            name: name.to_string(),
+        };
+        let btps = btp_refs_for_target(target_manager, &target);
         for btp_ref in btps {
             tracing::debug!(
                 route = %route_ref.resource_key(),
@@ -312,7 +303,18 @@ pub(crate) async fn requeue_backend_policies_for_route(
 /// delegation, and backend replacement all refresh affected ancestors.
 pub(crate) async fn requeue_backend_policies_for_backend_targets(backend_target_keys: &[String], ctx: &HandlerContext) {
     for target_key in backend_target_keys {
-        for policy_ref in ebtp_refs_for_target(&ctx.runtime().backend_ref_mgr, target_key) {
+        for policy_ref in ctx
+            .runtime()
+            .backend_ref_mgr
+            .get_refs(target_key)
+            .into_iter()
+            .filter(|resource_ref| {
+                matches!(
+                    resource_ref.kind,
+                    ResourceKind::BackendTLSPolicy | ResourceKind::EdgionBackendTrafficPolicy
+                )
+            })
+        {
             tracing::debug!(
                 policy = %policy_ref.resource_key(),
                 backend = %target_key,
@@ -337,7 +339,15 @@ pub(crate) async fn requeue_backend_policies_for_services(dropped_service_keys: 
     }
     let target_manager = ctx.runtime().backend_tls_policy.target_mgr();
     for service_key in dropped_service_keys {
-        for btp_ref in btp_refs_for_service(target_manager, service_key) {
+        let Some((namespace, name)) = service_key.split_once('/') else {
+            continue;
+        };
+        let target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::Service,
+            namespace: namespace.to_string(),
+            name: name.to_string(),
+        };
+        for btp_ref in btp_refs_for_target(target_manager, &target) {
             tracing::debug!(
                 btp = %btp_ref.resource_key(),
                 service = %service_key,
@@ -376,21 +386,40 @@ mod tests {
         let sec80 = btp_ref("ns", "btp-80");
         let sec443 = btp_ref("ns", "btp-443");
 
-        mgr.add_ref(make_target_conflict_key("ns", "svc", None), bare.clone());
-        mgr.add_ref(make_target_conflict_key("ns", "svc", Some("port-80")), sec80.clone());
-        mgr.add_ref(make_target_conflict_key("ns", "svc", Some("port-443")), sec443.clone());
+        let target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::Service,
+            namespace: "ns".to_string(),
+            name: "svc".to_string(),
+        };
+        mgr.add_ref(make_target_conflict_key(&target, None), bare.clone());
+        mgr.add_ref(make_target_conflict_key(&target, Some("port-80")), sec80.clone());
+        mgr.add_ref(make_target_conflict_key(&target, Some("port-443")), sec443.clone());
         // A different Service that shares the "svc" name prefix must NOT match —
         // neither its bare key nor a section-scoped key may over-match "ns/svc".
         mgr.add_ref(
-            make_target_conflict_key("ns", "svc-other", None),
+            make_target_conflict_key(
+                &PolicyTargetKey {
+                    target_kind: PolicyTargetKind::Service,
+                    namespace: "ns".to_string(),
+                    name: "svc-other".to_string(),
+                },
+                None,
+            ),
             btp_ref("ns", "btp-other"),
         );
         mgr.add_ref(
-            make_target_conflict_key("ns", "svc-other", Some("s")),
+            make_target_conflict_key(
+                &PolicyTargetKey {
+                    target_kind: PolicyTargetKind::Service,
+                    namespace: "ns".to_string(),
+                    name: "svc-other".to_string(),
+                },
+                Some("s"),
+            ),
             btp_ref("ns", "btp-other-sec"),
         );
 
-        let mut got: Vec<String> = btp_refs_for_service(&mgr, "ns/svc")
+        let mut got: Vec<String> = btp_refs_for_target(&mgr, &target)
             .iter()
             .map(|r| r.resource_key())
             .collect();
@@ -404,11 +433,26 @@ mod tests {
     fn btp_refs_for_service_no_match_is_empty() {
         let mgr: SecretRefManager = BidirectionalRefManager::with_component("test");
         mgr.add_ref(
-            make_target_conflict_key("ns", "svc", Some("port-80")),
+            make_target_conflict_key(
+                &PolicyTargetKey {
+                    target_kind: PolicyTargetKind::Service,
+                    namespace: "ns".to_string(),
+                    name: "svc".to_string(),
+                },
+                Some("port-80"),
+            ),
             btp_ref("ns", "btp-80"),
         );
 
-        assert!(btp_refs_for_service(&mgr, "ns/nomatch").is_empty());
+        assert!(btp_refs_for_target(
+            &mgr,
+            &PolicyTargetKey {
+                target_kind: PolicyTargetKind::Service,
+                namespace: "ns".to_string(),
+                name: "nomatch".to_string(),
+            }
+        )
+        .is_empty());
     }
 
     /// The shared ancestor resolver walks Service -> Routes (service_ref_mgr)

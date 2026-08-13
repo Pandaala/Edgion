@@ -12,7 +12,10 @@ pub mod store;
 
 pub use conf_handler_impl::create_backend_traffic_policy_handler;
 pub use retry_budget::RetryBudget;
-pub use store::{get_backend_traffic_policy_store, BackendTrafficPolicyStore, EffectiveBackendTrafficPolicy};
+pub use store::{
+    get_backend_traffic_policy_store, BackendTrafficPolicySnapshot, BackendTrafficPolicyStore,
+    EffectiveBackendTrafficPolicy,
+};
 
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 

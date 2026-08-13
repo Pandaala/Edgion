@@ -7,6 +7,8 @@ use std::sync::Arc;
 use crate::ai::{AdaptiveTelemetryState, AiCredentialOutlierHandle, RuntimeAiBackend};
 use crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy;
 use crate::routes::http::match_unit::{CompiledBackend, CompiledBackendTarget};
+use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+use edgion_resources::resources::BackendTLSPolicy;
 
 /// One immutable, gateway-compiled HTTPRoute backend slot.
 #[derive(Clone)]
@@ -48,6 +50,28 @@ impl LogicalBackendHandle {
     pub fn is_authorized(&self) -> bool {
         self.compiled.schema.ref_denied.is_none()
     }
+
+    /// Canonical resource identity used by backend-attached policy stores.
+    ///
+    /// Slot occurrence deliberately does not participate: two route slots that
+    /// refer to the same backend resource share the same attached policy.
+    pub fn policy_target_key(&self) -> Option<PolicyTargetKey> {
+        if !self.is_authorized() {
+            return None;
+        }
+        let (target_kind, namespace, name) = match self.target() {
+            CompiledBackendTarget::Service { namespace, name } => (PolicyTargetKind::Service, namespace, name),
+            CompiledBackendTarget::EdgionBackend { namespace, name } => {
+                (PolicyTargetKind::EdgionBackend, namespace, name)
+            }
+            CompiledBackendTarget::Invalid { .. } => return None,
+        };
+        Some(PolicyTargetKey {
+            target_kind,
+            namespace: namespace.clone(),
+            name: name.clone(),
+        })
+    }
 }
 
 impl fmt::Debug for LogicalBackendHandle {
@@ -86,6 +110,8 @@ pub struct SelectedAiBackend {
     logical: LogicalBackendHandle,
     pub backend: Arc<RuntimeAiBackend>,
     pub effective_policy: Option<Arc<EffectiveBackendTrafficPolicy>>,
+    /// Request-stable TLS policy selected for this logical backend.
+    pub backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
     pub adaptive: Option<Arc<AdaptiveTelemetryState>>,
     pub credential_outlier: Option<AiCredentialOutlierHandle>,
     pub credential_index: usize,
@@ -99,6 +125,7 @@ impl SelectedAiBackend {
         logical: LogicalBackendHandle,
         backend: Arc<RuntimeAiBackend>,
         effective_policy: Option<Arc<EffectiveBackendTrafficPolicy>>,
+        backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
         adaptive: Option<Arc<AdaptiveTelemetryState>>,
         credential_outlier: Option<AiCredentialOutlierHandle>,
         credential_index: usize,
@@ -110,6 +137,7 @@ impl SelectedAiBackend {
                 logical,
                 backend,
                 effective_policy,
+                backend_tls_policy,
                 adaptive,
                 credential_outlier,
                 credential_index,
@@ -131,6 +159,7 @@ impl fmt::Debug for SelectedAiBackend {
             .field("logical", &self.logical)
             .field("runtime_available", &true)
             .field("effective_policy", &self.effective_policy.is_some())
+            .field("backend_tls_policy", &self.backend_tls_policy.is_some())
             .field("adaptive", &self.adaptive.is_some())
             .field("credential_index", &self.credential_index)
             .field("effective_weight", &self.effective_weight)
@@ -247,6 +276,14 @@ mod tests {
         ));
         assert_eq!(logical.identity().namespace, "backend-ns");
         assert_eq!(logical.identity().name, "api");
+        assert_eq!(
+            logical.policy_target_key(),
+            Some(PolicyTargetKey {
+                target_kind: PolicyTargetKind::Service,
+                namespace: "backend-ns".to_string(),
+                name: "api".to_string(),
+            })
+        );
     }
 
     #[test]
@@ -266,6 +303,8 @@ mod tests {
             target_name: "api".to_string(),
             reason: Some("NoMatchingReferenceGrant".to_string()),
         });
-        assert!(SelectedServiceBackend::new(LogicalBackendHandle::new(backend)).is_none());
+        let logical = LogicalBackendHandle::new(backend);
+        assert!(logical.policy_target_key().is_none());
+        assert!(SelectedServiceBackend::new(logical).is_none());
     }
 }

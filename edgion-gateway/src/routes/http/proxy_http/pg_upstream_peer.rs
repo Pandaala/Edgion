@@ -4,6 +4,7 @@ use crate::ai::dispatch::{
     AiPeerPredispatchFailure, PreparedAiAttempt,
 };
 use crate::ai::{render_openai_error, AiProxyError};
+use crate::backends::peer_builder::{create_tls_peer, extract_tls_config};
 use crate::backends::policy::backend_traffic::authority::{render_authority, AuthorityError};
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
 use crate::backends::policy::backend_traffic::RetryBudget;
@@ -781,22 +782,12 @@ pub async fn select_http_backend(
         },
     };
 
-    // Query BackendTLSPolicy using route namespace for proper namespace inheritance.
-    // Read the lookup inputs into owned values first so the mutation below does not
-    // conflict with the `Deref` borrows of `backend_ref`.
-    let service_name = backend_ref.name.clone();
-    // If backend_ref.namespace is None, inherit from route namespace
-    let service_namespace = backend_ref
-        .namespace
-        .clone()
-        .or_else(|| Some(route_unit.matched_info.rsc.ns.clone()));
+    // Project policy identity from the selected WP2 logical slot. Route-local
+    // occurrence remains proof of selection but is not part of attachment.
+    let logical = backend_ref.logical_handle();
     let service_port = backend_ref.port;
-
-    backend_ref.schema.backend_tls_policy = crate::backends::query_backend_tls_policy_for_service(
-        &service_name,
-        service_namespace.as_deref(),
-        service_port,
-    );
+    backend_ref.schema.backend_tls_policy =
+        crate::backends::query_backend_tls_policy_for_logical_backend(&logical, service_port);
 
     backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
     if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
@@ -1317,8 +1308,27 @@ async fn try_ai_backend_peer(
         ctx.add_error(status);
         return Err(AiPeerPredispatchFailure::Endpoint);
     }
-    let mut peer = Box::new(HttpPeer::new(addr, endpoint.use_tls, endpoint.sni.clone()));
+    if target.selected.backend_tls_policy.is_some() && !endpoint.use_tls {
+        return Err(AiPeerPredispatchFailure::Endpoint);
+    }
+    let mut peer = match &target.selected.backend_tls_policy {
+        Some(policy) => create_tls_peer(
+            PingoraSocketAddr::Inet(addr),
+            &Some(std::sync::Arc::clone(policy)),
+            None,
+        )
+        .map_err(|status| {
+            ctx.add_error(status);
+            AiPeerPredispatchFailure::Endpoint
+        })?,
+        None => Box::new(HttpPeer::new(addr, endpoint.use_tls, endpoint.sni.clone())),
+    };
     begin_ai_peer_attempt(ctx);
+    let (use_tls, sni) = match &target.selected.backend_tls_policy {
+        Some(_) => extract_tls_config(&target.selected.backend_tls_policy),
+        None => (endpoint.use_tls, endpoint.sni.clone()),
+    };
+    crate::backends::peer_builder::record_tls_to_upstream(ctx, use_tls, &sni);
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
     backfill_upstream_addr(&peer, ctx);
     Ok(peer)

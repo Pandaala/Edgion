@@ -28,8 +28,8 @@ pub use gateway_backend_tls_store::{get_global_gateway_backend_tls_store, Gatewa
 pub use health::{get_health_check_manager, get_health_status_store};
 pub(crate) use peer_builder::validate_endpoint_backend_addr;
 pub use policy::{
-    create_backend_tls_policy_handler, get_global_backend_tls_policy_store, query_backend_tls_policy_for_service,
-    BackendTLSPolicyStore,
+    create_backend_tls_policy_handler, get_global_backend_tls_policy_store,
+    query_backend_tls_policy_for_logical_backend, BackendTLSPolicyStore,
 };
 pub use port_resolver::resolve_target_port_key;
 pub use preload::preload_load_balancers;

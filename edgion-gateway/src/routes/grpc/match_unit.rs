@@ -32,6 +32,34 @@ impl std::ops::Deref for CompiledGrpcBackend {
     }
 }
 
+impl CompiledGrpcBackend {
+    /// Canonical typed policy identity for this authorized gRPC Service ref.
+    pub fn policy_target_key(
+        &self,
+        route_namespace: &str,
+    ) -> Option<edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey> {
+        if self.schema.ref_denied.is_some() {
+            return None;
+        }
+        let group = self.schema.group.as_deref().unwrap_or("");
+        let kind = self.schema.kind.as_deref().unwrap_or("Service");
+        if !matches!(group, "" | "core") || kind != "Service" {
+            return None;
+        }
+        Some(
+            edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey {
+                target_kind: edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind::Service,
+                namespace: self
+                    .schema
+                    .namespace
+                    .clone()
+                    .unwrap_or_else(|| route_namespace.to_string()),
+                name: self.schema.name.clone(),
+            },
+        )
+    }
+}
+
 /// Per-rule compiled runtime, built ONCE per rule and Arc-shared across all
 /// match-item units of that rule. In-memory RateLimit owns per-rule CMS state,
 /// so rebuilding per-unit would split the counter N×.

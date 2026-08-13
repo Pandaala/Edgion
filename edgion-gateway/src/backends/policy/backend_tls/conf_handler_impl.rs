@@ -62,6 +62,9 @@ mod tests {
                     name: target_name.to_string(),
                     section_name: None,
                 }],
+                resolved_target_class: Some(
+                    edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass::Service,
+                ),
                 validation: BackendTLSPolicyValidation {
                     ca_certificate_refs: None,
                     hostname: format!("{}.example.com", target_name),
@@ -169,7 +172,13 @@ mod tests {
 
         store.full_set(&data);
 
-        let policies = store.get_policies_for_target("svc1", Some("default"));
+        let policies = store.get_policies_for_target(
+            &edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey {
+                target_kind: edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind::Service,
+                namespace: "default".to_string(),
+                name: "svc1".to_string(),
+            },
+        );
         assert_eq!(policies.len(), 2);
     }
 

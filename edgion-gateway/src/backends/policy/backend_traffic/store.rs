@@ -39,7 +39,7 @@ pub struct BackendTrafficPolicyStore {
     /// Winning policy key per typed destination identity.
     applied: DashMap<PolicyTargetKey, String>,
     /// Immutable effective policy snapshots for request-scoped capture.
-    effective: ArcSwap<HashMap<PolicyTargetKey, Arc<EffectiveBackendTrafficPolicy>>>,
+    effective: ArcSwap<EffectivePolicySnapshotData>,
     /// Resolved load-balancer policy per Service key (read on the request path).
     lb_policies: DashMap<String, ParsedLBPolicy>,
     /// Resolved upstream authority per Service key (read on the request path).
@@ -76,6 +76,30 @@ pub struct EffectiveBackendTrafficPolicy {
     /// `None` for core Service targets.
     pub ai_credential_outlier: Option<Arc<AiCredentialOutlierBackendHandle>>,
     pub ai_circuit_breaker: Option<Arc<crate::ai::circuit_breaker::AiBackendCircuitBreaker>>,
+}
+
+struct EffectivePolicySnapshotData {
+    generation: u64,
+    policies: HashMap<PolicyTargetKey, Arc<EffectiveBackendTrafficPolicy>>,
+}
+
+/// One immutable, request-capturable view of all effective backend policies.
+/// A handle remains valid after later store publications.
+#[derive(Clone)]
+pub struct BackendTrafficPolicySnapshot {
+    inner: Arc<EffectivePolicySnapshotData>,
+}
+
+impl BackendTrafficPolicySnapshot {
+    #[inline]
+    pub fn generation(&self) -> u64 {
+        self.inner.generation
+    }
+
+    #[inline]
+    pub fn get_effective(&self, target: &PolicyTargetKey) -> Option<Arc<EffectiveBackendTrafficPolicy>> {
+        self.inner.policies.get(target).cloned()
+    }
 }
 
 fn effective_snapshot_eq(
@@ -119,7 +143,10 @@ impl BackendTrafficPolicyStore {
         Self {
             policies: DashMap::new(),
             applied: DashMap::new(),
-            effective: ArcSwap::from_pointee(HashMap::new()),
+            effective: ArcSwap::from_pointee(EffectivePolicySnapshotData {
+                generation: 0,
+                policies: HashMap::new(),
+            }),
             lb_policies: DashMap::new(),
             authorities: DashMap::new(),
             retry_budgets: DashMap::new(),
@@ -196,7 +223,15 @@ impl BackendTrafficPolicyStore {
     /// Effective policy for a typed Service or EdgionBackend destination.
     /// Callers capture the returned Arc once and use it for the whole request.
     pub fn get_effective(&self, target: &PolicyTargetKey) -> Option<Arc<EffectiveBackendTrafficPolicy>> {
-        self.effective.load().get(target).cloned()
+        self.snapshot().get_effective(target)
+    }
+
+    /// Capture a coherent generation for all typed policy targets.
+    #[inline]
+    pub fn snapshot(&self) -> BackendTrafficPolicySnapshot {
+        BackendTrafficPolicySnapshot {
+            inner: self.effective.load_full(),
+        }
     }
 
     /// Admin snapshot of the resolved load-balancer map: Service key -> debug
@@ -238,7 +273,11 @@ impl BackendTrafficPolicyStore {
 
     /// Recompute and apply the winning policy for one typed destination.
     /// Returns true when the effective config changed.
-    pub fn reapply_target(&self, target: &PolicyTargetKey) -> bool {
+    fn resolve_target(
+        &self,
+        target: &PolicyTargetKey,
+        old_effective: Option<&Arc<EffectiveBackendTrafficPolicy>>,
+    ) -> (bool, Option<Arc<EffectiveBackendTrafficPolicy>>) {
         // Winner = min over valid cached policies targeting this key, ordered by
         // precedence_key (LOWER wins). Invalid policies are skipped entirely.
         let mut winner: Option<((i64, String), String, Arc<EdgionBackendTrafficPolicy>)> = None;
@@ -264,7 +303,7 @@ impl BackendTrafficPolicyStore {
             (target.target_kind == PolicyTargetKind::Service).then(|| format!("{}/{}", target.namespace, target.name));
         let old_lb = service_key.as_deref().and_then(|key| self.get_lb_policy(key));
         let old_winner = self.applied.get(target).map(|v| v.value().clone());
-        let old_effective = self.get_effective(target);
+        let old_effective = old_effective.cloned();
 
         let hc_store = get_hc_config_store();
         let hc_manager = get_health_check_manager();
@@ -396,7 +435,7 @@ impl BackendTrafficPolicyStore {
                         get_ai_credential_outlier_store().publish_policy(target.clone(), normalized_outlier.clone())
                     })
                     .flatten();
-                let effective = Arc::new(EffectiveBackendTrafficPolicy {
+                let candidate = Arc::new(EffectiveBackendTrafficPolicy {
                     retry_budget: self.retry_budgets.get(target).map(|entry| Arc::clone(&entry.value().1)),
                     circuit_breaker_limit: self.circuit_breakers.get(target).map(|entry| *entry.value()),
                     connect_timeout: self.connect_timeouts.get(target).map(|entry| *entry.value()),
@@ -407,6 +446,10 @@ impl BackendTrafficPolicyStore {
                         .get(target)
                         .map(|entry| Arc::clone(&entry.value().1)),
                 });
+                let effective = match old_effective.as_ref() {
+                    Some(old) if effective_snapshot_eq(Some(old), Some(&candidate)) => Arc::clone(old),
+                    _ => candidate,
+                };
                 if let Some(service_key) = service_key.as_deref() {
                     self.sync_service_effective_cache(service_key, Some(&effective));
                 }
@@ -439,25 +482,59 @@ impl BackendTrafficPolicyStore {
             }
         };
 
-        self.effective.rcu(|current| {
-            let mut next = (**current).clone();
-            match &new_effective {
-                Some(snapshot) => {
-                    next.insert(target.clone(), Arc::clone(snapshot));
-                }
-                None => {
-                    next.remove(target);
-                }
-            }
-            next
-        });
-
         // The request path resolves its LB algorithm from this store on every
         // request (selector cells rebuild lazily via `get_or_build`), so a flip
         // needs no proactive rebuild here.
-        old_lb != new_lb
-            || old_winner != new_winner
-            || !effective_snapshot_eq(old_effective.as_deref(), new_effective.as_deref())
+        (
+            old_lb != new_lb
+                || old_winner != new_winner
+                || !effective_snapshot_eq(old_effective.as_deref(), new_effective.as_deref()),
+            new_effective,
+        )
+    }
+
+    fn publish_effective_updates(
+        &self,
+        current: &Arc<EffectivePolicySnapshotData>,
+        updates: HashMap<PolicyTargetKey, Option<Arc<EffectiveBackendTrafficPolicy>>>,
+    ) {
+        // Config sync serializes ConfHandler writes for a resource kind. This
+        // load-build-store publication therefore has one writer; callers must
+        // not introduce an independent publisher without adding writer
+        // serialization here.
+        let mut next = current.policies.clone();
+        let mut changed = false;
+        for (target, policy) in updates {
+            match policy {
+                Some(policy) => {
+                    let same = next.get(&target).is_some_and(|existing| Arc::ptr_eq(existing, &policy));
+                    if !same {
+                        next.insert(target, policy);
+                        changed = true;
+                    }
+                }
+                None => {
+                    changed |= next.remove(&target).is_some();
+                }
+            }
+        }
+        if changed {
+            self.effective.store(Arc::new(EffectivePolicySnapshotData {
+                generation: current
+                    .generation
+                    .checked_add(1)
+                    .expect("BackendTrafficPolicy snapshot generation exhausted"),
+                policies: next,
+            }));
+        }
+    }
+
+    /// Recompute and publish one typed destination.
+    pub fn reapply_target(&self, target: &PolicyTargetKey) -> bool {
+        let current = self.effective.load_full();
+        let (changed, effective) = self.resolve_target(target, current.policies.get(target));
+        self.publish_effective_updates(&current, HashMap::from([(target.clone(), effective)]));
+        changed
     }
 
     /// Service-only compatibility seam used by existing LB/health/authority
@@ -482,9 +559,13 @@ impl BackendTrafficPolicyStore {
             self.policies.insert(key, policy);
         }
 
+        let current = self.effective.load_full();
+        let mut updates = HashMap::with_capacity(affected.len());
         for target in &affected {
-            self.reapply_target(target);
+            let (_, effective) = self.resolve_target(target, current.policies.get(target));
+            updates.insert(target.clone(), effective);
         }
+        self.publish_effective_updates(&current, updates);
         affected.len()
     }
 
@@ -521,9 +602,13 @@ impl BackendTrafficPolicyStore {
             self.policies.remove(key);
         }
 
+        let current = self.effective.load_full();
+        let mut updates = HashMap::with_capacity(affected.len());
         for target in &affected {
-            self.reapply_target(target);
+            let (_, effective) = self.resolve_target(target, current.policies.get(target));
+            updates.insert(target.clone(), effective);
         }
+        self.publish_effective_updates(&current, updates);
         affected.len()
     }
 }
@@ -1291,7 +1376,8 @@ mod tests {
             ai_policy("typed-update", "policy", "models", 20, "250ms"),
         );
         store.full_set_policies(initial);
-        let first = store.get_effective(&target).expect("initial snapshot");
+        let first_snapshot = store.snapshot();
+        let first = first_snapshot.get_effective(&target).expect("initial snapshot");
         let first_budget = first.retry_budget.as_ref().expect("retry budget");
         let first_outlier = first.ai_credential_outlier.as_ref().expect("AI outlier generation");
 
@@ -1301,7 +1387,10 @@ mod tests {
             ai_policy("typed-update", "policy", "models", 20, "250ms"),
         );
         store.full_set_policies(equivalent);
-        let second = store.get_effective(&target).expect("equivalent snapshot");
+        let equivalent_snapshot = store.snapshot();
+        let second = equivalent_snapshot.get_effective(&target).expect("equivalent snapshot");
+        assert_eq!(first_snapshot.generation(), equivalent_snapshot.generation());
+        assert!(Arc::ptr_eq(&first, &second), "equivalent outer Arc retained");
         assert!(Arc::ptr_eq(
             first_budget,
             second.retry_budget.as_ref().expect("retry budget retained")
@@ -1354,5 +1443,45 @@ mod tests {
             fourth.ai_credential_outlier.as_ref().unwrap(),
             &default_generation
         ));
+        assert_eq!(first.connect_timeout, Some(std::time::Duration::from_millis(250)));
+    }
+
+    #[test]
+    fn multi_target_reconcile_publishes_one_coherent_generation() {
+        let store = BackendTrafficPolicyStore::new();
+        let target_a = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionBackend,
+            namespace: "batch".to_string(),
+            name: "a".to_string(),
+        };
+        let target_b = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionBackend,
+            namespace: "batch".to_string(),
+            name: "b".to_string(),
+        };
+        let before = store.snapshot();
+        assert_eq!(before.generation(), 0);
+
+        store.full_set_policies(HashMap::from([
+            (
+                "batch/policy-a".to_string(),
+                ai_policy("batch", "policy-a", "a", 20, "100ms"),
+            ),
+            (
+                "batch/policy-b".to_string(),
+                ai_policy("batch", "policy-b", "b", 20, "200ms"),
+            ),
+        ]));
+        let after = store.snapshot();
+        assert_eq!(after.generation(), 1, "one batch yields one publication");
+        assert_eq!(
+            after.get_effective(&target_a).unwrap().connect_timeout,
+            Some(std::time::Duration::from_millis(100))
+        );
+        assert_eq!(
+            after.get_effective(&target_b).unwrap().connect_timeout,
+            Some(std::time::Duration::from_millis(200))
+        );
+        assert!(before.get_effective(&target_a).is_none(), "old handle is immutable");
     }
 }

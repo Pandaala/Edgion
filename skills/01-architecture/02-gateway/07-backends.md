@@ -164,15 +164,20 @@ policy/
 ```
 
 `BackendTrafficPolicyStore` (`get_backend_traffic_policy_store()`, global
-singleton) is the single owner of per-service *policy config* — it is the
+singleton) is the single owner of typed Service and EdgionBackend policy
+config. Its immutable `BackendTrafficPolicySnapshot` publishes the complete
+affected target set in one generation and retains equivalent effective-policy
+`Arc`s. AI planning captures one snapshot before candidate iteration; Service
+selection continues to resolve the current snapshot at its existing late
+lookup point. The store is also the
 **sole writer** of `HealthCheckConfigStore`, `CircuitBreakerStore`, the
 `PanicThresholdStore` per-service override, and its own `lb_policies: DashMap<service_key, ParsedLBPolicy>`
 (read on the request path via `resolve_lb_policy(service_key)` /
 `backends::policy::resolve_lb_policy`). This replaced the former route-fed,
 ref-counted `lb/lb_policy/PolicyStore` (deleted).
 
-- **Arbitration** (`reapply_service(service_key)`): among all cached policies
-  whose `targetRefs` include this Service key, skip specs that fail
+- **Arbitration** (`reapply_target(PolicyTargetKey)`): among all cached policies
+  whose `targetRefs` include the typed target, skip specs that fail
   `get_validation_errors()`, then pick the minimum `precedence_key` (oldest
   `creationTimestamp`, then name) — same rule as `BackendTLSPolicy`. The
   winner's `loadBalancer` / `healthCheck` / `outlierDetection` sections are
@@ -180,7 +185,8 @@ ref-counted `lb/lb_policy/PolicyStore` (deleted).
   the four stores; no winner clears all four.
 - **`full_set_policies` / `partial_update_policies`**: `partial_update` is a
   real incremental diff (ConfHandler iron rule) — it recomputes only the
-  Service keys touched by the changed policies' old ∪ new `targetRefs`.
+  typed targets touched by the changed policies' old ∪ new `targetRefs`, then
+  publishes all affected targets together.
 - **EPS rebuild on LB change**: when `reapply_service` flips the applied LB
   policy for a key, it calls
   `config_client.trigger_endpoint_slice_update_event(service_key)` so
@@ -202,9 +208,20 @@ policy/
 └── mod.rs
 ```
 
-- Get the global instance via `get_global_backend_tls_policy_store()`.
-- During the `upstream_peer` phase, look up the TLS policy for the service.
+- Get the global instance via `get_global_backend_tls_policy_store()` and
+  capture its immutable, generation-bearing `BackendTLSPolicySnapshot`.
+- Lookup accepts a typed `PolicyTargetKey`, never a bare backend name. Service
+  targets use exact-section first and then whole-target fallback; another
+  section never wins. EdgionBackend AI targets are whole-target only.
+- The Controller publishes `resolvedTargetClass` only after target and TLS
+  references are valid. The Gateway indexes only resources whose marker,
+  canonical key, and target capability agree.
+- HTTP and gRPC Service paths project the key from the compiled logical backend
+  proof at the existing late lookup point. AI captures the TLS policy with the
+  request-stable candidate plan.
 - Configure the HttpPeer's TLS connection parameters (CA certificate, client certificate / key).
+- BackendTLS hostname controls certificate verification and SNI; it does not
+  rewrite the HTTP Host authority.
 - Secret key constants: `CA_CERT`, `CERT`, `KEY`.
 
 ## LB preload

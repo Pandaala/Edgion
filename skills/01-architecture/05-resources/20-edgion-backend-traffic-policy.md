@@ -58,9 +58,17 @@ existence.
 
 ## Gateway
 
-`BackendTrafficPolicyStore` is the sole writer and publishes one ArcSwap snapshot keyed by typed
-backend identity. It applies the same per-target oldest-wins arbitration and exposes stable handles
-for connection timeout, retry budget, circuit breaker, outlier detection, and half-open state.
+`BackendTrafficPolicyStore` is the sole writer and publishes one immutable ArcSwap snapshot keyed by
+typed backend identity. The snapshot has a monotonic generation. Full and partial reconciles compute
+all affected winners before one publication, so a reader cannot observe a half-applied target set.
+Equivalent updates retain the outer effective-policy Arc and generation; captured old Arcs remain
+valid for in-flight requests. It applies the same per-target oldest-wins arbitration and exposes
+stable handles for connection timeout, retry budget, circuit breaker, outlier detection, and
+half-open state.
+
+AI captures one complete policy snapshot before building its request candidates. Service deliberately
+retains its existing per-attempt live compatibility lookups. EdgionBackend runtime, EBTP, and
+BackendTLSPolicy are independent conf_sync publications; there is no cross-resource transaction.
 
 Service-only side effects—load-balancer selector compilation, endpoint active health checks,
 dynamic authority, and panic threshold—remain isolated to Service keys. For AI targets, the

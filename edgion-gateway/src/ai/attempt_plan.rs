@@ -6,6 +6,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use edgion_resources::resources::edgion_backend::ParsedAiModelPricing;
 use edgion_resources::resources::edgion_plugins::AiBackendSelection;
+use edgion_resources::resources::BackendTLSPolicy;
 
 use crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy;
 use crate::backends::LogicalBackendHandle;
@@ -40,6 +41,8 @@ pub struct AiPlanCandidate {
     pub backend: Option<Arc<RuntimeAiBackend>>,
     pub model: Option<AiCandidateModel>,
     pub effective_policy: Option<Arc<EffectiveBackendTrafficPolicy>>,
+    /// TLS policy winner captured with this candidate's request-stable plan.
+    pub backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
     /// Route/rule/target/model telemetry generation captured with this plan.
     pub adaptive: Option<Arc<AdaptiveTelemetryState>>,
     /// Credential state captured from the candidate's exact EBTP policy
@@ -58,6 +61,7 @@ impl fmt::Debug for AiPlanCandidate {
             .field("backend_available", &self.backend.is_some())
             .field("model", &self.model)
             .field("effective_policy", &self.effective_policy.is_some())
+            .field("backend_tls_policy", &self.backend_tls_policy.is_some())
             .field("adaptive", &self.adaptive.is_some())
             .field(
                 "credential_outliers_available",

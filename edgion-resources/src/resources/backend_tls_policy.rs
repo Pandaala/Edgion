@@ -3,6 +3,7 @@
 //! BackendTLSPolicy provides a way to configure how a Gateway connects to a backend via TLS.
 
 use super::common::PolicyAncestorStatus;
+use super::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass};
 use super::gateway::SecretObjectReference;
 use k8s_openapi::api::core::v1::Secret;
 use kube::CustomResource;
@@ -32,6 +33,11 @@ pub const OPTION_CLIENT_CERTIFICATE_REF: &str = "edgion.io/client-certificate-re
 pub struct BackendTLSPolicySpec {
     /// TargetRefs identifies the API object(s) to apply the policy to.
     pub target_refs: Vec<BackendTLSPolicyTargetRef>,
+
+    /// Controller-resolved target capability used to gate runtime publication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_target_class: Option<ResolvedPolicyTargetClass>,
 
     /// Validation contains backend TLS validation configuration.
     pub validation: BackendTLSPolicyValidation,
@@ -82,6 +88,11 @@ pub struct BackendTLSPolicyAlpha3Spec {
     /// TargetRefs identifies the API object(s) to apply the policy to.
     pub target_refs: Vec<BackendTLSPolicyTargetRef>,
 
+    /// Controller-resolved target capability used to gate runtime publication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_target_class: Option<ResolvedPolicyTargetClass>,
+
     /// Validation contains backend TLS validation configuration.
     pub validation: BackendTLSPolicyValidation,
 
@@ -131,6 +142,29 @@ pub struct BackendTLSPolicyTargetRef {
     /// SectionName is the name of a section within the target resource.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section_name: Option<String>,
+}
+
+impl BackendTLSPolicyTargetRef {
+    /// Parse the accepted direct policy target group/kind pair.
+    pub fn target_kind(&self) -> Result<PolicyTargetKind, String> {
+        match (self.group.as_str(), self.kind.as_str()) {
+            ("" | "core", "Service") => Ok(PolicyTargetKind::Service),
+            ("edgion.io", "EdgionBackend") => Ok(PolicyTargetKind::EdgionBackend),
+            _ => Err(format!(
+                "targetRef {}/{} {}: supported targets are core-group Service or edgion.io/EdgionBackend",
+                self.group, self.kind, self.name
+            )),
+        }
+    }
+
+    /// Resolve this same-namespace reference to the canonical policy identity.
+    pub fn canonical_key(&self, namespace: &str) -> Result<PolicyTargetKey, String> {
+        Ok(PolicyTargetKey {
+            target_kind: self.target_kind()?,
+            namespace: namespace.to_string(),
+            name: self.name.clone(),
+        })
+    }
 }
 
 /// BackendTLSPolicyValidation contains backend TLS validation configuration.
@@ -277,6 +311,7 @@ pub trait BtpSpecView {
     fn resolved_ca_certificates(&self) -> Option<&[Secret]>;
     fn resolved_client_certificate(&self) -> Option<&Secret>;
     fn use_system_ca(&self) -> bool;
+    fn resolved_target_class(&self) -> Option<ResolvedPolicyTargetClass>;
 
     fn client_certificate_secret_ref(&self) -> Result<Option<SecretObjectReference>, String> {
         parse_client_certificate_option(self.options())
@@ -302,6 +337,9 @@ impl BtpSpecView for BackendTLSPolicySpec {
     fn use_system_ca(&self) -> bool {
         self.use_system_ca
     }
+    fn resolved_target_class(&self) -> Option<ResolvedPolicyTargetClass> {
+        self.resolved_target_class
+    }
 }
 
 impl BtpSpecView for BackendTLSPolicyAlpha3Spec {
@@ -322,6 +360,9 @@ impl BtpSpecView for BackendTLSPolicyAlpha3Spec {
     }
     fn use_system_ca(&self) -> bool {
         self.use_system_ca
+    }
+    fn resolved_target_class(&self) -> Option<ResolvedPolicyTargetClass> {
+        self.resolved_target_class
     }
 }
 
@@ -348,6 +389,7 @@ impl From<BackendTLSPolicyAlpha3> for BackendTLSPolicy {
             metadata: alpha3.metadata,
             spec: BackendTLSPolicySpec {
                 target_refs: alpha3.spec.target_refs,
+                resolved_target_class: alpha3.spec.resolved_target_class,
                 validation: alpha3.spec.validation,
                 options: alpha3.spec.options,
                 resolved_ca_certificates: alpha3.spec.resolved_ca_certificates,
@@ -365,6 +407,7 @@ impl From<BackendTLSPolicy> for BackendTLSPolicyAlpha3 {
             metadata: v1.metadata,
             spec: BackendTLSPolicyAlpha3Spec {
                 target_refs: v1.spec.target_refs,
+                resolved_target_class: v1.spec.resolved_target_class,
                 validation: v1.spec.validation,
                 options: v1.spec.options,
                 resolved_ca_certificates: v1.spec.resolved_ca_certificates,
@@ -416,6 +459,7 @@ mod tests {
                     name: "svc".to_string(),
                     section_name: None,
                 }],
+                resolved_target_class: Some(ResolvedPolicyTargetClass::Service),
                 validation: BackendTLSPolicyValidation {
                     ca_certificate_refs: None,
                     hostname: "backend.example.com".to_string(),
@@ -501,6 +545,46 @@ mod tests {
         let policy = make_policy(None);
         let json = serde_json::to_value(&policy.spec).unwrap();
         assert!(json.get("useSystemCa").is_none());
+    }
+
+    #[test]
+    fn canonical_target_identity_is_typed() {
+        let service = BackendTLSPolicyTargetRef {
+            group: "core".to_string(),
+            kind: "Service".to_string(),
+            name: "shared".to_string(),
+            section_name: Some("https".to_string()),
+        };
+        let backend = BackendTLSPolicyTargetRef {
+            group: "edgion.io".to_string(),
+            kind: "EdgionBackend".to_string(),
+            name: "shared".to_string(),
+            section_name: None,
+        };
+
+        assert_eq!(
+            service.canonical_key("tenant").unwrap().target_kind,
+            PolicyTargetKind::Service
+        );
+        assert_eq!(
+            backend.canonical_key("tenant").unwrap().target_kind,
+            PolicyTargetKind::EdgionBackend
+        );
+        assert_ne!(
+            service.canonical_key("tenant").unwrap(),
+            backend.canonical_key("tenant").unwrap()
+        );
+    }
+
+    #[test]
+    fn resolved_target_class_is_transport_only() {
+        let policy = make_policy(None);
+        let json = serde_json::to_value(&policy.spec).unwrap();
+        assert_eq!(json["resolvedTargetClass"], "service");
+
+        let schema = schemars::schema_for!(BackendTLSPolicySpec);
+        let schema_json = serde_json::to_value(schema).unwrap();
+        assert!(!schema_json.to_string().contains("resolvedTargetClass"));
     }
 
     #[test]

@@ -7,7 +7,7 @@ description: BackendTLSPolicy resource — upstream mTLS configuration, CA certi
 
 > **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-BackendTLSPolicy is a Gateway API standard policy resource used to configure upstream TLS connections from the Gateway to backend Services, including CA certificate verification and client certificates (mTLS). It binds to a specific Service via `targetRef`.
+BackendTLSPolicy is a Gateway API standard policy resource used to configure upstream TLS connections from the Gateway to direct backend targets, including CA certificate verification and client certificates (mTLS). Edgion accepts core `Service` and `edgion.io/EdgionBackend` targets. The latter currently requires the `spec.ai` variant and an HTTPS provider endpoint.
 
 ## Source code locations
 
@@ -20,10 +20,13 @@ BackendTLSPolicy is a Gateway API standard policy resource used to configure ups
 
 ### parse
 
-1. **Conflict-detection registration**:
+1. **Typed target evaluation and conflict registration**:
    - Compute old siblings (before clearing, used for requeue)
    - Clear the old target registrations of this BackendTLSPolicy in `BackendTLSPolicyTargetManager`
-   - Iterate `spec.target_refs`, generate conflict keys in the format `{ns}/{svc_name}[::sectionName]`, and register
+   - Require exactly one targetRef and derive a typed `(kind, namespace, name, section)` identity
+   - Register the canonical dependency before existence lookup, so target creation can self-heal a missing policy
+   - Resolve Service existence or the EdgionBackend AI capability; AI rejects `sectionName` and plaintext endpoints
+   - Set the schema-hidden `resolvedTargetClass` marker and enter conflict arbitration only after complete eligibility
    - Store `creationTimestamp` for conflict-priority ordering
    - Requeue old siblings (when targets change, old siblings need to re-evaluate their conflict status)
 2. **Clear stale references**: clear records for this BackendTLSPolicy in SecretRefManager
@@ -62,15 +65,21 @@ Use synthetic PolicyAncestorStatus (because BackendTLSPolicy's target is a Servi
 
 Uses `BackendTLSPolicyTargetManager` (a `BidirectionalRefManager<ResourceRef>` instance), following the same pattern as `ServiceRefManager` and `SecretRefManager`:
 
-- **Conflict key**: `"{ns}/{svc_name}"` or `"{ns}/{svc_name}::{sectionName}"`; different sectionNames do not conflict
+- **Conflict key**: typed target kind + namespace + name + optional section; same-name Service and EdgionBackend targets never collide
 - **Priority**: creationTimestamp ASC → `{namespace}/{name}` lexicographic order; the first is the winner
 - **Sibling requeue**: parse stage requeues old siblings; on_change stage requeues new siblings; on_delete stage requeues all siblings
+- **Section lookup**: an exact Service-port winner is preferred, then the whole-Service winner; another section is never a fallback. EdgionBackend is whole-target only.
 
 ## Gateway-side processing
 
-After BackendTLSPolicy is synced to the Gateway side, when initiating a connection to the backend Service:
+The Gateway keeps one immutable typed policy snapshot with a monotonic generation. It indexes only policies whose Controller marker matches their typed target. Equivalent updates retain the policy Arc and generation; material changes publish once and old captured Arcs remain valid for in-flight requests.
+
+When initiating a connection to a Service or AI backend:
 - Use the CA certificates in `resolved_ca_certificates` to verify the backend's server certificate
 - Use the client certificate in `resolved_client_certificate` to provide identity to the backend (mTLS)
+- Use the same canonical peer builder for both target classes
+
+Service freezes the TLS winner when the logical Service is selected. AI captures the winner in its request-stable candidate plan. AI keeps the provider endpoint Host authority; the policy hostname owns SNI and certificate authentication only.
 
 ## Cross-resource relationships
 
@@ -80,5 +89,6 @@ After BackendTLSPolicy is synced to the Gateway side, when initiating a connecti
 | BackendTLSPolicy → ConfigMap | ConfigMap | caCertificateRefs | CA certificate (ConfigMap form) |
 | BackendTLSPolicy → Secret | Secret | clientCertificateRef | Client certificate for mTLS |
 | BackendTLSPolicy → Service | Service | targetRef | Target Service the policy binds to |
+| BackendTLSPolicy → EdgionBackend | EdgionBackend | targetRef | Direct AI target; no nested-Service policy inheritance |
 | BackendTLSPolicy ↔ BackendTLSPolicy | BackendTLSPolicy | BackendTLSPolicyTargetManager | Same-target conflict detection + sibling requeue |
 | BackendTLSPolicy ← SecretRefManager | Secret | cascading requeue | Secret changes automatically re-process the policy |
