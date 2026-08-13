@@ -650,13 +650,20 @@ impl AnthropicResponseProcessor {
     }
 
     fn fail_streaming(&mut self, chunk: &mut Option<Bytes>, session: &mut dyn PluginSession) {
-        self.sealed = true;
-        if self.semantic_records.is_some() {
-            self.semantic_records = Some(CanonicalRecordBatch::new());
+        if !session.try_claim_response_terminal(crate::ai::terminal::ResponseTerminalCause::TranslationFailure) {
+            self.sealed = true;
+            self.semantic_records = None;
+            *chunk = None;
+            return;
         }
+        self.sealed = true;
+        // A translation failure wins in the AI slot. Do not hand its fixed
+        // client error to the preempted semantic guard as provider content.
+        self.semantic_records = None;
         self.pending_output_chars = stream_error_output_chars();
         self.record_translation_failure(session);
         *chunk = Some(Bytes::from_static(STREAM_ERROR));
+        session.mark_response_terminal_emission(crate::ai::terminal::TerminalEmission::Rendered);
     }
 
     fn record_translation_failure(&mut self, session: &mut dyn PluginSession) {
@@ -692,6 +699,9 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
         if self.sealed {
             *chunk = None;
             if matches!(self.mode, BodyMode::Streaming) {
+                if session.try_claim_response_terminal(crate::ai::terminal::ResponseTerminalCause::ProviderCompleted) {
+                    session.mark_response_terminal_emission(crate::ai::terminal::TerminalEmission::NoEvent);
+                }
                 sink.terminate();
             }
             return;
@@ -731,6 +741,9 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
             terminate_over_quota(&self.usage_shared, sink, session, true);
         }
         if self.sealed && matches!(self.mode, BodyMode::Streaming) {
+            if session.try_claim_response_terminal(crate::ai::terminal::ResponseTerminalCause::ProviderCompleted) {
+                session.mark_response_terminal_emission(crate::ai::terminal::TerminalEmission::Rendered);
+            }
             sink.terminate();
         }
         if let Some(mut batch) = self.semantic_records.take() {
@@ -742,10 +755,20 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
             } else {
                 *chunk = None;
             }
+            if sink.is_terminated() {
+                // The AI slot won, so the semantic guard will be preempted.
+                // Reclaim only translator-produced client bytes from this
+                // callback; the batch never contains undecoded provider tail.
+                *chunk = batch.into_raw_bytes().ok();
+                return;
+            }
             // Publish an empty active batch at EOS as an explicit semantic
             // source boundary for a window retained by an earlier callback.
             if (!batch.is_empty() || end_of_stream) && session.publish_canonical_records(batch).is_err() {
-                sink.terminate();
+                if session.try_claim_response_terminal(crate::ai::terminal::ResponseTerminalCause::ProcessorFailure) {
+                    session.mark_response_terminal_emission(crate::ai::terminal::TerminalEmission::NoEvent);
+                    sink.terminate();
+                }
             }
         }
         if !sink.is_terminated() {
@@ -1041,6 +1064,8 @@ mod tests {
     fn mock_session() -> MockPluginSession {
         let mut session = MockPluginSession::new();
         session.expect_semantic_guard_active().return_const(false);
+        session.expect_try_claim_response_terminal().return_const(true);
+        session.expect_mark_response_terminal_emission().return_const(());
         session
     }
 

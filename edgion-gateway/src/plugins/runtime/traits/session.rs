@@ -362,6 +362,26 @@ pub trait PluginSession: Send + Sync {
         None
     }
 
+    /// Claim the request's first irreversible response terminal for the active
+    /// processor instance. Alternate adapters cannot claim by default.
+    fn try_claim_response_terminal(&mut self, _cause: crate::ai::terminal::ResponseTerminalCause) -> bool {
+        false
+    }
+
+    /// Record whether the claimed terminal produced a client-visible event.
+    fn mark_response_terminal_emission(&mut self, _emission: crate::ai::terminal::TerminalEmission) {}
+
+    /// Return the client dialect and final response eligibility used by the
+    /// bounded terminal renderer.
+    fn ai_terminal_render_context(
+        &self,
+    ) -> Option<(
+        crate::ai::terminal::AiClientStreamDialect,
+        crate::ai::terminal::FinalResponseEligibility,
+    )> {
+        None
+    }
+
     /// Disable canonical semantic withholding before response-body processing
     /// begins. This is used only by an attached Guardrail that has selected its
     /// configured pre-commit fail-open path.

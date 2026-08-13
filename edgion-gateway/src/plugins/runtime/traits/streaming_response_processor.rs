@@ -63,6 +63,14 @@ pub trait StreamingResponseProcessor: Send + Sync {
     /// cancellation). Called once from the universal logging boundary.
     fn finalize_incomplete(&mut self, _outcome: &'static str, _reason: &'static str) {}
 
+    /// Promptly settle a request-scoped owner after another processor instance
+    /// wins the response terminal. The winning instance is never called.
+    fn on_terminal_preempted(&mut self, _winner: crate::ai::terminal::ResponseTerminalCause) {}
+
+    /// Release resources held across an async callback when its future is
+    /// cancelled before the run set can be restored to the request context.
+    fn release_inflight(&mut self) {}
+
     /// Called for every upstream response body chunk, including the
     /// end-of-stream call (where `chunk` may be `None`). `stream_kind` is the
     /// allocation-free classification copied from the request context.

@@ -13,6 +13,7 @@ pub mod dispatch;
 pub mod error;
 pub mod quota;
 pub mod routing;
+pub(crate) mod terminal;
 pub mod usage;
 
 pub(crate) use error::render_openai_error;

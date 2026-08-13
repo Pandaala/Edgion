@@ -16,6 +16,7 @@ use serde::Serialize;
 use crate::ai::canonical_sse::{observe_canonical_event, CanonicalRecordBatch};
 use crate::ai::error::render_openai_error;
 use crate::ai::quota::{AiQuotaRequest, QuotaAccumulator};
+use crate::ai::terminal::{ResponseTerminalCause, TerminalEmission};
 use crate::ai::AiProxyError;
 use crate::ctx::ResponseStreamKind;
 use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
@@ -332,9 +333,24 @@ fn terminate_ai_stream(
     event: &LazyLock<Bytes>,
     terminal_status: EdgionStatus,
 ) {
-    if inject && sink.push((*event).clone()).is_err() {
-        session.add_error(EdgionStatus::AiQuotaErrorEventDropped);
+    let cause = match terminal_status {
+        EdgionStatus::AiQuotaOverLimitTerminated => ResponseTerminalCause::QuotaExceeded,
+        _ => ResponseTerminalCause::QuotaUnavailable,
+    };
+    if !session.try_claim_response_terminal(cause) {
+        return;
     }
+    let emission = if inject {
+        if sink.push((*event).clone()).is_err() {
+            session.add_error(EdgionStatus::AiQuotaErrorEventDropped);
+            TerminalEmission::NoEvent
+        } else {
+            TerminalEmission::Rendered
+        }
+    } else {
+        TerminalEmission::NoEvent
+    };
+    session.mark_response_terminal_emission(emission);
     sink.terminate();
     shared.mark_gateway_terminated();
     session.add_error(terminal_status);
@@ -1468,7 +1484,11 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
             if let Some(batch) = batch {
                 canonical_batch = Some(batch);
             } else if semantic_guard_active && self.semantic_source_overflowed {
-                sink.terminate();
+                if session.try_claim_response_terminal(ResponseTerminalCause::ProcessorFailure) {
+                    session.mark_response_terminal_emission(TerminalEmission::NoEvent);
+                    self.shared.mark_gateway_terminated();
+                    sink.terminate();
+                }
             } else {
                 *chunk = Some(original);
             }
@@ -1498,7 +1518,11 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
                 // An empty batch is the explicit EOS signal that makes the
                 // guard resolve a below-threshold window retained earlier.
                 if finish_overflowed || session.publish_canonical_records(batch).is_err() {
-                    sink.terminate();
+                    if session.try_claim_response_terminal(ResponseTerminalCause::ProcessorFailure) {
+                        session.mark_response_terminal_emission(TerminalEmission::NoEvent);
+                        self.shared.mark_gateway_terminated();
+                        sink.terminate();
+                    }
                 }
             }
             self.finish(stream_kind);
@@ -1506,7 +1530,11 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
         }
         if let Some(batch) = canonical_batch {
             if session.publish_canonical_records(batch).is_err() {
-                sink.terminate();
+                if session.try_claim_response_terminal(ResponseTerminalCause::ProcessorFailure) {
+                    session.mark_response_terminal_emission(TerminalEmission::NoEvent);
+                    self.shared.mark_gateway_terminated();
+                    sink.terminate();
+                }
             }
         }
         // Gated on `requested_streaming`, not `stream_kind`. In the ordinary
@@ -1568,6 +1596,16 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
                 stream_kind == ResponseStreamKind::Sse,
             );
         }
+        // A semantic source normally transfers the current transport bytes to
+        // the canonical handoff for Guardrail. A terminal claimed in this AI
+        // slot preempts Guardrail, so reclaim those bytes for the pump before
+        // the driver discards the stale handoff. This preserves quota's
+        // established current-chunk-before-terminal-event wire contract.
+        if sink.is_terminated() && semantic_guard_active && chunk.is_none() {
+            *chunk = session
+                .take_canonical_records()
+                .and_then(|batch| batch.into_raw_bytes().ok());
+        }
     }
 }
 
@@ -1611,6 +1649,8 @@ mod tests {
     fn mock_session() -> MockPluginSession {
         let mut session = MockPluginSession::new();
         session.expect_semantic_guard_active().return_const(false);
+        session.expect_try_claim_response_terminal().return_const(true);
+        session.expect_mark_response_terminal_emission().return_const(());
         session
     }
 

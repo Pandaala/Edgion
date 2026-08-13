@@ -1,4 +1,5 @@
 use super::EdgionHttpProxy;
+use crate::ai::terminal::{ResponseClose, ResponseTerminalState};
 use crate::ai::{estimated_cost_usd, GenAiAttemptUsageSource, GenAiSummary, ReportedAiUsage};
 use crate::cli::config::{get_backend_requests_config, get_genai_tokens_config, get_request_duration_config};
 use crate::ctx::ResponseStreamKind;
@@ -42,6 +43,8 @@ pub async fn logging(
     finalize_ai_usage(ctx);
     finalize_ai_quota(ctx).await;
     record_request_metrics(ctx, _e);
+
+    finalize_response_terminal_for_logging(ctx, _e.map(PingoraError::esource).cloned());
 
     // Streamed body handlers whose pump never reached EOS (client abort,
     // early upstream response) still carry log entries — sweep them into the
@@ -1121,5 +1124,18 @@ mod genai_tests {
         let ordinary = EdgionHttpContext::new();
         let ordinary_json = crate::observe::AccessLogEntry::from_context(&ordinary).to_json();
         assert!(!ordinary_json.contains("\"genai\""));
+    }
+}
+pub(super) fn finalize_response_terminal_for_logging(ctx: &mut EdgionHttpContext, error_source: Option<ErrorSource>) {
+    if matches!(ctx.response_terminal_state, ResponseTerminalState::Claimed { .. }) {
+        ctx.response_terminal_state.settle_pending_without_event();
+        ctx.response_terminal_state.close_gateway();
+    } else {
+        let close = match error_source {
+            Some(ErrorSource::Upstream) => ResponseClose::UpstreamAbort,
+            Some(ErrorSource::Downstream) | None => ResponseClose::DownstreamCancel,
+            Some(ErrorSource::Internal | ErrorSource::Unset) => ResponseClose::UpstreamAbort,
+        };
+        ctx.response_terminal_state.close_open(close);
     }
 }

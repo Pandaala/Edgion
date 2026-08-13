@@ -28,6 +28,7 @@ pub(super) const RESPONSE_WINDOW_CAP: usize = 1024 * 1024;
 trait ResponseExchange: Send + Sync {
     async fn exchange(&self, request: ProcessingRequest, last: bool) -> Result<ProcessingResponse, tonic::Status>;
     fn terminal(&self, outcome: &'static str, reason: &'static str);
+    fn release_inflight(&self) {}
 }
 
 #[async_trait]
@@ -38,6 +39,10 @@ impl ResponseExchange for AttachedExtProc {
 
     fn terminal(&self, outcome: &'static str, reason: &'static str) {
         self.mark_terminal(outcome, reason);
+    }
+
+    fn release_inflight(&self) {
+        AttachedExtProc::release_inflight(self);
     }
 }
 
@@ -79,9 +84,14 @@ impl ExtProcResponseProcessor {
         self.done = true;
         session.install_dye_plan(self.dye_plan.clone());
         if !self.failure_mode_allow {
+            if !session.try_claim_response_terminal(crate::ai::terminal::ResponseTerminalCause::ProcessorFailure) {
+                self.owner.terminal("superseded", "terminal-lost");
+                return;
+            }
             self.owner.terminal("fail-close", reason);
             session.record_outcome(DyeOutcome::FailClose, reason);
             *chunk = None;
+            session.mark_response_terminal_emission(crate::ai::terminal::TerminalEmission::NoEvent);
             sink.terminate();
         } else {
             self.owner.terminal("fail-open", reason);
@@ -98,6 +108,16 @@ impl StreamingResponseProcessor for ExtProcResponseProcessor {
 
     fn changes_body_length(&self) -> bool {
         true
+    }
+
+    fn on_terminal_preempted(&mut self, winner: crate::ai::terminal::ResponseTerminalCause) {
+        self.done = true;
+        self.owner.terminal("superseded", winner.as_str());
+    }
+
+    fn release_inflight(&mut self) {
+        self.done = true;
+        self.owner.release_inflight();
     }
 
     async fn on_chunk(
@@ -217,6 +237,13 @@ mod tests {
         }
     }
 
+    fn mock_session() -> MockPluginSession {
+        let mut session = MockPluginSession::new();
+        session.expect_try_claim_response_terminal().return_const(true);
+        session.expect_mark_response_terminal_emission().return_const(());
+        session
+    }
+
     fn processor(
         result: Result<ProcessingResponse, tonic::Status>,
         fail_open: bool,
@@ -237,7 +264,7 @@ mod tests {
     }
 
     fn failure_session(outcome: DyeOutcome) -> MockPluginSession {
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         session.expect_install_dye_plan().times(1).return_const(());
         session
             .expect_record_outcome()
@@ -268,7 +295,7 @@ mod tests {
             let (mut processor, _) = processor(Ok(verdict(mutation, false)), false);
             let mut chunk = Some(Bytes::from_static(b"original"));
             let mut sink = ResponseBodySink::new();
-            let mut session = MockPluginSession::new();
+            let mut session = mock_session();
             processor
                 .on_chunk(&mut chunk, false, ResponseStreamKind::None, &mut sink, &mut session)
                 .await;
@@ -282,7 +309,7 @@ mod tests {
         let (mut exact, _) = processor(Ok(verdict(None, false)), false);
         let mut exact_chunk = Some(Bytes::from(vec![b'x'; RESPONSE_WINDOW_CAP]));
         let mut sink = ResponseBodySink::new();
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         exact
             .on_chunk(
                 &mut exact_chunk,
@@ -313,7 +340,7 @@ mod tests {
         );
         let mut input = Some(Bytes::from_static(b"x"));
         let mut sink = ResponseBodySink::new();
-        let mut session = MockPluginSession::new();
+        let mut session = mock_session();
         exact_replacement
             .on_chunk(&mut input, false, ResponseStreamKind::None, &mut sink, &mut session)
             .await;

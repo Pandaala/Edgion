@@ -150,7 +150,7 @@ spec:
         maxResponseBytes: 4096
         request:
           path:
-            template: /guardrail/decision/pass
+            template: /guardrail/decision/replace
         windowBytes: 1
         overlapBytes: 0
         failOpen: false
@@ -164,3 +164,149 @@ spec:
           responseHeaderMode: SEND
           responseBodyMode: STREAMED
         failureModeAllow: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-reject-ext-proc
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/reject
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: false
+    - type: ExtProc
+      config:
+        grpcService:
+          target: 127.0.0.1:30041
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+          responseHeaderMode: SEND
+          responseBodyMode: STREAMED
+        failureModeAllow: false
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: guardrail-anthropic-credential
+  namespace: edgion-test
+type: Opaque
+stringData:
+  api-key: anthropic-provider-test-key
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: guardrail-anthropic-provider
+  namespace: edgion-test
+spec:
+  ai:
+    provider: Anthropic
+    endpoint: http://127.0.0.1:30001/anthropic/prefix
+    allowInsecureHttp: true
+    credentialPool:
+      credentials:
+        - name: primary
+          secretRef:
+            name: guardrail-anthropic-credential
+    models:
+      - name: claude-fixture
+        aliases:
+          - claude-alias
+    defaults:
+      streaming: true
+      maxOutputTokens: 64
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-anthropic-pass
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/pass
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-anthropic-replace
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/replace
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-anthropic-reject
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/reject
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: false

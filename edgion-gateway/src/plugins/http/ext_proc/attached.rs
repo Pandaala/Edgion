@@ -63,6 +63,16 @@ impl AttachedExtProc {
         Self::new(ExtProcClient::new(&config).expect("test target must build lazily"))
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_state(&self) -> (&'static str, &'static str, bool) {
+        let summary = self.summary.lock().expect("test summary lock");
+        let finished = self
+            .state
+            .lock()
+            .is_ok_and(|state| matches!(*state, StreamState::Finished));
+        (summary.outcome, summary.reason, finished)
+    }
+
     pub(super) async fn exchange(
         &self,
         request: ProcessingRequest,
@@ -150,6 +160,12 @@ impl AttachedExtProc {
         }
     }
 
+    pub(super) fn release_inflight(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            *state = StreamState::Finished;
+        }
+    }
+
     pub(crate) fn terminalize_for_logging(&self) {
         let was_open = if let Ok(mut state) = self.state.lock() {
             if matches!(*state, StreamState::Lazy | StreamState::Open(_)) {
@@ -161,7 +177,7 @@ impl AttachedExtProc {
         } else {
             false
         };
-        if was_open {
+        if was_open || self.summary.lock().is_ok_and(|summary| summary.outcome == "pending") {
             if let Ok(mut summary) = self.summary.lock() {
                 if summary.outcome == "pending" {
                     summary.outcome = "cancelled";

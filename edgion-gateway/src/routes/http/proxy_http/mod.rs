@@ -39,6 +39,9 @@ mod pg_upstream_request_filter;
 mod pg_upstream_response_body_filter;
 mod pg_upstream_response_filter;
 
+#[cfg(test)]
+pub(crate) use pg_upstream_response_body_filter::run_stream_processors;
+
 pub use content_type::{is_grpc_content_type, is_grpc_web_content_type};
 pub use global_plugins_resolve::{resolve_gateway_plugins, resolve_global_plugins, resolve_route_ext_refs};
 pub use parse_timeout::{ParsedBackendTimeout, ParsedClientTimeout, ParsedTimeouts};

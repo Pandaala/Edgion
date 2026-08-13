@@ -194,6 +194,11 @@ pub async fn response_filter(
     // response plugin and framing repair, and immediately before Pingora runs
     // the downstream modules' response-header filters.
     ctx.response_stream_kind = classify_response_stream_kind(upstream_response);
+    ctx.final_response_eligibility = Some(final_response_eligibility(
+        &session.req_header().method,
+        upstream_response.status,
+        ctx.response_stream_kind,
+    ));
     if let Some(compression_ctx) = session.downstream_modules_ctx.get_mut::<ResponseCompression>() {
         let level = response_compression_level(
             enable_compression(edgion_http),
@@ -208,7 +213,7 @@ pub async fn response_filter(
 
 #[cfg(test)]
 mod tests {
-    use super::{response_compression_level, DEFAULT_COMPRESSION_LEVEL};
+    use super::{final_response_eligibility, response_compression_level, DEFAULT_COMPRESSION_LEVEL};
     use crate::ctx::ResponseStreamKind;
     use pingora_core::protocols::http::compression::ResponseCompressionCtx;
     use pingora_http::{RequestHeader, ResponseHeader};
@@ -220,6 +225,28 @@ mod tests {
             response.insert_header("content-length", content_length).unwrap();
         }
         response
+    }
+
+    #[test]
+    fn final_response_eligibility_uses_live_method_status_and_stream_kind() {
+        for status in [
+            http::StatusCode::CONTINUE,
+            http::StatusCode::NO_CONTENT,
+            http::StatusCode::NOT_MODIFIED,
+        ] {
+            assert!(!final_response_eligibility(&http::Method::GET, status, ResponseStreamKind::Sse).allows_sse());
+        }
+        assert!(
+            !final_response_eligibility(&http::Method::HEAD, http::StatusCode::OK, ResponseStreamKind::Sse)
+                .allows_sse()
+        );
+        assert!(
+            final_response_eligibility(&http::Method::GET, http::StatusCode::OK, ResponseStreamKind::Sse).allows_sse()
+        );
+        assert!(
+            !final_response_eligibility(&http::Method::GET, http::StatusCode::OK, ResponseStreamKind::None)
+                .allows_sse()
+        );
     }
 
     #[test]
@@ -303,5 +330,16 @@ mod tests {
         compression.response_header_filter(&mut response, false);
 
         assert!(response.headers.get("content-encoding").is_none());
+    }
+}
+fn final_response_eligibility(
+    method: &http::Method,
+    status: http::StatusCode,
+    stream_kind: crate::ctx::ResponseStreamKind,
+) -> crate::ai::terminal::FinalResponseEligibility {
+    crate::ai::terminal::FinalResponseEligibility {
+        method_allows_body: method != http::Method::HEAD,
+        status_allows_body: !status.is_informational() && !matches!(status.as_u16(), 204 | 304),
+        stream_kind,
     }
 }

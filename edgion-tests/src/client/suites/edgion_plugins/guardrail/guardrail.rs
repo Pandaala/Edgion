@@ -14,8 +14,13 @@ const REJECT_HOST: &str = "guardrail-reject.example.com";
 const MALFORMED_HOST: &str = "guardrail-malformed.example.com";
 const TIMEOUT_HOST: &str = "guardrail-timeout.example.com";
 const EXT_PROC_HOST: &str = "guardrail-ext-proc.example.com";
+const REJECT_EXT_PROC_HOST: &str = "guardrail-reject-ext-proc.example.com";
+const ANTHROPIC_PASS_HOST: &str = "guardrail-anthropic-pass.example.com";
+const ANTHROPIC_REPLACE_HOST: &str = "guardrail-anthropic-replace.example.com";
+const ANTHROPIC_REJECT_HOST: &str = "guardrail-anthropic-reject.example.com";
 const PATH: &str = "/v1/chat/completions?mock_mode=guardrail_split";
 const TWO_WINDOWS_PATH: &str = "/v1/chat/completions?mock_mode=guardrail_two_windows";
+const REJECT_EVENT: &[u8] = b"event: error\ndata: {\"error\":{\"message\":\"The response was blocked by a content policy.\",\"type\":\"content_filter_error\",\"code\":\"content_policy_violation\"}}\n\n";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,15 +76,20 @@ async fn request_at_path(
     path: &str,
     trace_id: Option<&str>,
 ) -> Result<reqwest::Response, String> {
+    let anthropic = host.starts_with("guardrail-anthropic-");
     let mut request = ctx
         .http_client
         .post(format!("{}{path}", ctx.http_url()))
         .header("host", host)
+        .header("connection", "close")
         .json(&json!({
-            "model": "fixture-model",
+            "model": if anthropic { "claude-alias" } else { "fixture-model" },
             "stream": true,
             "messages": [{"role": "user", "content": "fixture prompt"}]
         }));
+    if anthropic {
+        request = request.header("x-anthropic-fixture-mode", "default");
+    }
     if let Some(trace_id) = trace_id {
         request = request
             .header("x-trace-id", trace_id)
@@ -93,6 +103,36 @@ async fn request_at_path(
 
 async fn request(ctx: &TestContext, host: &str) -> Result<reqwest::Response, String> {
     request_with_trace(ctx, host, None).await
+}
+
+async fn request_anthropic_mode(
+    ctx: &TestContext,
+    host: &str,
+    mode: &str,
+    h2: bool,
+) -> Result<reqwest::Response, String> {
+    let client = if h2 {
+        reqwest::Client::builder()
+            .no_proxy()
+            .http2_prior_knowledge()
+            .build()
+            .map_err(|error| format!("failed to build H2 client: {error}"))?
+    } else {
+        ctx.http_client.clone()
+    };
+    client
+        .post(format!("{}{PATH}", ctx.http_url()))
+        .header("host", host)
+        .header("x-anthropic-fixture-mode", mode)
+        .header("connection", "close")
+        .json(&json!({
+            "model": "claude-alias",
+            "stream": true,
+            "messages": [{"role": "user", "content": "fixture prompt"}]
+        }))
+        .send()
+        .await
+        .map_err(|error| format!("Anthropic Guardrail request failed: {error}"))
 }
 
 fn fixture_url(ctx: &TestContext, path: &str) -> String {
@@ -263,13 +303,21 @@ impl GuardrailTestSuite {
                                 String::from_utf8_lossy(&delivered)
                             ),
                         )
+                    } else if delivered != REJECT_EVENT {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "policy Reject did not emit the one canonical refusal event: {}",
+                                String::from_utf8_lossy(&delivered)
+                            ),
+                        )
                     } else {
                         if let Err(error) = assert_one_canonical_call(&ctx, "reject").await {
                             return TestResult::failed(start.elapsed(), error);
                         }
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "policy Reject discarded the held window before termination".to_string(),
+                            "policy Reject discarded the held window and emitted one refusal event".to_string(),
                         )
                     }
                 })
@@ -386,13 +434,13 @@ impl GuardrailTestSuite {
                     let body_ok = body
                         .windows(b"response-by-attached-ext-proc".len())
                         .any(|window| window == b"response-by-attached-ext-proc");
-                    if let Err(error) = assert_one_canonical_call(&ctx, "pass").await {
+                    if let Err(error) = assert_one_canonical_call(&ctx, "replace").await {
                         return TestResult::failed(start.elapsed(), error);
                     }
                     if header_ok && body_ok {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "Guardrail called once before ExtProc mutated the response".to_string(),
+                            "Guardrail Replace ran before ExtProc mutated the response".to_string(),
                         )
                     } else {
                         TestResult::failed(
@@ -403,6 +451,190 @@ impl GuardrailTestSuite {
                             ),
                         )
                     }
+                })
+            },
+        )
+    }
+
+    fn reject_preempts_ext_proc_body_and_h2_closes_cleanly() -> TestCase {
+        TestCase::new(
+            "reject_preempts_ext_proc_body_and_h2_closes_cleanly",
+            "Guardrail Reject bypasses ExtProc body mutation and emits the same final event on H1 and H2",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    for h2 in [false, true] {
+                        if let Err(error) = reset_observations(&ctx).await {
+                            return TestResult::failed(start.elapsed(), error);
+                        }
+                        let response = if h2 {
+                            let address = match format!("{}:{}", ctx.target_host, ctx.http_port).parse() {
+                                Ok(address) => address,
+                                Err(error) => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("invalid test address: {error}"),
+                                    )
+                                }
+                            };
+                            let client = match reqwest::Client::builder()
+                                .no_proxy()
+                                .http2_prior_knowledge()
+                                .resolve(REJECT_EXT_PROC_HOST, address)
+                                .build()
+                            {
+                                Ok(client) => client,
+                                Err(error) => return TestResult::failed(start.elapsed(), error.to_string()),
+                            };
+                            client
+                                .post(format!("http://{REJECT_EXT_PROC_HOST}:{}{PATH}", ctx.http_port))
+                                .json(&json!({
+                                    "model": "fixture-model",
+                                    "stream": true,
+                                    "messages": [{"role": "user", "content": "fixture prompt"}]
+                                }))
+                                .send()
+                                .await
+                                .map_err(|error| error.to_string())
+                        } else {
+                            request(&ctx, REJECT_EXT_PROC_HOST).await
+                        };
+                        let response = match response {
+                            Ok(response) => response,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        let body = response.bytes().await.unwrap_or_default();
+                        if body.as_ref() != REJECT_EVENT
+                            || body
+                                .windows(b"response-by-attached-ext-proc".len())
+                                .any(|part| part == b"response-by-attached-ext-proc")
+                        {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!(
+                                    "unexpected H{} Reject wire: {}",
+                                    if h2 { 2 } else { 1 },
+                                    String::from_utf8_lossy(&body)
+                                ),
+                            );
+                        }
+                        if let Err(error) = assert_one_canonical_call(&ctx, "reject").await {
+                            return TestResult::failed(start.elapsed(), error);
+                        }
+                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "H1/H2 Reject wire bypassed ExtProc body".to_string(),
+                    )
+                })
+            },
+        )
+    }
+
+    fn anthropic_translation_composes_with_guardrail() -> TestCase {
+        TestCase::new(
+            "anthropic_translation_composes_with_guardrail",
+            "Anthropic provider translation feeds Guardrail Pass, Replace, and Reject on canonical client wire",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    for (host, action) in [
+                        (ANTHROPIC_PASS_HOST, "pass"),
+                        (ANTHROPIC_REPLACE_HOST, "replace"),
+                        (ANTHROPIC_REJECT_HOST, "reject"),
+                    ] {
+                        if let Err(error) = reset_observations(&ctx).await {
+                            return TestResult::failed(start.elapsed(), error);
+                        }
+                        let response = match request(&ctx, host).await {
+                            Ok(response) => response,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        let body = response.bytes().await.unwrap_or_default();
+                        let wire_ok = match action {
+                            "pass" => {
+                                body.ends_with(b"data: [DONE]\n\n")
+                                    && !body
+                                        .windows(b"event: message_".len())
+                                        .any(|part| part == b"event: message_")
+                            }
+                            "replace" => {
+                                body.windows(b"\"content\":\"reviewed\"".len())
+                                    .any(|part| part == b"\"content\":\"reviewed\"")
+                                    && body.ends_with(b"data: [DONE]\n\n")
+                            }
+                            "reject" => body.as_ref() == REJECT_EVENT,
+                            _ => false,
+                        };
+                        if !wire_ok {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!(
+                                    "Anthropic {action} wire was not canonical: {}",
+                                    String::from_utf8_lossy(&body)
+                                ),
+                            );
+                        }
+                        if let Err(error) = assert_one_canonical_call(&ctx, action).await {
+                            return TestResult::failed(start.elapsed(), error);
+                        }
+                    }
+                    if let Err(error) = reset_observations(&ctx).await {
+                        return TestResult::failed(start.elapsed(), error);
+                    }
+                    let failed = match request_anthropic_mode(&ctx, ANTHROPIC_PASS_HOST, "malformed", false).await {
+                        Ok(response) => response.bytes().await.unwrap_or_default(),
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    if !failed
+                        .windows(b"response_translation_failed".len())
+                        .any(|part| part == b"response_translation_failed")
+                    {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "translation failure wire was invalid: {}",
+                                String::from_utf8_lossy(&failed)
+                            ),
+                        );
+                    }
+                    let observation = match ctx
+                        .http_client
+                        .get(fixture_url(&ctx, "/guardrail/observation/pass"))
+                        .send()
+                        .await
+                    {
+                        Ok(response) => {
+                            response
+                                .json::<GuardrailObservation>()
+                                .await
+                                .unwrap_or_else(|_| GuardrailObservation {
+                                    calls: u64::MAX,
+                                    total_windows: 0,
+                                    last_window_count: 0,
+                                    version_v1: false,
+                                    minimal_envelope: false,
+                                    sorted_unique_keys: false,
+                                    canonical_content_window: false,
+                                })
+                        }
+                        Err(_) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                "failed to query translation competition".to_string(),
+                            )
+                        }
+                    };
+                    if observation.calls != 0 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "Guardrail ran after translation failure".to_string(),
+                        );
+                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "Anthropic translation composed with all Guardrail decisions".to_string(),
+                    )
                 })
             },
         )
@@ -483,6 +715,8 @@ impl TestSuite for GuardrailTestSuite {
             Self::one_call_per_canonical_window(),
             Self::timeout_fail_close_discards_window(),
             Self::ext_proc_observes_guardrail_output(),
+            Self::reject_preempts_ext_proc_body_and_h2_closes_cleanly(),
+            Self::anthropic_translation_composes_with_guardrail(),
             Self::aggregate_log_is_emitted_once(),
         ]
     }

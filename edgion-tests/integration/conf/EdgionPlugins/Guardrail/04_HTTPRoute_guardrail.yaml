@@ -129,3 +129,91 @@ spec:
         - group: edgion.io
           kind: EdgionBackend
           name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-anthropic-pass
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-anthropic-pass.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-anthropic-pass
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: guardrail-anthropic-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-reject-ext-proc
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-reject-ext-proc.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-reject-ext-proc
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-anthropic-replace
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-anthropic-replace.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-anthropic-replace
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: guardrail-anthropic-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-anthropic-reject
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-anthropic-reject.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-anthropic-reject
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: guardrail-anthropic-provider

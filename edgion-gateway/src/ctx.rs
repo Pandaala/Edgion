@@ -1,3 +1,6 @@
+use crate::ai::terminal::{
+    AiClientStreamDialect, FinalResponseEligibility, ResponseProcessorSlot, ResponseTerminalState,
+};
 use crate::ai::{AiAttemptPlan, AiRequestContext, GenAiSummary};
 use crate::backends::ServiceBackendKind;
 use crate::lb::edgion_backend::EdgionBackend;
@@ -1305,6 +1308,18 @@ pub struct EdgionHttpContext {
     /// Replaceable provider-aware response processor for the active AI attempt.
     pub ai_stream_processor: Option<Box<dyn StreamingResponseProcessor>>,
 
+    /// Client-facing AI stream dialect selected at canonical AI ingress.
+    pub(crate) ai_client_stream_dialect: Option<AiClientStreamDialect>,
+
+    /// Final method/status/media eligibility captured after the response onion.
+    pub(crate) final_response_eligibility: Option<FinalResponseEligibility>,
+
+    /// Stable processor instance currently executing in the response driver.
+    pub(crate) active_response_processor_slot: Option<ResponseProcessorSlot>,
+
+    /// First-wins request-local terminal and close ownership.
+    pub(crate) response_terminal_state: ResponseTerminalState,
+
     /// Immutable GenAI usage summary committed once during final logging.
     /// `Some` is also the idempotence sentinel for metric emission.
     pub genai_summary: Option<GenAiSummary>,
@@ -1423,6 +1438,7 @@ impl EdgionHttpContext {
             false
         } else {
             self.ai = Some(context);
+            self.ai_client_stream_dialect = Some(AiClientStreamDialect::OpenAiCompatibleSse);
             true
         }
     }
@@ -1430,6 +1446,7 @@ impl EdgionHttpContext {
     /// Replace attempt-local provider/usage state while retaining the one
     /// request-wide quota handle across AI failover attempts.
     pub(crate) fn replace_ai_attempt_context(&mut self, mut context: AiRequestContext) {
+        self.ai_client_stream_dialect = Some(AiClientStreamDialect::OpenAiCompatibleSse);
         if let Some(mut previous) = self.ai.take() {
             if context.quota.is_none() {
                 context.quota = previous.quota.take();
@@ -1531,6 +1548,10 @@ impl EdgionHttpContext {
             ai_effective_policy: None,
             ai_request_baseline: None,
             ai_stream_processor: None,
+            ai_client_stream_dialect: None,
+            final_response_eligibility: None,
+            active_response_processor_slot: None,
+            response_terminal_state: ResponseTerminalState::Open,
             genai_summary: None,
             stream_processors: Vec::new(),
             semantic_response_guard_claimed: false,

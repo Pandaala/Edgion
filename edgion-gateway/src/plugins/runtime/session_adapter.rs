@@ -154,6 +154,14 @@ pub(crate) fn build_response_local_reply(
 }
 
 impl<'a> PingoraSessionAdapter<'a> {
+    pub(crate) fn set_response_processor_slot(&mut self, slot: crate::ai::terminal::ResponseProcessorSlot) {
+        self.ctx.active_response_processor_slot = Some(slot);
+    }
+
+    pub(crate) fn response_terminal_winner(&self) -> Option<crate::ai::terminal::ResponseProcessorSlot> {
+        self.ctx.response_terminal_state.winner()
+    }
+
     #[inline]
     pub fn new(inner: &'a mut Session, ctx: &'a mut EdgionHttpContext) -> Self {
         Self {
@@ -1079,6 +1087,25 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn take_canonical_records(&mut self) -> Option<crate::ai::canonical_sse::CanonicalRecordBatch> {
         self.ctx.canonical_record_batch.take()
+    }
+
+    fn try_claim_response_terminal(&mut self, cause: crate::ai::terminal::ResponseTerminalCause) -> bool {
+        self.ctx
+            .active_response_processor_slot
+            .is_some_and(|slot| self.ctx.response_terminal_state.try_claim(slot, cause))
+    }
+
+    fn mark_response_terminal_emission(&mut self, emission: crate::ai::terminal::TerminalEmission) {
+        self.ctx.response_terminal_state.mark_emission(emission);
+    }
+
+    fn ai_terminal_render_context(
+        &self,
+    ) -> Option<(
+        crate::ai::terminal::AiClientStreamDialect,
+        crate::ai::terminal::FinalResponseEligibility,
+    )> {
+        Some((self.ctx.ai_client_stream_dialect?, self.ctx.final_response_eligibility?))
     }
 
     fn disable_semantic_guard(&mut self) {
