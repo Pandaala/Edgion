@@ -1,0 +1,11 @@
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: a2a-gateway-dynamic-backend
+  namespace: edgion-test
+spec:
+  a2a:
+    target:
+      serviceRef:
+        name: test-http
+        port: 30001

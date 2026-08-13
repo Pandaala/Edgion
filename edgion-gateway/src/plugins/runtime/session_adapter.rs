@@ -1192,6 +1192,18 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .map(|(_, owner)| std::sync::Arc::clone(owner))
     }
 
+    fn install_attached_a2a_observation(
+        &mut self,
+        identity: String,
+        owner: crate::plugins::http::a2a_gateway::AttachedA2aObservation,
+    ) -> bool {
+        if self.ctx.response_body_processing_started || self.ctx.attached_a2a_observation.is_some() {
+            return false;
+        }
+        self.ctx.attached_a2a_observation = Some((identity, owner));
+        true
+    }
+
     fn install_attached_response_processor(
         &mut self,
         processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
@@ -2457,6 +2469,37 @@ mod record_outcome_tests {
         adapter.record_outcome(DyeOutcome::Success, "app-v1");
 
         assert_single_set(&ctx, "X-O", "app-v1");
+    }
+
+    #[tokio::test]
+    async fn attached_a2a_observation_is_first_writer_and_pre_body_only() {
+        use crate::plugins::http::a2a_gateway::AttachedA2aObservation;
+
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            assert!(adapter.install_attached_a2a_observation(
+                "route/requestPlugins/#0".to_string(),
+                AttachedA2aObservation::new(),
+            ));
+            assert!(!adapter.install_attached_a2a_observation(
+                "route/requestPlugins/#1".to_string(),
+                AttachedA2aObservation::new(),
+            ));
+        }
+        assert_eq!(
+            ctx.attached_a2a_observation
+                .as_ref()
+                .map(|(identity, _)| identity.as_str()),
+            Some("route/requestPlugins/#0")
+        );
+
+        ctx.attached_a2a_observation = None;
+        ctx.response_body_processing_started = true;
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert!(!adapter
+            .install_attached_a2a_observation("route/requestPlugins/#2".to_string(), AttachedA2aObservation::new(),));
     }
 
     struct NoopStreamHandler;

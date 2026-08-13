@@ -19,3 +19,18 @@ spec:
             group: edgion.io
             kind: EdgionPlugins
             name: a2a-gateway-dynamic
+    - matches:
+        - method: POST
+          path:
+            type: Exact
+            value: /a2a/json-success
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: a2a-gateway-dynamic
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: a2a-gateway-dynamic-backend

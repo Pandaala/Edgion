@@ -1488,6 +1488,11 @@ pub struct EdgionHttpContext {
         std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>,
     )>,
 
+    /// The request-scoped A2A response observer and its request-entry log
+    /// identity. It only sees the final downstream-visible body chunks; the
+    /// observer never owns or changes response bytes.
+    pub attached_a2a_observation: Option<(String, crate::plugins::http::a2a_gateway::AttachedA2aObservation)>,
+
     /// Early framing reservations for attached processors that may mutate the
     /// final response body before their concrete processor is installed.
     pub attached_response_framing_reservations: usize,
@@ -1702,6 +1707,7 @@ impl EdgionHttpContext {
             semantic_response_processor: None,
             attached_ext_proc: std::collections::HashMap::new(),
             attached_guardrail: None,
+            attached_a2a_observation: None,
             attached_response_framing_reservations: 0,
             response_body_processing_started: false,
             local_reply_body: None,

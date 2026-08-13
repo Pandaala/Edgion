@@ -1,4 +1,4 @@
-use super::content_type::classify_response_stream_kind;
+use super::content_type::{classify_a2a_response_media, classify_response_stream_kind};
 use super::pg_init_downstream_modules::DEFAULT_COMPRESSION_LEVEL;
 use super::pg_upstream_response_body_filter::enforce_stream_processor_framing;
 use super::pg_upstream_response_filter::{is_interim_informational, response_denial_error, response_stage_settled};
@@ -206,6 +206,16 @@ pub async fn response_filter(
             upstream_response,
         );
         compression_ctx.adjust_level(level);
+    }
+    if let Some((_, observer)) = ctx.attached_a2a_observation.as_mut() {
+        // The response-body hook observes the final logical entity after all
+        // Edgion response plugins and before downstream modules encode it.
+        // Gateway compression therefore does not change JSON/SSE eligibility;
+        // an already encoded upstream response remains opaque in the classifier.
+        observer.observe_final_header(classify_a2a_response_media(
+            &session.req_header().method,
+            upstream_response,
+        ));
     }
 
     Ok(())

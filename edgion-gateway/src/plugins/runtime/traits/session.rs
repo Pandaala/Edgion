@@ -445,6 +445,16 @@ pub trait PluginSession: Send + Sync {
         None
     }
 
+    /// Install the request's A2A response observer. The first qualifying A2A
+    /// Gateway entry wins and alternate adapters remain inert by default.
+    fn install_attached_a2a_observation(
+        &mut self,
+        _identity: String,
+        _owner: crate::plugins::http::a2a_gateway::AttachedA2aObservation,
+    ) -> bool {
+        false
+    }
+
     fn install_attached_response_processor(
         &mut self,
         processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,

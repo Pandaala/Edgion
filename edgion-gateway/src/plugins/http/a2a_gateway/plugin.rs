@@ -18,10 +18,13 @@ use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::request_body::{JsonDuplicatePolicy, JsonScanValue, JsonSelectPlan, JsonSelectScanner};
 use crate::routes::http::match_unit::CompiledBackendTarget;
 
+use super::AttachedA2aObservation;
+
 const CARD_PATH: &str = "/.well-known/agent-card.json";
 const METHOD_MAX_BYTES: usize = 64;
 
 pub struct A2aGateway {
+    identity: String,
     card: Value,
     external_origin: Option<Url>,
     fail_open: bool,
@@ -34,11 +37,12 @@ impl A2aGateway {
         PluginRunningResult::GoodNext
     }
 
-    pub fn create(config: &A2aGatewayConfig) -> Option<Box<dyn RequestFilter>> {
+    pub fn create(config: &A2aGatewayConfig, entry_scope: &str) -> Option<Box<dyn RequestFilter>> {
         config.validated_card_bytes().ok()?;
         let external_origin = config.validated_external_origin().ok()?;
         let method_path = "$.method".parse::<DefiniteJsonPath>().ok()?;
         Some(Box::new(Self {
+            identity: entry_scope.to_string(),
             card: config.card.clone(),
             external_origin,
             fail_open: config.fail_open,
@@ -266,6 +270,14 @@ impl RequestFilter for A2aGateway {
                 }
             };
         }
+        if !session.install_attached_a2a_observation(self.identity.clone(), AttachedA2aObservation::new()) {
+            log.push_err("observer-claim");
+            return PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None,
+            };
+        }
+        log.set_internal_token(self.identity.clone());
         self.observe_method(session, log).await
     }
 }
@@ -462,6 +474,7 @@ mod tests {
                 .return_const(None);
             session.expect_ensure_request_body().times(0);
             let plugin = A2aGateway {
+                identity: "test-scope".to_string(),
                 card: cfg.card,
                 external_origin,
                 fail_open,
@@ -497,6 +510,7 @@ mod tests {
             .return_const(());
         let cfg = config();
         let plugin = A2aGateway {
+            identity: "test-scope".to_string(),
             card: cfg.card,
             external_origin: None,
             fail_open: true,
@@ -549,6 +563,7 @@ mod tests {
                 "protocolVersion": "1.0"
             }));
         let plugin = A2aGateway {
+            identity: "test-scope".to_string(),
             card,
             external_origin: Url::parse("https://public.example:8443").ok(),
             fail_open: false,
@@ -570,6 +585,7 @@ mod tests {
     #[test]
     fn rewrite_preserves_ipv6_public_authority() {
         let plugin = A2aGateway {
+            identity: "test-scope".to_string(),
             card: config().card,
             external_origin: Url::parse("https://[2001:db8::1]:8443").ok(),
             fail_open: false,
@@ -672,6 +688,7 @@ mod tests {
         let mut cfg = config();
         cfg.card["supportedInterfaces"] = Value::Array(vec![interface; 12_000]);
         let plugin = A2aGateway {
+            identity: "test-scope".to_string(),
             card: cfg.card,
             external_origin: Some(Url::parse(&format!("https://{}.example", "a".repeat(60))).unwrap()),
             fail_open: false,
@@ -693,6 +710,7 @@ mod tests {
             let mut card = base_card.clone();
             card["supportedInterfaces"][1]["padding"] = Value::String("x".repeat(padding));
             A2aGateway {
+                identity: "test-scope".to_string(),
                 card,
                 external_origin: Some(origin.clone()),
                 fail_open: false,
@@ -737,6 +755,7 @@ mod tests {
         let concrete = config();
         let external_origin = concrete.validated_external_origin().unwrap();
         let plugin = A2aGateway {
+            identity: "test-scope".to_string(),
             card: concrete.card,
             external_origin,
             fail_open: false,
@@ -754,10 +773,10 @@ mod tests {
 
     #[test]
     fn create_rejects_invalid_config_and_retains_valid_snapshot() {
-        assert!(A2aGateway::create(&config()).is_some());
+        assert!(A2aGateway::create(&config(), "test-scope").is_some());
         let mut invalid = config();
         invalid.card["url"] = json!("https://legacy.example/rpc");
-        assert!(A2aGateway::create(&invalid).is_none());
+        assert!(A2aGateway::create(&invalid, "test-scope").is_none());
     }
 
     #[test]
@@ -841,6 +860,7 @@ mod tests {
             session.expect_ctx().return_const(ctx);
             session.expect_downstream_is_tls().return_const(tls);
             let concrete = A2aGateway {
+                identity: "test-scope".to_string(),
                 card: cfg.card.clone(),
                 external_origin: None,
                 fail_open: false,
@@ -919,6 +939,7 @@ mod tests {
         let cfg = config();
         let external_origin = cfg.validated_external_origin().unwrap();
         let plugin = A2aGateway {
+            identity: "test-scope".to_string(),
             card: cfg.card,
             external_origin,
             fail_open: false,

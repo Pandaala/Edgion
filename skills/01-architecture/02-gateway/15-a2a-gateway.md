@@ -1,9 +1,9 @@
 ---
 name: a2a-gateway
-description: A2A Gateway Phase 1 ownership, local Agent Card publication, JSON-RPC request observation, route-shape activation, and streaming boundaries.
+description: A2A Gateway ownership, local Agent Card publication, JSON-RPC request observation, route-shape activation, and bounded response observability.
 ---
 
-# A2A Gateway Phase 1
+# A2A Gateway
 
 `A2aGateway` is a request-stage `EdgionPlugins` entry. It adds two narrowly
 gated capabilities on top of the canonical `EdgionBackend.spec.a2a` transport:
@@ -101,12 +101,53 @@ The method is sensitive access-log data. It is recorded only through the
 existing redaction-aware plugin log; no payload, params, result, task, or raw
 body is logged.
 
-## Phase boundary
+## Bounded response observability
 
-Phase 1 does not parse or aggregate the main upstream response and does not add
-a response-side `BodyStorage`. A2A JSON-RPC outcome, task-state, and SSE event
-observation belong to response observability and must reuse the canonical
-stream processor, SSE decoder, and `RawWindow`.
+A qualifying RPC proxy installs one request-scoped response observer after the
+`A2A-Version` and content-type gate succeeds. It is installed even when request
+method metadata is unavailable. The observer runs as the read-only tail of the
+canonical response-stream driver: it never rewrites, delays, releases,
+discards, or retries response bytes and cannot affect the client result.
+
+For a supported `application/json` or concrete `application/*+json` response,
+the observer retains at most 1 MiB in its own bounded side accumulator. The limit is inclusive. A streamed response over
+the limit, malformed JSON, incomplete EOS, cancellation, or upstream abort
+produces only an `unknown` observation; forwarding remains streaming and
+unchanged. This side accumulator is not `BodyStorage`, is not exposed to
+plugins, and is never an unbounded or reusable response cache.
+The process also enforces a 64 MiB atomic reservation budget across concurrent
+JSON observers. A request that cannot reserve its bounded slot records a static
+unknown outcome and continues forwarding. Reservations are released at the
+response terminal boundary rather than waiting for access-log serialization.
+
+For `text/event-stream`, the observer feeds bytes to the single WP7
+`SseDecoder`. It does not create another SSE parser or semantic window. Because
+observation makes no writable policy decision, it must not instantiate
+`RawWindow`: every received byte is already released by the canonical driver,
+the observer retains no unreleased prefix, and its observation state cannot
+create backpressure. Decoder degradation makes the observation unknown without
+changing the stream.
+
+The recognized A2A v1 `StreamResponse` result members are `task`, `message`,
+`statusUpdate`, and `artifactUpdate`. Task state is read only from
+`result.status.state` for a direct Task result, `result.task.status.state` for
+a wrapped task, or `result.statusUpdate.status.state` for a stream update. The bounded
+state vocabulary covers `TASK_STATE_UNSPECIFIED`, `SUBMITTED`, `WORKING`,
+`COMPLETED`, `FAILED`, `CANCELED`, `INPUT_REQUIRED`, `REJECTED`, and
+`AUTH_REQUIRED`; arbitrary values remain unknown. Do not use legacy `kind`,
+`final`, or `taskStatusUpdate` fields removed before A2A v1.
+
+At normal EOS or terminal cleanup, the observer appends exactly one static,
+bounded summary to the original `A2aGateway` `PluginLog`. The summary may carry
+only fixed enums and a saturating event count: outcome class, result/event kind,
+bounded error-code class, final task-state class, and event count. It must never
+contain JSON-RPC IDs, task/context/artifact IDs, error message/data, message or
+artifact content, arbitrary state strings, or raw payload. No per-event logs,
+new access-log field, metric, tracing call, or response storage is permitted.
+
+Hot reload affects new requests through the normal immutable plugin snapshot.
+An in-flight response keeps its request-pinned observer and summary owner; it is
+never migrated to a newer plugin generation.
 
 Related references:
 

@@ -7,6 +7,7 @@
 //! path from drifting apart.
 
 use crate::ctx::ResponseStreamKind;
+use crate::plugins::http::a2a_gateway::A2aResponseMedia;
 
 /// SSE media type, optionally followed by parameters such as
 /// `; charset=utf-8`.
@@ -37,6 +38,76 @@ pub fn classify_response_stream_kind(resp: &pingora_http::ResponseHeader) -> Res
     } else {
         ResponseStreamKind::None
     }
+}
+
+/// Classify the final, post-plugin response representation that the read-only
+/// A2A observer may inspect. Encoded or bodyless representations are opaque:
+/// observation must never decompress, reinterpret, or invent response bytes.
+#[inline]
+pub(crate) fn classify_a2a_response_media(
+    method: &http::Method,
+    resp: &pingora_http::ResponseHeader,
+) -> A2aResponseMedia {
+    if *method == http::Method::HEAD
+        || resp.status.is_informational()
+        || matches!(
+            resp.status,
+            http::StatusCode::NO_CONTENT | http::StatusCode::NOT_MODIFIED
+        )
+        || !has_identity_content_encoding(resp)
+    {
+        return A2aResponseMedia::Other;
+    }
+    let mut content_types = resp.headers.get_all(http::header::CONTENT_TYPE).iter();
+    let Some(content_type) = content_types.next().and_then(|value| value.to_str().ok()) else {
+        return A2aResponseMedia::Other;
+    };
+    if content_types.next().is_some() {
+        return A2aResponseMedia::Other;
+    }
+    if matches_media_type(content_type, EVENT_STREAM_MEDIA_TYPE) {
+        A2aResponseMedia::Sse
+    } else if is_supported_json_media_type(content_type) {
+        A2aResponseMedia::Json
+    } else {
+        A2aResponseMedia::Other
+    }
+}
+
+#[inline]
+fn has_identity_content_encoding(resp: &pingora_http::ResponseHeader) -> bool {
+    let mut values = resp.headers.get_all(http::header::CONTENT_ENCODING).iter();
+    let Some(first) = values.next() else {
+        return true;
+    };
+    values.next().is_none()
+        && first
+            .to_str()
+            .ok()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("identity"))
+}
+
+#[inline]
+fn is_supported_json_media_type(value: &str) -> bool {
+    let Ok(media_type) = value.trim().parse::<mime::Mime>() else {
+        return false;
+    };
+    let subtype = media_type.subtype();
+    let is_json = subtype == mime::JSON || (subtype.as_str() != "*" && media_type.suffix() == Some(mime::JSON));
+    if media_type.type_() != mime::APPLICATION || !is_json {
+        return false;
+    }
+    let mut charset_count = 0usize;
+    for (name, value) in media_type.params() {
+        if name != mime::CHARSET {
+            return false;
+        }
+        charset_count += 1;
+        if charset_count > 1 || !value.as_str().eq_ignore_ascii_case("utf-8") {
+            return false;
+        }
+    }
+    true
 }
 
 /// Match one exact media type case-insensitively, allowing optional whitespace
@@ -81,6 +152,90 @@ fn starts_with_ignore_ascii_case(haystack: &str, prefix: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn a2a_response(content_type: &str) -> pingora_http::ResponseHeader {
+        let mut response = pingora_http::ResponseHeader::build(200, None).unwrap();
+        response.insert_header("content-type", content_type).unwrap();
+        response
+    }
+
+    #[test]
+    fn a2a_media_accepts_exact_json_suffix_and_sse() {
+        for content_type in [
+            "application/json",
+            "Application/JSON; charset=utf-8",
+            "application/problem+json",
+        ] {
+            assert_eq!(
+                classify_a2a_response_media(&http::Method::POST, &a2a_response(content_type)),
+                A2aResponseMedia::Json
+            );
+        }
+        assert_eq!(
+            classify_a2a_response_media(&http::Method::POST, &a2a_response("text/event-stream; charset=utf-8")),
+            A2aResponseMedia::Sse
+        );
+    }
+
+    #[test]
+    fn a2a_media_rejects_lookalikes_encoding_and_bodyless_responses() {
+        for content_type in [
+            "text/json",
+            "application/json-seq",
+            "application/notjson",
+            "application/json; version=1",
+            "application/json; charset=latin1",
+            "text/event-streaming",
+        ] {
+            assert_eq!(
+                classify_a2a_response_media(&http::Method::POST, &a2a_response(content_type)),
+                A2aResponseMedia::Other
+            );
+        }
+
+        let mut encoded = a2a_response("application/json");
+        encoded.insert_header("content-encoding", "gzip").unwrap();
+        assert_eq!(
+            classify_a2a_response_media(&http::Method::POST, &encoded),
+            A2aResponseMedia::Other
+        );
+        encoded.insert_header("content-encoding", "identity").unwrap();
+        assert_eq!(
+            classify_a2a_response_media(&http::Method::POST, &encoded),
+            A2aResponseMedia::Json
+        );
+
+        let mut duplicate_type = a2a_response("application/json");
+        duplicate_type
+            .append_header("content-type", "application/json")
+            .unwrap();
+        assert_eq!(
+            classify_a2a_response_media(&http::Method::POST, &duplicate_type),
+            A2aResponseMedia::Other
+        );
+        let mut duplicate_encoding = a2a_response("application/json");
+        duplicate_encoding
+            .append_header("content-encoding", "identity")
+            .unwrap();
+        duplicate_encoding
+            .append_header("content-encoding", "identity")
+            .unwrap();
+        assert_eq!(
+            classify_a2a_response_media(&http::Method::POST, &duplicate_encoding),
+            A2aResponseMedia::Other
+        );
+
+        assert_eq!(
+            classify_a2a_response_media(&http::Method::HEAD, &a2a_response("application/json")),
+            A2aResponseMedia::Other
+        );
+        let mut no_content = a2a_response("application/json");
+        no_content.set_status(http::StatusCode::NO_CONTENT).unwrap();
+        assert_eq!(
+            classify_a2a_response_media(&http::Method::POST, &no_content),
+            A2aResponseMedia::Other
+        );
+    }
 
     #[test]
     fn native_grpc_matches_various_casings_and_params() {

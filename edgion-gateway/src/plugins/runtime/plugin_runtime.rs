@@ -1348,7 +1348,7 @@ impl PluginRuntime {
             )))),
             EdgionPlugin::BasicAuth(config) => CreateResult::Ok(Some(Box::new(BasicAuth::new(config)))),
             EdgionPlugin::AiProxy(config) => CreateResult::Ok(AiProxy::create(config, namespace, entry_scope)),
-            EdgionPlugin::A2aGateway(config) => CreateResult::Ok(A2aGateway::create(config)),
+            EdgionPlugin::A2aGateway(config) => CreateResult::Ok(A2aGateway::create(config, entry_scope)),
             EdgionPlugin::AiGuard(config) => CreateResult::Ok(AiGuard::create(config, entry_scope)),
             EdgionPlugin::Cors(config) => CreateResult::Ok(Some(Box::new(Cors::new(config)))),
             EdgionPlugin::Csrf(config) => CreateResult::Ok(Some(Box::new(Csrf::new(config)))),

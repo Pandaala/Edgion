@@ -172,6 +172,7 @@ pub(crate) async fn run_stream_processors(
     if ctx.stream_processors.is_empty()
         && ctx.ai_stream_processor.is_none()
         && ctx.semantic_response_processor.is_none()
+        && ctx.attached_a2a_observation.is_none()
     {
         return;
     }
@@ -251,6 +252,14 @@ pub(crate) async fn run_stream_processors(
         );
         *body = None;
         sink.terminate();
+    }
+    if winner.is_none()
+        && !sink.is_terminated()
+        && !(ctx.semantic_response_guard_claimed && body.is_none() && !end_of_stream)
+    {
+        if let Some((_, observer)) = ctx.attached_a2a_observation.as_mut() {
+            observer.observe_chunk(body.as_ref(), end_of_stream);
+        }
     }
 }
 
@@ -431,6 +440,57 @@ mod tests {
             _session: &mut dyn PluginSession,
         ) {
             *chunk = None;
+        }
+    }
+
+    struct ReplaceWithJson;
+
+    #[async_trait]
+    impl StreamingResponseProcessor for ReplaceWithJson {
+        fn name(&self) -> &str {
+            "replace-with-json"
+        }
+
+        async fn on_chunk(
+            &mut self,
+            chunk: &mut Option<Bytes>,
+            _end_of_stream: bool,
+            _stream_kind: ResponseStreamKind,
+            _sink: &mut ResponseBodySink,
+            _session: &mut dyn PluginSession,
+        ) {
+            *chunk = Some(Bytes::from_static(
+                br#"{"jsonrpc":"2.0","result":{"task":{"status":{"state":"TASK_STATE_COMPLETED"}}}}"#,
+            ));
+        }
+    }
+
+    struct WithholdThenReleaseJson {
+        withheld: bool,
+    }
+
+    #[async_trait]
+    impl StreamingResponseProcessor for WithholdThenReleaseJson {
+        fn name(&self) -> &str {
+            "withhold-then-release-json"
+        }
+
+        async fn on_chunk(
+            &mut self,
+            chunk: &mut Option<Bytes>,
+            _end_of_stream: bool,
+            _stream_kind: ResponseStreamKind,
+            _sink: &mut ResponseBodySink,
+            _session: &mut dyn PluginSession,
+        ) {
+            if self.withheld {
+                *chunk = Some(Bytes::from_static(
+                    br#"{"jsonrpc":"2.0","result":{"task":{"status":{"state":"TASK_STATE_COMPLETED"}}}}"#,
+                ));
+            } else {
+                self.withheld = true;
+                *chunk = None;
+            }
         }
     }
 
@@ -751,6 +811,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn attached_a2a_observer_runs_without_writable_processors() {
+        use crate::plugins::http::a2a_gateway::{A2aResponseMedia, AttachedA2aObservation};
+
+        let mut session = test_session().await;
+        let mut owner = AttachedA2aObservation::new();
+        owner.observe_final_header(A2aResponseMedia::Json);
+        let mut ctx = crate::EdgionHttpContext {
+            attached_a2a_observation: Some(("route/requestPlugins/#0".to_string(), owner)),
+            ..Default::default()
+        };
+        let original =
+            Bytes::from_static(br#"{"jsonrpc":"2.0","result":{"task":{"status":{"state":"TASK_STATE_COMPLETED"}}}}"#);
+        let mut body = Some(original.clone());
+        let mut sink = ResponseBodySink::new();
+
+        run_stream_processors(&mut session, &mut ctx, &mut body, true, &mut sink).await;
+
+        assert_eq!(body, Some(original));
+        let line = ctx
+            .attached_a2a_observation
+            .as_mut()
+            .and_then(|(_, observer)| observer.take_summary_line())
+            .expect("natural EOS must finalize an A2A summary");
+        assert!(line.contains("outcome=success"), "{line}");
+        assert!(line.contains("state=completed"), "{line}");
+    }
+
+    #[tokio::test]
+    async fn attached_a2a_observer_sees_ordinary_processor_final_json() {
+        use crate::plugins::http::a2a_gateway::{A2aResponseMedia, AttachedA2aObservation};
+
+        let mut session = test_session().await;
+        let mut owner = AttachedA2aObservation::new();
+        owner.observe_final_header(A2aResponseMedia::Json);
+        let mut ctx = crate::EdgionHttpContext {
+            attached_a2a_observation: Some(("route/requestPlugins/#0".to_string(), owner)),
+            ..Default::default()
+        };
+        ctx.stream_processors.push(Box::new(ReplaceWithJson));
+        let mut body = Some(Bytes::from_static(b"not-json"));
+        let mut sink = ResponseBodySink::new();
+
+        run_stream_processors(&mut session, &mut ctx, &mut body, true, &mut sink).await;
+
+        assert_eq!(
+            body.as_deref(),
+            Some(br#"{"jsonrpc":"2.0","result":{"task":{"status":{"state":"TASK_STATE_COMPLETED"}}}}"#.as_slice())
+        );
+        let line = ctx
+            .attached_a2a_observation
+            .as_mut()
+            .and_then(|(_, observer)| observer.take_summary_line())
+            .expect("natural EOS must finalize the post-mutation A2A summary");
+        assert!(line.contains("outcome=success"), "{line}");
+        assert!(line.contains("state=completed"), "{line}");
+    }
+
+    #[tokio::test]
     async fn processor_observes_response_stream_kind() {
         let mut session = test_session().await;
         let mut ctx = crate::EdgionHttpContext::default();
@@ -806,6 +924,66 @@ mod tests {
 
         assert!(!*ran.lock());
         assert!(!sink.is_terminated());
+    }
+
+    #[tokio::test]
+    async fn semantic_withholding_does_not_advance_a2a_observation() {
+        use crate::plugins::http::a2a_gateway::{A2aResponseMedia, AttachedA2aObservation};
+
+        let mut session = test_session().await;
+        let mut owner = AttachedA2aObservation::new();
+        owner.observe_final_header(A2aResponseMedia::Json);
+        let mut ctx = crate::EdgionHttpContext {
+            semantic_response_guard_claimed: true,
+            attached_a2a_observation: Some(("route/requestPlugins/#0".to_string(), owner)),
+            ..Default::default()
+        };
+        let mut sink = ResponseBodySink::new();
+        let mut body = None;
+
+        run_stream_processors(&mut session, &mut ctx, &mut body, false, &mut sink).await;
+
+        assert!(!sink.is_terminated());
+        let line = ctx
+            .attached_a2a_observation
+            .as_mut()
+            .and_then(|(_, observer)| observer.take_summary_line())
+            .expect("logging fallback must settle the untouched observer");
+        assert!(line.contains("reason=logging-fallback"), "{line}");
+    }
+
+    #[tokio::test]
+    async fn attached_a2a_observer_sees_only_semantic_release_bytes() {
+        use crate::plugins::http::a2a_gateway::{A2aResponseMedia, AttachedA2aObservation};
+
+        let mut session = test_session().await;
+        let mut owner = AttachedA2aObservation::new();
+        owner.observe_final_header(A2aResponseMedia::Json);
+        let mut ctx = crate::EdgionHttpContext {
+            semantic_response_guard_claimed: true,
+            semantic_response_processor: Some(Box::new(WithholdThenReleaseJson { withheld: false })),
+            attached_a2a_observation: Some(("route/requestPlugins/#0".to_string(), owner)),
+            ..Default::default()
+        };
+        let mut sink = ResponseBodySink::new();
+        let mut withheld = Some(Bytes::from_static(b"must-not-be-observed"));
+
+        run_stream_processors(&mut session, &mut ctx, &mut withheld, false, &mut sink).await;
+
+        assert!(withheld.is_none());
+        assert!(!sink.is_terminated());
+
+        let mut released = Some(Bytes::from_static(b"ignored-current-chunk"));
+        run_stream_processors(&mut session, &mut ctx, &mut released, true, &mut sink).await;
+
+        let line = ctx
+            .attached_a2a_observation
+            .as_mut()
+            .and_then(|(_, observer)| observer.take_summary_line())
+            .expect("released JSON at EOS must finalize the A2A summary");
+        assert!(line.contains("outcome=success"), "{line}");
+        assert!(line.contains("state=completed"), "{line}");
+        assert!(!line.contains("malformed=1"), "{line}");
     }
 
     #[tokio::test]
