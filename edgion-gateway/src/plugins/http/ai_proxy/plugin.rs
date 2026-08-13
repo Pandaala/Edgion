@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -8,9 +9,11 @@ use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey
 use edgion_resources::resources::edgion_plugins::{
     AiBackendSelection, AiProxyConfig, OnUnknownModel, PluginValidation,
 };
+use pingora_http::ResponseHeader;
 use serde_json::{Map, Value};
 
 use crate::ai::attempt::{AttemptScheduler, BackendCredentials, MAX_AI_ROUTE_RETRIES};
+use crate::ai::model_router::ModelRouteTable;
 use crate::ai::quota::{CompiledAiQuotaPlan, QuotaAdmission, QuotaExceededAction};
 use crate::ai::routing::{invalid_weight_gate, CandidateEligibility, ConformanceGate, RouteCandidate};
 use crate::ai::{
@@ -56,6 +59,78 @@ fn gate_candidate(
     })
 }
 
+fn visible_model_ids(
+    model_routes: &ModelRouteTable,
+    backends: &[crate::routes::http::match_unit::CompiledBackend],
+    headers: &[(String, String)],
+    lookup: impl Fn(&str) -> Option<std::sync::Arc<crate::ai::RuntimeAiBackend>>,
+) -> Vec<String> {
+    let mut proposed = BTreeSet::new();
+    for backend in backends.iter().filter(|backend| backend.is_permitted_ai_backend()) {
+        let Some((_, _, key)) = ai_candidate_spec(backend) else {
+            continue;
+        };
+        if let Some(runtime) = lookup(&key) {
+            proposed.extend(runtime.public_model_ids.iter().cloned());
+        }
+    }
+    proposed.extend(model_routes.header_applicable_patterns(headers).map(str::to_string));
+
+    proposed
+        .into_iter()
+        .filter(|model_id| {
+            if model_id.ends_with('*') && model_routes.wildcard_is_partially_shadowed(model_id, headers) {
+                return false;
+            }
+            let Ok(decision) = model_routes.decide(model_id, headers, backends) else {
+                return false;
+            };
+            backends.iter().any(|backend| {
+                let weight = decision.weights.get(backend.slot).copied().unwrap_or(0);
+                if weight <= 0 || !backend.is_permitted_ai_backend() {
+                    return false;
+                }
+                let Some((_, _, key)) = ai_candidate_spec(backend) else {
+                    return false;
+                };
+                lookup(&key).is_some_and(|runtime| {
+                    let resolved = runtime.resolve_model(&decision.identity_model);
+                    let has_symbolic_owner = !model_id.ends_with('*')
+                        || decision.rewrite_requires_canonical
+                        || runtime
+                            .wildcard_models
+                            .iter()
+                            .any(|alias| alias.pattern == *model_id && alias.model.public);
+                    resolved.is_some_and(|model| model.public)
+                        && has_symbolic_owner
+                        && (!decision.rewrite_requires_canonical
+                            || runtime.has_canonical_model(&decision.identity_model))
+                })
+            })
+        })
+        .collect()
+}
+
+fn unknown_model_passthrough_allowed(
+    rewrite_requires_canonical: bool,
+    configured: OnUnknownModel,
+    candidates: &[(
+        (usize, i32, String),
+        Option<std::sync::Arc<crate::ai::RuntimeAiBackend>>,
+    )],
+) -> bool {
+    !rewrite_requires_canonical
+        && configured == OnUnknownModel::Passthrough
+        && candidates
+            .iter()
+            .filter(|((_, weight, _), _)| *weight > 0)
+            .all(|(_, backend)| {
+                backend.as_ref().is_some_and(|backend| {
+                    matches!(backend.provider, AiProvider::OpenAI | AiProvider::OpenAICompatible)
+                })
+            })
+}
+
 fn has_positive_weight_service_backend(backends: &[crate::routes::http::match_unit::CompiledBackend]) -> bool {
     backends.iter().any(|backend| {
         backend.schema.weight.unwrap_or(1) > 0 && matches!(backend.target, CompiledBackendTarget::Service { .. })
@@ -65,6 +140,7 @@ fn has_positive_weight_service_backend(backends: &[crate::routes::http::match_un
 /// Request-stage AI semantics. Provider-specific mutation happens per attempt.
 pub struct AiProxy {
     config: AiProxyConfig,
+    model_routes: ModelRouteTable,
     quota: Option<CompiledAiQuotaPlan>,
 }
 
@@ -79,6 +155,7 @@ impl AiProxy {
         };
         Some(Self {
             config: config.clone(),
+            model_routes: ModelRouteTable::compile(&config.model_routes)?,
             quota,
         })
     }
@@ -110,6 +187,44 @@ impl AiProxy {
         }
     }
 
+    async fn write_model_list(
+        &self,
+        snapshot: &crate::ai::AiBackendSnapshot,
+        backends: &[crate::routes::http::match_unit::CompiledBackend],
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+    ) -> PluginRunningResult {
+        let headers = session.request_headers();
+        let visible = visible_model_ids(&self.model_routes, backends, &headers, |key| snapshot.get_by_key(key));
+        let data = visible
+            .into_iter()
+            .map(|id| {
+                serde_json::json!({
+                    "id": id,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "edgion"
+                })
+            })
+            .collect::<Vec<_>>();
+        let body = match serde_json::to_vec(&serde_json::json!({"object": "list", "data": data})) {
+            Ok(body) => Bytes::from(body),
+            Err(_) => return Self::reject(session, log, "model-list-encode", AiProxyError::BackendUnavailable),
+        };
+        let mut response = match ResponseHeader::build(200, None) {
+            Ok(response) => response,
+            Err(_) => return PluginRunningResult::ErrTerminateRequest,
+        };
+        let _ = response.insert_header("content-type", "application/json");
+        let _ = response.insert_header("content-length", body.len().to_string());
+        if session.write_response_header(Box::new(response), false).await.is_err()
+            || session.write_response_body(Some(body), true).await.is_err()
+        {
+            log.push_err("model-list-write");
+        }
+        PluginRunningResult::ErrTerminateRequest
+    }
+
     async fn run_request_with_store_and_entropy(
         &self,
         store: &AiBackendStore,
@@ -135,29 +250,11 @@ impl AiProxy {
             return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
         }
 
-        // Capture one runtime generation before the conformance gate. A
-        // syntactically valid EdgionBackend ref whose current runtime object is
-        // missing/unresolved remains an invalid weighted slot; its share must
-        // fail closed instead of being redistributed to healthy candidates.
+        // Capture one runtime generation for the complete request decision.
         let snapshot = store.snapshot();
-        let mut gate_candidates = Vec::with_capacity(backends.len());
-        for (order, backend) in backends.iter().enumerate() {
-            let runtime_available = ai_candidate_spec(backend)
-                .and_then(|(_, _, key)| snapshot.get_by_key(&key))
-                .is_some();
-            let Ok(candidate) = gate_candidate(order, backend, runtime_available) else {
-                return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
-            };
-            gate_candidates.push(candidate);
-        }
-        match invalid_weight_gate(&gate_candidates, entropy) {
-            Ok(ConformanceGate::Valid) => {}
-            Ok(ConformanceGate::Invalid) => {
-                return Self::install_rejected_plan(session, log, AiPlanError::InvalidBackend);
-            }
-            Err(_) => {
-                return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
-            }
+
+        if session.get_method() == "GET" && session.get_path().ends_with("/models") {
+            return self.write_model_list(&snapshot, &backends, session, log).await;
         }
 
         if session.get_method() != "POST" || !session.get_path().ends_with("/chat/completions") {
@@ -192,20 +289,66 @@ impl AiProxy {
             Err(error) => return Self::reject(session, log, "request-invalid", error),
         };
 
+        let decision = match self
+            .model_routes
+            .decide(&canonical.requested_model, &session.request_headers(), &backends)
+        {
+            Ok(decision) => decision,
+            Err(_) => return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration),
+        };
+        if decision.identity_model != canonical.logical_model
+            && canonical.replace_logical_model(&decision.identity_model).is_err()
+        {
+            return Self::reject(session, log, "model-rewrite-invalid", AiProxyError::BackendUnavailable);
+        }
+
+        let mut gate_candidates = Vec::with_capacity(backends.len());
+        for (order, backend) in backends.iter().enumerate() {
+            let runtime_available = ai_candidate_spec(backend)
+                .and_then(|(_, _, key)| snapshot.get_by_key(&key))
+                .is_some();
+            let Ok(mut candidate) = gate_candidate(order, backend, runtime_available) else {
+                return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
+            };
+            // A missing runtime object remains an invalid declared share even
+            // when an explicit filter omits this syntactically valid slot.
+            // Otherwise the filter would silently normalize onto healthy
+            // candidates during publication skew.
+            if runtime_available {
+                candidate.weight = decision.weights.get(backend.slot).copied().unwrap_or(candidate.weight);
+            }
+            gate_candidates.push(candidate);
+        }
+        match invalid_weight_gate(&gate_candidates, entropy) {
+            Ok(ConformanceGate::Valid) => {}
+            Ok(ConformanceGate::Invalid) => {
+                return Self::install_rejected_plan(session, log, AiPlanError::InvalidBackend);
+            }
+            Err(_) => {
+                return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
+            }
+        }
+
         let policy_store = get_backend_traffic_policy_store();
         let adaptive_store = get_adaptive_telemetry_store();
-        let candidate_specs: Vec<_> = backends.iter().filter_map(ai_candidate_spec).collect();
+        let candidate_specs: Vec<_> = backends
+            .iter()
+            .filter_map(|backend| {
+                ai_candidate_spec(backend)
+                    .map(|(slot, _, key)| (slot, decision.weights.get(slot).copied().unwrap_or(0), key))
+            })
+            .collect();
         let resolved = snapshot.get_many_by_key(candidate_specs.iter().map(|(_, _, key)| key.as_str()));
-        let passthrough_allowed = self.config.on_unknown_model == OnUnknownModel::Passthrough
-            && candidate_specs
-                .iter()
-                .zip(&resolved)
-                .filter(|((_, weight, _), _)| *weight > 0)
-                .all(|(_, backend)| {
-                    backend.as_ref().is_some_and(|backend| {
-                        matches!(backend.provider, AiProvider::OpenAI | AiProvider::OpenAICompatible)
-                    })
-                });
+        let passthrough_inputs = candidate_specs
+            .iter()
+            .cloned()
+            .zip(resolved.iter().cloned())
+            .collect::<Vec<_>>();
+        let passthrough_allowed = unknown_model_passthrough_allowed(
+            decision.rewrite_requires_canonical,
+            self.config.on_unknown_model,
+            &passthrough_inputs,
+        );
         let mut candidates = candidate_specs
             .into_iter()
             .zip(resolved)
@@ -250,15 +393,25 @@ impl AiProxy {
                 }
             })
             .collect::<Vec<_>>();
+        if decision.rewrite_requires_canonical
+            && !candidates.iter().any(|candidate| {
+                candidate.weight > 0
+                    && candidate
+                        .backend
+                        .as_ref()
+                        .is_some_and(|backend| backend.has_canonical_model(&canonical.logical_model))
+            })
+        {
+            return Self::reject(session, log, "rewrite-model-not-found", AiProxyError::ModelNotFound);
+        }
         let any_available_service = candidates
             .iter()
             .any(|candidate| candidate.weight > 0 && candidate.backend.is_some());
         let any_model_supported = candidates.iter().any(|candidate| {
             candidate.weight > 0
-                && candidate
-                    .backend
-                    .as_ref()
-                    .is_some_and(|backend| backend.models.contains_key(&canonical.logical_model) || passthrough_allowed)
+                && candidate.backend.as_ref().is_some_and(|backend| {
+                    backend.resolve_model(&canonical.logical_model).is_some() || passthrough_allowed
+                })
         });
         let any_model_eligible = resolve_candidate_models(
             &mut candidates,
@@ -364,6 +517,14 @@ impl AiProxy {
                                 AiProxyError::BackendUnavailable,
                             );
                         }
+                        capture_adaptive_states(
+                            adaptive_store.as_ref(),
+                            self.config.backend_selection.selection_type,
+                            &terminal_route_uid,
+                            &terminal_rule_identity,
+                            &canonical.logical_model,
+                            &mut candidates,
+                        );
                         let admitted = quota
                             .admit(session, log, &canonical.logical_model, maximum_request_duration)
                             .await;
@@ -471,6 +632,7 @@ impl AiProxy {
 
 struct CanonicalOpenAiRequest {
     body: Bytes,
+    requested_model: String,
     logical_model: String,
     requested_streaming: bool,
     input_chars: u64,
@@ -498,13 +660,13 @@ fn resolve_candidate_models(
 ) -> bool {
     let mut any_eligible = false;
     for candidate in candidates {
+        candidate.adaptive = None;
         candidate.model = candidate.backend.as_ref().and_then(|backend| {
             if requested_streaming && !backend.streaming {
                 return None;
             }
             backend
-                .models
-                .get(logical_model)
+                .resolve_model(logical_model)
                 .map(|model| AiCandidateModel {
                     provider_model: model.canonical_name.clone(),
                     pricing: model.pricing,
@@ -556,7 +718,7 @@ fn capture_adaptive_states(
         let model_is_catalogued = candidate
             .backend
             .as_ref()
-            .is_some_and(|backend| backend.models.contains_key(logical_model));
+            .is_some_and(|backend| backend.resolve_model(logical_model).is_some());
         if !model_is_catalogued || candidate.model.is_none() {
             continue;
         }
@@ -617,6 +779,7 @@ fn canonical_openai_request(body: &[u8], inject_usage_tracking: bool) -> Result<
     let input_chars = checked_utf8_chars(&body)?;
     Ok(CanonicalOpenAiRequest {
         body,
+        requested_model: logical_model.clone(),
         logical_model,
         requested_streaming,
         input_chars,
@@ -647,16 +810,19 @@ impl RequestFilter for AiProxy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
+    use crate::ai::backend_store::RuntimeWildcardModel;
     use crate::ai::{ResolvedModel, RuntimeAiBackend, RuntimeAiCredentialPool, RuntimeAiEndpoint};
     use crate::plugins::common::redis_rate_limiter::RedisRateLimiter;
     use crate::plugins::PluginRuntime;
     use crate::routes::http::match_unit::CompiledBackend;
     use edgion_resources::resources::common::RefDenied;
     use edgion_resources::resources::edgion_backend::AiProvider;
-    use edgion_resources::resources::edgion_plugins::{AiBackendSelection, AiBackendSelectionConfig};
+    use edgion_resources::resources::edgion_plugins::{
+        AiBackendSelection, AiBackendSelectionConfig, AiModelRoute, AiModelRouteAction, AiModelRouteMatch,
+    };
     use edgion_resources::HTTPBackendRef;
 
     fn config() -> AiProxyConfig {
@@ -666,6 +832,7 @@ mod tests {
             },
             inject_usage_tracking: true,
             on_unknown_model: OnUnknownModel::Reject,
+            model_routes: Vec::new(),
             token_quota: None,
         }
     }
@@ -753,6 +920,93 @@ mod tests {
             AiBackendSelection::Weighted
         );
         assert!(plugin.quota.is_none());
+    }
+
+    #[test]
+    fn model_list_is_deterministic_public_and_requires_symbolic_wildcard_owner() {
+        let public = ResolvedModel {
+            canonical_name: "provider-public".to_string(),
+            pricing: None,
+            public: true,
+        };
+        let hidden = ResolvedModel {
+            canonical_name: "provider-hidden".to_string(),
+            pricing: None,
+            public: false,
+        };
+        let runtime = Arc::new(RuntimeAiBackend {
+            uid: "backend-uid".to_string(),
+            provider: AiProvider::OpenAI,
+            endpoint: RuntimeAiEndpoint {
+                domain: "example.test".to_string(),
+                port: 443,
+                use_tls: true,
+                sni: "example.test".to_string(),
+                host: "example.test".to_string(),
+                path_prefix: String::new(),
+            },
+            streaming: true,
+            max_output_tokens: None,
+            credential_pool: RuntimeAiCredentialPool {
+                redis_ref: None,
+                on_redis_failure: Default::default(),
+                credentials: Vec::new(),
+                limiter_core: Arc::new(RedisRateLimiter::new()),
+            },
+            models: HashMap::from([("public".to_string(), public.clone()), ("hidden".to_string(), hidden)]),
+            wildcard_models: vec![
+                RuntimeWildcardModel {
+                    pattern: "owned*".to_string(),
+                    prefix: "owned".to_string(),
+                    model: public.clone(),
+                },
+                RuntimeWildcardModel {
+                    pattern: "n*".to_string(),
+                    prefix: "n".to_string(),
+                    model: public,
+                },
+            ],
+            canonical_models: HashSet::from(["public".to_string(), "hidden".to_string()]),
+            public_model_ids: BTreeSet::from(["public".to_string(), "owned*".to_string(), "n*".to_string()]),
+        });
+        let routes = ModelRouteTable::compile(&[
+            AiModelRoute {
+                match_: AiModelRouteMatch {
+                    model: "virtual*".to_string(),
+                    headers: Vec::new(),
+                },
+                action: AiModelRouteAction {
+                    rewrite: Some("hidden".to_string()),
+                    candidates: None,
+                },
+            },
+            AiModelRoute {
+                match_: AiModelRouteMatch {
+                    model: "owned*".to_string(),
+                    headers: Vec::new(),
+                },
+                action: AiModelRouteAction {
+                    rewrite: None,
+                    candidates: None,
+                },
+            },
+            AiModelRoute {
+                match_: AiModelRouteMatch {
+                    model: "narrow*".to_string(),
+                    headers: Vec::new(),
+                },
+                action: AiModelRouteAction {
+                    rewrite: None,
+                    candidates: None,
+                },
+            },
+        ])
+        .unwrap();
+        let visible = visible_model_ids(&routes, &[compiled_ai_backend(None)], &[], |key| {
+            (key == "tenant-b/provider").then(|| runtime.clone())
+        });
+        assert_eq!(visible, vec!["owned*", "public"]);
+        assert!(!visible.iter().any(|id| id == "virtual*" || id == "narrow*"));
     }
 
     #[test]
@@ -872,6 +1126,7 @@ mod tests {
                     ResolvedModel {
                         canonical_name: "provider-premium".to_string(),
                         pricing: None,
+                        public: true,
                     },
                 ),
                 (
@@ -879,9 +1134,13 @@ mod tests {
                     ResolvedModel {
                         canonical_name: "provider-economy".to_string(),
                         pricing: None,
+                        public: true,
                     },
                 ),
             ]),
+            wildcard_models: Vec::new(),
+            canonical_models: HashSet::from(["premium".to_string(), "economy".to_string()]),
+            public_model_ids: BTreeSet::from(["premium".to_string(), "economy".to_string()]),
         });
         let mut candidates = vec![AiPlanCandidate {
             slot: 0,
@@ -951,6 +1210,28 @@ mod tests {
         );
         assert_eq!(adaptive.len(), 1);
         assert!(candidates[0].adaptive.is_some());
+
+        let passthrough_inputs = vec![((0, 1, "tenant/backend".to_string()), candidates[0].backend.clone())];
+        assert!(unknown_model_passthrough_allowed(
+            false,
+            OnUnknownModel::Passthrough,
+            &passthrough_inputs
+        ));
+        assert!(!unknown_model_passthrough_allowed(
+            true,
+            OnUnknownModel::Passthrough,
+            &passthrough_inputs
+        ));
+        assert!(!unknown_model_passthrough_allowed(
+            false,
+            OnUnknownModel::Reject,
+            &passthrough_inputs
+        ));
+        assert!(!unknown_model_passthrough_allowed(
+            false,
+            OnUnknownModel::Passthrough,
+            &[((0, 1, "missing/backend".to_string()), None)]
+        ));
     }
 
     #[test]

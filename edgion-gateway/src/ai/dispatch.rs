@@ -861,7 +861,7 @@ fn provider_label(provider: AiProvider) -> AiProviderLabel {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap, HashSet};
 
     use super::*;
     use crate::ai::attempt::{AttemptScheduler, BackendCredentials};
@@ -968,6 +968,9 @@ mod tests {
                 limiter_core: Arc::new(crate::plugins::common::redis_rate_limiter::RedisRateLimiter::new()),
             },
             models: HashMap::new(),
+            wildcard_models: Vec::new(),
+            canonical_models: HashSet::new(),
+            public_model_ids: BTreeSet::new(),
         });
         let mut plan = candidate_plan();
         plan.scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &weights }], 0).unwrap();

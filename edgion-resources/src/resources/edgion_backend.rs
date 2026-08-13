@@ -160,8 +160,48 @@ pub struct AiModel {
     #[serde(default)]
     #[schemars(length(max = 32), inner(length(min = 1, max = 512)))]
     pub aliases: Vec<String>,
+    /// Whether this canonical model and its direct aliases are visible through
+    /// the route-scoped OpenAI model-list endpoint.
+    #[serde(default = "default_model_public")]
+    pub public: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<AiModelPricing>,
+}
+
+const fn default_model_public() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AiModelCatalogEntry {
+    pub canonical_name: String,
+    pub public: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AiModelWildcardAlias {
+    pub pattern: String,
+    pub prefix: String,
+    pub entry: AiModelCatalogEntry,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AiModelCatalog {
+    pub exact: HashMap<String, AiModelCatalogEntry>,
+    /// Descending literal-prefix length, then ascending pattern for stable
+    /// diagnostics and deterministic lookup.
+    pub wildcards: Vec<AiModelWildcardAlias>,
+}
+
+impl AiModelCatalog {
+    pub fn resolve(&self, requested: &str) -> Option<&AiModelCatalogEntry> {
+        self.exact.get(requested).or_else(|| {
+            self.wildcards
+                .iter()
+                .find(|alias| requested.starts_with(&alias.prefix))
+                .map(|alias| &alias.entry)
+        })
+    }
 }
 
 /// Estimated USD prices per one million tokens for one canonical model.
@@ -345,8 +385,8 @@ impl AiBackendSpec {
         Ok(parsed)
     }
 
-    /// Builds the cold-path lookup table from canonical names and aliases.
-    pub fn model_alias_table(&self) -> Result<HashMap<String, String>, Vec<String>> {
+    /// Builds the cold-path exact and suffix-wildcard model catalog.
+    pub fn model_catalog(&self) -> Result<AiModelCatalog, Vec<String>> {
         let mut errors = Vec::new();
         if self.models.is_empty() {
             errors.push("models must contain at least one entry".to_string());
@@ -367,17 +407,26 @@ impl AiBackendSpec {
                 ));
                 continue;
             }
+            if model.name.contains('*') {
+                errors.push(format!("model name {:?} must not contain '*'", model.name));
+                continue;
+            }
             if !canonical_names.insert(model.name.as_str()) {
                 errors.push(format!("duplicate model name {:?}", model.name));
             }
         }
 
-        let mut table = HashMap::new();
+        let mut exact = HashMap::new();
         for model in &self.models {
             if !model.name.trim().is_empty() {
-                table.entry(model.name.clone()).or_insert_with(|| model.name.clone());
+                exact.entry(model.name.clone()).or_insert_with(|| AiModelCatalogEntry {
+                    canonical_name: model.name.clone(),
+                    public: model.public,
+                });
             }
         }
+        let mut wildcard_patterns = HashSet::new();
+        let mut wildcards = Vec::new();
         for model in &self.models {
             if model.aliases.len() > AI_MODEL_ALIAS_MAX_COUNT {
                 errors.push(format!(
@@ -397,24 +446,71 @@ impl AiBackendSpec {
                     ));
                     continue;
                 }
+                let star_count = alias.bytes().filter(|byte| *byte == b'*').count();
+                if star_count > 0 {
+                    if star_count != 1 || !alias.ends_with('*') || alias.len() == 1 {
+                        errors.push(format!(
+                            "model alias {alias:?} must use at most one trailing '*' after a non-empty prefix"
+                        ));
+                        continue;
+                    }
+                    if !wildcard_patterns.insert(alias.as_str()) {
+                        errors.push(format!("duplicate wildcard model alias {alias:?}"));
+                        continue;
+                    }
+                    wildcards.push(AiModelWildcardAlias {
+                        pattern: alias.clone(),
+                        prefix: alias[..alias.len() - 1].to_string(),
+                        entry: AiModelCatalogEntry {
+                            canonical_name: model.name.clone(),
+                            public: model.public,
+                        },
+                    });
+                    continue;
+                }
                 if canonical_names.contains(alias.as_str()) {
                     errors.push(format!("model alias {alias:?} collides with a canonical name"));
                     continue;
                 }
-                if let Some(existing) = table.insert(alias.clone(), model.name.clone()) {
+                if let Some(existing) = exact.insert(
+                    alias.clone(),
+                    AiModelCatalogEntry {
+                        canonical_name: model.name.clone(),
+                        public: model.public,
+                    },
+                ) {
                     errors.push(format!(
-                        "model alias {alias:?} is assigned to both {existing:?} and {:?}",
-                        model.name
+                        "model alias {alias:?} is assigned to both {:?} and {:?}",
+                        existing.canonical_name, model.name
                     ));
                 }
             }
         }
 
+        wildcards.sort_by(|left, right| {
+            right
+                .prefix
+                .len()
+                .cmp(&left.prefix.len())
+                .then_with(|| left.pattern.cmp(&right.pattern))
+        });
+
         if errors.is_empty() {
-            Ok(table)
+            Ok(AiModelCatalog { exact, wildcards })
         } else {
             Err(errors)
         }
+    }
+
+    /// Exact-name compatibility view used by older cold-path consumers.
+    pub fn model_alias_table(&self) -> Result<HashMap<String, String>, Vec<String>> {
+        self.model_catalog().map(|catalog| {
+            catalog
+                .exact
+                .into_iter()
+                .map(|(name, entry)| (name, entry.canonical_name))
+                .collect()
+        })
     }
 
     /// Performs all configuration-only validation shared by ingest consumers.
@@ -441,7 +537,7 @@ impl AiBackendSpec {
         if self.defaults.max_output_tokens == Some(0) {
             errors.push("defaults.maxOutputTokens must be greater than zero".to_string());
         }
-        if let Err(model_errors) = self.model_alias_table() {
+        if let Err(model_errors) = self.model_catalog() {
             errors.extend(model_errors);
         }
         for model in &self.models {
@@ -624,6 +720,7 @@ mod tests {
             models: vec![AiModel {
                 name: "model-a".to_string(),
                 aliases: vec!["default".to_string()],
+                public: true,
                 pricing: None,
             }],
             defaults: AiBackendDefaults::default(),
@@ -777,21 +874,25 @@ mod tests {
             AiModel {
                 name: "model-a".to_string(),
                 aliases: vec!["".to_string(), "model-b".to_string(), "shared".to_string()],
+                public: true,
                 pricing: None,
             },
             AiModel {
                 name: "model-b".to_string(),
                 aliases: vec!["shared".to_string()],
+                public: true,
                 pricing: None,
             },
             AiModel {
                 name: "model-b".to_string(),
                 aliases: Vec::new(),
+                public: true,
                 pricing: None,
             },
             AiModel {
                 name: " ".to_string(),
                 aliases: Vec::new(),
+                public: true,
                 pricing: None,
             },
         ];
@@ -808,6 +909,46 @@ mod tests {
         let table = ai_spec(AiProvider::OpenAI).model_alias_table().unwrap();
         assert_eq!(table.get("model-a").map(String::as_str), Some("model-a"));
         assert_eq!(table.get("default").map(String::as_str), Some("model-a"));
+    }
+
+    #[test]
+    fn model_catalog_uses_longest_suffix_wildcard_and_public_default() {
+        let mut value = ai_spec(AiProvider::OpenAI);
+        value.models = vec![
+            AiModel {
+                name: "broad".to_string(),
+                aliases: vec!["gpt*".to_string()],
+                public: false,
+                pricing: None,
+            },
+            AiModel {
+                name: "specific".to_string(),
+                aliases: vec!["gpt-4*".to_string()],
+                public: true,
+                pricing: None,
+            },
+        ];
+        let catalog = value.model_catalog().unwrap();
+        assert_eq!(catalog.resolve("gpt-4.1").unwrap().canonical_name, "specific");
+        assert_eq!(catalog.resolve("gpt-3").unwrap().canonical_name, "broad");
+        assert!(!catalog.resolve("gpt-3").unwrap().public);
+
+        let decoded: AiModel = serde_json::from_str(r#"{"name":"m","aliases":[]}"#).unwrap();
+        assert!(decoded.public);
+    }
+
+    #[test]
+    fn model_catalog_rejects_invalid_and_duplicate_wildcards() {
+        let mut value = ai_spec(AiProvider::OpenAI);
+        value.models[0].aliases = vec![
+            "*".to_string(),
+            "bad*tail".to_string(),
+            "dup*".to_string(),
+            "dup*".to_string(),
+        ];
+        let errors = value.model_catalog().unwrap_err().join("\n");
+        assert!(errors.contains("trailing '*'"));
+        assert!(errors.contains("duplicate wildcard"));
     }
 
     #[test]

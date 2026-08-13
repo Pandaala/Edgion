@@ -612,6 +612,7 @@ mod ai_proxy_variant_tests {
             } else {
                 OnUnknownModel::Reject
             },
+            model_routes: Vec::new(),
             token_quota: None,
         }
     }

@@ -72,6 +72,12 @@ fn plugin_yaml() -> String {
     )
 }
 
+fn routed_plugin_yaml() -> String {
+    format!(
+        "apiVersion: edgion.io/v1\nkind: EdgionPlugins\nmetadata:\n  name: {PLUGIN}\n  namespace: {ROUTE_NS}\nspec:\n  requestPlugins:\n    - enable: true\n      type: AiProxy\n      config:\n        backendSelection:\n          type: Weighted\n        modelRoutes:\n          - match:\n              model: virtual-*\n            action:\n              rewrite: economy-model\n              candidates:\n                - backend:\n                    group: edgion.io\n                    kind: EdgionBackend\n                    namespace: {BACKEND_NS}\n                    name: {BACKEND_A}\n                    occurrence: 0\n                  weight: 1\n          - match:\n              model: header-only\n              headers:\n                - name: x-model-tier\n                  value: paid\n            action:\n              rewrite: economy-model\n          - match:\n              model: blocked-model\n            action:\n              rewrite: economy-model\n              candidates:\n                - backend:\n                    group: edgion.io\n                    kind: EdgionBackend\n                    namespace: {BACKEND_NS}\n                    name: {BACKEND_A}\n                    occurrence: 0\n                  weight: 0\n"
+    )
+}
+
 fn route_yaml() -> String {
     route_yaml_target(BACKEND_A)
 }
@@ -301,6 +307,14 @@ async fn ai_request_status(ctx: &ScenarioCtx) -> Result<reqwest::StatusCode> {
 }
 
 async fn ai_request(ctx: &ScenarioCtx) -> Result<reqwest::Response> {
+    ai_request_model(ctx, "fixture-model").await
+}
+
+async fn ai_request_model(ctx: &ScenarioCtx, model: &str) -> Result<reqwest::Response> {
+    ai_request_model_with_header(ctx, model, None).await
+}
+
+async fn ai_request_model_with_header(ctx: &ScenarioCtx, model: &str, tier: Option<&str>) -> Result<reqwest::Response> {
     let target = ctx
         .test_ctx
         .target_host
@@ -312,12 +326,42 @@ async fn ai_request(ctx: &ScenarioCtx) -> Result<reqwest::Response> {
         .resolve(HOST, std::net::SocketAddr::new(target, AI_GATEWAY_PORT))
         .build()
         .context("failed to build lifecycle request client")?;
-    client
+    let mut request = client
         .post(format!("http://{HOST}:{AI_GATEWAY_PORT}/v1/chat/completions"))
-        .json(&json!({"model": "fixture-model", "messages": [{"role": "user", "content": "hello"}]}))
+        .json(&json!({"model": model, "messages": [{"role": "user", "content": "hello"}]}));
+    if let Some(tier) = tier {
+        request = request.header("x-model-tier", tier);
+    }
+    request.send().await.context("AI lifecycle request failed")
+}
+
+async fn model_list(ctx: &ScenarioCtx) -> Result<Vec<String>> {
+    let target = ctx
+        .test_ctx
+        .target_host
+        .parse::<std::net::IpAddr>()
+        .with_context(|| format!("test target {} is not an IP address", ctx.test_ctx.target_host))?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .no_proxy()
+        .resolve(HOST, std::net::SocketAddr::new(target, AI_GATEWAY_PORT))
+        .build()
+        .context("failed to build model-list request client")?;
+    let response = client
+        .get(format!("http://{HOST}:{AI_GATEWAY_PORT}/v1/models"))
         .send()
         .await
-        .context("AI lifecycle request failed")
+        .context("AI model-list request failed")?
+        .error_for_status()
+        .context("AI model-list returned an error")?;
+    let value: Value = response.json().await.context("AI model-list response is not JSON")?;
+    Ok(value
+        .pointer("/data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect())
 }
 
 async fn wait_hot_backend_observation(ctx: &ScenarioCtx, economy: bool, streaming: bool) -> Result<()> {
@@ -638,6 +682,53 @@ async fn reference_lifecycle(ctx: &ScenarioCtx) -> Result<()> {
             }))
     })
     .await?;
+    wait_for(
+        "public model list after backend reload",
+        Duration::from_secs(15),
+        || async { Ok(model_list(ctx).await? == vec!["economy-model".to_string(), "fixture-model".to_string()]) },
+    )
+    .await?;
+    apply(ctx, routed_plugin_yaml()).await?;
+    wait_for(
+        "model route rewrite after plugin reload",
+        Duration::from_secs(15),
+        || async {
+            let response = ai_request_model(ctx, "virtual-chat").await?;
+            if !response.status().is_success() {
+                return Ok(false);
+            }
+            let body: Value = response.json().await.context("routed backend response is not JSON")?;
+            Ok(body.pointer("/mock/model_is_economy").and_then(Value::as_bool) == Some(true))
+        },
+    )
+    .await?;
+    wait_for("virtual model visibility", Duration::from_secs(15), || async {
+        Ok(model_list(ctx).await?.iter().any(|model| model == "virtual-*"))
+    })
+    .await?;
+    wait_for("header model route", Duration::from_secs(15), || async {
+        Ok(ai_request_model_with_header(ctx, "header-only", Some("paid"))
+            .await?
+            .status()
+            .is_success())
+    })
+    .await?;
+    anyhow::ensure!(
+        ai_request_model_with_header(ctx, "header-only", Some("free"))
+            .await?
+            .status()
+            == reqwest::StatusCode::NOT_FOUND,
+        "header mismatch must not select the model route"
+    );
+    anyhow::ensure!(
+        !ai_request_model(ctx, "blocked-model").await?.status().is_success(),
+        "an all-zero candidate filter must exhaust routing"
+    );
+    apply(ctx, plugin_yaml()).await?;
+    wait_for("model route removal", Duration::from_secs(15), || async {
+        Ok(ai_request_model(ctx, "virtual-chat").await?.status() == reqwest::StatusCode::NOT_FOUND)
+    })
+    .await?;
     apply(ctx, hot_backend_yaml(BACKEND_A, "fail-503")).await?;
     wait_traffic(ctx, false).await?;
     apply(ctx, backend_yaml(BACKEND_A)).await?;
@@ -822,6 +913,7 @@ mod tests {
             backend_yaml(BACKEND_A),
             backend_yaml(BACKEND_B),
             plugin_yaml(),
+            routed_plugin_yaml(),
             route_yaml(),
             route_grant_yaml(),
             secret_grant_yaml(),

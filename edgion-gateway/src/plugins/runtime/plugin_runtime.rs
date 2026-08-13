@@ -2995,6 +2995,7 @@ mod tests {
             },
             inject_usage_tracking: true,
             on_unknown_model: OnUnknownModel::Reject,
+            model_routes: Vec::new(),
             token_quota: None,
         });
 

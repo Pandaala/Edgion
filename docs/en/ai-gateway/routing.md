@@ -12,9 +12,44 @@ AiProxy must appear exactly once in a rule-level EdgionPlugins ExtensionRef.
 | `backendSelection.type` | Enum | `Weighted` | `Weighted`, `Priority`, `LowestLatency`, `LowestUsage`, or `CostWeighted` |
 | `injectUsageTracking` | Boolean | `true` | Requests provider usage for streaming passthrough while retaining independent access-log accounting |
 | `onUnknownModel` | Enum | `reject` | `reject` fails unknown models; `passthrough` is limited to OpenAI-compatible candidates with `Weighted` or `Priority` |
+| `modelRoutes` | Array | `[]` | Structured model/header matching, canonical rewrite, and typed candidate filter/weight overrides |
 | `tokenQuota` | Object | none | Optional Redis-backed logical-model token quota; omission performs no quota Redis work |
 
-AiProxy does not have `aiServiceRef`, a provider list, backend weights, or retry attempts.
+AiProxy does not have `aiServiceRef`, a separate provider list, or retry attempts. A model-route
+action may identify existing typed route slots and explicitly override their effective weights.
+
+## Model routes
+
+`modelRoutes` runs once after model parsing and before the existing scheduler.
+Exact patterns beat trailing wildcards; then longer literal prefixes and more
+header predicates are more specific. Equal-specificity ambiguity is rejected.
+
+```yaml
+modelRoutes:
+  - match:
+      model: chat-*
+      headers:
+        - name: x-tier
+          value: premium
+    action:
+      rewrite: provider-chat-v2
+      candidates:
+        - backend:
+            group: edgion.io
+            kind: EdgionBackend
+            namespace: production
+            name: primary-provider
+            occurrence: 0
+          weight: 100
+```
+
+Selectors identify one typed backend declaration, including duplicate
+occurrence. Filters never remove a declared missing, denied, or invalid traffic
+share. The existing scheduler still owns retry, failover, and adaptive choice.
+
+`GET /v1/models` on a route that admits GET returns sorted, duplicate-free
+reachable public canonical names and aliases. Header-specific rules use the
+listing request's headers; hidden and unavailable targets are omitted.
 
 ## Selection algorithms
 

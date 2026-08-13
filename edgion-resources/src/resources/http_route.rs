@@ -5,6 +5,7 @@
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -376,6 +377,116 @@ pub struct HTTPBackendRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub ref_denied: Option<RefDenied>,
+}
+
+/// Stable identity of one declaration in an effective HTTPRoute backendRefs
+/// list. `occurrence` is counted among equal normalized tuples, while Gateway
+/// keeps the raw vector slot separately for dispatch.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LogicalBackendSlotIdentity {
+    pub group: String,
+    pub kind: String,
+    pub namespace: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+    pub occurrence: u16,
+}
+
+impl LogicalBackendSlotIdentity {
+    pub fn matches_ai_selector(&self, selector: &crate::resources::edgion_plugins::AiBackendSlotSelector) -> bool {
+        self.group == selector.group
+            && self.kind == selector.kind
+            && self.namespace == selector.namespace
+            && self.name == selector.name
+            && self.section == selector.section
+            && self.occurrence == selector.occurrence
+    }
+}
+
+/// Construct one canonical identity for every declaration in order.
+pub fn logical_backend_slot_identities(
+    refs: &[HTTPBackendRef],
+    route_namespace: &str,
+) -> Vec<LogicalBackendSlotIdentity> {
+    let mut occurrences: HashMap<(String, String, String, String, Option<String>), u16> = HashMap::new();
+    refs.iter()
+        .map(|backend| {
+            let group = match backend.group.as_deref() {
+                None | Some("") => "core".to_string(),
+                Some(group) => group.to_string(),
+            };
+            let kind = match backend.kind.as_deref() {
+                None | Some("") => "Service".to_string(),
+                Some(kind) => kind.to_string(),
+            };
+            let namespace = backend.namespace.as_deref().unwrap_or(route_namespace).to_string();
+            let tuple = (
+                group.clone(),
+                kind.clone(),
+                namespace.clone(),
+                backend.name.clone(),
+                None,
+            );
+            let occurrence = occurrences.entry(tuple).or_default();
+            let identity = LogicalBackendSlotIdentity {
+                group,
+                kind,
+                namespace,
+                name: backend.name.clone(),
+                section: None,
+                occurrence: *occurrence,
+            };
+            *occurrence = occurrence.saturating_add(1);
+            identity
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod logical_slot_identity_tests {
+    use super::*;
+
+    fn backend(name: &str, namespace: Option<&str>) -> HTTPBackendRef {
+        HTTPBackendRef {
+            name: name.to_string(),
+            namespace: namespace.map(str::to_string),
+            port: None,
+            weight: Some(1),
+            group: Some("edgion.io".to_string()),
+            kind: Some("EdgionBackend".to_string()),
+            filters: None,
+            backend_tls_policy: None,
+            ref_denied: None,
+        }
+    }
+
+    #[test]
+    fn logical_identity_normalizes_namespace_and_counts_equal_tuple_occurrences() {
+        let refs = vec![
+            backend("same", None),
+            backend("other", None),
+            backend("same", None),
+            backend("same", Some("elsewhere")),
+        ];
+        let identities = logical_backend_slot_identities(&refs, "route-ns");
+        assert_eq!(identities[0].namespace, "route-ns");
+        assert_eq!(identities[0].occurrence, 0);
+        assert_eq!(identities[2].occurrence, 1);
+        assert_eq!(identities[3].namespace, "elsewhere");
+        assert_eq!(identities[3].occurrence, 0);
+        assert!(
+            identities[2].matches_ai_selector(&crate::resources::edgion_plugins::AiBackendSlotSelector {
+                group: "edgion.io".to_string(),
+                kind: "EdgionBackend".to_string(),
+                namespace: "route-ns".to_string(),
+                name: "same".to_string(),
+                section: None,
+                occurrence: 1,
+            })
+        );
+    }
 }
 
 /// Canonical classification of an HTTPRoute backendRef.

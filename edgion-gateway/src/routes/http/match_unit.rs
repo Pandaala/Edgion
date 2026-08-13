@@ -88,6 +88,8 @@ pub struct CompiledBackend {
     /// Original position in `HTTPRouteRule.backendRefs`. This remains stable
     /// across typed filtering and is the conformance/metrics slot identity.
     pub slot: usize,
+    /// Canonical typed identity shared with Controller contextual admission.
+    pub identity: edgion_resources::LogicalBackendSlotIdentity,
     /// Cold-path classification. Service-only consumers must explicitly match
     /// `Service`; AI routing consumes the full ordered slot list separately.
     pub target: CompiledBackendTarget,
@@ -132,10 +134,26 @@ impl CompiledBackend {
         slot: usize,
         plugin_runtime: Arc<PluginRuntime>,
     ) -> Self {
+        let identity =
+            edgion_resources::logical_backend_slot_identities(std::slice::from_ref(&schema), route_namespace)
+                .into_iter()
+                .next()
+                .expect("one backend ref produces one identity");
+        Self::compile_with_identity(schema, route_namespace, slot, identity, plugin_runtime)
+    }
+
+    fn compile_with_identity(
+        schema: HTTPBackendRef,
+        route_namespace: &str,
+        slot: usize,
+        identity: edgion_resources::LogicalBackendSlotIdentity,
+        plugin_runtime: Arc<PluginRuntime>,
+    ) -> Self {
         let target = Self::compile_target(&schema, route_namespace);
         Self {
             schema,
             slot,
+            identity,
             target,
             plugin_runtime,
         }
@@ -239,16 +257,18 @@ impl HttpRouteRuleUnit {
             None => PluginRuntime::new(),
         });
         let backends: Vec<CompiledBackend> = rule.backend_refs.as_ref().map_or_else(Vec::new, |refs| {
+            let identities = edgion_resources::logical_backend_slot_identities(refs, namespace);
             refs.iter()
+                .zip(identities)
                 .enumerate()
-                .map(|(slot, br)| {
+                .map(|(slot, (br, identity))| {
                     let plugin_runtime = Arc::new(match &br.filters {
                         Some(filters) => {
                             PluginRuntime::from_httproute_filters_for_backend(filters, namespace, &mirror_tuning)
                         }
                         None => PluginRuntime::new(),
                     });
-                    CompiledBackend::compile(br.clone(), namespace, slot, plugin_runtime)
+                    CompiledBackend::compile_with_identity(br.clone(), namespace, slot, identity, plugin_runtime)
                 })
                 .collect()
         });

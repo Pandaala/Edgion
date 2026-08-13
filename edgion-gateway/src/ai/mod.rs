@@ -12,6 +12,7 @@ pub mod credential_outlier;
 pub mod dispatch;
 pub mod error;
 pub(crate) mod json_span;
+pub mod model_router;
 pub mod quota;
 pub mod routing;
 pub(crate) mod terminal;

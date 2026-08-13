@@ -5,7 +5,7 @@
 //! bounded hash lookups within it; it never reads the typed ConfigClient cache
 //! or reparses endpoint, model, or credential data.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, LazyLock};
 
@@ -47,6 +47,14 @@ pub struct RuntimeAiEndpoint {
 pub struct ResolvedModel {
     pub canonical_name: String,
     pub pricing: Option<ParsedAiModelPricing>,
+    pub public: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeWildcardModel {
+    pub pattern: String,
+    pub prefix: String,
+    pub model: ResolvedModel,
 }
 
 /// One usable credential in the configured provider credential pool.
@@ -111,6 +119,24 @@ pub struct RuntimeAiBackend {
     pub max_output_tokens: Option<u32>,
     pub credential_pool: RuntimeAiCredentialPool,
     pub models: HashMap<String, ResolvedModel>,
+    pub wildcard_models: Vec<RuntimeWildcardModel>,
+    pub canonical_models: HashSet<String>,
+    pub public_model_ids: BTreeSet<String>,
+}
+
+impl RuntimeAiBackend {
+    pub fn resolve_model(&self, requested: &str) -> Option<&ResolvedModel> {
+        self.models.get(requested).or_else(|| {
+            self.wildcard_models
+                .iter()
+                .find(|alias| requested.starts_with(&alias.prefix))
+                .map(|alias| &alias.model)
+        })
+    }
+
+    pub fn has_canonical_model(&self, model: &str) -> bool {
+        self.canonical_models.contains(model)
+    }
 }
 
 impl fmt::Debug for RuntimeAiBackend {
@@ -500,20 +526,44 @@ fn try_compile_backend(key: &str, resource: &EdgionBackend) -> Result<RuntimeAiB
             Ok((model.name.as_str(), pricing))
         })
         .collect::<Result<_, &'static str>>()?;
-    let models = ai
-        .model_alias_table()
-        .map_err(|_| "invalid model catalog")?
+    let catalog = ai.model_catalog().map_err(|_| "invalid model catalog")?;
+    let models = catalog
+        .exact
         .into_iter()
-        .map(|(name, canonical_name)| {
-            let pricing = canonical_pricing.get(canonical_name.as_str()).copied().flatten();
+        .map(|(name, entry)| {
+            let pricing = canonical_pricing.get(entry.canonical_name.as_str()).copied().flatten();
             (
                 name,
                 ResolvedModel {
-                    canonical_name,
+                    canonical_name: entry.canonical_name,
                     pricing,
+                    public: entry.public,
                 },
             )
         })
+        .collect::<HashMap<_, _>>();
+    let wildcard_models = catalog
+        .wildcards
+        .into_iter()
+        .map(|alias| RuntimeWildcardModel {
+            pattern: alias.pattern,
+            prefix: alias.prefix,
+            model: ResolvedModel {
+                pricing: canonical_pricing
+                    .get(alias.entry.canonical_name.as_str())
+                    .copied()
+                    .flatten(),
+                canonical_name: alias.entry.canonical_name,
+                public: alias.entry.public,
+            },
+        })
+        .collect::<Vec<_>>();
+    let canonical_models = ai.models.iter().map(|model| model.name.clone()).collect();
+    let public_model_ids = ai
+        .models
+        .iter()
+        .filter(|model| model.public)
+        .flat_map(|model| std::iter::once(model.name.clone()).chain(model.aliases.iter().cloned()))
         .collect();
 
     Ok(RuntimeAiBackend {
@@ -524,6 +574,9 @@ fn try_compile_backend(key: &str, resource: &EdgionBackend) -> Result<RuntimeAiB
         max_output_tokens: ai.defaults.max_output_tokens,
         credential_pool,
         models,
+        wildcard_models,
+        canonical_models,
+        public_model_ids,
     })
 }
 
@@ -597,6 +650,7 @@ mod tests {
                 models: vec![AiModel {
                     name: "model-a".to_string(),
                     aliases: vec!["fast".to_string()],
+                    public: true,
                     pricing: None,
                 }],
                 defaults: AiBackendDefaults {
@@ -649,6 +703,33 @@ mod tests {
         assert_eq!(backend.credential_pool.credentials[0].credential, "secret-value");
         assert_eq!(backend.models["model-a"].canonical_name, "model-a");
         assert_eq!(backend.models["fast"].canonical_name, "model-a");
+    }
+
+    #[test]
+    fn runtime_catalog_resolves_longest_wildcard_and_visibility() {
+        let mut configured = resource("provider", "https://ai.example.com", Some(b"secret-value"));
+        let ai = Arc::get_mut(&mut configured).unwrap().spec.ai.as_mut().unwrap();
+        ai.models = vec![
+            AiModel {
+                name: "broad".to_string(),
+                aliases: vec!["gpt*".to_string()],
+                public: false,
+                pricing: None,
+            },
+            AiModel {
+                name: "specific".to_string(),
+                aliases: vec!["gpt-4*".to_string()],
+                public: true,
+                pricing: None,
+            },
+        ];
+        let store = AiBackendStore::new();
+        store.replace_all(&HashMap::from([("default/provider".to_string(), configured)]));
+        let backend = store.get_by_key("default/provider").unwrap();
+        assert_eq!(backend.resolve_model("gpt-4.1").unwrap().canonical_name, "specific");
+        assert_eq!(backend.resolve_model("gpt-3").unwrap().canonical_name, "broad");
+        assert!(backend.public_model_ids.contains("gpt-4*"));
+        assert!(!backend.public_model_ids.contains("gpt*"));
     }
 
     #[test]

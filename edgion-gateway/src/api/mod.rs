@@ -1763,6 +1763,7 @@ mod edgion_backend_admin_tests {
                 models: vec![AiModel {
                     name: "model-a".to_string(),
                     aliases: vec![],
+                    public: true,
                     pricing: None,
                 }],
                 defaults: AiBackendDefaults::default(),

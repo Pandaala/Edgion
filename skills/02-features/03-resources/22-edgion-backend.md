@@ -45,6 +45,8 @@ spec:
       - name: provider-chat-v2
         aliases:
           - chat
+          - chat-v2-*
+        public: true
         pricing:
           inputPerMillionUsd: "1"
           outputPerMillionUsd: "4"
@@ -114,7 +116,8 @@ window expires.
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `name` | String | Yes | — | Provider model name, at most 512 UTF-8 bytes |
-| `aliases` | String array | No | `[]` | Up to 32 client-facing logical model names, each at most 512 UTF-8 bytes |
+| `aliases` | String array | No | `[]` | Up to 32 exact names or suffix wildcards (`prefix*`), each at most 512 UTF-8 bytes |
+| `public` | Boolean | No | `true` | Expose the canonical name and direct aliases through route-scoped `/v1/models` |
 | `pricing` | Object | No | — | Estimated USD prices per one million tokens |
 | `pricing.inputPerMillionUsd` | Decimal string | Yes with `pricing` | — | Ordinary input-token price |
 | `pricing.outputPerMillionUsd` | Decimal string | Yes with `pricing` | — | Output-token price |
@@ -123,6 +126,8 @@ window expires.
 
 Names and aliases are unique across the complete backend. Price strings are non-negative, support
 at most six decimal places, and cannot exceed 1,000,000 USD per million tokens.
+Wildcard aliases contain exactly one trailing `*` after a non-empty prefix.
+Exact lookup wins; overlapping wildcards use the longest literal prefix.
 
 ### `spec.ai.defaults`
 
@@ -189,6 +194,7 @@ spec:
 | `backendSelection.type` | Enum | No | `Weighted` | `Weighted`, `Priority`, `LowestLatency`, `LowestUsage`, or `CostWeighted` |
 | `injectUsageTracking` | Boolean | No | `true` | Requests provider usage for streaming passthrough while retaining independent access-log accounting |
 | `onUnknownModel` | Enum | No | `reject` | `reject` fails unknown models; `passthrough` is limited to OpenAI-compatible candidates with `Weighted` or `Priority` |
+| `modelRoutes` | Array | No | `[]` | Up to 64 bounded model/header matches with canonical rewrite and typed candidate overrides |
 | `tokenQuota` | Object | No | — | Optional Redis-backed logical-model token quota; omission has no Redis/task overhead |
 
 Selection always scans only valid positive-weight route candidates that support the request's
@@ -202,8 +208,10 @@ logical model:
 | `LowestUsage` | Chooses the lowest recent charged-token usage divided by route weight |
 | `CostWeighted` | Uses route weight and inverse-square estimated request cost |
 
-`CostWeighted` requires pricing and an output bound for every otherwise eligible candidate. AiProxy
-never contains backend names, backend order, weights, retry attempts, or a provider list.
+`CostWeighted` requires pricing and an output bound for every otherwise eligible candidate. The base
+AiProxy selection never embeds a provider list or retry attempts. A `modelRoutes` action may
+explicitly identify existing typed route slots and override their effective weights; the HTTPRoute
+declarations remain authoritative and invalid shares are preserved.
 
 ### Token quota
 

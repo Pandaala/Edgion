@@ -17,7 +17,8 @@ model catalog. HTTPRoute references these resources directly from `backendRefs`.
 | `spec.ai.credentialPool.onRedisFailure` | Enum | `Deny` | `Deny` fails closed; `Allow` bypasses credential limits during Redis failure |
 | `spec.ai.models` | Array | **Required** | One to 256 provider model entries |
 | `spec.ai.models[].name` | String | **Required** | Provider model name, at most 512 UTF-8 bytes |
-| `spec.ai.models[].aliases` | Array | `[]` | Up to 32 client-facing logical names |
+| `spec.ai.models[].aliases` | Array | `[]` | Up to 32 exact names or suffix wildcards (`prefix*`) |
+| `spec.ai.models[].public` | Boolean | `true` | Include the canonical name and aliases in route-scoped `/v1/models` |
 | `spec.ai.models[].pricing` | Object | none | Optional fixed-point USD prices per one million tokens |
 | `spec.ai.defaults.streaming` | Boolean | `true` | Rejects client streaming when `false` |
 | `spec.ai.defaults.maxOutputTokens` | Integer | none | Fallback output bound for translation, TPM reservation, and estimated cost |
@@ -60,6 +61,8 @@ for quota and access logs across failover.
 
 Names and aliases are unique within a backend. Optional `pricing` strings are non-negative, support
 at most six decimal places, and cannot exceed 1,000,000 USD per million tokens.
+Exact aliases take precedence over suffix wildcards, and the longest matching
+wildcard prefix wins. `*` alone and embedded wildcards are invalid.
 
 ## Status
 

@@ -149,11 +149,16 @@ spec:
                           aliases:
                             type: array
                             default: []
+                            description: Exact aliases or suffix-wildcard aliases with one trailing '*'.
                             maxItems: 32
                             items:
                               type: string
                               minLength: 1
                               maxLength: 512
+                          public:
+                            type: boolean
+                            default: true
+                            description: Expose the canonical name and direct aliases through /v1/models.
                           pricing:
                             type: object
                             description: Estimated USD prices per one million tokens.

@@ -413,6 +413,7 @@ mod tests {
                     models: vec![AiModel {
                         name: "model-a".to_string(),
                         aliases: Vec::new(),
+                        public: true,
                         pricing: None,
                     }],
                     defaults: AiBackendDefaults::default(),
