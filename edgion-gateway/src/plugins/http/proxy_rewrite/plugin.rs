@@ -598,6 +598,7 @@ impl ProxyRewrite {
             BodyReadError::Incomplete => Some(EdgionStatus::BodyReadAborted),
             BodyReadError::Unimplemented => Some(EdgionStatus::BodyReadUnimplemented),
             BodyReadError::StorageFailure => Some(EdgionStatus::BodyCaptureStorageFailed),
+            BodyReadError::GenerationConflict => Some(EdgionStatus::BodyMutationConflict),
             BodyReadError::NotBuffered => None,
         };
         if let Some(status) = status {

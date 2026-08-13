@@ -242,6 +242,7 @@ pub(crate) fn body_read_failure_result(
         // Handled above; unreachable.
         BodyReadError::NotBuffered => EdgionStatus::BodyRefusedStage,
         BodyReadError::StorageFailure => EdgionStatus::BodyCaptureStorageFailed,
+        BodyReadError::GenerationConflict => EdgionStatus::BodyMutationConflict,
     });
 
     match requirement.on_read_failure {

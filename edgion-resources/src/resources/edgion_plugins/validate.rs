@@ -26,7 +26,7 @@ use std::collections::BTreeSet;
 
 use super::conditions::PluginConditions;
 use super::edgion_plugin::{BodyStage, EdgionPlugin};
-use super::entry::dye_set_clobber_error;
+use super::entry::{dye_set_clobber_error, RequestFilterEntry};
 use super::EdgionPlugins;
 use crate::resources::common::log_labels::LOG_LABEL_MAX_COUNT;
 
@@ -115,6 +115,39 @@ pub fn applicable_stages_by_name(type_name: &str) -> StageSet {
 /// Which execution stages a plugin variant is valid for.
 fn applicable_stages(plugin: &EdgionPlugin) -> StageSet {
     applicable_stages_by_name(plugin.type_name())
+}
+
+/// The single message for a misordered `AiGuard`.
+///
+/// Shared verbatim by the controller admission path and the gateway
+/// `compile_plugins` path so the two error sets stay byte-identical, as
+/// `validate_plugins_matches_compile_plugins_error_set` requires.
+pub const AI_GUARD_AFTER_AI_PROXY_ERROR: &str =
+    "requestPlugins: AiGuard must be ordered before AiProxy; a mask published after AiProxy has captured the \
+     canonical body never reaches the provider";
+
+/// Report an `AiGuard` entry ordered after `AiProxy` in the same resource.
+///
+/// This is deliberately narrow and best-effort. It catches the unambiguous
+/// same-resource mistake with no false positives; it cannot see across
+/// resources (global/Gateway scope, or two `ExtensionRef` targets), and it does
+/// not attempt to detect a body-mutating plugin between the two. The exact,
+/// scope-independent guarantee is the runtime body-generation check, not this.
+pub fn collect_ai_guard_ordering_errors(entries: &[RequestFilterEntry], errors: &mut Vec<String>) {
+    let active = |entry: &RequestFilterEntry| entry.is_enabled() && entry.policy_action.is_none();
+    // The LAST guard against the FIRST proxy: `[AiGuard, AiProxy, AiGuard]`
+    // still has a genuinely misordered third entry.
+    let last_guard = entries
+        .iter()
+        .rposition(|entry| active(entry) && entry.plugin.type_name() == "AiGuard");
+    let first_proxy = entries
+        .iter()
+        .position(|entry| active(entry) && entry.plugin.type_name() == "AiProxy");
+    if let (Some(guard), Some(proxy)) = (last_guard, first_proxy) {
+        if guard > proxy {
+            errors.push(AI_GUARD_AFTER_AI_PROXY_ERROR.to_string());
+        }
+    }
 }
 
 /// Compile + validate the regex conditions on a single entry, pushing any
@@ -459,6 +492,8 @@ impl EdgionPlugins {
                     "requestPlugins: at most one TraceContext plugin is allowed, found {count}"
                 ));
             }
+
+            collect_ai_guard_ordering_errors(entries, &mut errors);
         }
 
         // Pass 3: access log extension declarations. Not a stage — no
@@ -509,6 +544,50 @@ mod tests {
             add: None,
             remove: None,
         }
+    }
+
+    fn ai_guard_entry() -> RequestFilterEntry {
+        let config: crate::resources::edgion_plugins::AiGuardConfig = serde_yaml::from_str(
+            "rules:\n  - name: r\n    match: { type: regex, pattern: \"x\" }\n    action: reject\n",
+        )
+        .expect("configuration parses");
+        RequestFilterEntry::new(EdgionPlugin::AiGuard(config))
+    }
+
+    fn ai_proxy_entry() -> RequestFilterEntry {
+        let config: crate::resources::edgion_plugins::AiProxyConfig =
+            serde_yaml::from_str("{}").expect("configuration parses");
+        RequestFilterEntry::new(EdgionPlugin::AiProxy(config))
+    }
+
+    #[test]
+    fn ai_guard_ordered_after_ai_proxy_is_reported() {
+        // A guard that runs after AiProxy can never affect the provider body,
+        // because the provider request is derived from the canonical body
+        // AiProxy already captured.
+        let mut errors = Vec::new();
+        collect_ai_guard_ordering_errors(&[ai_proxy_entry(), ai_guard_entry()], &mut errors);
+        assert_eq!(errors, vec![AI_GUARD_AFTER_AI_PROXY_ERROR.to_string()]);
+
+        let mut ok = Vec::new();
+        collect_ai_guard_ordering_errors(&[ai_guard_entry(), ai_proxy_entry()], &mut ok);
+        assert!(ok.is_empty(), "guard before proxy is the supported order");
+    }
+
+    #[test]
+    fn ordering_rule_ignores_inert_entries_and_single_sided_lists() {
+        // A disabled entry is inert and must not trigger a status condition.
+        let mut disabled = ai_guard_entry();
+        disabled.enable = false;
+        let mut errors = Vec::new();
+        collect_ai_guard_ordering_errors(&[ai_proxy_entry(), disabled], &mut errors);
+        assert!(errors.is_empty());
+
+        // Either plugin alone is a perfectly valid configuration.
+        let mut errors = Vec::new();
+        collect_ai_guard_ordering_errors(&[ai_guard_entry()], &mut errors);
+        collect_ai_guard_ordering_errors(&[ai_proxy_entry()], &mut errors);
+        assert!(errors.is_empty());
     }
 
     fn aliased_request_entry(alias: &str) -> RequestFilterEntry {

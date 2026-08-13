@@ -76,12 +76,12 @@ pub use gateway::{
 
 // EdgionPlugins tests
 pub use edgion_plugins::{
-    AccessLogExternTestSuite, AllConditionsTestSuite, AllEndpointStatusTestSuite, BandwidthLimitTestSuite,
-    BasicAuthDynamicGroupedInitialTestSuite, BasicAuthDynamicGroupedUpdateTestSuite, BasicAuthDynamicInitialTestSuite,
-    BasicAuthDynamicUpdateTestSuite, BasicAuthTestSuite, BodyDynamicCappedTestSuite, BodyDynamicInitialTestSuite,
-    BodyDynamicRejectedTestSuite, BodyDynamicUpdateTestSuite, BodyPluginsTestSuite, CanaryHotSwapFinalTestSuite,
-    CanaryHotSwapInitialTestSuite, CanaryTestSuite, CorsPluginTestSuite, CsrfTestSuite, CtxSetTestSuite,
-    DirectEndpointTestSuite, DslBodyTestSuite, DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite,
+    AccessLogExternTestSuite, AiGuardTestSuite, AllConditionsTestSuite, AllEndpointStatusTestSuite,
+    BandwidthLimitTestSuite, BasicAuthDynamicGroupedInitialTestSuite, BasicAuthDynamicGroupedUpdateTestSuite,
+    BasicAuthDynamicInitialTestSuite, BasicAuthDynamicUpdateTestSuite, BasicAuthTestSuite, BodyDynamicCappedTestSuite,
+    BodyDynamicInitialTestSuite, BodyDynamicRejectedTestSuite, BodyDynamicUpdateTestSuite, BodyPluginsTestSuite,
+    CanaryHotSwapFinalTestSuite, CanaryHotSwapInitialTestSuite, CanaryTestSuite, CorsPluginTestSuite, CsrfTestSuite,
+    CtxSetTestSuite, DirectEndpointTestSuite, DslBodyTestSuite, DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite,
     DslGrpcErrorTestSuite, DslTestSuite, DynamicExternalUpstreamTestSuite, DynamicInternalUpstreamTestSuite,
     EdgionConfigDataFlapInitialTestSuite, EdgionConfigDataFlapInvalidTestSuite, EdgionConfigDataFlapValidTestSuite,
     EdgionConfigDataManagedTestSuite, EdgionConfigDataStatusTestSuite, ExtProcTestSuite, FaultInjectionTestSuite,

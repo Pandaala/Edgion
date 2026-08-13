@@ -1295,6 +1295,19 @@ pub struct EdgionHttpContext {
     /// The canonical body is never rendered by Debug or access logging.
     pub ai_attempt_plan: Option<AiAttemptPlan>,
 
+    /// Request-body generation observed by `AiGuard` when it settled its
+    /// decision, and the identities of guard entries that already decided.
+    ///
+    /// `AiProxy` compares the generation against the current one after reading
+    /// the body: a difference means something mutated the body between the
+    /// guard and the proxy, so the guard's mask is not what the provider would
+    /// receive. This is the exact, scope-independent ordering guarantee;
+    /// plugin ordering alone cannot provide it.
+    pub ai_guard_body_generation: Option<u64>,
+    /// One-shot latch so a re-entered guard (the backendRef chain re-runs on
+    /// every upstream attempt) never selects, evaluates, or masks twice.
+    pub ai_guard_decided: Vec<String>,
+
     /// Bounded active-attempt and pending Redis settlement state. Async work is
     /// drained only at the next-attempt and universal logging seams.
     pub ai_attempt_runtime: crate::ai::attempt_runtime::AiAttemptRuntimeState,
@@ -1544,6 +1557,8 @@ impl EdgionHttpContext {
             resolved_route_ext_refs: None,
             ai: None,
             ai_attempt_plan: None,
+            ai_guard_body_generation: None,
+            ai_guard_decided: Vec::new(),
             ai_attempt_runtime: crate::ai::attempt_runtime::AiAttemptRuntimeState::default(),
             ai_effective_policy: None,
             ai_request_baseline: None,

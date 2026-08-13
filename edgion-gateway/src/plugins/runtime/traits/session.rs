@@ -42,6 +42,12 @@ pub enum BodyReadError {
     TooLarge { limit: u64 },
     /// The body stream ended prematurely / was aborted.
     Incomplete,
+    /// A mutation was computed against one logical snapshot but another
+    /// mutation was published before it could be applied. Kept distinct from
+    /// `Incomplete` so a lost update is never mistaken for a truncated body:
+    /// the two demand opposite handling, and byte offsets from the stale
+    /// snapshot must never be spliced into the newer one.
+    GenerationConflict,
     /// The capture storage backend failed (spill file create/write, or the
     /// capture was poisoned mid-chunk): an infrastructure fault, not a client
     /// abort. Kept distinct from `Incomplete` so operators can alert on it,
@@ -64,6 +70,7 @@ impl std::fmt::Display for BodyReadError {
             }
             BodyReadError::TooLarge { limit } => write!(f, "body exceeds buffer cap of {limit} bytes"),
             BodyReadError::Incomplete => write!(f, "body stream incomplete"),
+            BodyReadError::GenerationConflict => write!(f, "body mutation conflict"),
             BodyReadError::StorageFailure => write!(f, "body capture storage failed"),
             BodyReadError::Timeout => write!(f, "body read timed out"),
         }
@@ -569,6 +576,24 @@ pub trait PluginSession: Send + Sync {
     ) -> BodyReadResult {
         Err(BodyReadError::Unimplemented)
     }
+
+    /// Apply several disjoint byte-range replacements as one atomic mutation.
+    ///
+    /// `expected_generation` binds the edits to the snapshot their offsets were
+    /// computed against; a mutation published in between fails with
+    /// [`BodyReadError::GenerationConflict`] rather than splicing stale offsets
+    /// into a different body. Returns the new generation.
+    async fn replace_request_body_spans(
+        &mut self,
+        _expected_generation: u64,
+        _edits: &[(std::ops::Range<u64>, Bytes)],
+    ) -> Result<u64, BodyReadError> {
+        Err(BodyReadError::Unimplemented)
+    }
+
+    /// Record that an `AiGuard` entry settled a decision, with the body
+    /// generation it settled on.
+    fn record_ai_guard_decision(&mut self, _identity: String, _generation: Option<u64>) {}
 
     /// Replace the complete buffered request body used for every upstream
     /// attempt.

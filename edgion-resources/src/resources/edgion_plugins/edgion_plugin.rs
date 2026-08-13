@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use super::dye::DyeOutcome;
 use super::plugin_configs::{
-    AiProxyConfig, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CanaryConfig, CorsConfig,
-    CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig,
+    AiGuardConfig, AiProxyConfig, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CanaryConfig,
+    CorsConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig,
     DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig,
     FormJsonTransformConfig, ForwardAuthConfig, GlobalAccessControlConfig, GuardrailConfig, HeaderCertAuthConfig,
     HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig,
@@ -117,6 +117,8 @@ pub enum EdgionPlugin {
     ExtProc(ExtProcConfig),
     /// Unary Pass/Replace/Reject decisions for canonical semantic SSE windows.
     Guardrail(GuardrailConfig),
+    /// Request-side prompt guarding over canonical LLM message spans.
+    AiGuard(AiGuardConfig),
     /// GlobalAccessControl filter (L7 allow-list: IP/CIDR and header/cookie/... composite, OR groups)
     GlobalAccessControl(GlobalAccessControlConfig),
     /// Canary filter (100% traffic to one named backend, switchable via a Selector EdgionConfigData)
@@ -180,6 +182,9 @@ impl EdgionPlugin {
                 ..BodyRequirement::fail_close()
             }),
             AiProxy(_) if stage == BodyStage::Request => Some(BodyRequirement::fail_close()),
+            // AiGuard selects spans from, and masks, the buffered canonical
+            // request body, so it must be gated exactly like AiProxy.
+            AiGuard(_) if stage == BodyStage::Request => Some(BodyRequirement::fail_close()),
             // Deliberately keyed on BUFFERED only: STREAMED must have NO
             // BodyRequirement — the streamed handler is driven per chunk by the
             // transport pump and must never trigger a pre-read capture
@@ -248,6 +253,7 @@ impl EdgionPlugin {
             | TraceContext(_)
             | ExtProc(_)
             | Guardrail(_)
+            | AiGuard(_)
             | Dsl(_)
             | GlobalAccessControl(_)
             | Canary(_)
@@ -312,6 +318,7 @@ impl EdgionPlugin {
             EdgionPlugin::TraceContext(_) => "TraceContext",
             EdgionPlugin::ExtProc(_) => "ExtProc",
             EdgionPlugin::Guardrail(_) => "Guardrail",
+            EdgionPlugin::AiGuard(_) => "AiGuard",
             EdgionPlugin::GlobalAccessControl(_) => "GlobalAccessControl",
             EdgionPlugin::Canary(_) => "Canary",
             EdgionPlugin::Wasm(_) => "Wasm",
@@ -376,6 +383,7 @@ impl EdgionPlugin {
             | EdgionPlugin::AllEndpointStatus(_)
             | EdgionPlugin::TraceContext(_)
             | EdgionPlugin::Guardrail(_)
+            | EdgionPlugin::AiGuard(_)
             | EdgionPlugin::GlobalAccessControl(_) => &[],
         }
     }
@@ -430,6 +438,7 @@ impl EdgionPlugin {
             | EdgionPlugin::AllEndpointStatus(_)
             | EdgionPlugin::TraceContext(_)
             | EdgionPlugin::Guardrail(_)
+            | EdgionPlugin::AiGuard(_)
             | EdgionPlugin::GlobalAccessControl(_) => "",
         }
     }
@@ -516,6 +525,7 @@ impl EdgionPlugin {
             | EdgionPlugin::TraceContext(_)
             | EdgionPlugin::ExtProc(_)
             | EdgionPlugin::Guardrail(_)
+            | EdgionPlugin::AiGuard(_)
             | EdgionPlugin::GlobalAccessControl(_)
             | EdgionPlugin::Canary(_)
             | EdgionPlugin::Wasm(_) => Vec::new(),
@@ -565,6 +575,7 @@ impl EdgionPlugin {
             EdgionPlugin::TraceContext(c) => c.validation_error(),
             EdgionPlugin::ExtProc(c) => c.validation_error(),
             EdgionPlugin::Guardrail(c) => c.validation_error(),
+            EdgionPlugin::AiGuard(c) => c.validation_error(),
             EdgionPlugin::GlobalAccessControl(c) => c.validation_error(),
             EdgionPlugin::Canary(c) => c.validation_error(),
             EdgionPlugin::Wasm(c) => c.validation_error(),

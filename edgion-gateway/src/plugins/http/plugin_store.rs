@@ -85,6 +85,16 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     // the runtime's ConditionalFilters.
     compile_plugin_conditions(&mut spec, &mut errors);
 
+    // Mirror the controller's cross-entry ordering rule into the data plane,
+    // from the same shared helper and with the same message, so
+    // `validate_plugins_matches_compile_plugins_error_set` stays exact. This is
+    // not cosmetic: a misordered guard means prompts reach the provider
+    // unguarded, so the resource must also fail closed here rather than only
+    // being flagged in status.
+    if let Some(entries) = spec.spec.request_plugins.as_ref() {
+        edgion_resources::resources::edgion_plugins::validate::collect_ai_guard_ordering_errors(entries, &mut errors);
+    }
+
     // Sanitize `accessLogExtern` declarations: drop any entry `validation_error()`
     // rejects (hard-blocklisted name, empty/over-length key or name) from the
     // *stored* spec before it is Arc-wrapped. `AccessLogExternField` is never a
@@ -912,8 +922,28 @@ mod compile_plugins_tests {
             }
         }
 
+        let ai_guard = || {
+            let config: edgion_resources::resources::edgion_plugins::AiGuardConfig = serde_yaml::from_str(
+                "rules:\n  - name: r\n    match: { type: regex, pattern: \"x\" }\n    action: reject\n",
+            )
+            .expect("configuration parses");
+            RequestFilterEntry::new(EdgionPlugin::AiGuard(config))
+        };
+        let ai_proxy = || {
+            let config: edgion_resources::resources::edgion_plugins::AiProxyConfig =
+                serde_yaml::from_str("{}").expect("configuration parses");
+            RequestFilterEntry::new(EdgionPlugin::AiProxy(config))
+        };
+
         let cases: Vec<(&str, EdgionPlugins)> = vec![
             ("valid_request", mk(Some(vec![RequestFilterEntry::new(rhm())]), None)),
+            (
+                // A guard ordered after AiProxy can never affect the provider
+                // body. Both paths must report it with the identical message,
+                // or the data plane silently forwards unguarded prompts.
+                "ai_guard_after_ai_proxy",
+                mk(Some(vec![ai_proxy(), ai_guard()]), None),
+            ),
             (
                 // Two entries of one stage array claiming the same alias → the
                 // second is rejected. The alias is part of the entry identity

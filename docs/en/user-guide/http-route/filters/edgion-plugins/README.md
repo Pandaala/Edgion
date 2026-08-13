@@ -6,6 +6,7 @@ HTTP Route-level plugins provided by Edgion, configured via the `EdgionPlugins` 
 
 | Document | Description |
 |----------|-------------|
+| [ai-guard.md](ai-guard.md) | Request-side prompt guarding: regex/PII rules, mask, refusal, and one bounded external evaluator |
 | [ai-proxy.md](ai-proxy.md) | Rule-level AiProxy entry; full docs in [AI Gateway](../../../../ai-gateway/) |
 | [bandwidth-limit.md](bandwidth-limit.md) | Bandwidth throttling |
 | [basic-auth.md](basic-auth.md) | HTTP Basic authentication |

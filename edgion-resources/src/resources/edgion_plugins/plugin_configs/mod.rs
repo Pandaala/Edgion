@@ -1,4 +1,5 @@
 pub mod access_log_extern;
+mod ai_guard;
 mod ai_proxy;
 pub mod all_endpoint_status;
 mod bandwidth_limit;
@@ -45,6 +46,13 @@ mod wasm;
 mod wasm_oci;
 
 pub use access_log_extern::{is_blocked, AccessLogExternField, LogExtSource, ACCESS_LOG_BLOCKED_CTX_KEYS};
+pub use ai_guard::{
+    compile_guard_pattern, AiGuardAction, AiGuardConfig, AiGuardEvaluator, AiGuardMatcher, AiGuardPiiDetector,
+    AiGuardRejectionMode, AiGuardRole, AiGuardRule, AI_GUARD_MAX_CONCURRENT, AI_GUARD_MAX_PATTERN_BYTES,
+    AI_GUARD_MAX_REPLACEMENT_BYTES, AI_GUARD_MAX_REQUEST_BYTES, AI_GUARD_MAX_RULES,
+    AI_GUARD_MAX_RULE_REPLACEMENT_BYTES, AI_GUARD_MAX_SPANS, AI_GUARD_MAX_SPAN_BYTES, AI_GUARD_MAX_TOTAL_SPAN_BYTES,
+    AI_GUARD_REGEX_SIZE_LIMIT,
+};
 pub use ai_proxy::{
     AiBackendSelection, AiBackendSelectionConfig, AiProxyConfig, AiTokenQuotaConfig, AiTokenQuotaLimit,
     AiTokenQuotaOnExceeded, AiTokenQuotaScope, OnUnknownModel, AI_QUOTA_MAX_SAFE_INTEGER,
@@ -121,3 +129,35 @@ pub use wasm::{
     MAX_INLINE_DECODED_BYTES, MAX_WASM_RAW_CONFIG_BYTES,
 };
 pub use wasm_oci::{OciImageRef, OciPullPolicy, WasmOciSpec};
+
+/// Validate a security-sensitive template against the restricted variable
+/// allow-list: only controller-resolved or non-client-controlled variables.
+///
+/// Shared by every plugin config whose outbound path/header templates are a
+/// security boundary, so the allow-list has exactly one definition.
+pub(super) fn validate_restricted_template(template: &str, field: &str) -> Option<String> {
+    let compiled = match CompiledTemplate::compile(template) {
+        Ok(compiled) => compiled,
+        Err(error) => return Some(format!("{field}: {error}")),
+    };
+    if let Err(error) = validate_secret_ref_segments(&compiled) {
+        return Some(format!("{field}: {error}"));
+    }
+    for segment in compiled.segments() {
+        if let TemplateSegment::Variable { var_type, .. } = segment {
+            if !matches!(
+                var_type,
+                TemplateVarType::Ctx
+                    | TemplateVarType::ClientIp
+                    | TemplateVarType::MatchedHttpRoute
+                    | TemplateVarType::MatchedGrpcRoute
+                    | TemplateVarType::SecretRef
+            ) {
+                return Some(format!(
+                    "{field} must not read client-controlled request input; use a trusted ctx, clientIp, matched-route, or secretRef variable"
+                ));
+            }
+        }
+    }
+    None
+}

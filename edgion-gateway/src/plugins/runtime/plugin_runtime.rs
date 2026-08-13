@@ -70,6 +70,7 @@ use crate::plugins::http::request_restriction::RequestRestriction;
 use crate::plugins::http::response_rewrite::ResponseRewrite;
 use crate::plugins::http::trace_context::TraceContext;
 use crate::plugins::http::wasm::WasmPlugin;
+use crate::plugins::http::AiGuard;
 use crate::plugins::runtime::gateway_api_filters::{
     DebugAccessLogToHeaderFilter, ExtensionRefFilter, GapiCorsFilter, RequestHeaderModifierFilter,
     RequestRedirectFilter, ResponseHeaderModifierFilter, URLRewriteFilter,
@@ -1346,6 +1347,7 @@ impl PluginRuntime {
             )))),
             EdgionPlugin::BasicAuth(config) => CreateResult::Ok(Some(Box::new(BasicAuth::new(config)))),
             EdgionPlugin::AiProxy(config) => CreateResult::Ok(AiProxy::create(config, namespace, entry_scope)),
+            EdgionPlugin::AiGuard(config) => CreateResult::Ok(AiGuard::create(config, entry_scope)),
             EdgionPlugin::Cors(config) => CreateResult::Ok(Some(Box::new(Cors::new(config)))),
             EdgionPlugin::Csrf(config) => CreateResult::Ok(Some(Box::new(Csrf::new(config)))),
             EdgionPlugin::IpRestriction(config) => CreateResult::Ok(Some(IpRestriction::create(config, namespace))),
@@ -1461,6 +1463,7 @@ impl PluginRuntime {
             | EdgionPlugin::FaultInjection(_)
             | EdgionPlugin::ExtProc(_)
             | EdgionPlugin::Guardrail(_)
+            | EdgionPlugin::AiGuard(_)
             | EdgionPlugin::RegionRoute(_)
             | EdgionPlugin::GlobalAccessControl(_)
             | EdgionPlugin::Canary(_) => CreateResult::WrongStage,
@@ -1522,6 +1525,7 @@ impl PluginRuntime {
             | EdgionPlugin::TraceContext(_)
             | EdgionPlugin::GlobalAccessControl(_)
             | EdgionPlugin::Canary(_)
+            | EdgionPlugin::AiGuard(_)
             | EdgionPlugin::Wasm(_) => CreateResult::WrongStage,
         }
     }
@@ -1573,6 +1577,7 @@ impl PluginRuntime {
             | EdgionPlugin::FaultInjection(_)
             | EdgionPlugin::ExtProc(_)
             | EdgionPlugin::Guardrail(_)
+            | EdgionPlugin::AiGuard(_)
             | EdgionPlugin::RegionRoute(_)
             | EdgionPlugin::GlobalAccessControl(_)
             | EdgionPlugin::Canary(_)
@@ -1626,6 +1631,7 @@ impl PluginRuntime {
             EdgionPlugin::RegionRoute(_) => "RegionRoute",
             EdgionPlugin::ExtProc(_) => "ExtProc",
             EdgionPlugin::Guardrail(_) => "Guardrail",
+            EdgionPlugin::AiGuard(_) => "AiGuard",
             EdgionPlugin::Wasm(_) => "Wasm",
         }
     }

@@ -76,6 +76,7 @@ impl FormJsonTransform {
             BodyReadError::Unimplemented => Some(EdgionStatus::BodyReadUnimplemented),
             BodyReadError::NotBuffered => None,
             BodyReadError::StorageFailure => Some(EdgionStatus::BodyCaptureStorageFailed),
+            BodyReadError::GenerationConflict => Some(EdgionStatus::BodyMutationConflict),
         };
         if let Some(status) = status {
             session.add_error(status);

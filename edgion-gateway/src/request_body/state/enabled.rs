@@ -190,6 +190,21 @@ impl Backend {
         Ok(self.modified_len)
     }
 
+    pub(super) fn generation(&self) -> Option<u64> {
+        self.view.as_ref().map(|view| view.generation())
+    }
+
+    pub(super) fn replace_spans(
+        &self,
+        expected_generation: u64,
+        edits: &[(std::ops::Range<u64>, Bytes)],
+    ) -> Result<u64, BodyOperationError> {
+        self.view
+            .as_ref()
+            .ok_or(BodyOperationError::Body(BodyReadError::NotBuffered))?
+            .replace_spans(expected_generation, edits)
+    }
+
     pub(super) fn release_view(&mut self) {
         self.view = None;
     }

@@ -109,34 +109,7 @@ impl Default for GuardrailConfig {
     }
 }
 
-fn validate_restricted_template(template: &str, field: &str) -> Option<String> {
-    use super::{validate_secret_ref_segments, CompiledTemplate, TemplateSegment, TemplateVarType};
-
-    let compiled = match CompiledTemplate::compile(template) {
-        Ok(compiled) => compiled,
-        Err(error) => return Some(format!("{field}: {error}")),
-    };
-    if let Err(error) = validate_secret_ref_segments(&compiled) {
-        return Some(format!("{field}: {error}"));
-    }
-    for segment in compiled.segments() {
-        if let TemplateSegment::Variable { var_type, .. } = segment {
-            if !matches!(
-                var_type,
-                TemplateVarType::Ctx
-                    | TemplateVarType::ClientIp
-                    | TemplateVarType::MatchedHttpRoute
-                    | TemplateVarType::MatchedGrpcRoute
-                    | TemplateVarType::SecretRef
-            ) {
-                return Some(format!(
-                    "{field} must not read client-controlled request input; use a trusted ctx, clientIp, matched-route, or secretRef variable"
-                ));
-            }
-        }
-    }
-    None
-}
+use super::validate_restricted_template;
 
 impl GuardrailConfig {
     /// Return the first admission-time configuration error.

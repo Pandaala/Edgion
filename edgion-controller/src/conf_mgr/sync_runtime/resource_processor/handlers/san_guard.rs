@@ -49,6 +49,7 @@ pub const SAN_ENFORCED_LDAP: bool = true;
 pub const SAN_ENFORCED_EXT_PROC: bool = false;
 
 /// Guardrail uses the managed HTTP client path and its OutboundSanVerifier.
+pub const SAN_ENFORCED_AI_GUARD: bool = true;
 pub const SAN_ENFORCED_GUARDRAIL: bool = true;
 
 /// Phase 1: SAN pinning is NOT enforced for LinkSys providers.
@@ -173,6 +174,19 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
                                 "Guardrail",
                                 SAN_ENFORCED_GUARDRAIL,
                             ));
+                        }
+                        EdgionPlugin::AiGuard(config) => {
+                            if let Some(evaluator) = config.evaluator.as_ref() {
+                                errors.extend(check_validation_block(
+                                    evaluator
+                                        .conn
+                                        .tls
+                                        .as_ref()
+                                        .and_then(|tls| tls.outbound.validation.as_ref()),
+                                    "AiGuard",
+                                    SAN_ENFORCED_AI_GUARD,
+                                ));
+                            }
                         }
                         // No outbound TLS `validation` block to guard. Exhaustive
                         // (no `_`) on purpose: this is an admission gate for

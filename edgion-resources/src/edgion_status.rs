@@ -281,6 +281,13 @@ pub enum EdgionStatus {
     /// (HTTP 500).
     BodyCaptureStorageFailed = 500_24,
 
+    /// A request-body mutation was computed against one logical snapshot but a
+    /// different mutation was published before it could be applied. Always a
+    /// gateway-side configuration or ordering fault (two plugins mutating the
+    /// same body in one request), never client input, so it fails closed
+    /// rather than splicing stale byte offsets into a newer body (HTTP 500).
+    BodyMutationConflict = 500_25,
+
     /// Client-supplied `grpc-timeout` deadline already exceeded before peer
     /// selection. Surfaced to the gRPC client as `grpc-status: 4` (DEADLINE_EXCEEDED)
     /// via the standard 504 → grpc-status mapping.
@@ -431,6 +438,7 @@ mod tests {
             EdgionStatus::BodyReadUnimplemented => Some(500),
             EdgionStatus::BodyReplayFailed => Some(500),
             EdgionStatus::BodyCaptureStorageFailed => Some(500),
+            EdgionStatus::BodyMutationConflict => Some(500),
             EdgionStatus::PluginResponseReplaced => None,
             EdgionStatus::PluginResponseReplaceUnsupportedGrpc => None,
             EdgionStatus::PluginResponseDenyAborted => None,
@@ -514,6 +522,7 @@ mod tests {
             EdgionStatus::BodyRefusedStage,
             EdgionStatus::BodyRefusedNoSnapshot,
             EdgionStatus::BodyReadAborted,
+            EdgionStatus::BodyMutationConflict,
             EdgionStatus::BodyReadTimeout,
             EdgionStatus::BodyReadTooLarge,
             EdgionStatus::BodyReadUnimplemented,

@@ -279,7 +279,10 @@ impl BodyStorageView {
         }
         let mut mutation = self.inner.mutation.write();
         if mutation.generation != expected_generation {
-            return Err(BodyOperationError::Body(BodyReadError::Incomplete));
+            // Distinct from `Incomplete`: a lost update and a truncated body
+            // demand opposite handling, and offsets computed against the stale
+            // snapshot must never be spliced into the newer one.
+            return Err(BodyOperationError::Body(BodyReadError::GenerationConflict));
         }
         mutation.generation = mutation
             .generation
@@ -597,6 +600,57 @@ impl BodyStorageView {
             .value;
         self.publish_arc(generation, next).map_err(operation_to_body_error)?;
         Ok(result)
+    }
+
+    /// Current logical snapshot generation.
+    ///
+    /// A caller that computes byte offsets against one snapshot binds them to
+    /// this value and passes it back to [`Self::replace_spans`], so a mutation
+    /// published by anything else in between is detected instead of splicing
+    /// offsets into a body they were never computed against.
+    pub fn generation(&self) -> u64 {
+        self.inner.mutation.read().generation
+    }
+
+    /// Apply several disjoint byte-range replacements as one atomic mutation.
+    ///
+    /// `edits` must be sorted by start offset and strictly non-overlapping.
+    /// Segments are spliced in ascending order against the captured snapshot,
+    /// so original offsets are consumed exactly once and never re-indexed after
+    /// a length change — the reverse-order hazard of repeated single-range
+    /// edits cannot arise. One generation compare-and-set, one segment-count
+    /// check, and one inclusive physical-cap check cover the whole batch, so a
+    /// partially masked body is never observable. Nothing is materialized.
+    pub fn replace_spans(
+        &self,
+        expected_generation: u64,
+        edits: &[(Range<u64>, Bytes)],
+    ) -> Result<u64, BodyOperationError> {
+        let (snapshot, generation) = self.snapshot().map_err(BodyOperationError::Body)?;
+        if generation != expected_generation {
+            return Err(BodyOperationError::Body(BodyReadError::GenerationConflict));
+        }
+        if edits.is_empty() {
+            return Ok(generation);
+        }
+
+        let mut segments = Vec::new();
+        let mut cursor = 0_u64;
+        for (range, replacement) in edits {
+            if range.start < cursor || range.end < range.start || range.end > snapshot.len {
+                return Err(BodyOperationError::InvalidRange);
+            }
+            segments.extend(snapshot.slice(cursor..range.start)?);
+            if !replacement.is_empty() {
+                segments.push(Segment::Inline(replacement.clone()));
+            }
+            cursor = range.end;
+        }
+        segments.extend(snapshot.slice(cursor..snapshot.len)?);
+
+        let next = Arc::new(BodySnapshot::from_segments(segments)?);
+        self.publish_arc(expected_generation, next)?;
+        Ok(self.generation())
     }
 
     pub fn overwrite_body(&self, body: Bytes) -> Result<(), BodyReadError> {
@@ -1270,6 +1324,180 @@ mod tests {
             storage.write(&Bytes::copy_from_slice(chunk)).await.unwrap();
         }
         storage.finish().await.unwrap();
+    }
+
+    /// `replace_spans` is the primitive the AI prompt guard masks through, so
+    /// every one of its guarantees is exercised directly here rather than
+    /// through a mocked session.
+    mod replace_spans {
+        use super::*;
+
+        const BODY: &[u8] = br#"{"a":"one","b":"two","c":"three"}"#;
+
+        fn edit(range: std::ops::Range<u64>, text: &str) -> (std::ops::Range<u64>, Bytes) {
+            (range, Bytes::from(text.to_string()))
+        }
+
+        /// Byte range of the Nth quoted value token in BODY.
+        fn token(value: &str) -> std::ops::Range<u64> {
+            let quoted = format!("\"{value}\"");
+            let start = std::str::from_utf8(BODY).unwrap().find(&quoted).expect("token present") as u64;
+            start..start + quoted.len() as u64
+        }
+
+        async fn view() -> (BodyStorage, Arc<BodyStorageView>) {
+            let (mut storage, view) = BodyStorage::new(64 * 1024, 1024 * 1024);
+            capture(&mut storage, &[BODY]).await;
+            (storage, view)
+        }
+
+        #[tokio::test]
+        async fn several_disjoint_edits_apply_as_one_generation() {
+            let (mut storage, view) = view().await;
+            let before = view.generation();
+            let after = view
+                .replace_spans(
+                    before,
+                    &[edit(token("one"), "\"1\""), edit(token("three"), "\"333333\"")],
+                )
+                .expect("batch applies");
+
+            // One publish for the whole batch, not one per edit.
+            assert_eq!(after, before + 1);
+            assert_eq!(
+                replay_all(&mut storage, 4096).await,
+                Bytes::from_static(br#"{"a":"1","b":"two","c":"333333"}"#)
+            );
+        }
+
+        #[tokio::test]
+        async fn a_stale_generation_is_a_conflict_and_publishes_nothing() {
+            let (mut storage, view) = view().await;
+            let stale = view.generation();
+            view.replace_spans(stale, &[edit(token("one"), "\"1\"")])
+                .expect("first batch applies");
+
+            // Offsets computed against the old snapshot must never be spliced
+            // into the new one.
+            let error = view
+                .replace_spans(stale, &[edit(token("two"), "\"2\"")])
+                .expect_err("stale generation must be refused");
+            assert!(matches!(
+                error,
+                BodyOperationError::Body(BodyReadError::GenerationConflict)
+            ));
+            assert_eq!(
+                replay_all(&mut storage, 4096).await,
+                Bytes::from_static(br#"{"a":"1","b":"two","c":"three"}"#)
+            );
+        }
+
+        #[tokio::test]
+        async fn overlapping_unsorted_and_out_of_range_edits_are_refused_atomically() {
+            let (mut storage, view) = view().await;
+            let generation = view.generation();
+            let one = token("one");
+            let three = token("three");
+
+            for bad in [
+                // Descending order: offsets are consumed once, ascending.
+                vec![edit(three.clone(), "\"x\""), edit(one.clone(), "\"y\"")],
+                // Overlapping ranges.
+                vec![
+                    edit(one.start..one.end, "\"x\""),
+                    edit(one.start + 1..one.end + 1, "\"y\""),
+                ],
+                // Inverted range.
+                vec![edit(one.end..one.start, "\"x\"")],
+                // Past the end of the body.
+                vec![edit(0..u64::from(u32::MAX), "\"x\"")],
+            ] {
+                assert!(
+                    view.replace_spans(generation, &bad).is_err(),
+                    "malformed edit set must be refused"
+                );
+            }
+
+            // Nothing was published by any of the refused batches.
+            assert_eq!(view.generation(), generation);
+            assert_eq!(replay_all(&mut storage, 4096).await, Bytes::from_static(BODY));
+        }
+
+        #[tokio::test]
+        async fn an_empty_edit_set_publishes_nothing() {
+            let (_storage, view) = view().await;
+            let generation = view.generation();
+            assert_eq!(view.replace_spans(generation, &[]).expect("no-op"), generation);
+            assert_eq!(view.generation(), generation);
+            assert!(!view.is_modified());
+        }
+
+        #[tokio::test]
+        async fn growth_past_the_physical_cap_fails_and_leaves_the_body_intact() {
+            let (mut storage, view) = BodyStorage::new(64 * 1024, 64);
+            capture(&mut storage, &[BODY]).await;
+            let generation = view.generation();
+
+            let oversized = format!("\"{}\"", "x".repeat(64));
+            let error = view
+                .replace_spans(generation, &[edit(token("one"), &oversized)])
+                .expect_err("growth past the cap must fail");
+            assert!(matches!(
+                error,
+                BodyOperationError::Body(BodyReadError::BufferLimitExceeded { .. })
+            ));
+            assert_eq!(view.generation(), generation);
+            assert_eq!(replay_all(&mut storage, 4096).await, Bytes::from_static(BODY));
+        }
+
+        #[tokio::test]
+        async fn a_shrinking_mask_is_forwarded_and_reframed() {
+            let (mut storage, view) = view().await;
+            let generation = view.generation();
+            view.replace_spans(generation, &[edit(token("three"), "\"\"")])
+                .expect("shrink applies");
+
+            let replayed = replay_all(&mut storage, 4096).await;
+            assert_eq!(replayed, Bytes::from_static(br#"{"a":"one","b":"two","c":""}"#));
+            // Framing consumers read the mutated length, not the original.
+            assert!(view.is_modified());
+            assert_eq!(view.len().unwrap(), replayed.len() as u64);
+        }
+
+        #[tokio::test]
+        async fn a_mask_over_a_disk_spilled_body_is_applied_and_replayed() {
+            // A tiny memory budget forces the spill path.
+            let (mut storage, view) = BodyStorage::new(8, 1024 * 1024);
+            capture(&mut storage, &[BODY]).await;
+            let generation = view.generation();
+
+            view.replace_spans(generation, &[edit(token("two"), "\"22\"")])
+                .expect("spilled mask applies");
+            assert_eq!(
+                replay_all(&mut storage, 4096).await,
+                Bytes::from_static(br#"{"a":"one","b":"22","c":"three"}"#)
+            );
+        }
+
+        #[tokio::test]
+        async fn exhausting_the_segment_budget_fails_atomically() {
+            let filler = format!("{{\"k\":\"{}\"}}", "ab".repeat(4096));
+            let (mut storage, view) = BodyStorage::new(1024 * 1024, 1024 * 1024);
+            capture(&mut storage, &[filler.as_bytes()]).await;
+            let generation = view.generation();
+
+            // Each edit splits the body further; enough of them exhaust
+            // MAX_BODY_SEGMENTS.
+            let edits: Vec<_> = (0..MAX_BODY_SEGMENTS)
+                .map(|i| {
+                    let start = 8 + (i as u64) * 2;
+                    (start..start + 1, Bytes::from_static(b"z"))
+                })
+                .collect();
+            assert!(view.replace_spans(generation, &edits).is_err());
+            assert_eq!(view.generation(), generation);
+            assert_eq!(replay_all(&mut storage, 4096).await.len(), filler.len());
+        }
     }
 
     async fn replay_all(storage: &mut BodyStorage, chunk_size: usize) -> Bytes {

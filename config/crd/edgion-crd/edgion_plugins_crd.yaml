@@ -213,6 +213,7 @@ spec:
                           - TraceContext
                           - ExtProc
                           - Guardrail
+                          - AiGuard
                           - GlobalAccessControl
                           - Canary
                           - Wasm

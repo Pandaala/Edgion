@@ -8,6 +8,7 @@
 //! (`resolve_basic_auth`, `resolve_jwt`, ...) so call sites remain greppable
 //! even though each submodule exports a locally simple `resolve`.
 
+mod ai_guard;
 mod basic_auth;
 mod csrf;
 mod ext_proc;
@@ -23,6 +24,7 @@ mod ldap_auth;
 mod openid_connect;
 mod wasm;
 
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use ai_guard::resolve as resolve_ai_guard;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use basic_auth::resolve as resolve_basic_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use csrf::resolve as resolve_csrf;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use ext_proc::resolve as resolve_ext_proc;

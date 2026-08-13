@@ -4,6 +4,7 @@
 // Corresponds to conf/EdgionPlugins/ directory structure
 
 mod access_log_extern;
+mod ai_guard;
 mod all_endpoint_status;
 mod bandwidth_limit;
 mod basic_auth;
@@ -57,6 +58,7 @@ mod wasm;
 mod webhook_key_get;
 
 pub use access_log_extern::AccessLogExternTestSuite;
+pub use ai_guard::AiGuardTestSuite;
 pub use all_endpoint_status::AllEndpointStatusTestSuite;
 pub use bandwidth_limit::BandwidthLimitTestSuite;
 pub use basic_auth::{

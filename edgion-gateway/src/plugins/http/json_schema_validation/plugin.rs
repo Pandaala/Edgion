@@ -46,6 +46,7 @@ impl JsonSchemaValidation {
             // The adapter records the more precise refusal status.
             BodyReadError::NotBuffered => None,
             BodyReadError::StorageFailure => Some(EdgionStatus::BodyCaptureStorageFailed),
+            BodyReadError::GenerationConflict => Some(EdgionStatus::BodyMutationConflict),
         };
         if let Some(status) = status {
             session.add_error(status);

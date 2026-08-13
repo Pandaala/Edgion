@@ -1312,6 +1312,36 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.replace_request_body_slice(range, replacement).await
     }
 
+    async fn replace_request_body_spans(
+        &mut self,
+        expected_generation: u64,
+        edits: &[(std::ops::Range<u64>, bytes::Bytes)],
+    ) -> Result<u64, BodyReadError> {
+        // Carried explicitly rather than inherited: the two sibling mutation
+        // methods below omit this check, and copying their wiring verbatim
+        // would silently reproduce that omission.
+        if !self.ctx.request_info.in_request_body_stage {
+            return Err(BodyReadError::NotBuffered);
+        }
+        self.ensure_bodyless_request_replay_owner().await?;
+        self.ctx
+            .request_body
+            .replace_spans(expected_generation, edits)
+            .map_err(|error| match error {
+                crate::request_body::BodyOperationError::Body(error) => error,
+                _ => BodyReadError::Incomplete,
+            })
+    }
+
+    fn record_ai_guard_decision(&mut self, identity: String, generation: Option<u64>) {
+        if !self.ctx.ai_guard_decided.iter().any(|existing| existing == &identity) {
+            self.ctx.ai_guard_decided.push(identity);
+        }
+        if generation.is_some() {
+            self.ctx.ai_guard_body_generation = generation;
+        }
+    }
+
     async fn overwrite_request_body(&mut self, body: bytes::Bytes) -> Result<(), BodyReadError> {
         self.ensure_bodyless_request_replay_owner().await?;
         self.ctx.overwrite_request_body(body)
@@ -2616,6 +2646,24 @@ mod record_outcome_tests {
     /// drives the real trait method (not the bare `request_admission`
     /// predicate) so a future regression that re-derives the stage signal
     /// from `response_header.is_some()` fails this test.
+    #[tokio::test]
+    async fn replace_request_body_spans_refuses_once_past_request_stage() {
+        // The two sibling mutation methods omit this check, so it is asserted
+        // explicitly here rather than assumed to be inherited.
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(true);
+        ctx.request_info.in_request_body_stage = false;
+
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            let result = adapter
+                .replace_request_body_spans(0, &[(0..1, bytes::Bytes::from_static(b"x"))])
+                .await;
+            assert!(matches!(result, Err(BodyReadError::NotBuffered)));
+        }
+    }
+
     #[tokio::test]
     async fn read_request_body_refuses_once_past_request_stage() {
         let mut session = test_session().await;

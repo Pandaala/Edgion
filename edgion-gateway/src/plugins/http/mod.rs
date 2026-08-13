@@ -1,5 +1,6 @@
 //! Plugin store module for EdgionPlugins resources
 
+pub mod ai_guard;
 pub mod ai_proxy;
 pub mod all_endpoint_status;
 pub mod bandwidth_limit;
@@ -43,6 +44,7 @@ pub mod response_rewrite;
 pub mod trace_context;
 pub mod wasm;
 
+pub use ai_guard::AiGuard;
 pub use ai_proxy::AiProxy;
 pub use all_endpoint_status::AllEndpointStatus;
 pub use bandwidth_limit::BandwidthLimit;

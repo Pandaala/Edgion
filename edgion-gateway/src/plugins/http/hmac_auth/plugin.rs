@@ -348,6 +348,7 @@ impl HmacAuth {
                     BodyReadError::Timeout => session.add_error(EdgionStatus::BodyReadTimeout),
                     BodyReadError::Incomplete => session.add_error(EdgionStatus::BodyReadAborted),
                     BodyReadError::StorageFailure => session.add_error(EdgionStatus::BodyCaptureStorageFailed),
+                    BodyReadError::GenerationConflict => session.add_error(EdgionStatus::BodyMutationConflict),
                     BodyReadError::Unimplemented => session.add_error(EdgionStatus::BodyReadUnimplemented),
                     // Already recorded on ctx by the read adapter.
                     BodyReadError::NotBuffered => {}

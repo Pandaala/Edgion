@@ -138,6 +138,20 @@ impl RequestBodyState {
 
     /// Release the read-only cache after the final response-header plugin
     /// chain. Retained mutation framing remains available for retries.
+    /// Current logical snapshot generation, when a view is installed.
+    pub fn generation(&self) -> Option<u64> {
+        self.0.generation()
+    }
+
+    /// Apply several disjoint replacements as one atomic mutation.
+    pub fn replace_spans(
+        &self,
+        expected_generation: u64,
+        edits: &[(std::ops::Range<u64>, Bytes)],
+    ) -> Result<u64, BodyOperationError> {
+        self.0.replace_spans(expected_generation, edits)
+    }
+
     pub fn release_view(&mut self) {
         self.0.release_view();
     }

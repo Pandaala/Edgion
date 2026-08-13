@@ -1,0 +1,82 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ai-guard-pass
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiGuard
+      config:
+        rules:
+          - name: tripwire
+            match:
+              type: regex
+              pattern: "never-present-in-this-prompt"
+            action: reject
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ai-guard-reject-error
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiGuard
+      config:
+        rejectionMode: error
+        rules:
+          - name: tripwire
+            match:
+              type: regex
+              pattern: "forbidden-token"
+            action: reject
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ai-guard-reject-content-filter
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiGuard
+      config:
+        rejectionMode: contentFilter
+        rules:
+          - name: tripwire
+            match:
+              type: pii
+              detector: awsAccessKeyId
+            action: reject
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ai-guard-mask
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiGuard
+      config:
+        rules:
+          - name: redact-emails
+            match:
+              type: pii
+              detector: email
+            action: mask
+            replacement: "[redacted]"
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted

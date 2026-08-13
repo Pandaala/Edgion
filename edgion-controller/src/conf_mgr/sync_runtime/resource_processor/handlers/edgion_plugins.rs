@@ -225,6 +225,7 @@ impl EdgionPluginsHandler {
                 | EdgionPlugin::TraceContext(_)
                 | EdgionPlugin::ExtProc(_)
                 | EdgionPlugin::Guardrail(_)
+                | EdgionPlugin::AiGuard(_)
                 | EdgionPlugin::Wasm(_) => {}
             }
         }
@@ -280,6 +281,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         cred::resolve_global_access_control(&mut ep, &resource_ref, ctx);
         cred::resolve_forward_auth(&mut ep, &resource_ref, ctx).await;
         cred::resolve_guardrail(&mut ep, &resource_ref, ctx).await;
+        cred::resolve_ai_guard(&mut ep, &resource_ref, ctx).await;
         cred::resolve_wasm(&mut ep, &resource_ref, ctx);
 
         // Clear existing EdgionConfigData override refs for this EP, then re-register from scratch.
@@ -452,6 +454,10 @@ fn resolve_guardrail_request_secret_refs(ep: &EdgionPlugins, ctx: &HandlerContex
         .flatten()
         .filter_map(|entry| match &entry.plugin {
             EdgionPlugin::Guardrail(config) => Some(config.request.collect_secret_ref_names()),
+            EdgionPlugin::AiGuard(config) => config
+                .evaluator
+                .as_ref()
+                .map(|evaluator| evaluator.request.collect_secret_ref_names()),
             _ => None,
         })
         .flatten()
@@ -2631,6 +2637,7 @@ mod tests {
                 | EdgionPlugin::TraceContext(_)
                 | EdgionPlugin::ExtProc(_)
                 | EdgionPlugin::Guardrail(_)
+                | EdgionPlugin::AiGuard(_)
                 | EdgionPlugin::Wasm(_) => false,
             }
         }

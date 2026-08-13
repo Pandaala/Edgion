@@ -309,6 +309,7 @@ impl WasmPlugin {
                     // Handled above; unreachable here.
                     BodyReadError::NotBuffered => EdgionStatus::BodyRefusedStage,
                     BodyReadError::StorageFailure => EdgionStatus::BodyCaptureStorageFailed,
+                    BodyReadError::GenerationConflict => EdgionStatus::BodyMutationConflict,
                 });
                 return self.fail_mode(session, log, "body read");
             }
@@ -350,6 +351,7 @@ impl WasmPlugin {
                         EdgionStatus::BodyReadTooLarge
                     }
                     BodyReadError::StorageFailure => EdgionStatus::BodyCaptureStorageFailed,
+                    BodyReadError::GenerationConflict => EdgionStatus::BodyMutationConflict,
                     BodyReadError::Timeout => EdgionStatus::BodyReadTimeout,
                     BodyReadError::Incomplete => EdgionStatus::BodyReadAborted,
                     BodyReadError::Unimplemented => EdgionStatus::BodyReadUnimplemented,

@@ -17,6 +17,12 @@ pub enum AiProxyError {
     RequestTooLarge,
     QuotaExceeded,
     QuotaUnavailable,
+    /// The request was refused by a request-side content policy.
+    ///
+    /// Uses the same `content_filter_error` / `content_policy_violation`
+    /// vocabulary as the response-side refusal in `ai::terminal`, so a client
+    /// sees one content-policy contract whichever side blocked.
+    ContentFiltered,
 }
 
 impl AiProxyError {
@@ -82,6 +88,12 @@ impl AiProxyError {
                 "api_error",
                 "token_quota_unavailable",
             ),
+            Self::ContentFiltered => (
+                403,
+                "The request was blocked by a content policy.",
+                "content_filter_error",
+                "content_policy_violation",
+            ),
         }
     }
 }
@@ -122,6 +134,54 @@ pub(crate) fn render_openai_error(error: AiProxyError) -> (u16, String) {
             .to_string()
     });
     (status, body)
+}
+
+/// Upper bound on the client-supplied model name echoed into a refusal.
+const MAX_ECHOED_MODEL_CHARS: usize = 128;
+
+/// Fixed OpenAI-compatible content-filter refusal delivered at the request
+/// stage, as a complete bounded body rather than a stream.
+///
+/// The client asked for a chat completion and gets a syntactically valid one
+/// whose only choice carries `finish_reason: "content_filter"`, so an agent
+/// chain degrades instead of erroring. Nothing is proxied upstream and no
+/// response-side processor, terminal coordinator, or terminal renderer is
+/// involved.
+///
+/// `model` is echoed from the request so clients that key on the field keep
+/// working. It is client input read before `AiProxy` has validated it, so it is
+/// truncated here and JSON-escaped rather than trusted. No rule name, matched
+/// text, or evaluator detail is ever included.
+pub fn content_filter_refusal(model: &str, streaming: bool) -> (&'static str, String) {
+    let created = chrono::Utc::now().timestamp();
+    let truncated = match model.char_indices().nth(MAX_ECHOED_MODEL_CHARS) {
+        Some((offset, _)) => &model[..offset],
+        None => model,
+    };
+    let model = serde_json::to_string(truncated).unwrap_or_else(|_| "\"\"".to_string());
+    if streaming {
+        let chunk = format!(
+            "{{\"id\":\"chatcmpl-guard\",\"object\":\"chat.completion.chunk\",\"created\":{created},\"model\":{model},\"choices\":[{{\"index\":0,\"delta\":{{\"role\":\"assistant\",\"content\":\"\"}},\"finish_reason\":\"content_filter\"}}]}}"
+        );
+        ("text/event-stream", format!("data: {chunk}\n\ndata: [DONE]\n\n"))
+    } else {
+        (
+            "application/json",
+            format!(
+                "{{\"id\":\"chatcmpl-guard\",\"object\":\"chat.completion\",\"created\":{created},\"model\":{model},\"choices\":[{{\"index\":0,\"message\":{{\"role\":\"assistant\",\"content\":\"\"}},\"finish_reason\":\"content_filter\"}}]}}"
+            ),
+        )
+    }
+}
+
+/// Emit the request-stage content-filter refusal as a local reply.
+pub fn content_filter_response(session: &mut dyn PluginSession, model: &str, streaming: bool) -> PluginRunningResult {
+    let (content_type, body) = content_filter_refusal(model, streaming);
+    let _ = session.set_response_header("content-type", content_type);
+    PluginRunningResult::ErrResponse {
+        status: 200,
+        body: Some(body),
+    }
 }
 
 #[cfg(test)]

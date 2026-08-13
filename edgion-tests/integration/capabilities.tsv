@@ -3,6 +3,7 @@
 # Keep body-dependent configuration in dedicated suites or dynamic scenarios.
 # The integration shell and Rust test client use this registry to exclude them
 # when the selected Gateway does not advertise the required capability.
+suite	EdgionPlugins/AiGuard	body-buffering
 suite	EdgionPlugins/DslBody	body-buffering
 suite	EdgionPlugins/BodyPlugins	body-buffering
 suite	EdgionPlugins/JsonSchemaValidation	body-buffering
