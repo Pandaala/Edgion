@@ -140,7 +140,7 @@ impl ConfigClient {
             },
             edgion_backends: {
                 let cache = ClientCache::new(client_id.clone(), client_name.clone());
-                cache.set_conf_processor(crate::ai::create_ai_backend_handler());
+                cache.set_conf_processor(crate::ai::create_edgion_backend_handler());
                 cache
             },
             edgion_acme: edgion_acme_cache,

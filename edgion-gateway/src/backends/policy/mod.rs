@@ -9,9 +9,11 @@ pub use backend_traffic::{create_backend_traffic_policy_handler, get_backend_tra
 
 use crate::backends::port_resolver::resolve_port_name;
 use crate::backends::LogicalBackendHandle;
+use edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey;
+#[cfg(test)]
+use edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind;
 #[cfg(test)]
 use edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass;
-use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::resources::BackendTLSPolicy;
 use std::sync::Arc;
 
@@ -22,9 +24,6 @@ pub fn query_backend_tls_policy_for_logical_backend(
     port: Option<i32>,
 ) -> Option<Arc<BackendTLSPolicy>> {
     let target = logical.policy_target_key()?;
-    if target.target_kind != PolicyTargetKind::Service {
-        return None;
-    }
     query_backend_tls_policy_for_target(&target, port)
 }
 

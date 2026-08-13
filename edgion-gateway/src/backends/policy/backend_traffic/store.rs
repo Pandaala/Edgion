@@ -19,6 +19,7 @@ use edgion_resources::resources::edgion_backend_traffic_policy::{
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::resources::outlier_detection::OutlierDetectionResolved;
 use edgion_resources::resources::upstream_authority::CompiledUpstreamAuthority;
+use edgion_resources::resources::upstream_authority::UpstreamAuthorityConfig;
 use edgion_resources::resources::EdgionBackendTrafficPolicy;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
@@ -57,7 +58,8 @@ pub struct BackendTrafficPolicyStore {
     /// Per-service circuit-breaker concurrency cap (read on the request path).
     circuit_breakers: DashMap<PolicyTargetKey, u32>,
     service_circuit_breakers: DashMap<String, u32>,
-    ai_circuit_breakers: DashMap<PolicyTargetKey, (u32, Arc<crate::ai::circuit_breaker::AiBackendCircuitBreaker>)>,
+    logical_circuit_breakers:
+        DashMap<PolicyTargetKey, (u32, Arc<crate::ai::circuit_breaker::LogicalBackendCircuitBreaker>)>,
     /// Per-service resolved HTTP upstream connect deadline (read on the request path).
     connect_timeouts: DashMap<PolicyTargetKey, std::time::Duration>,
     service_connect_timeouts: DashMap<String, std::time::Duration>,
@@ -68,6 +70,9 @@ pub struct BackendTrafficPolicyStore {
 /// normalized values suitable for future AI-attempt state handles.
 #[derive(Clone)]
 pub struct EffectiveBackendTrafficPolicy {
+    pub load_balancer: Option<ParsedLBPolicy>,
+    pub upstream_authority: Option<Arc<CompiledUpstreamAuthority>>,
+    pub(crate) upstream_authority_config: Option<UpstreamAuthorityConfig>,
     pub retry_budget: Option<Arc<RetryBudget>>,
     pub circuit_breaker_limit: Option<u32>,
     pub connect_timeout: Option<std::time::Duration>,
@@ -75,7 +80,7 @@ pub struct EffectiveBackendTrafficPolicy {
     /// Exact AI credential-outlier policy generation for request capture.
     /// `None` for core Service targets.
     pub ai_credential_outlier: Option<Arc<AiCredentialOutlierBackendHandle>>,
-    pub ai_circuit_breaker: Option<Arc<crate::ai::circuit_breaker::AiBackendCircuitBreaker>>,
+    pub logical_circuit_breaker: Option<Arc<crate::ai::circuit_breaker::LogicalBackendCircuitBreaker>>,
 }
 
 struct EffectivePolicySnapshotData {
@@ -110,9 +115,11 @@ fn effective_snapshot_eq(
         (None, None) => true,
         (Some(left), Some(right)) => {
             left.circuit_breaker_limit == right.circuit_breaker_limit
+                && left.load_balancer == right.load_balancer
+                && left.upstream_authority_config == right.upstream_authority_config
                 && left.connect_timeout == right.connect_timeout
                 && left.outlier_detection == right.outlier_detection
-                && match (&left.ai_circuit_breaker, &right.ai_circuit_breaker) {
+                && match (&left.logical_circuit_breaker, &right.logical_circuit_breaker) {
                     (None, None) => true,
                     (Some(left), Some(right)) => Arc::ptr_eq(left, right),
                     _ => false,
@@ -153,7 +160,7 @@ impl BackendTrafficPolicyStore {
             service_retry_budgets: DashMap::new(),
             circuit_breakers: DashMap::new(),
             service_circuit_breakers: DashMap::new(),
-            ai_circuit_breakers: DashMap::new(),
+            logical_circuit_breakers: DashMap::new(),
             connect_timeouts: DashMap::new(),
             service_connect_timeouts: DashMap::new(),
         }
@@ -172,6 +179,8 @@ impl BackendTrafficPolicyStore {
                 (resolved_class, key.target_kind),
                 (ResolvedPolicyTargetClass::Service, PolicyTargetKind::Service)
                     | (ResolvedPolicyTargetClass::Ai, PolicyTargetKind::EdgionBackend)
+                    | (ResolvedPolicyTargetClass::A2aService, PolicyTargetKind::EdgionBackend)
+                    | (ResolvedPolicyTargetClass::A2aExternal, PolicyTargetKind::EdgionBackend)
             )
         });
         matches_resolved_class.then_some(keys).unwrap_or_default()
@@ -388,15 +397,15 @@ impl BackendTrafficPolicyStore {
                         self.circuit_breakers.insert(target.clone(), cb.max_parallel_requests);
                         if target.target_kind == PolicyTargetKind::EdgionBackend {
                             let unchanged = self
-                                .ai_circuit_breakers
+                                .logical_circuit_breakers
                                 .get(target)
                                 .is_some_and(|entry| entry.value().0 == cb.max_parallel_requests);
                             if !unchanged {
-                                self.ai_circuit_breakers.insert(
+                                self.logical_circuit_breakers.insert(
                                     target.clone(),
                                     (
                                         cb.max_parallel_requests,
-                                        crate::ai::circuit_breaker::AiBackendCircuitBreaker::new(
+                                        crate::ai::circuit_breaker::LogicalBackendCircuitBreaker::new(
                                             cb.max_parallel_requests,
                                         ),
                                     ),
@@ -406,7 +415,7 @@ impl BackendTrafficPolicyStore {
                     }
                     None => {
                         self.circuit_breakers.remove(target);
-                        self.ai_circuit_breakers.remove(target);
+                        self.logical_circuit_breakers.remove(target);
                     }
                 }
 
@@ -430,19 +439,36 @@ impl BackendTrafficPolicyStore {
                 }
 
                 self.applied.insert(target.clone(), policy_key_str.clone());
-                let ai_credential_outlier = (target.target_kind == PolicyTargetKind::EdgionBackend)
+                let target_class = policy.spec.resolved_target_class;
+                let is_ai = target_class == Some(ResolvedPolicyTargetClass::Ai);
+                let is_a2a_service = target_class == Some(ResolvedPolicyTargetClass::A2aService);
+                let ai_credential_outlier = is_ai
                     .then(|| {
                         get_ai_credential_outlier_store().publish_policy(target.clone(), normalized_outlier.clone())
                     })
                     .flatten();
                 let candidate = Arc::new(EffectiveBackendTrafficPolicy {
+                    load_balancer: is_a2a_service
+                        .then(|| policy.spec.load_balancer.as_ref().and_then(|lb| lb.to_parsed()))
+                        .flatten(),
+                    upstream_authority: is_a2a_service
+                        .then(|| {
+                            policy
+                                .spec
+                                .upstream_authority
+                                .as_ref()
+                                .and_then(|authority| CompiledUpstreamAuthority::compile(authority).ok())
+                                .map(Arc::new)
+                        })
+                        .flatten(),
+                    upstream_authority_config: is_a2a_service.then(|| policy.spec.upstream_authority.clone()).flatten(),
                     retry_budget: self.retry_budgets.get(target).map(|entry| Arc::clone(&entry.value().1)),
                     circuit_breaker_limit: self.circuit_breakers.get(target).map(|entry| *entry.value()),
                     connect_timeout: self.connect_timeouts.get(target).map(|entry| *entry.value()),
-                    outlier_detection: normalized_outlier,
+                    outlier_detection: is_ai.then_some(normalized_outlier).flatten(),
                     ai_credential_outlier,
-                    ai_circuit_breaker: self
-                        .ai_circuit_breakers
+                    logical_circuit_breaker: self
+                        .logical_circuit_breakers
                         .get(target)
                         .map(|entry| Arc::clone(&entry.value().1)),
                 });
@@ -466,7 +492,7 @@ impl BackendTrafficPolicyStore {
                 }
                 self.retry_budgets.remove(target);
                 self.circuit_breakers.remove(target);
-                self.ai_circuit_breakers.remove(target);
+                self.logical_circuit_breakers.remove(target);
                 self.connect_timeouts.remove(target);
                 self.applied.remove(target);
                 if target.target_kind == PolicyTargetKind::EdgionBackend {
@@ -738,6 +764,30 @@ mod tests {
             },
             status: None,
         })
+    }
+
+    fn a2a_policy(
+        ns: &str,
+        name: &str,
+        target: &str,
+        target_class: ResolvedPolicyTargetClass,
+    ) -> Arc<EdgionBackendTrafficPolicy> {
+        use edgion_resources::resources::upstream_authority::UpstreamAuthorityConfig;
+
+        let mut policy = ai_policy(ns, name, target, 25, "750ms");
+        let spec = &mut Arc::get_mut(&mut policy).expect("new policy fixture").spec;
+        spec.resolved_target_class = Some(target_class);
+        spec.load_balancer = Some(LoadBalancerConfig {
+            r#type: LoadBalancerType::LeastConn,
+            consistent_hash: None,
+            panic_threshold: None,
+        });
+        spec.upstream_authority = Some(UpstreamAuthorityConfig {
+            pattern: "*.agents.internal".to_string(),
+            template: "${ctx:tenant}.agents.internal".to_string(),
+            health_check_host: None,
+        });
+        policy
     }
 
     // (a) A single valid policy populates all four data-plane stores and the
@@ -1358,6 +1408,91 @@ mod tests {
             "typed/service-policy"
         );
         assert_eq!(store.applied.get(&ai_target).unwrap().value(), "typed/ai-policy");
+    }
+
+    #[test]
+    fn a2a_service_marker_publishes_only_its_captured_direct_target_capabilities() {
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = BackendTrafficPolicyStore::new();
+        let target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionBackend,
+            namespace: "a2a-service-marker".to_string(),
+            name: "agent".to_string(),
+        };
+        let policy = a2a_policy(
+            "a2a-service-marker",
+            "policy",
+            "agent",
+            ResolvedPolicyTargetClass::A2aService,
+        );
+
+        assert_eq!(
+            store.full_set_policies(HashMap::from([("a2a-service-marker/policy".to_string(), policy,)])),
+            1
+        );
+        let snapshot = store.snapshot();
+        let effective = snapshot.get_effective(&target).expect("captured A2A Service policy");
+
+        assert_eq!(effective.load_balancer, Some(ParsedLBPolicy::LeastConn));
+        let authority = effective.upstream_authority.as_ref().expect("captured authority");
+        assert_eq!(authority.suffix, ".agents.internal");
+        assert_eq!(authority.compose("tenant-a"), "tenant-a.agents.internal");
+        assert!(effective.retry_budget.is_some());
+        assert_eq!(effective.connect_timeout, Some(std::time::Duration::from_millis(750)));
+        assert_eq!(effective.circuit_breaker_limit, Some(7));
+        assert!(effective.logical_circuit_breaker.is_some());
+
+        assert!(effective.ai_credential_outlier.is_none());
+        assert!(effective.outlier_detection.is_none());
+        assert!(get_ai_credential_outlier_store().current_handle(&target).is_none());
+        assert!(
+            !get_outlier_detection_store().keys().contains(&target.to_string()),
+            "A2A Service must not publish a passive-outlier side store"
+        );
+        assert_eq!(
+            store.get_lb_policy("a2a-service-marker/agent"),
+            None,
+            "nested Service discovery must not turn the direct EdgionBackend owner into a Service policy key"
+        );
+        assert!(store.get_authority("a2a-service-marker/agent").is_none());
+    }
+
+    #[test]
+    fn a2a_external_marker_keeps_common_attempt_policy_without_service_projection() {
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = BackendTrafficPolicyStore::new();
+        let target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionBackend,
+            namespace: "a2a-external-marker".to_string(),
+            name: "agent".to_string(),
+        };
+        let policy = a2a_policy(
+            "a2a-external-marker",
+            "policy",
+            "agent",
+            ResolvedPolicyTargetClass::A2aExternal,
+        );
+
+        assert_eq!(
+            store.full_set_policies(HashMap::from([("a2a-external-marker/policy".to_string(), policy,)])),
+            1
+        );
+        let effective = store
+            .snapshot()
+            .get_effective(&target)
+            .expect("captured A2A external policy");
+
+        assert!(effective.load_balancer.is_none());
+        assert!(effective.upstream_authority.is_none());
+        assert!(effective.upstream_authority_config.is_none());
+        assert!(effective.outlier_detection.is_none());
+        assert!(effective.ai_credential_outlier.is_none());
+        assert!(effective.retry_budget.is_some());
+        assert_eq!(effective.connect_timeout, Some(std::time::Duration::from_millis(750)));
+        assert_eq!(effective.circuit_breaker_limit, Some(7));
+        assert!(effective.logical_circuit_breaker.is_some());
+        assert!(get_ai_credential_outlier_store().current_handle(&target).is_none());
+        assert!(!get_outlier_detection_store().keys().contains(&target.to_string()));
     }
 
     #[test]

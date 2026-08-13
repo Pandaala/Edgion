@@ -121,7 +121,9 @@ impl CompiledBackend {
     fn is_generic_selectable(&self) -> bool {
         matches!(
             self.target,
-            CompiledBackendTarget::Service { .. } | CompiledBackendTarget::Invalid { .. }
+            CompiledBackendTarget::Service { .. }
+                | CompiledBackendTarget::EdgionBackend { .. }
+                | CompiledBackendTarget::Invalid { .. }
         )
     }
 

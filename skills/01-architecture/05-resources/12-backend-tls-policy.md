@@ -7,7 +7,7 @@ description: BackendTLSPolicy resource — upstream mTLS configuration, CA certi
 
 > **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-BackendTLSPolicy is a Gateway API standard policy resource used to configure upstream TLS connections from the Gateway to direct backend targets, including CA certificate verification and client certificates (mTLS). Edgion accepts core `Service` and `edgion.io/EdgionBackend` targets. The latter currently requires the `spec.ai` variant and an HTTPS provider endpoint.
+BackendTLSPolicy is a Gateway API standard policy resource used to configure upstream TLS connections from the Gateway to direct backend targets, including CA certificate verification and client certificates (mTLS). Edgion accepts core `Service` and `edgion.io/EdgionBackend` targets. EdgionBackend supports AI HTTPS endpoints, A2A Service targets, and A2A HTTPS external endpoints.
 
 ## Source code locations
 
@@ -25,7 +25,7 @@ BackendTLSPolicy is a Gateway API standard policy resource used to configure ups
    - Clear the old target registrations of this BackendTLSPolicy in `BackendTLSPolicyTargetManager`
    - Require exactly one targetRef and derive a typed `(kind, namespace, name, section)` identity
    - Register the canonical dependency before existence lookup, so target creation can self-heal a missing policy
-   - Resolve Service existence or the EdgionBackend AI capability; AI rejects `sectionName` and plaintext endpoints
+   - Resolve Service existence or the validated raw EdgionBackend capability; all EdgionBackend variants reject `sectionName`, and external/AI targets reject plaintext endpoints
    - Set the schema-hidden `resolvedTargetClass` marker and enter conflict arbitration only after complete eligibility
    - Store `creationTimestamp` for conflict-priority ordering
    - Requeue old siblings (when targets change, old siblings need to re-evaluate their conflict status)

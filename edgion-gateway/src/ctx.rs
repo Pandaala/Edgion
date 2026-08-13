@@ -1189,6 +1189,8 @@ pub struct EdgionHttpContext {
     /// backend (`sp_target_addr` is consumed by `take()` on the first attempt).
     /// Plain field, no serde attribute (`EdgionHttpContext` has no serde derive).
     pub sp_sticky_addr: Option<std::net::SocketAddr>,
+    /// Optional typed scope used by the canonical affinity token/map.
+    pub sp_token_scope: Option<String>,
 
     /// Direct evidence that an earlier attempt consumed the SP sticky target
     /// (`sp_target_addr.take()` returned `Some`). Drives the cross-attempt token
@@ -1312,6 +1314,17 @@ pub struct EdgionHttpContext {
     /// Bounded active-attempt and pending Redis settlement state. Async work is
     /// drained only at the next-attempt and universal logging seams.
     pub ai_attempt_runtime: crate::ai::attempt_runtime::AiAttemptRuntimeState,
+
+    /// Attempt-owned aggregate permit for a non-AI logical backend.
+    pub logical_backend_cb_permit: Option<crate::ai::circuit_breaker::LogicalBackendCircuitBreakerPermit>,
+
+    /// Request-captured canonical DNS and dial-time egress classifier for a
+    /// routed external backend. Retries share its bounded resolver memo.
+    pub(crate) routed_external_resolver: Option<Arc<crate::plugins::http::common::outbound::egress::EgressResolver>>,
+
+    /// One-shot guard for an external A2A target's transport base path. The
+    /// same request context re-enters peer selection on retry.
+    pub(crate) a2a_path_prefix_applied: bool,
 
     /// Request-captured typed destination policy for the selected AI backend.
     pub ai_effective_policy: Option<Arc<crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy>>,
@@ -1546,6 +1559,7 @@ impl EdgionHttpContext {
             sp_state: SessionPersistenceState::Inactive,
             sp_target_addr: None,
             sp_sticky_addr: None,
+            sp_token_scope: None,
             sp_sticky_consumed: false,
             allow_loopback_upstream: false,
             request_body_config: crate::request_body::ResolvedRequestBodyConfig::default(),
@@ -1561,6 +1575,9 @@ impl EdgionHttpContext {
             ai_guard_body_generation: None,
             ai_guard_decided: Vec::new(),
             ai_attempt_runtime: crate::ai::attempt_runtime::AiAttemptRuntimeState::default(),
+            logical_backend_cb_permit: None,
+            routed_external_resolver: None,
+            a2a_path_prefix_applied: false,
             ai_effective_policy: None,
             ai_request_baseline: None,
             ai_stream_processor: None,

@@ -41,7 +41,9 @@ spec:
                         description: "Name of the referent in the policy namespace"
                 loadBalancer:
                   type: object
-                  description: "Load-balancing algorithm and panic threshold. Service targets only"
+                  description: >-
+                    Load balancing for core Service and A2A Service EdgionBackend targets.
+                    Panic threshold is supported only for direct core Service targets.
                   required:
                     - type
                   properties:
@@ -169,7 +171,8 @@ spec:
                   description: >-
                     Dynamic upstream authority (Host + SNI) within a wildcard pattern this
                     Service backend declares. The connection stays pinned to the Service's
-                    endpoints; only the authority varies. Service targets only.
+                    endpoints; only the authority varies. Supported for core Service and A2A
+                    Service EdgionBackend targets.
                   required:
                     - pattern
                     - template

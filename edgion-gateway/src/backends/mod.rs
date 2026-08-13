@@ -34,7 +34,8 @@ pub use policy::{
 pub use port_resolver::resolve_target_port_key;
 pub use preload::preload_load_balancers;
 pub use runtime::{
-    LogicalBackendHandle, SelectedAiBackend, SelectedHttpBackend, SelectedLogicalBackend, SelectedServiceBackend,
+    LogicalBackendHandle, SelectedA2aBackend, SelectedAiBackend, SelectedHttpBackend, SelectedLogicalBackend,
+    SelectedServiceBackend,
 };
 pub use selector::{get_backends_for_service_key, select_roundrobin_backend_key};
 pub use service_kind::ServiceBackendKind;
@@ -67,9 +68,19 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use selector::{extract_hash_key, is_backend_healthy, select_from_endpoint_slice};
+use selector::{
+    extract_hash_key, is_backend_healthy, select_from_endpoint_slice, select_from_endpoint_slice_discovery_only,
+};
 
-type ServicePeerInput = (Option<i32>, Option<Arc<BackendTLSPolicy>>, String, ServiceBackendKind);
+#[derive(Debug)]
+struct ServicePeerInput {
+    port: Option<i32>,
+    backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
+    service_key: String,
+    service_type: ServiceBackendKind,
+    lb_policy: Option<ParsedLBPolicy>,
+    inherit_service_state: bool,
+}
 
 /// Derive HTTP Service transport identity from the selected proof and use the
 /// mutable context only as an invariant check. A stale/mismatched context must
@@ -95,12 +106,31 @@ fn selected_http_service_input(
     if !context_matches {
         return Err(EdgionStatus::UpstreamNotBackendRefs);
     }
-    Ok((
-        compiled.port,
-        compiled.backend_tls_policy.clone(),
+    Ok(ServicePeerInput {
+        port: compiled.port,
+        backend_tls_policy: compiled.backend_tls_policy.clone(),
+        lb_policy: crate::backends::policy::backend_traffic::resolve_lb_policy(&service_key),
         service_key,
-        service_kind,
-    ))
+        service_type: service_kind,
+        inherit_service_state: true,
+    })
+}
+
+fn selected_a2a_service_input(selected: &SelectedA2aBackend) -> Result<ServicePeerInput, EdgionStatus> {
+    let crate::ai::RuntimeA2aTarget::Service { namespace, name, port } = &selected.backend.target else {
+        return Err(EdgionStatus::UpstreamNotBackendRefs);
+    };
+    Ok(ServicePeerInput {
+        port: Some(i32::from(*port)),
+        backend_tls_policy: selected.backend_tls_policy.clone(),
+        service_key: format!("{namespace}/{name}"),
+        service_type: ServiceBackendKind::Service,
+        lb_policy: selected
+            .effective_policy
+            .as_ref()
+            .and_then(|policy| policy.load_balancer.clone()),
+        inherit_service_state: false,
+    })
 }
 
 /// Internal: try to get peer, returns Result with EdgionStatus on error
@@ -108,14 +138,14 @@ pub(crate) async fn try_get_peer(
     ctx: &mut EdgionHttpContext,
     session: &Session,
     is_grpc: bool,
-    selected_http: Option<&SelectedServiceBackend>,
+    selected_http: Option<&SelectedLogicalBackend>,
 ) -> Result<Box<HttpPeer>, EdgionStatus> {
     let gateway_key = ctx.gateway_info.gateway_key();
     let gateway_key_ref = Some(gateway_key.as_str());
 
     // HTTP routed Service identity comes exclusively from the selected proof.
     // gRPC and Invalid retain their existing context compatibility input.
-    let (br_port, backend_tls_policy, service_key, service_type) = if is_grpc {
+    let input = if is_grpc {
         // gRPC backend
         let grpc_br = ctx
             .selected_grpc_backend
@@ -129,14 +159,23 @@ pub(crate) async fn try_get_peer(
                 _ => None,
             })
             .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
-        (
-            grpc_br.port,
-            grpc_br.backend_tls_policy.clone(),
+        let lb_policy = crate::backends::policy::backend_traffic::resolve_lb_policy(&service_key);
+        ServicePeerInput {
+            port: grpc_br.port,
+            backend_tls_policy: grpc_br.backend_tls_policy.clone(),
             service_key,
+            lb_policy,
             service_type,
-        )
+            inherit_service_state: true,
+        }
     } else if let Some(selected) = selected_http {
-        selected_http_service_input(selected, ctx.backend_context.as_ref())?
+        match selected {
+            SelectedLogicalBackend::Service(selected) => {
+                selected_http_service_input(selected, ctx.backend_context.as_ref())?
+            }
+            SelectedLogicalBackend::A2a(selected) => selected_a2a_service_input(selected)?,
+            SelectedLogicalBackend::Ai(_) => return Err(EdgionStatus::UpstreamNotBackendRefs),
+        }
     } else {
         let http_br = match ctx.selected_backend.as_ref() {
             Some(SelectedHttpBackend::Invalid(compiled)) => compiled,
@@ -152,19 +191,31 @@ pub(crate) async fn try_get_peer(
                 _ => None,
             })
             .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
-        (
-            http_br.port,
-            http_br.backend_tls_policy.clone(),
+        let lb_policy = crate::backends::policy::backend_traffic::resolve_lb_policy(&service_key);
+        ServicePeerInput {
+            port: http_br.port,
+            backend_tls_policy: http_br.backend_tls_policy.clone(),
             service_key,
+            lb_policy,
             service_type,
-        )
+            inherit_service_state: true,
+        }
     };
+    let ServicePeerInput {
+        port: br_port,
+        backend_tls_policy,
+        service_key,
+        service_type,
+        lb_policy,
+        inherit_service_state,
+    } = input;
 
-    // Source the LB policy from the per-service EdgionBackendTrafficPolicy store
-    // (single DashMap read). No policy => None => the RoundRobin default in selection.
-    let lb_policy = crate::backends::policy::backend_traffic::resolve_lb_policy(&service_key);
-
-    let backend_app_protocol = detect_backend_app_protocol_key(&service_key, br_port);
+    let detected_app_protocol = detect_backend_app_protocol_key(&service_key, br_port);
+    let backend_app_protocol = if inherit_service_state {
+        detected_app_protocol
+    } else {
+        a2a_backend_app_protocol(detected_app_protocol)
+    };
 
     match service_type {
         ServiceBackendKind::Service => {
@@ -179,8 +230,12 @@ pub(crate) async fn try_get_peer(
             } else {
                 String::new()
             };
-            let backend = take_sp_target_or_select(ctx, &service_key, || {
-                select_from_endpoint_slice(&service_key, &lb_policy, session, &client_ip)
+            let backend = take_sp_target_or_select(ctx, &service_key, inherit_service_state, || {
+                if inherit_service_state {
+                    select_from_endpoint_slice(&service_key, &lb_policy, session, &client_ip)
+                } else {
+                    select_from_endpoint_slice_discovery_only(&service_key, &lb_policy, session, &client_ip)
+                }
             })?;
 
             build_peer_from_lb_selection(
@@ -294,7 +349,7 @@ pub(crate) async fn try_get_peer(
                     } else {
                         String::new()
                     };
-                    let backend = take_sp_target_or_select(ctx, &service_key, || {
+                    let backend = take_sp_target_or_select(ctx, &service_key, true, || {
                         select_from_endpoint_slice(&service_key, &lb_policy, session, &client_ip)
                     })?;
                     build_peer_from_lb_selection(
@@ -374,7 +429,7 @@ pub(crate) async fn try_get_peer(
             } else {
                 String::new()
             };
-            let backend = take_sp_target_or_select(ctx, &service_key, || {
+            let backend = take_sp_target_or_select(ctx, &service_key, true, || {
                 select_from_endpoint_slice(&service_key, &lb_policy, session, &client_ip)
             })?;
             build_peer_from_lb_selection(
@@ -389,6 +444,13 @@ pub(crate) async fn try_get_peer(
                 gateway_key_ref,
             )
         }
+    }
+}
+
+fn a2a_backend_app_protocol(protocol: Option<BackendAppProtocol>) -> Option<BackendAppProtocol> {
+    match protocol {
+        Some(BackendAppProtocol::WebSocket) => None,
+        protocol => protocol,
     }
 }
 
@@ -409,6 +471,17 @@ fn compute_external_name_resolver(
     let egc_layer = egc_default.and_then(candidate_from_egc_default);
 
     resolve_effective_spec(&[service_layer, gateway_layer, egc_layer], |key: &LinkSysKey| {
+        httpdns_config_for_ref(key)
+    })
+}
+
+/// Resolve the request's Gateway-scoped DNS policy for a routed external
+/// EdgionBackend. Unlike ExternalName there is no Service annotation layer.
+pub(crate) fn compute_routed_external_resolver(ctx: &EdgionHttpContext) -> ResolverSpec {
+    let gateway_layer = ctx.gateway_info.dns_resolver_candidate.clone();
+    let egc_default = crate::config::get_egc_dns_resolver_default();
+    let egc_layer = egc_default.as_ref().and_then(candidate_from_egc_default);
+    resolve_effective_spec(&[gateway_layer, egc_layer], |key: &LinkSysKey| {
         httpdns_config_for_ref(key)
     })
 }
@@ -468,6 +541,7 @@ async fn resolve_external_ips(
 fn take_sp_target_or_select<F>(
     ctx: &mut EdgionHttpContext,
     service_key: &str,
+    inherit_service_state: bool,
     select_fn: F,
 ) -> Result<Arc<crate::lb::EdgionBackend>, EdgionStatus>
 where
@@ -491,7 +565,7 @@ where
         match live {
             Some(arc) => {
                 let health_store = get_health_status_store();
-                if is_backend_healthy(service_key, arc.inner(), &health_store) {
+                if !inherit_service_state || is_backend_healthy(service_key, arc.inner(), &health_store) {
                     return Ok(arc);
                 }
                 return Err(EdgionStatus::StickyBackendUnhealthy);
@@ -598,7 +672,7 @@ pub async fn get_peer(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     is_grpc: bool,
-    selected_http: Option<&SelectedServiceBackend>,
+    selected_http: Option<&SelectedLogicalBackend>,
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<Box<HttpPeer>> {
     match try_get_peer(ctx, session, is_grpc, selected_http).await {
@@ -665,11 +739,11 @@ mod selected_service_input_tests {
         let selected = selected_service("service-a");
         let context = backend_context("tenant/service-a");
 
-        let (port, _, service_key, kind) = selected_http_service_input(&selected, Some(&context)).unwrap();
+        let input = selected_http_service_input(&selected, Some(&context)).unwrap();
 
-        assert_eq!(port, Some(8080));
-        assert_eq!(service_key, "tenant/service-a");
-        assert_eq!(kind, ServiceBackendKind::Service);
+        assert_eq!(input.port, Some(8080));
+        assert_eq!(input.service_key, "tenant/service-a");
+        assert_eq!(input.service_type, ServiceBackendKind::Service);
     }
 
     #[test]
@@ -681,5 +755,15 @@ mod selected_service_input_tests {
             selected_http_service_input(&selected, Some(&context)).unwrap_err(),
             EdgionStatus::UpstreamNotBackendRefs
         );
+    }
+
+    #[test]
+    fn a2a_preserves_h2c_but_never_activates_websocket_transport() {
+        assert_eq!(
+            a2a_backend_app_protocol(Some(BackendAppProtocol::H2c)),
+            Some(BackendAppProtocol::H2c)
+        );
+        assert_eq!(a2a_backend_app_protocol(Some(BackendAppProtocol::WebSocket)), None);
+        assert_eq!(a2a_backend_app_protocol(None), None);
     }
 }

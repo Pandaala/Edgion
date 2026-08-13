@@ -29,21 +29,29 @@ policies retain unbounded fan-out and treat duplicate references idempotently.
 
 The field matrix is atomic:
 
-| Target kind | Valid sections |
-|-------------|----------------|
-| `Service` | All existing sections |
-| `EdgionBackend` | `connection`, `retryConstraint`, `circuitBreaker`, `outlierDetection` |
+| Resolved target capability | Valid sections |
+|----------------------------|----------------|
+| Core `Service` | All existing sections |
+| AI `EdgionBackend` | `connection`, `retryConstraint`, `circuitBreaker`, `outlierDetection` |
+| A2A Service `EdgionBackend` | `connection`, `retryConstraint`, `circuitBreaker`, `loadBalancer` without `panicThreshold`, and `upstreamAuthority` |
+| A2A external `EdgionBackend` | `connection`, `retryConstraint`, `circuitBreaker` |
 
-For AI targets, `loadBalancer`, `healthCheck`, and `upstreamAuthority` reject the whole policy.
-Cross-service choice belongs to AiProxy; an AI service has one provider endpoint, and Edgion does
-not invent an unauthenticated public-provider health-probe contract.
+For AI targets, `loadBalancer`, `healthCheck`, and `upstreamAuthority` reject the whole policy. A2A
+Service targets reject `healthCheck`, `outlierDetection`, and `loadBalancer.panicThreshold` because
+WP4 has no canonical captured health population for that nested Service. A2A external targets also
+reject load balancing and authority override. Cross-service AI choice belongs to AiProxy; Edgion
+does not invent an unauthenticated public-provider health-probe contract.
 
 ## Controller
 
 - Validation calls the canonical target parser plus `spec.get_validation_errors()`.
 - Parse clears old dependencies, registers every typed target, and resolves object existence per
   target.
-- Service targets use `service_ref_mgr`; AI targets use `ai_backend_ref_mgr`.
+- Service targets use `service_ref_mgr`; all EdgionBackend variants use the shared typed backend
+  dependency index. EdgionBackend capability is derived from the current RawStore object after
+  full spec validation because backend `on_change` requeues policy workers before processed-cache
+  publication. A valid A2A identity may retain an inert marker while its nested target is
+  unresolved; missing `resolvedA2a` still withdraws the Gateway runtime.
 - Valid and resolved targets enter conflict arbitration independently. An unresolved sibling is
   omitted while its dependency remains registered for self-healing.
 - Policies sharing a typed target use oldest creation timestamp, then policy name, as precedence.
@@ -66,14 +74,16 @@ valid for in-flight requests. It applies the same per-target oldest-wins arbitra
 stable handles for connection timeout, retry budget, circuit breaker, outlier detection, and
 half-open state.
 
-AI captures one complete policy snapshot before building its request candidates. Service deliberately
-retains its existing per-attempt live compatibility lookups. EdgionBackend runtime, EBTP, and
-BackendTLSPolicy are independent conf_sync publications; there is no cross-resource transaction.
+AI and A2A capture one complete policy snapshot for their selected direct EdgionBackend. Core
+Service deliberately retains its existing per-attempt live compatibility lookups. EdgionBackend
+runtime, EBTP, and BackendTLSPolicy are independent conf_sync publications; there is no
+cross-resource transaction.
 
-Service-only side effects—load-balancer selector compilation, endpoint active health checks,
-dynamic authority, and panic threshold—remain isolated to Service keys. For AI targets, the
-service-level circuit breaker is the aggregate concurrency guard; passive outlier state is keyed by
-typed AI service plus credential alias so one failing credential does not eject its siblings.
+Core-Service side effects—active health checks, passive endpoint outlier state, and panic
+threshold—remain isolated to Service keys. A2A Service reuses the canonical selector cell with the
+direct EdgionBackend's load-balancer algorithm and authority, but does not inherit nested Service
+policy state. For AI and A2A, the direct logical circuit breaker is the aggregate concurrency
+guard; AI passive outlier state remains keyed by typed service plus credential alias.
 
 `HTTPRoute.retry` authorizes a retry. EBTP `retryConstraint` only limits aggregate retry volume;
 both must pass. No AI-specific retry policy or route-targeted EBTP is introduced.

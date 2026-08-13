@@ -1,6 +1,6 @@
 ---
 name: edgion-backend-features
-description: Canonical EdgionBackend credential-pool schema, AI HTTPRoute backend contract, AiProxy selection, defaults, status, and complete examples.
+description: Canonical EdgionBackend exactly-one AI/A2A schema, typed HTTPRoute contract, status, policy attachment, and examples.
 ---
 
 # EdgionBackend resource
@@ -8,12 +8,15 @@ description: Canonical EdgionBackend credential-pool schema, AI HTTPRoute backen
 > API: `edgion.io/v1` | Scope: Namespaced | Short name: `eb`
 > Internal processing: [../../01-architecture/05-resources/22-edgion-backend.md](../../01-architecture/05-resources/22-edgion-backend.md)
 
-`EdgionBackend` defines one provider endpoint, a bounded credential pool, and the provider model
-catalog. An HTTPRoute references these resources directly from `backendRefs`. The route is the only
-source of backend candidates, declaration order, and weights; rule-level `AiProxy` stores only the
-selection algorithm and AI request behavior.
+`EdgionBackend` is a typed HTTP backend with exactly one configured variant: `spec.ai` defines an
+AI provider, credential pool, and model catalog; `spec.a2a` defines an A2A Service or external
+transport target. An HTTPRoute references either variant directly from `backendRefs`. An AiProxy
+rule accepts only AI variants, while an ordinary HTTPRoute forwards transparently through A2A
+variants.
 
 ## Full schema
+
+The AI form is:
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -57,12 +60,44 @@ status:
   conditions: []
 ```
 
+The A2A Service form is:
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: task-agent
+  namespace: production
+spec:
+  a2a:
+    target:
+      serviceRef:
+        name: task-agent
+        port: 8080
+```
+
+The A2A external form is:
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: external-task-agent
+  namespace: production
+spec:
+  a2a:
+    target:
+      endpoint: https://agents.example.com/a2a
+    allowInsecureHttp: false
+```
+
 Input handling differs by config-center mode. On Kubernetes, requests using
-`fieldValidation=Strict` reject undeclared fields throughout `spec.ai`; Warn/Ignore clients may
-allow the API server to prune a misspelled optional field into a silent no-op. Filesystem and etcd
+`fieldValidation=Strict` reject undeclared fields throughout `spec.ai` and `spec.a2a`; Warn/Ignore
+clients may allow the API server to prune a misspelled optional field into a silent no-op. Filesystem and etcd
 input is deserialized directly and always rejects unknown fields in the strict `spec` tree.
-Resolved Secret objects are Controller-filled transport fields; they are excluded from the CRD
-schema and redacted from Admin configuration output.
+Resolved Secret objects and `resolvedA2a` are Controller-filled transport fields excluded from the
+CRD schema. Secret values are redacted from Admin configuration output. Users must configure
+exactly one of `spec.ai` and `spec.a2a`; neither or both is invalid.
 
 ## `spec` fields
 
@@ -77,6 +112,55 @@ schema and redacted from Admin configuration output.
 
 `OpenAI` defaults to `https://api.openai.com`; `Anthropic` defaults to
 `https://api.anthropic.com`. `OpenAICompatible` requires `spec.ai.endpoint`.
+
+### `spec.a2a`
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `target` | Object | Yes | — | Exactly-one transport union containing `serviceRef` or `endpoint` |
+| `target.serviceRef.name` | String | With Service target | — | Kubernetes 1.26 DNS-1035 Service name: 1–63 bytes, starts with a lowercase letter, then lowercase letters, digits, or hyphens; no dots |
+| `target.serviceRef.namespace` | String | No | EdgionBackend Namespace | Service Namespace; cross-Namespace use requires ReferenceGrant |
+| `target.serviceRef.port` | Integer | With Service target | — | Numeric Service port from 1 through 65535; the port must exist on the Service |
+| `target.endpoint` | URL string | With external target | — | Absolute HTTP(S) upstream base endpoint, optionally with a confined path prefix |
+| `allowInsecureHttp` | Boolean | No | `false` | Permits an external `http://` endpoint; it must remain `false` for Service targets |
+
+The target union is strict: configuring both `serviceRef` and `endpoint`, or configuring neither,
+is invalid. External endpoints reject user information, query strings, fragments, ambiguous path
+separators, dot-segment encodings, and unsupported schemes. The Controller normalizes the endpoint
+before publication. The endpoint is a transport base; WP4 does not fetch, cache, or rewrite an
+Agent Card.
+
+For a Service target, the Controller registers Service and cross-Namespace ReferenceGrant
+dependencies and publishes a transport-only `resolvedA2a` only after the Service and numeric port
+are proved. A missing Service/port or denied reference leaves the Gateway runtime inactive until a
+later watch event self-heals it. For an external target, the Gateway resolves at dial time through
+the canonical routed-external egress policy and uses canonical TLS/SNI/authority handling.
+
+### A2A HTTPRoute contract
+
+An ordinary HTTPRoute references A2A and Service backends through the normal weighted backend list:
+
+```yaml
+backendRefs:
+  - group: edgion.io
+    kind: EdgionBackend
+    name: task-agent
+    weight: 90
+  - kind: Service
+    name: fallback-http
+    port: 8080
+    weight: 10
+```
+
+The A2A reference uses `group: edgion.io`, `kind: EdgionBackend`, and no `port`; the port belongs
+inside `spec.a2a.target.serviceRef`. Namespace defaults to the HTTPRoute Namespace, and a
+cross-Namespace backendRef requires ReferenceGrant. Missing, denied, invalid, and wrong-variant
+targets retain the canonical Gateway API invalid-share behavior. AiProxy rules reject A2A slots;
+ordinary HTTPRoute forwarding does not require an A2A plugin.
+
+WP4 preserves request and response bytes and adds no Agent Card rewrite, JSON-RPC method handling,
+body observation, response observation, or protocol-specific access-log fields. Those capabilities
+belong to WP5, WP6, and WP8.
 
 ### `spec.ai.credentialPool`
 
@@ -252,12 +336,16 @@ logical model, and repeats eligibility and quota admission.
 
 | Condition | Meaning |
 |-----------|---------|
-| `Accepted` | Static provider, endpoint, pool, model, pricing, and default validation |
-| `ResolvedRefs` | Every credential Secret reference resolved; any missing, denied, or invalid Secret makes this condition false |
-| `PartiallyInvalid` | Some credentials were omitted while a usable subset remains active; reason `InvalidCredentials` contains bounded aliases and fixed reason enums |
+| `Accepted` | Exactly-one variant plus the selected AI or A2A static schema is valid |
+| `ResolvedRefs` | AI: every credential Secret resolved. A2A Service: the reference is permitted and its Service/port exists. A2A external: the normalized endpoint is ready |
+| `PartiallyInvalid` | AI only: some credentials were omitted while a usable subset remains active; reason `InvalidCredentials` contains bounded aliases and fixed reason enums |
 
-All conditions carry `observedGeneration`. Secret rotation and corrected refs affect fresh requests
-after normal Controller-to-Gateway synchronization without restarting either binary.
+An invalid union or selected variant produces `Accepted=False/Invalid`. A denied A2A Service
+reference produces `ResolvedRefs=False/RefNotPermitted`; a missing Service or port produces
+`ResolvedRefs=False/TargetNotFound`. All conditions carry `observedGeneration`. Secret rotation,
+Service/port updates, ReferenceGrant changes, endpoint updates, deletion, recreation, and variant
+switches affect fresh requests after normal Controller-to-Gateway synchronization without
+restarting either binary.
 
 ## Complete configuration example
 

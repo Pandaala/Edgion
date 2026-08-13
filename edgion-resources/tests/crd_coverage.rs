@@ -243,10 +243,23 @@ fn edgion_backend_spec_has_no_uncovered_fields() {
         "EdgionBackend CRD must not expose any controller-resolved Secret"
     );
     assert!(
+        !contains_property_named(&expected, "resolvedA2a") && !contains_property_named(&actual, "resolvedA2a"),
+        "resolvedA2a must remain conf_sync-only and absent from both generated and committed schemas"
+    );
+    assert!(
         actual["properties"]["ai"]["properties"]["defaults"]["properties"]
             .get("timeout")
             .is_none(),
         "EdgionBackend CRD must not retain the removed defaults.timeout field"
+    );
+    let service_name_pattern = actual["properties"]["a2a"]["properties"]["target"]["properties"]["serviceRef"]
+        ["properties"]["name"]["pattern"]
+        .as_str()
+        .expect("A2A Service name must have an admission pattern");
+    assert_eq!(service_name_pattern, r"^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$");
+    assert!(
+        !service_name_pattern.contains("(?:"),
+        "Kubernetes RE2 admission patterns must not use unsupported non-capturing groups"
     );
 }
 
@@ -323,7 +336,12 @@ fn edgion_backend_crd_is_recursively_structural_and_secret_free() {
     );
     assert_eq!(
         schema["properties"]["spec"]["x-kubernetes-validations"][0]["rule"],
-        "[has(self.ai)].filter(present, present).size() == 1"
+        "[has(self.ai), has(self.a2a)].filter(present, present).size() == 1"
+    );
+    assert_eq!(
+        schema["properties"]["spec"]["properties"]["a2a"]["properties"]["target"]["x-kubernetes-validations"][0]
+            ["rule"],
+        "[has(self.serviceRef), has(self.endpoint)].filter(present, present).size() == 1"
     );
 }
 

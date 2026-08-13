@@ -83,7 +83,7 @@ description: Feature and configuration schema reference for all Kubernetes resou
 
 | Resource | Description |
 |----------|-------------|
-| [22-edgion-backend.md](22-edgion-backend.md) | Provider endpoint, partial-good credential pool, model catalog, HTTPRoute backend binding, and AiProxy selection |
+| [22-edgion-backend.md](22-edgion-backend.md) | Exactly-one AI/A2A backend variants, typed targets, HTTPRoute binding, status, and policy attachment |
 
 ## Quick Lookup
 
@@ -100,4 +100,4 @@ description: Feature and configuration schema reference for all Kubernetes resou
 | Configure health checks/circuit breaking/load balancing | [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) |
 | Integrate with external systems | [18-link-sys.md](18-link-sys.md) |
 | Configure upstream TLS | [12-backend-tls-policy.md](12-backend-tls-policy.md) |
-| Configure an OpenAI-compatible provider | [22-edgion-backend.md](22-edgion-backend.md) |
+| Configure an AI provider or A2A backend | [22-edgion-backend.md](22-edgion-backend.md) |

@@ -280,6 +280,27 @@ pub(crate) fn select_from_endpoint_slice(
     )
 }
 
+/// Select from the canonical Service discovery cell without inheriting the
+/// Service's active-health or passive-outlier policy state. A2A owns policy at
+/// the directly routed EdgionBackend, while the nested Service owns discovery.
+pub(crate) fn select_from_endpoint_slice_discovery_only(
+    service_key: &str,
+    lb_policy: &Option<ParsedLBPolicy>,
+    session: &Session,
+    client_ip: &str,
+) -> Result<Arc<EdgionBackend>, EdgionStatus> {
+    let cell = compiled_selector::get_or_create_cell(service_key);
+    if !hydrate_cell_if_empty(&cell, service_key) {
+        return Err(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault);
+    }
+    let kind = policy_to_kind(lb_policy);
+    let selector = cell.get_or_build(kind);
+    let hash_key = matches!(kind, PolicyKind::ConsistentHash).then(|| extract_hash_key(session, lb_policy, client_ip));
+    selector
+        .select(hash_key.as_deref(), |_| true)
+        .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin)
+}
+
 #[cfg(test)]
 mod panic_tests {
     use super::*;

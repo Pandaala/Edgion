@@ -1,5 +1,6 @@
 // Scenario implementations. Each scenario lives in its own file.
 
+pub mod a2a_backend_lifecycle;
 pub mod ai_backend_lifecycle;
 pub mod ai_backend_secret_rotation;
 pub mod ai_backend_weighted;

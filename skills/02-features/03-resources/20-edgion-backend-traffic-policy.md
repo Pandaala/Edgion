@@ -1,6 +1,6 @@
 ---
 name: edgion-backend-traffic-policy-features
-description: Canonical EdgionBackendTrafficPolicy schema for homogeneous Service or EdgionBackend direct-backend targets.
+description: Canonical EdgionBackendTrafficPolicy schema and variant-aware capability matrix for direct Service, AI, and A2A targets.
 ---
 
 # EdgionBackendTrafficPolicy resource
@@ -13,8 +13,9 @@ targets either core Services or EdgionBackends in its own Namespace. It does not
 and does not define a backend list for routing.
 
 For AI traffic, HTTPRoute `backendRefs` remains the only candidate, order, and weight source;
-rule-level `AiProxy.backendSelection` chooses among those candidates. EBTP independently controls
-connection establishment and resilience for each referenced destination.
+rule-level `AiProxy.backendSelection` chooses among those candidates. For A2A, the direct
+EdgionBackend remains the policy identity even when it resolves to a nested Service. EBTP never
+attaches through that nested Service and never changes route weights.
 
 ## Target contract
 
@@ -43,23 +44,33 @@ Rules:
 - All refs in one policy have the same target kind
 - Duplicate EdgionBackend targets are rejected; duplicate Service targets are idempotent
 - A Service and EdgionBackend with the same Namespace/name are distinct targets
+- EdgionBackend refs in one policy must resolve to one homogeneous capability: AI, A2A Service, or
+  A2A external
 - HTTPRoute, GRPCRoute, and other route kinds are not valid targets
 
 ## Section applicability
 
-| Section | Service | EdgionBackend |
-|---------|---------|-----------------|
-| `loadBalancer` | Supported | Rejected |
-| `healthCheck` | Supported | Rejected |
-| `outlierDetection` | Supported | Supported |
-| `retryConstraint` | Supported | Supported |
-| `circuitBreaker` | Supported | Supported |
-| `upstreamAuthority` | Supported | Rejected |
-| `connection` | Supported | Supported |
+| Section | Core Service | AI EdgionBackend | A2A Service EdgionBackend | A2A external EdgionBackend |
+|---------|--------------|------------------|---------------------------|----------------------------|
+| `loadBalancer.type` and `consistentHash` | Supported | Rejected | Supported | Rejected |
+| `loadBalancer.panicThreshold` | Supported | Rejected | Rejected | Rejected |
+| `healthCheck` | Supported | Rejected | Rejected | Rejected |
+| `outlierDetection` | Supported | Supported | Rejected | Rejected |
+| `retryConstraint` | Supported | Supported | Supported | Supported |
+| `circuitBreaker` | Supported | Supported | Supported | Supported |
+| `upstreamAuthority` | Supported | Rejected | Supported | Rejected |
+| `connection` | Supported | Supported | Supported | Supported |
 
-Unsupported sections reject the entire policy; they are never silently ignored. EdgionBackend
-has one provider endpoint, so cross-service load balancing belongs to AiProxy and Host/SNI comes
-from that endpoint. Edgion does not issue unauthenticated active probes to public AI providers.
+Unsupported sections reject the entire policy; they are never silently ignored. A2A Service
+targets reuse the canonical Service selector for EndpointSlice discovery, but WP4 has no captured
+health/outlier population and therefore rejects active health checks, passive outlier detection,
+and panic-threshold fail-open. A2A external targets have one endpoint and reject load balancing and
+authority overrides. AI retains its credential-scoped passive outlier behavior.
+
+Policy attachment follows an existing, fully valid direct EdgionBackend identity. If an A2A
+Service target later becomes missing or cross-Namespace authorization is denied, the policy may
+remain accepted but is inert: the backend publishes no `resolvedA2a`, the Gateway withdraws its
+runtime entry, and traffic fails closed until eligibility recovers.
 
 ## Complete Service schema example
 
@@ -120,7 +131,7 @@ merges fields from competing policies.
 | `kind` | String | Yes | — | `Service` or `EdgionBackend`, paired with the correct group |
 | `name` | String | Yes | — | Same-Namespace target name |
 
-### `loadBalancer` (Service only)
+### `loadBalancer` (core Service and A2A Service)
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
@@ -128,12 +139,12 @@ merges fields from competing policies.
 | `consistentHash` | Object | With `ConsistentHash` | — | Hash source and optional key |
 | `consistentHash.hashOn` | Enum | With `ConsistentHash` | — | `header`, `cookie`, `queryParam`, or `sourceIp` |
 | `consistentHash.key` | String | Conditional | — | Required for header/cookie/query; absent for `sourceIp` |
-| `panicThreshold` | Integer | No | Global value | Percentage from 0 through 100 |
+| `panicThreshold` | Integer | No | Global value | Percentage from 0 through 100; core Service only, rejected for A2A Service |
 
 The field is named `hashOn`, not `on`, because YAML 1.1 converters may interpret an unquoted `on`
 key as a Boolean.
 
-### `healthCheck` (Service only)
+### `healthCheck` (core Service only)
 
 `healthCheck.active` uses the shared active-health-check shape. Supported probe types are `http`,
 `tcp`, and `grpc`. Thresholds are at least one; interval and timeout are non-zero; HTTP requires a
@@ -150,10 +161,11 @@ non-empty path and status list. See [Service backends](16-service-backends.md) f
 | `maxEjectionTime` | Maximum bounded ejection duration |
 | `maxEjectionPercent` | Maximum ejected share for a Service endpoint pool |
 
-Classification is per upstream attempt. For Service targets, state is per endpoint. For
+Classification is per upstream attempt. For core Service targets, state is per endpoint. For AI
 EdgionBackend targets, the stable destination is the typed service and passive state is further
 isolated by credential alias, so one failing or rate-limited credential does not eject its
-siblings. A half-open lease admits one probe after ejection expires.
+siblings. A half-open lease admits one probe after ejection expires. A2A Service and external
+targets reject this section in WP4.
 
 ### `retryConstraint`
 
@@ -178,12 +190,12 @@ EdgionBackend.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `maxParallelRequests` | Positive integer | Yes with section | — | Service: maximum concurrent requests per endpoint. EdgionBackend: aggregate concurrent requests for the service |
+| `maxParallelRequests` | Positive integer | Yes with section | — | Core Service: maximum concurrent requests per endpoint. AI or A2A EdgionBackend: aggregate concurrent requests for the direct logical backend |
 
 Excess requests fail without queueing. For AI traffic, credential-specific outlier state remains
 separate from this aggregate service guard.
 
-### `upstreamAuthority` (Service only)
+### `upstreamAuthority` (core Service and A2A Service)
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -196,13 +208,17 @@ for TLS, SNI and certificate-validation name. Rendering failure or an invalid DN
 closed; it never falls back to the static authority. Prefer a label made of one `${...}` variable,
 without literal characters, so an unset variable reliably renders empty.
 
+For A2A Service, this is a policy on the direct EdgionBackend, not on the nested Service. The same
+rendered Host/SNI behavior applies. `loadBalancer.panicThreshold`, health-check-only
+`healthCheckHost`, and active probes remain unavailable for this target class.
+
 ### `connection`
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `connectTimeout` | GEP-2257 duration | No | Global HTTP backend connect timeout | Per-target connection-establishment deadline, greater than zero and at most 1 h |
 
-This field applies to HTTP upstream connections, including AI provider connections. It does not
+This field applies to HTTP upstream connections, including AI and A2A connections. It does not
 change TCPRoute/TLSRoute stream connect deadlines. Request and backend-request deadlines remain on
 HTTPRoute; EdgionBackend has no timeout field.
 
@@ -238,6 +254,21 @@ spec:
 The HTTPRoute continues to reference `primary-provider` directly. This policy neither attaches to
 the route nor adds the provider to any route.
 
+## A2A policy and BackendTLSPolicy semantics
+
+For an A2A Service target, EBTP may configure load-balancer type/consistent hash,
+`upstreamAuthority`, retry constraint, aggregate circuit breaker, and connection timeout. For an
+A2A external target, only retry constraint, aggregate circuit breaker, and connection timeout are
+accepted. These sections are captured from the policy on the direct EdgionBackend; a policy on the
+nested Service is not composed into the request.
+
+BackendTLSPolicy also targets the direct `edgion.io/EdgionBackend`. It uses the canonical upstream
+TLS resolver and peer builder for CA, mTLS, hostname validation, SNI, and authority behavior. A
+BackendTLSPolicy on a cleartext A2A external endpoint fails closed. When an A2A Service policy uses
+`upstreamAuthority`, its wildcard pattern must contain every matching BackendTLSPolicy validation
+hostname; otherwise the EBTP is rejected. Retry permission still comes from HTTPRoute, and the
+existing session-persistence and accounting semantics are unchanged.
+
 ## Conflict resolution and status
 
 Arbitration runs independently for each typed target. Oldest `creationTimestamp` wins; missing
@@ -263,13 +294,13 @@ requeue the policy through its serialized workqueue so status and arbitration se
 
 | Concern | Default |
 |---------|---------|
-| Load balancing | Service `RoundRobin`; AI service choice remains AiProxy's route-scoped selection |
+| Load balancing | Core Service and A2A Service use `RoundRobin`; AI choice remains AiProxy's route-scoped selection; A2A external has one endpoint |
 | Active health check | None |
 | Outlier detection | None |
 | Retry constraint | None; only configured HTTPRoute retry permission applies |
 | Circuit breaker | No concurrency cap |
 | Connect timeout | Global HTTP backend connect timeout |
-| Panic threshold | Global load-balancing value for Service targets |
+| Panic threshold | Global load-balancing value for core Service targets; unsupported for A2A Service |
 
 ## Related documentation
 

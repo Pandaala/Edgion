@@ -133,12 +133,19 @@ pub fn upstream_response_filter(
     // Record every completed upstream response before retry-on-status can
     // return early. The corresponding HTTPStatus control-flow error is not a
     // local-origin failure and is filtered out by error_while_proxy.
-    if let Some(upstream) = ctx.get_current_upstream() {
-        if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
-            let cb_store = crate::backends::get_outlier_detection_store();
-            match crate::backends::FailureClass::from_http_status(status_code) {
-                Some(class) => cb_store.record_failure_by_addr(service_key, addr, class),
-                None => cb_store.record_success_by_addr(service_key, addr),
+    if !matches!(
+        ctx.selected_backend
+            .as_ref()
+            .and_then(crate::backends::SelectedHttpBackend::routed),
+        Some(crate::backends::SelectedLogicalBackend::A2a(_))
+    ) {
+        if let Some(upstream) = ctx.get_current_upstream() {
+            if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
+                let cb_store = crate::backends::get_outlier_detection_store();
+                match crate::backends::FailureClass::from_http_status(status_code) {
+                    Some(class) => cb_store.record_failure_by_addr(service_key, addr, class),
+                    None => cb_store.record_success_by_addr(service_key, addr),
+                }
             }
         }
     }
@@ -327,7 +334,8 @@ pub fn upstream_response_filter(
                     });
 
                     if let Some(addr) = backend_addr {
-                        let addrhash = session_persistence::generate_session_token(&addr);
+                        let addrhash =
+                            session_persistence::generate_scoped_session_token(ctx.sp_token_scope.as_deref(), &addr);
                         // Freeze the absolute expiry at issuance: compute the ttl
                         // once (GEP-2257) and feed both the wire token and the
                         // Cookie Max-Age so the browser hint can never desync from

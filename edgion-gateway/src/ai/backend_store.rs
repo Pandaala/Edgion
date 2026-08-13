@@ -13,16 +13,16 @@ use arc_swap::ArcSwap;
 use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::credentials::{AiApiKeyResolver, SecretMaterialResolver};
 use edgion_resources::resources::edgion_backend::{
-    AiCredentialLimits, AiProvider, EdgionBackend, ParsedAiModelPricing,
+    AiCredentialLimits, AiProvider, EdgionBackend, ParsedAiModelPricing, ResolvedA2aTarget,
 };
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::resources::edgion_plugins::OnRedisFailure;
 use url::{Host, Url};
 
-type RuntimeMap = HashMap<String, Arc<RuntimeAiBackend>>;
+type RuntimeMap = HashMap<String, Arc<RuntimeEdgionBackend>>;
 
-static GLOBAL_AI_BACKEND_STORE: LazyLock<Arc<AiBackendStore>> = LazyLock::new(|| {
-    Arc::new(AiBackendStore::with_credential_outlier_store(
+static GLOBAL_EDGION_BACKEND_STORE: LazyLock<Arc<EdgionBackendStore>> = LazyLock::new(|| {
+    Arc::new(EdgionBackendStore::with_credential_outlier_store(
         super::get_ai_credential_outlier_store(),
     ))
 });
@@ -40,6 +40,32 @@ pub struct RuntimeAiEndpoint {
     pub host: String,
     /// Empty for a root endpoint; otherwise begins with `/` and has no trailing `/`.
     pub path_prefix: String,
+}
+
+/// Cold-compiled external A2A endpoint. Resolution still happens through the
+/// canonical routed-external resolver at dial time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeA2aExternalEndpoint {
+    pub domain: String,
+    pub port: u16,
+    pub use_tls: bool,
+    pub sni: String,
+    pub authority: String,
+    pub path_prefix: String,
+}
+
+/// Controller-proved, request-ready A2A transport target.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuntimeA2aTarget {
+    Service { namespace: String, name: String, port: u16 },
+    External(RuntimeA2aExternalEndpoint),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeA2aBackend {
+    /// Stable logical-backend identity for policy and attempt state.
+    pub uid: String,
+    pub target: RuntimeA2aTarget,
 }
 
 /// Canonical model selected by either its canonical name or an alias.
@@ -153,6 +179,14 @@ impl fmt::Debug for RuntimeAiBackend {
     }
 }
 
+/// One runtime generation entry. Keeping both variants in one enum prevents a
+/// route from observing torn AI/A2A publications during hot reload.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RuntimeEdgionBackend {
+    Ai(Arc<RuntimeAiBackend>),
+    A2a(Arc<RuntimeA2aBackend>),
+}
+
 struct Snapshot {
     backends: RuntimeMap,
     credential_outliers: Arc<super::AiCredentialOutlierStore>,
@@ -169,7 +203,10 @@ pub struct AiBackendSnapshot {
 
 impl AiBackendSnapshot {
     pub fn get_by_key(&self, key: &str) -> Option<Arc<RuntimeAiBackend>> {
-        self.inner.backends.get(key).cloned()
+        match self.inner.backends.get(key)?.as_ref() {
+            RuntimeEdgionBackend::Ai(backend) => Some(Arc::clone(backend)),
+            RuntimeEdgionBackend::A2a(_) => None,
+        }
     }
 
     /// Resolve several candidate keys from this one captured generation.
@@ -186,8 +223,27 @@ impl AiBackendSnapshot {
     }
 }
 
-/// Atomic store of activatable AI backends.
-pub struct AiBackendStore {
+/// Request-stable typed view of every EdgionBackend variant.
+#[derive(Clone)]
+pub struct EdgionBackendSnapshot {
+    inner: Arc<Snapshot>,
+}
+
+impl EdgionBackendSnapshot {
+    pub fn get_by_key(&self, key: &str) -> Option<Arc<RuntimeEdgionBackend>> {
+        self.inner.backends.get(key).cloned()
+    }
+
+    pub fn get_a2a_by_key(&self, key: &str) -> Option<Arc<RuntimeA2aBackend>> {
+        match self.inner.backends.get(key)?.as_ref() {
+            RuntimeEdgionBackend::A2a(backend) => Some(Arc::clone(backend)),
+            RuntimeEdgionBackend::Ai(_) => None,
+        }
+    }
+}
+
+/// Atomic store of all activatable EdgionBackend variants.
+pub struct EdgionBackendStore {
     /// Production writer invariant: this handler is owned by exactly one
     /// ConfigClient cache, whose list/watch callbacks are serialized under the
     /// cache-data write lock. Therefore partial updates use load-clone-store
@@ -197,13 +253,17 @@ pub struct AiBackendStore {
     credential_outliers: Arc<super::AiCredentialOutlierStore>,
 }
 
-impl Default for AiBackendStore {
+/// Compatibility name for existing AI consumers. It is the same unified store,
+/// not a second store or publication path.
+pub type AiBackendStore = EdgionBackendStore;
+
+impl Default for EdgionBackendStore {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl AiBackendStore {
+impl EdgionBackendStore {
     pub fn new() -> Self {
         Self::with_credential_outlier_store(Arc::new(super::AiCredentialOutlierStore::new()))
     }
@@ -238,11 +298,11 @@ impl AiBackendStore {
     /// unreachable state that accumulates for the process lifetime. Requests
     /// already holding a captured generation keep it alive through their own
     /// `Arc`, which is what preserves in-flight ejection state.
-    fn publish_credentials(&self, key: &str, backend: Option<&RuntimeAiBackend>) {
+    fn publish_credentials(&self, key: &str, backend: Option<&RuntimeEdgionBackend>) {
         let Some(target) = Self::target_key(key) else {
             return;
         };
-        let Some(backend) = backend else {
+        let Some(RuntimeEdgionBackend::Ai(backend)) = backend else {
             self.credential_outliers.remove_backend(&target);
             return;
         };
@@ -256,7 +316,21 @@ impl AiBackendStore {
 
     /// One lock-free snapshot load plus one hash-table lookup.
     pub fn get_by_key(&self, key: &str) -> Option<Arc<RuntimeAiBackend>> {
-        self.snapshot.load().backends.get(key).cloned()
+        match self.snapshot.load().backends.get(key)?.as_ref() {
+            RuntimeEdgionBackend::Ai(backend) => Some(Arc::clone(backend)),
+            RuntimeEdgionBackend::A2a(_) => None,
+        }
+    }
+
+    /// Capture the variant-neutral generation for route selection and transport.
+    pub fn edgion_backend_snapshot(&self) -> EdgionBackendSnapshot {
+        EdgionBackendSnapshot {
+            inner: self.snapshot.load_full(),
+        }
+    }
+
+    pub fn get_a2a_by_key(&self, key: &str) -> Option<Arc<RuntimeA2aBackend>> {
+        self.edgion_backend_snapshot().get_a2a_by_key(key)
     }
 
     /// Capture one immutable generation for a complete request/attempt plan.
@@ -268,10 +342,28 @@ impl AiBackendStore {
 
     /// Number of activatable entries. Invalid or unresolved resources are absent.
     pub fn count(&self) -> usize {
-        self.snapshot.load().backends.len()
+        self.snapshot
+            .load()
+            .backends
+            .values()
+            .filter(|backend| matches!(backend.as_ref(), RuntimeEdgionBackend::Ai(_)))
+            .count()
     }
 
     pub fn keys(&self) -> Vec<String> {
+        self.snapshot
+            .load()
+            .backends
+            .iter()
+            .filter_map(|(key, backend)| matches!(backend.as_ref(), RuntimeEdgionBackend::Ai(_)).then(|| key.clone()))
+            .collect()
+    }
+
+    pub fn count_all(&self) -> usize {
+        self.snapshot.load().backends.len()
+    }
+
+    pub fn keys_all(&self) -> Vec<String> {
         self.snapshot.load().backends.keys().cloned().collect()
     }
 
@@ -283,7 +375,7 @@ impl AiBackendStore {
                 compile_backend_entry(key, resource, current.backends.get(key)).map(|backend| (key.clone(), backend))
             })
             .collect();
-        let adaptive_targets = changed_backend_targets(&current.backends, &backends);
+        let adaptive_targets = changed_ai_backend_targets(&current.backends, &backends);
         for key in current.backends.keys() {
             if !backends.contains_key(key) {
                 self.publish_credentials(key, None);
@@ -296,7 +388,7 @@ impl AiBackendStore {
             backends,
             credential_outliers: Arc::clone(&self.credential_outliers),
         }));
-        if std::ptr::eq(self, GLOBAL_AI_BACKEND_STORE.as_ref()) {
+        if std::ptr::eq(self, GLOBAL_EDGION_BACKEND_STORE.as_ref()) {
             let adaptive_store = super::get_adaptive_telemetry_store();
             for target in &adaptive_targets {
                 adaptive_store.remove_target(target);
@@ -325,12 +417,12 @@ impl AiBackendStore {
                 }
             }
         }
-        let adaptive_targets = changed_backend_targets(&current.backends, &backends);
+        let adaptive_targets = changed_ai_backend_targets(&current.backends, &backends);
         self.snapshot.store(Arc::new(Snapshot {
             backends,
             credential_outliers: Arc::clone(&self.credential_outliers),
         }));
-        if std::ptr::eq(self, GLOBAL_AI_BACKEND_STORE.as_ref()) {
+        if std::ptr::eq(self, GLOBAL_EDGION_BACKEND_STORE.as_ref()) {
             let adaptive_store = super::get_adaptive_telemetry_store();
             for target in &adaptive_targets {
                 adaptive_store.remove_target(target);
@@ -340,23 +432,35 @@ impl AiBackendStore {
     }
 }
 
-fn changed_backend_targets(current: &RuntimeMap, next: &RuntimeMap) -> Vec<PolicyTargetKey> {
+fn changed_ai_backend_targets(current: &RuntimeMap, next: &RuntimeMap) -> Vec<PolicyTargetKey> {
     current
         .keys()
         .chain(next.keys())
         .collect::<HashSet<_>>()
         .into_iter()
         .filter(|key| match (current.get(*key), next.get(*key)) {
-            (Some(previous), Some(updated)) => !Arc::ptr_eq(previous, updated),
+            (Some(previous), Some(updated)) => match (previous.as_ref(), updated.as_ref()) {
+                (RuntimeEdgionBackend::Ai(previous), RuntimeEdgionBackend::Ai(updated)) => {
+                    !Arc::ptr_eq(previous, updated)
+                }
+                (RuntimeEdgionBackend::Ai(_), RuntimeEdgionBackend::A2a(_))
+                | (RuntimeEdgionBackend::A2a(_), RuntimeEdgionBackend::Ai(_)) => true,
+                (RuntimeEdgionBackend::A2a(_), RuntimeEdgionBackend::A2a(_)) => false,
+            },
+            (Some(previous), None) => matches!(previous.as_ref(), RuntimeEdgionBackend::Ai(_)),
+            (None, Some(updated)) => matches!(updated.as_ref(), RuntimeEdgionBackend::Ai(_)),
             (None, None) => false,
-            _ => true,
         })
-        .filter_map(|key| AiBackendStore::target_key(key))
+        .filter_map(|key| EdgionBackendStore::target_key(key))
         .collect()
 }
 
 pub fn get_global_ai_backend_store() -> Arc<AiBackendStore> {
-    GLOBAL_AI_BACKEND_STORE.clone()
+    GLOBAL_EDGION_BACKEND_STORE.clone()
+}
+
+pub fn get_global_edgion_backend_store() -> Arc<EdgionBackendStore> {
+    GLOBAL_EDGION_BACKEND_STORE.clone()
 }
 
 /// Borrow the process-global store without incrementing the outer Arc.
@@ -365,15 +469,20 @@ pub fn get_global_ai_backend_store() -> Arc<AiBackendStore> {
 /// [`AiBackendSnapshot`], then resolve every candidate from that view.
 #[inline]
 pub fn global_ai_backend_store() -> &'static AiBackendStore {
-    GLOBAL_AI_BACKEND_STORE.as_ref()
+    GLOBAL_EDGION_BACKEND_STORE.as_ref()
 }
 
-pub fn create_ai_backend_handler() -> Box<dyn ConfHandler<EdgionBackend> + Send + Sync> {
-    Box::new(get_global_ai_backend_store())
+#[inline]
+pub fn global_edgion_backend_store() -> &'static EdgionBackendStore {
+    GLOBAL_EDGION_BACKEND_STORE.as_ref()
+}
+
+pub fn create_edgion_backend_handler() -> Box<dyn ConfHandler<EdgionBackend> + Send + Sync> {
+    Box::new(get_global_edgion_backend_store())
 }
 
 pub fn count_ai_backends() -> usize {
-    GLOBAL_AI_BACKEND_STORE.count()
+    GLOBAL_EDGION_BACKEND_STORE.count()
 }
 
 #[cfg(test)]
@@ -391,20 +500,20 @@ pub struct GlobalAiBackendTestGuard {
 #[cfg(test)]
 impl Drop for GlobalAiBackendTestGuard {
     fn drop(&mut self) {
-        GLOBAL_AI_BACKEND_STORE.replace_all(&HashMap::new());
+        GLOBAL_EDGION_BACKEND_STORE.replace_all(&HashMap::new());
     }
 }
 
 #[cfg(test)]
 pub fn lock_global_ai_backend_store_for_test() -> GlobalAiBackendTestGuard {
     let lock = GLOBAL_AI_BACKEND_TEST_LOCK.lock();
-    GLOBAL_AI_BACKEND_STORE.replace_all(&HashMap::new());
+    GLOBAL_EDGION_BACKEND_STORE.replace_all(&HashMap::new());
     GlobalAiBackendTestGuard { _lock: lock }
 }
 
-impl ConfHandler<EdgionBackend> for AiBackendStore {
+impl ConfHandler<EdgionBackend> for EdgionBackendStore {
     fn full_set(&self, data: &HashMap<String, Arc<EdgionBackend>>) {
-        tracing::info!(component = "ai_backend_store", count = data.len(), "full set");
+        tracing::info!(component = "edgion_backend_store", count = data.len(), "full set");
         self.replace_all(data);
     }
 
@@ -415,7 +524,7 @@ impl ConfHandler<EdgionBackend> for AiBackendStore {
         remove: HashSet<String>,
     ) {
         tracing::info!(
-            component = "ai_backend_store",
+            component = "edgion_backend_store",
             add = add.len(),
             update = update.len(),
             remove = remove.len(),
@@ -427,15 +536,15 @@ impl ConfHandler<EdgionBackend> for AiBackendStore {
     }
 }
 
-fn compile_backend(key: &str, resource: &EdgionBackend) -> Option<RuntimeAiBackend> {
-    match try_compile_backend(key, resource) {
+fn compile_backend(key: &str, resource: &EdgionBackend) -> Option<RuntimeEdgionBackend> {
+    match try_compile_edgion_backend(key, resource) {
         Ok(backend) => Some(backend),
         Err(reason) => {
             tracing::warn!(
-                component = "ai_backend_store",
+                component = "edgion_backend_store",
                 key = key,
                 reason = reason,
-                "AI backend omitted from activatable runtime index"
+                "EdgionBackend omitted from activatable runtime index"
             );
             None
         }
@@ -448,37 +557,97 @@ fn compile_backend(key: &str, resource: &EdgionBackend) -> Option<RuntimeAiBacke
 fn compile_backend_entry(
     key: &str,
     resource: &EdgionBackend,
-    previous: Option<&Arc<RuntimeAiBackend>>,
-) -> Option<Arc<RuntimeAiBackend>> {
+    previous: Option<&Arc<RuntimeEdgionBackend>>,
+) -> Option<Arc<RuntimeEdgionBackend>> {
     let mut compiled = compile_backend(key, resource)?;
     if let Some(previous) = previous.filter(|previous| previous.as_ref() == &compiled) {
         return Some(previous.clone());
     }
-    if let Some(previous) = previous.filter(|previous| previous.credential_pool == compiled.credential_pool) {
-        compiled.credential_pool.limiter_core = Arc::clone(&previous.credential_pool.limiter_core);
+    if let (RuntimeEdgionBackend::Ai(compiled_ai), Some(RuntimeEdgionBackend::Ai(previous_ai))) =
+        (&mut compiled, previous.map(|backend| backend.as_ref()))
+    {
+        if previous_ai.credential_pool == compiled_ai.credential_pool {
+            // Preserve request-shared limiter state for an otherwise changed AI
+            // entry without giving A2A any AI-only side effects.
+            Arc::get_mut(compiled_ai)
+                .expect("newly compiled AI backend must be unique")
+                .credential_pool
+                .limiter_core = Arc::clone(&previous_ai.credential_pool.limiter_core);
+        }
     }
     Some(Arc::new(compiled))
 }
 
-fn try_compile_backend(key: &str, resource: &EdgionBackend) -> Result<RuntimeAiBackend, &'static str> {
+fn try_compile_edgion_backend(key: &str, resource: &EdgionBackend) -> Result<RuntimeEdgionBackend, &'static str> {
     resource.spec.validate().map_err(|_| "invalid configuration")?;
+    match (&resource.spec.ai, &resource.spec.a2a) {
+        (Some(_), None) => try_compile_backend(key, resource)
+            .map(Arc::new)
+            .map(RuntimeEdgionBackend::Ai),
+        (None, Some(_)) => try_compile_a2a_backend(key, resource)
+            .map(Arc::new)
+            .map(RuntimeEdgionBackend::A2a),
+        _ => Err("invalid backend variant"),
+    }
+}
+
+fn runtime_uid(key: &str, resource: &EdgionBackend) -> Result<String, &'static str> {
+    if let Some(uid) = resource.metadata.uid.as_deref().filter(|uid| !uid.is_empty()) {
+        return Ok(uid.to_string());
+    }
+    let (namespace, name) = key.split_once('/').ok_or("invalid resource key")?;
+    if namespace.is_empty() || name.is_empty() {
+        return Err("invalid resource key");
+    }
+    Ok(PolicyTargetKey {
+        target_kind: PolicyTargetKind::EdgionBackend,
+        namespace: namespace.to_string(),
+        name: name.to_string(),
+    }
+    .to_string())
+}
+
+fn try_compile_a2a_backend(key: &str, resource: &EdgionBackend) -> Result<RuntimeA2aBackend, &'static str> {
+    let a2a = resource.spec.a2a.as_ref().ok_or("missing A2A backend capability")?;
+    let resolved = resource
+        .spec
+        .resolved_a2a
+        .as_ref()
+        .ok_or("missing resolved A2A target")?;
+    let key_namespace = key
+        .split_once('/')
+        .map(|(namespace, _)| namespace)
+        .ok_or("invalid resource key")?;
+    let target = match (&a2a.target.service_ref, &resolved.target) {
+        (Some(configured), ResolvedA2aTarget::Service { namespace, name, port })
+            if configured.name == *name
+                && configured.namespace.as_deref().unwrap_or(key_namespace) == namespace
+                && configured.port == *port =>
+        {
+            RuntimeA2aTarget::Service {
+                namespace: namespace.clone(),
+                name: name.clone(),
+                port: *port,
+            }
+        }
+        (None, ResolvedA2aTarget::External { normalized_endpoint })
+            if a2a.normalized_endpoint().as_deref() == Ok(normalized_endpoint.as_str()) =>
+        {
+            let endpoint = Url::parse(normalized_endpoint).map_err(|_| "invalid resolved A2A endpoint")?;
+            RuntimeA2aTarget::External(compile_a2a_endpoint(&endpoint).ok_or("invalid resolved A2A endpoint")?)
+        }
+        _ => return Err("resolved A2A target does not match the configured target"),
+    };
+    Ok(RuntimeA2aBackend {
+        uid: runtime_uid(key, resource)?,
+        target,
+    })
+}
+
+fn try_compile_backend(key: &str, resource: &EdgionBackend) -> Result<RuntimeAiBackend, &'static str> {
     let ai = resource.spec.ai.as_ref().ok_or("missing AI backend capability")?;
 
-    let uid = match resource.metadata.uid.as_deref().filter(|uid| !uid.is_empty()) {
-        Some(uid) => uid.to_string(),
-        None => {
-            let (namespace, name) = key.split_once('/').ok_or("invalid resource key")?;
-            if namespace.is_empty() || name.is_empty() {
-                return Err("invalid resource key");
-            }
-            PolicyTargetKey {
-                target_kind: PolicyTargetKind::EdgionBackend,
-                namespace: namespace.to_string(),
-                name: name.to_string(),
-            }
-            .to_string()
-        }
-    };
+    let uid = runtime_uid(key, resource)?;
 
     let endpoint = ai.effective_endpoint().map_err(|_| "invalid endpoint")?;
     let endpoint = compile_endpoint(&endpoint).ok_or("invalid endpoint")?;
@@ -608,12 +777,25 @@ fn compile_endpoint(endpoint: &Url) -> Option<RuntimeAiEndpoint> {
     })
 }
 
+fn compile_a2a_endpoint(endpoint: &Url) -> Option<RuntimeA2aExternalEndpoint> {
+    let endpoint = compile_endpoint(endpoint)?;
+    Some(RuntimeA2aExternalEndpoint {
+        domain: endpoint.domain,
+        port: endpoint.port,
+        use_tls: endpoint.use_tls,
+        sni: endpoint.sni,
+        authority: endpoint.host,
+        path_prefix: endpoint.path_prefix,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
     use edgion_resources::resources::edgion_backend::{
-        AiBackendDefaults, AiBackendSpec, AiCredential, AiCredentialPool, AiModel, AiModelPricing, EdgionBackendSpec,
+        A2aBackendSpec, A2aBackendTarget, A2aServiceReference, AiBackendDefaults, AiBackendSpec, AiCredential,
+        AiCredentialPool, AiModel, AiModelPricing, EdgionBackendSpec, ResolvedA2aBackend,
     };
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
@@ -658,6 +840,58 @@ mod tests {
                     max_output_tokens: Some(2048),
                 },
             }),
+            a2a: None,
+            resolved_a2a: None,
+            reconcile_outcome: None,
+        };
+        let mut resource = EdgionBackend::new(name, spec);
+        resource.metadata.namespace = Some("default".to_string());
+        Arc::new(resource)
+    }
+
+    fn a2a_service_resource(name: &str, resolved: bool) -> Arc<EdgionBackend> {
+        let spec = EdgionBackendSpec {
+            ai: None,
+            a2a: Some(A2aBackendSpec {
+                target: A2aBackendTarget {
+                    service_ref: Some(A2aServiceReference {
+                        name: "agent-service".to_string(),
+                        namespace: Some("agents".to_string()),
+                        port: 8080,
+                    }),
+                    endpoint: None,
+                },
+                allow_insecure_http: false,
+            }),
+            resolved_a2a: resolved.then(|| ResolvedA2aBackend {
+                target: ResolvedA2aTarget::Service {
+                    namespace: "agents".to_string(),
+                    name: "agent-service".to_string(),
+                    port: 8080,
+                },
+            }),
+            reconcile_outcome: None,
+        };
+        let mut resource = EdgionBackend::new(name, spec);
+        resource.metadata.namespace = Some("default".to_string());
+        Arc::new(resource)
+    }
+
+    fn a2a_external_resource(name: &str, endpoint: &str, resolved_endpoint: &str) -> Arc<EdgionBackend> {
+        let spec = EdgionBackendSpec {
+            ai: None,
+            a2a: Some(A2aBackendSpec {
+                target: A2aBackendTarget {
+                    service_ref: None,
+                    endpoint: Some(endpoint.to_string()),
+                },
+                allow_insecure_http: endpoint.starts_with("http://"),
+            }),
+            resolved_a2a: Some(ResolvedA2aBackend {
+                target: ResolvedA2aTarget::External {
+                    normalized_endpoint: resolved_endpoint.to_string(),
+                },
+            }),
             reconcile_outcome: None,
         };
         let mut resource = EdgionBackend::new(name, spec);
@@ -671,6 +905,128 @@ mod tests {
         assert_eq!(store.count(), 0);
         assert!(store.keys().is_empty());
         assert!(store.get_by_key("default/missing").is_none());
+    }
+
+    #[test]
+    fn a2a_service_and_external_targets_compile_from_controller_proof() {
+        let store = EdgionBackendStore::new();
+        store.full_set(&HashMap::from([
+            (
+                "default/service-agent".to_string(),
+                a2a_service_resource("service-agent", true),
+            ),
+            (
+                "default/external-agent".to_string(),
+                a2a_external_resource(
+                    "external-agent",
+                    "https://agent.example.com:8443/base/",
+                    "https://agent.example.com:8443/base",
+                ),
+            ),
+        ]));
+
+        assert_eq!(store.count(), 0, "A2A entries must not enter the AI view");
+        assert_eq!(store.count_all(), 2);
+        let snapshot = store.edgion_backend_snapshot();
+        let service = snapshot.get_a2a_by_key("default/service-agent").unwrap();
+        assert_eq!(
+            service.target,
+            RuntimeA2aTarget::Service {
+                namespace: "agents".to_string(),
+                name: "agent-service".to_string(),
+                port: 8080,
+            }
+        );
+        let external = snapshot.get_a2a_by_key("default/external-agent").unwrap();
+        let RuntimeA2aTarget::External(external) = &external.target else {
+            panic!("expected external target");
+        };
+        assert_eq!(external.domain, "agent.example.com");
+        assert_eq!(external.port, 8443);
+        assert!(external.use_tls);
+        assert_eq!(external.sni, "agent.example.com");
+        assert_eq!(external.authority, "agent.example.com:8443");
+        assert_eq!(external.path_prefix, "/base");
+    }
+
+    #[test]
+    fn unresolved_or_mismatched_a2a_proof_withdraws_previous_generation() {
+        let store = EdgionBackendStore::new();
+        let key = "default/agent";
+        store.full_set(&HashMap::from([(key.to_string(), a2a_service_resource("agent", true))]));
+        assert!(store.get_a2a_by_key(key).is_some());
+
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.to_string(), a2a_service_resource("agent", false))]),
+            HashSet::new(),
+        );
+        assert!(store.get_a2a_by_key(key).is_none());
+
+        store.full_set(&HashMap::from([(
+            key.to_string(),
+            a2a_external_resource(
+                "agent",
+                "https://agent.example.com/base",
+                "https://other.example.com/base",
+            ),
+        )]));
+        assert!(store.get_a2a_by_key(key).is_none());
+    }
+
+    #[test]
+    fn ai_to_a2a_switch_is_atomic_and_removes_ai_only_side_effects() {
+        let store = EdgionBackendStore::new();
+        let key = "default/agent";
+        store.full_set(&HashMap::from([(
+            key.to_string(),
+            resource("agent", "https://ai.example.com", Some(b"key")),
+        )]));
+        let old = store.edgion_backend_snapshot();
+        assert!(old.get_by_key(key).is_some());
+        assert_eq!(store.credential_outliers.count(), 1);
+
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.to_string(), a2a_service_resource("agent", true))]),
+            HashSet::new(),
+        );
+        let current = store.edgion_backend_snapshot();
+        assert!(matches!(
+            old.get_by_key(key).unwrap().as_ref(),
+            RuntimeEdgionBackend::Ai(_)
+        ));
+        assert!(matches!(
+            current.get_by_key(key).unwrap().as_ref(),
+            RuntimeEdgionBackend::A2a(_)
+        ));
+        assert!(store.get_by_key(key).is_none());
+        assert_eq!(store.credential_outliers.count(), 0);
+    }
+
+    #[test]
+    fn equivalent_a2a_resync_retains_runtime_arc() {
+        let store = EdgionBackendStore::new();
+        let key = "default/agent";
+        store.full_set(&HashMap::from([(
+            key.to_string(),
+            a2a_external_resource(
+                "agent",
+                "https://agent.example.com/base/",
+                "https://agent.example.com/base",
+            ),
+        )]));
+        let before = store.edgion_backend_snapshot().get_by_key(key).unwrap();
+        store.full_set(&HashMap::from([(
+            key.to_string(),
+            a2a_external_resource(
+                "agent",
+                "https://agent.example.com/base",
+                "https://agent.example.com/base",
+            ),
+        )]));
+        let after = store.edgion_backend_snapshot().get_by_key(key).unwrap();
+        assert!(Arc::ptr_eq(&before, &after));
     }
 
     #[test]
@@ -964,9 +1320,15 @@ mod tests {
         store.full_set(&HashMap::from([("default/provider".to_string(), equivalent)]));
         let after = store.get_by_key("default/provider").unwrap();
         assert!(Arc::ptr_eq(&before, &after));
-        assert!(changed_backend_targets(
-            &HashMap::from([("default/provider".to_string(), before)]),
-            &HashMap::from([("default/provider".to_string(), Arc::clone(&after))]),
+        assert!(changed_ai_backend_targets(
+            &HashMap::from([(
+                "default/provider".to_string(),
+                Arc::new(RuntimeEdgionBackend::Ai(before)),
+            )]),
+            &HashMap::from([(
+                "default/provider".to_string(),
+                Arc::new(RuntimeEdgionBackend::Ai(Arc::clone(&after))),
+            )]),
         )
         .is_empty());
 
@@ -975,9 +1337,15 @@ mod tests {
         let changed = store.get_by_key("default/provider").unwrap();
         assert!(!Arc::ptr_eq(&after, &changed));
         assert_eq!(
-            changed_backend_targets(
-                &HashMap::from([("default/provider".to_string(), after)]),
-                &HashMap::from([("default/provider".to_string(), changed)]),
+            changed_ai_backend_targets(
+                &HashMap::from([(
+                    "default/provider".to_string(),
+                    Arc::new(RuntimeEdgionBackend::Ai(after)),
+                )]),
+                &HashMap::from([(
+                    "default/provider".to_string(),
+                    Arc::new(RuntimeEdgionBackend::Ai(changed)),
+                )]),
             ),
             vec![PolicyTargetKey {
                 target_kind: PolicyTargetKind::EdgionBackend,
@@ -999,8 +1367,8 @@ mod tests {
             name: "provider".to_string(),
         };
 
-        assert_eq!(changed_backend_targets(&empty, &populated), vec![target.clone()]);
-        assert_eq!(changed_backend_targets(&populated, &empty), vec![target]);
+        assert_eq!(changed_ai_backend_targets(&empty, &populated), vec![target.clone()]);
+        assert_eq!(changed_ai_backend_targets(&populated, &empty), vec![target]);
     }
 
     #[test]

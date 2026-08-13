@@ -45,7 +45,7 @@ pub struct AiAttemptAdmissionInput {
     pub eos: Arc<AtomicBool>,
     pub outlier: Option<AiCredentialOutlierHandle>,
     pub adaptive: Option<Arc<AdaptiveTelemetryState>>,
-    pub circuit_breaker: Option<Arc<crate::ai::circuit_breaker::AiBackendCircuitBreaker>>,
+    pub circuit_breaker: Option<Arc<crate::ai::circuit_breaker::LogicalBackendCircuitBreaker>>,
     pub limiter_core: Arc<RedisRateLimiter>,
 }
 
@@ -77,7 +77,7 @@ pub struct AiAttemptRuntime {
     retry_after_seconds: Option<u64>,
     dispatched: bool,
     verdict_recorded: bool,
-    _circuit_breaker: Option<crate::ai::circuit_breaker::AiBackendCircuitBreakerPermit>,
+    _circuit_breaker: Option<crate::ai::circuit_breaker::LogicalBackendCircuitBreakerPermit>,
 }
 
 impl AiAttemptRuntime {

@@ -36,7 +36,8 @@ pub struct EdgionBackendTrafficPolicySpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_target_class: Option<ResolvedPolicyTargetClass>,
-    /// Load-balancing algorithm and panic threshold. Service targets only.
+    /// Load balancing for core Service and A2A Service EdgionBackend targets.
+    /// Panic threshold is supported only for direct core Service targets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load_balancer: Option<LoadBalancerConfig>,
     /// Active health check (probe) configuration. Service targets only.
@@ -47,7 +48,8 @@ pub struct EdgionBackendTrafficPolicySpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outlier_detection: Option<OutlierDetectionConfig>,
     /// Dynamic upstream authority (Host + SNI) within a wildcard pattern the
-    /// Service backend declares. Service targets only.
+    /// Service backend declares. Supported for core Service and A2A Service
+    /// EdgionBackend targets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_authority: Option<UpstreamAuthorityConfig>,
     /// Retry budget: cap retry volume as a percentage of request volume to the
@@ -167,6 +169,8 @@ pub enum PolicyTargetKind {
 pub enum ResolvedPolicyTargetClass {
     Service,
     Ai,
+    A2aService,
+    A2aExternal,
 }
 
 impl PolicyTargetKind {
@@ -344,14 +348,8 @@ impl EdgionBackendTrafficPolicySpec {
                     target_name
                 ));
             }
-            if self.load_balancer.is_some() {
-                errors.push("loadBalancer is not supported for EdgionBackend targets".to_string());
-            }
             if self.health_check.is_some() {
                 errors.push("healthCheck is not supported for EdgionBackend targets".to_string());
-            }
-            if self.upstream_authority.is_some() {
-                errors.push("upstreamAuthority is not supported for EdgionBackend targets".to_string());
             }
         }
         if let Some(lb) = &self.load_balancer {
@@ -633,18 +631,14 @@ outlierDetection:
     }
 
     #[test]
-    fn ai_targets_enforce_policy_field_matrix() {
+    fn edgion_backend_targets_enforce_static_policy_fields() {
         let allowed: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
             "targetRefs:\n  - group: edgion.io\n    kind: EdgionBackend\n    name: provider\nconnection:\n  connectTimeout: 2s\nretryConstraint: {}\ncircuitBreaker:\n  maxParallelRequests: 20\noutlierDetection:\n  consecutiveErrors: 5",
         )
         .unwrap();
         assert!(allowed.get_validation_errors().is_empty());
 
-        for forbidden in [
-            "loadBalancer:\n  type: RoundRobin",
-            "healthCheck:\n  active: {}",
-            "upstreamAuthority:\n  pattern: '*.example.com'\n  template: '${ctx:tenant}.example.com'",
-        ] {
+        for forbidden in ["healthCheck:\n  active: {}"] {
             let yaml =
                 format!("targetRefs:\n  - group: edgion.io\n    kind: EdgionBackend\n    name: provider\n{forbidden}");
             let spec: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(&yaml).unwrap();
@@ -653,6 +647,21 @@ outlierDetection:
                     .iter()
                     .any(|error| error.contains("not supported for EdgionBackend targets")),
                 "field must be rejected: {forbidden}"
+            );
+        }
+
+        // Variant-dependent fields are admitted structurally and resolved by
+        // the Controller after it proves AI, A2A Service, or A2A external.
+        for deferred in [
+            "loadBalancer:\n  type: RoundRobin",
+            "upstreamAuthority:\n  pattern: '*.example.com'\n  template: '${ctx:tenant}.example.com'",
+        ] {
+            let yaml =
+                format!("targetRefs:\n  - group: edgion.io\n    kind: EdgionBackend\n    name: provider\n{deferred}");
+            let spec: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(&yaml).unwrap();
+            assert!(
+                spec.get_validation_errors().is_empty(),
+                "field is capability-resolved: {deferred}"
             );
         }
     }

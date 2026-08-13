@@ -1,6 +1,20 @@
 # EdgionBackend Lifecycle Dynamic Test
 
-Scenario: `AiBackendLifecycle`.
+Scenarios: `A2aBackendLifecycle` and `AiBackendLifecycle`.
+
+`A2aBackendLifecycle` exercises the transparent WP4 backend variant without an
+A2A protocol plugin. It moves one HTTPRoute through missing, Service, external,
+missing-Service, wrong AI variant, delete, and recreate states. Requests use the
+existing `ai-gateway` listener and distinguish the existing port 30001 and 30002
+test backends, so target hot reload is externally observable without adding a
+server or listener.
+
+The scenario requires the normal full-integration fixture set: the
+`EdgionBackend/SingleProvider` gateway enables loopback upstreams for the local
+external target, while `HTTPRoute/Basic` supplies the `test-http` Service and
+EndpointSlice used by the Service target.
+
+`AiBackendLifecycle` covers the AI capability and policy lifecycle:
 
 This self-cleaning scenario exercises two hot-reload state machines through the
 Controller Admin API while observing Controller status, Gateway config-client

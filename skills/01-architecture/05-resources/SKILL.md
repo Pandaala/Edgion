@@ -47,7 +47,7 @@ description: Resource taxonomy and processing — common processing flow, per-re
 | [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) | EdgionBackendTrafficPolicy | Typed direct-backend policy for Service or EdgionBackend; never route-scoped |
 | [21-configmap.md](21-configmap.md) | ConfigMap | Controller-side CA reference material |
 | **AI Gateway** | | |
-| [22-edgion-backend.md](22-edgion-backend.md) | EdgionBackend | Provider catalog, partial-good credential pool, route dependencies, and attempt runtime |
+| [22-edgion-backend.md](22-edgion-backend.md) | EdgionBackend | Exactly-one AI/A2A variants, Controller resolution, unified runtime snapshots, and typed route consumption |
 | **Relationships** | | |
 | [19-resource-dependency.md](19-resource-dependency.md) | Inter-resource dependencies | Understanding cross-resource references, Store queries, and requeue cascades |
 
@@ -68,7 +68,7 @@ GatewayClass ──────► Gateway ◄────── EdgionGatewayCo
             ├────────► BackendTLSPolicy
             └────────► EdgionBackendTrafficPolicy
 
-HTTPRoute ──► EdgionBackend ──► EdgionBackendTrafficPolicy
+HTTPRoute ──► EdgionBackend (AI or A2A) ──► EdgionBackendTrafficPolicy
 
 ConfigMap ──► BackendTLSPolicy (CA reference material)
 
@@ -82,6 +82,7 @@ HTTPRoute/GRPCRoute ──► EdgionPlugins (HTTP plugins)
 EdgionPlugins/EdgionStreamPlugins ──► EdgionConfigData (overlay/data primitive via overrideRef)
 
 EdgionBackend ──► Secret (bounded credential pool)
+EdgionBackend/A2A ──► Service (optional typed target)
 HTTPRoute.backendRefs ──► EdgionBackend (sole candidate/order/weight source)
 EdgionPlugins/AiProxy ──► HTTPRoute candidates (selection algorithm only)
 

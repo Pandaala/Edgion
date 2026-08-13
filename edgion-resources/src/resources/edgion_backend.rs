@@ -23,6 +23,8 @@ pub const AI_CREDENTIAL_LIMIT_MAX: u64 = 9_007_199_254_740_991;
 pub const AI_PRICE_MAX_USD_PER_MILLION: u64 = 1_000_000;
 pub const AI_PRICE_MAX_DECIMAL_PLACES: usize = 6;
 pub const AI_PRICE_PATTERN: &str = r"^[0-9]+(\.[0-9]{1,6})?$";
+pub const A2A_SERVICE_NAME_PATTERN: &str = r"^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$";
+pub const KUBE_DNS_LABEL_PATTERN: &str = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$";
 
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
@@ -38,10 +40,62 @@ pub const AI_PRICE_PATTERN: &str = r"^[0-9]+(\.[0-9]{1,6})?$";
 pub struct EdgionBackendSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai: Option<AiBackendSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a2a: Option<A2aBackendSpec>,
+    /// Controller-resolved A2A target shipped to the Gateway over conf_sync.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_a2a: Option<ResolvedA2aBackend>,
     /// Controller-only resolution outcome used to build current-generation status.
     #[serde(skip)]
     #[schemars(skip)]
-    pub reconcile_outcome: Option<AiBackendReconcileOutcome>,
+    pub reconcile_outcome: Option<EdgionBackendReconcileOutcome>,
+}
+
+/// A2A backend identity and transport target.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct A2aBackendSpec {
+    pub target: A2aBackendTarget,
+    #[serde(default)]
+    pub allow_insecure_http: bool,
+}
+
+/// Strict exactly-one target union for an A2A backend.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct A2aBackendTarget {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_ref: Option<A2aServiceReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+}
+
+/// Typed reference to one port of a core Kubernetes Service.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct A2aServiceReference {
+    #[schemars(length(min = 1, max = 63), pattern(A2A_SERVICE_NAME_PATTERN))]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 63), pattern(KUBE_DNS_LABEL_PATTERN))]
+    pub namespace: Option<String>,
+    #[schemars(range(min = 1, max = 65535))]
+    pub port: u16,
+}
+
+/// Current-generation A2A target proved by the Controller.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedA2aBackend {
+    pub target: ResolvedA2aTarget,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ResolvedA2aTarget {
+    Service { namespace: String, name: String, port: u16 },
+    External { normalized_endpoint: String },
 }
 
 /// Phase-1 AI capability nested under `EdgionBackend.spec.ai`.
@@ -66,6 +120,37 @@ pub struct AiBackendReconcileOutcome {
     pub resolved_count: usize,
     pub total_count: usize,
     pub credential_errors: Vec<AiCredentialResolutionError>,
+}
+
+/// Controller-only status input for the selected backend variant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EdgionBackendReconcileOutcome {
+    Ai(AiBackendReconcileOutcome),
+    A2a(A2aBackendReconcileOutcome),
+}
+
+/// Bounded result of resolving an A2A target reference.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct A2aBackendReconcileOutcome {
+    pub error: Option<A2aTargetResolutionClass>,
+}
+
+/// Static A2A resolution class. It deliberately carries no target or raw error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum A2aTargetResolutionClass {
+    RefNotPermitted,
+    TargetNotFound,
+    UnsupportedProtocol,
+}
+
+impl A2aTargetResolutionClass {
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::RefNotPermitted => "RefNotPermitted",
+            Self::TargetNotFound => "TargetNotFound",
+            Self::UnsupportedProtocol => "UnsupportedProtocol",
+        }
+    }
 }
 
 /// One failed credential resolution, safe for bounded status construction.
@@ -343,14 +428,106 @@ pub struct EdgionBackendStatus {
 impl EdgionBackendSpec {
     /// Validate the backend union and its selected capability.
     pub fn validate(&self) -> Result<(), Vec<String>> {
-        let configured_variants = usize::from(self.ai.is_some());
+        let configured_variants = usize::from(self.ai.is_some()) + usize::from(self.a2a.is_some());
         if configured_variants != 1 {
             return Err(vec!["spec must configure exactly one backend variant".to_string()]);
         }
-        match self.ai.as_ref() {
-            Some(ai) => ai.validate(),
-            None => Err(vec!["spec must configure exactly one backend variant".to_string()]),
+        match (self.ai.as_ref(), self.a2a.as_ref()) {
+            (Some(ai), None) => ai.validate(),
+            (None, Some(a2a)) => a2a.validate(),
+            _ => Err(vec!["spec must configure exactly one backend variant".to_string()]),
         }
+    }
+}
+
+impl A2aBackendSpec {
+    /// Validate and normalize this A2A target without performing I/O.
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        match (&self.target.service_ref, &self.target.endpoint) {
+            (Some(service_ref), None) => {
+                if self.allow_insecure_http {
+                    errors.push("allowInsecureHttp must be false for a Service target".to_string());
+                }
+                errors.extend(service_ref.validation_errors());
+            }
+            (None, Some(_)) => {
+                if let Err(error) = self.normalized_endpoint() {
+                    errors.push(error);
+                }
+            }
+            _ => errors.push("a2a.target must configure exactly one of serviceRef or endpoint".to_string()),
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Return the canonical external endpoint used in the resolved target.
+    pub fn normalized_endpoint(&self) -> Result<String, String> {
+        let endpoint = self
+            .target
+            .endpoint
+            .as_deref()
+            .ok_or_else(|| "a2a.target.endpoint is required for an external target".to_string())?;
+        let mut parsed = Url::parse(endpoint)
+            .map_err(|_| "a2a.target.endpoint must be an absolute HTTP or HTTPS URL".to_string())?;
+        if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+            return Err("a2a.target.endpoint must be an absolute HTTP or HTTPS URL".to_string());
+        }
+        if !parsed.username().is_empty() || parsed.password().is_some() {
+            return Err("a2a.target.endpoint must not contain user information".to_string());
+        }
+        if parsed.port() == Some(0) {
+            return Err("a2a.target.endpoint port must be in 1..=65535".to_string());
+        }
+        if parsed.query().is_some() {
+            return Err("a2a.target.endpoint must not contain a query".to_string());
+        }
+        if parsed.fragment().is_some() {
+            return Err("a2a.target.endpoint must not contain a fragment".to_string());
+        }
+        if parsed.scheme() == "http" && !self.allow_insecure_http {
+            return Err("HTTP a2a.target.endpoint requires allowInsecureHttp: true".to_string());
+        }
+        let lower_endpoint = endpoint.to_ascii_lowercase();
+        let path = parsed.path();
+        if endpoint.contains('\\')
+            || path.contains("//")
+            || lower_endpoint.contains("%2f")
+            || lower_endpoint.contains("%5c")
+            || lower_endpoint.contains("%2e")
+            || path.split('/').any(|segment| matches!(segment, "." | ".."))
+        {
+            return Err("a2a.target.endpoint path must be unambiguous and confined".to_string());
+        }
+        if parsed.path() != "/" {
+            let normalized_path = parsed.path().trim_end_matches('/').to_string();
+            parsed.set_path(&normalized_path);
+        }
+        Ok(parsed.to_string().trim_end_matches('/').to_string())
+    }
+}
+
+impl A2aServiceReference {
+    fn validation_errors(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if !valid_service_name(&self.name) {
+            errors.push("a2a.target.serviceRef.name must be a valid Kubernetes name".to_string());
+        }
+        if self
+            .namespace
+            .as_deref()
+            .is_some_and(|namespace| !valid_dns_label(namespace))
+        {
+            errors.push("a2a.target.serviceRef.namespace must be a valid Kubernetes namespace".to_string());
+        }
+        if self.port == 0 {
+            errors.push("a2a.target.serviceRef.port must be in 1..=65535".to_string());
+        }
+        errors
     }
 }
 
@@ -669,6 +846,10 @@ fn valid_kube_name(value: &str) -> bool {
     !value.is_empty() && value.len() <= 253 && value.split('.').all(valid_dns_label)
 }
 
+fn valid_service_name(value: &str) -> bool {
+    valid_dns_label(value) && value.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+}
+
 fn valid_redis_ref(value: &str) -> bool {
     let mut parts = value.split('/');
     let (Some(namespace), Some(name), None) = (parts.next(), parts.next(), parts.next()) else {
@@ -730,6 +911,27 @@ mod tests {
     fn spec(provider: AiProvider) -> EdgionBackendSpec {
         EdgionBackendSpec {
             ai: Some(ai_spec(provider)),
+            a2a: None,
+            resolved_a2a: None,
+            reconcile_outcome: None,
+        }
+    }
+
+    fn a2a_service_spec() -> EdgionBackendSpec {
+        EdgionBackendSpec {
+            ai: None,
+            a2a: Some(A2aBackendSpec {
+                target: A2aBackendTarget {
+                    service_ref: Some(A2aServiceReference {
+                        name: "agent-service".to_string(),
+                        namespace: Some("agents".to_string()),
+                        port: 8080,
+                    }),
+                    endpoint: None,
+                },
+                allow_insecure_http: false,
+            }),
+            resolved_a2a: None,
             reconcile_outcome: None,
         }
     }
@@ -749,6 +951,8 @@ mod tests {
     fn backend_union_requires_exactly_one_variant() {
         let missing = EdgionBackendSpec {
             ai: None,
+            a2a: None,
+            resolved_a2a: None,
             reconcile_outcome: None,
         };
         assert_eq!(
@@ -756,6 +960,120 @@ mod tests {
             vec!["spec must configure exactly one backend variant"]
         );
         assert!(spec(AiProvider::OpenAI).validate().is_ok());
+        assert!(a2a_service_spec().validate().is_ok());
+
+        let mut both = spec(AiProvider::OpenAI);
+        both.a2a = a2a_service_spec().a2a;
+        assert_eq!(
+            both.validate().unwrap_err(),
+            vec!["spec must configure exactly one backend variant"]
+        );
+    }
+
+    #[test]
+    fn a2a_target_union_and_service_reference_are_strict() {
+        let mut value = a2a_service_spec();
+        let a2a = value.a2a.as_mut().unwrap();
+        a2a.target.endpoint = Some("https://agent.example.com".to_string());
+        assert!(a2a.validate().unwrap_err().join("\n").contains("exactly one"));
+
+        a2a.target.endpoint = None;
+        a2a.allow_insecure_http = true;
+        assert!(a2a.validate().unwrap_err().join("\n").contains("must be false"));
+
+        a2a.allow_insecure_http = false;
+        let service_ref = a2a.target.service_ref.as_mut().unwrap();
+        service_ref.name = "Invalid_Name".to_string();
+        service_ref.namespace = Some("Invalid_Namespace".to_string());
+        service_ref.port = 0;
+        let errors = a2a.validate().unwrap_err().join("\n");
+        assert!(errors.contains("valid Kubernetes name"));
+        assert!(errors.contains("valid Kubernetes namespace"));
+        assert!(errors.contains("1..=65535"));
+
+        for yaml in [
+            "target:\n  unknown: true\n",
+            "target:\n  serviceRef:\n    name: agent\n    port: 8080\n    unknown: true\n",
+        ] {
+            assert!(serde_yaml::from_str::<A2aBackendSpec>(yaml).is_err());
+        }
+    }
+
+    #[test]
+    fn a2a_service_name_enforces_kubernetes_1_26_dns_1035_bounds() {
+        let mut spec = a2a_service_spec();
+        spec.a2a.as_mut().unwrap().target.service_ref.as_mut().unwrap().name = "a".repeat(63);
+        assert!(spec.validate().is_ok());
+
+        spec.a2a.as_mut().unwrap().target.service_ref.as_mut().unwrap().name = "a".repeat(64);
+        assert!(spec.validate().is_err());
+
+        spec.a2a.as_mut().unwrap().target.service_ref.as_mut().unwrap().name = "agent.service".to_string();
+        assert!(spec.validate().is_err());
+
+        spec.a2a.as_mut().unwrap().target.service_ref.as_mut().unwrap().name = "1-agent".to_string();
+        assert!(spec.validate().is_err());
+    }
+
+    #[test]
+    fn a2a_external_endpoint_is_validated_and_normalized() {
+        let external = |endpoint: &str, allow_insecure_http| A2aBackendSpec {
+            target: A2aBackendTarget {
+                service_ref: None,
+                endpoint: Some(endpoint.to_string()),
+            },
+            allow_insecure_http,
+        };
+
+        assert!(external("https://agent.example.com/base///", false).validate().is_err());
+        assert_eq!(
+            external("https://agent.example.com/", false)
+                .normalized_endpoint()
+                .unwrap(),
+            "https://agent.example.com"
+        );
+        for (case, value) in [
+            external("agent.example.com", false),
+            external("ftp://agent.example.com", false),
+            external("https://user@agent.example.com", false),
+            external("https://agent.example.com:0", false),
+            external("https://agent.example.com/?q=1", false),
+            external("https://agent.example.com/#fragment", false),
+            external("http://agent.example.com", false),
+            external("https://agent.example.com/base//task", false),
+            external("https://agent.example.com/base/%2e%2e/task", false),
+            external("https://agent.example.com/base/%2Ftask", false),
+            external("https://agent.example.com/base\\task", false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert!(value.validate().is_err(), "invalid endpoint case {case} was accepted");
+        }
+        assert!(external("http://agent.example.com", true).validate().is_ok());
+    }
+
+    #[test]
+    fn resolved_a2a_is_conf_sync_visible_but_schema_hidden() {
+        let mut value = a2a_service_spec();
+        value.resolved_a2a = Some(ResolvedA2aBackend {
+            target: ResolvedA2aTarget::Service {
+                namespace: "agents".to_string(),
+                name: "agent-service".to_string(),
+                port: 8080,
+            },
+        });
+        value.reconcile_outcome = Some(EdgionBackendReconcileOutcome::A2a(A2aBackendReconcileOutcome {
+            error: Some(A2aTargetResolutionClass::TargetNotFound),
+        }));
+
+        let serialized = serde_json::to_value(&value).unwrap();
+        assert_eq!(serialized["resolvedA2a"]["target"]["type"], "service");
+        assert!(serialized.get("reconcileOutcome").is_none());
+
+        let schema = serde_json::to_value(schemars::schema_for!(EdgionBackendSpec)).unwrap();
+        assert!(schema["properties"].get("resolvedA2a").is_none());
+        assert!(schema["properties"].get("reconcileOutcome").is_none());
     }
 
     #[test]

@@ -5,11 +5,12 @@
 //! which closes the TOCTOU / DNS-rebinding window that a config-time or
 //! dial-time-only IP check leaves open.
 //!
-//! The address memo is owned by the resolver, not shared: its lifetime is the
-//! owning `ManagedOutboundClient`'s (and therefore the webhook resource's), its
-//! cardinality is bounded (one URL per client, redirects denied), and because the
-//! egress policy is a constant of the cache, classified results can be stored
-//! directly. See the design spec, section 5.3.
+//! The address memo is owned by the resolver, not shared. Plugin callouts keep
+//! it for the lifetime of their `ManagedOutboundClient`; routed external
+//! backends capture one resolver per request and reuse it across attempts. Its
+//! cardinality is bounded, and because the egress policy is a constant of the
+//! cache, classified results can be stored directly. See the design spec,
+//! section 5.3.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -68,9 +69,12 @@ pub fn egress_dns_cache_ttl() -> Duration {
 
 /// Egress policy for a single outbound client.
 ///
-/// Loopback and link-local (which contains the cloud-metadata address
-/// `169.254.169.254`) are always rejected. `block_private` additionally rejects
-/// RFC1918 and unique-local addresses.
+/// Plugin and callout consumers constructed with [`EgressResolver::new`] always
+/// reject loopback and link-local addresses (including the cloud-metadata
+/// address `169.254.169.254`). Routed external backends may preserve the
+/// separately captured `allowLoopbackUpstream` opt-in through
+/// [`EgressResolver::new_routed`]; link-local remains rejected. `block_private`
+/// additionally rejects RFC1918 and unique-local addresses.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EgressPolicy {
     pub block_private: bool,
@@ -85,11 +89,13 @@ struct CacheEntry {
 struct Inner {
     spec: ResolverSpec,
     policy: EgressPolicy,
+    allow_loopback: bool,
     ttl: Duration,
     cache: RwLock<HashMap<String, CacheEntry>>,
 }
 
-/// A `reqwest` DNS resolver that applies an egress policy to every resolved address.
+/// A canonical DNS resolver that applies an egress policy to every resolved address.
+/// It also implements reqwest's resolver trait for plugin outbound clients.
 #[derive(Clone)]
 pub struct EgressResolver {
     inner: Arc<Inner>,
@@ -97,10 +103,22 @@ pub struct EgressResolver {
 
 impl EgressResolver {
     pub fn new(spec: ResolverSpec, policy: EgressPolicy, ttl: Duration) -> Self {
+        Self::new_with_loopback(spec, policy, ttl, false)
+    }
+
+    /// Construct a resolver for a routed backend that has already captured the
+    /// request's `allowLoopbackUpstream` policy. Plugin/callout consumers use
+    /// [`Self::new`] and therefore remain fail-closed for loopback addresses.
+    pub(crate) fn new_routed(spec: ResolverSpec, policy: EgressPolicy, ttl: Duration, allow_loopback: bool) -> Self {
+        Self::new_with_loopback(spec, policy, ttl, allow_loopback)
+    }
+
+    fn new_with_loopback(spec: ResolverSpec, policy: EgressPolicy, ttl: Duration, allow_loopback: bool) -> Self {
         Self {
             inner: Arc::new(Inner {
                 spec,
                 policy,
+                allow_loopback,
                 ttl,
                 cache: RwLock::new(HashMap::new()),
             }),
@@ -184,7 +202,9 @@ impl Inner {
                     // Integration tests bind test_server to 127.0.0.1; the same escape
                     // hatch that `validate_endpoint_backend_addr` honors must apply here,
                     // or the guard kills our own test suite.
-                    IpClass::Loopback if cfg!(test) || is_integration_testing_mode() => return true,
+                    IpClass::Loopback if self.allow_loopback || cfg!(test) || is_integration_testing_mode() => {
+                        return true;
+                    }
                     IpClass::Loopback => "loopback",
                     IpClass::LinkLocal => "link_local",
                     // Unspecified (0.0.0.0 / ::) is blocked unconditionally, not gated on

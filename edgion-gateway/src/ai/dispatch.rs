@@ -904,12 +904,15 @@ mod tests {
             min_retry_rate: None,
         }));
         let policy = Arc::new(EffectiveBackendTrafficPolicy {
+            load_balancer: None,
+            upstream_authority: None,
+            upstream_authority_config: None,
             retry_budget: Some(Arc::clone(&budget)),
             circuit_breaker_limit: None,
             connect_timeout: None,
             outlier_detection: None,
             ai_credential_outlier: None,
-            ai_circuit_breaker: None,
+            logical_circuit_breaker: None,
         });
         (policy, budget)
     }

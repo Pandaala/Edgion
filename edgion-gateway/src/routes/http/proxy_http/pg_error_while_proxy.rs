@@ -78,14 +78,21 @@ pub fn error_while_proxy(
     // or retry-budget denial), or a locally generated response status; the
     // response filter has already classified any real upstream status.
     if should_record_local_origin_failure(ctx.retry_on_status, e.etype()) {
-        if let Some(upstream) = ctx.get_current_upstream() {
-            if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
-                // Mid-proxy read/write error or transport reset — local-origin failure.
-                crate::backends::get_outlier_detection_store().record_failure_by_addr(
-                    service_key,
-                    addr,
-                    crate::backends::FailureClass::LocalOrigin,
-                );
+        if !matches!(
+            ctx.selected_backend
+                .as_ref()
+                .and_then(crate::backends::SelectedHttpBackend::routed),
+            Some(crate::backends::SelectedLogicalBackend::A2a(_))
+        ) {
+            if let Some(upstream) = ctx.get_current_upstream() {
+                if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
+                    // Mid-proxy read/write error or transport reset — local-origin failure.
+                    crate::backends::get_outlier_detection_store().record_failure_by_addr(
+                        service_key,
+                        addr,
+                        crate::backends::FailureClass::LocalOrigin,
+                    );
+                }
             }
         }
     }

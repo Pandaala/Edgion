@@ -1768,6 +1768,8 @@ mod edgion_backend_admin_tests {
                 }],
                 defaults: AiBackendDefaults::default(),
             }),
+            a2a: None,
+            resolved_a2a: None,
             reconcile_outcome: None,
         };
         let mut service = EdgionBackend::new(name, spec);

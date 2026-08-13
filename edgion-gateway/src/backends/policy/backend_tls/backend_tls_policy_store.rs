@@ -175,6 +175,8 @@ impl BackendTLSPolicyStore {
                 (resolved_class, key.target_kind),
                 (ResolvedPolicyTargetClass::Service, PolicyTargetKind::Service)
                     | (ResolvedPolicyTargetClass::Ai, PolicyTargetKind::EdgionBackend)
+                    | (ResolvedPolicyTargetClass::A2aService, PolicyTargetKind::EdgionBackend)
+                    | (ResolvedPolicyTargetClass::A2aExternal, PolicyTargetKind::EdgionBackend)
             )
         });
         let section_supported = policy.spec.target_refs.iter().all(|target| {

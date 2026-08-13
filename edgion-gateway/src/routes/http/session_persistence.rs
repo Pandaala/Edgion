@@ -9,6 +9,12 @@ use sha2::{Digest, Sha256};
 
 use crate::{EdgionHttpContext, SessionPersistenceState};
 
+pub(crate) struct StickyCandidate {
+    pub slot: usize,
+    pub service_key: String,
+    pub scope: Option<String>,
+}
+
 /// Current Unix time in whole seconds (call edge; pure logic takes `now`).
 pub fn now_unix_secs() -> u64 {
     std::time::SystemTime::now()
@@ -42,7 +48,19 @@ const DEFAULT_SESSION_NAME: &str = "edgion-session-affinity";
 /// routing restrictions are ever required (e.g. tenant isolation by pod),
 /// replace the unkeyed hash with an HMAC over a per-process/service secret.
 pub fn generate_session_token(backend_addr: &str) -> String {
-    let digest = Sha256::digest(backend_addr.as_bytes());
+    generate_scoped_session_token(None, backend_addr)
+}
+
+/// Generate the canonical token with an optional typed routing scope.
+/// Ordinary Service callers pass `None` and retain the existing wire format.
+pub fn generate_scoped_session_token(scope: Option<&str>, backend_addr: &str) -> String {
+    let mut hasher = Sha256::new();
+    if let Some(scope) = scope {
+        hasher.update(scope.as_bytes());
+        hasher.update([0]);
+    }
+    hasher.update(backend_addr.as_bytes());
+    let digest = hasher.finalize();
     let prefix: [u8; 8] = digest[..8].try_into().expect("SHA-256 digest is 32 bytes");
     format!("{:016x}", u64::from_be_bytes(prefix))
 }
@@ -250,6 +268,29 @@ fn sp_lookup_rule_scoped_indexed<'a>(
     None
 }
 
+pub(crate) fn sp_resolve_typed_candidates(
+    ctx: &mut EdgionHttpContext,
+    candidates: &[StickyCandidate],
+    token: Option<&str>,
+) -> Option<usize> {
+    let token = token?;
+    for candidate in candidates {
+        let affinity_map = crate::lb::runtime_state::sp_affinity_get_or_build_scoped(
+            &candidate.service_key,
+            candidate.scope.as_deref(),
+            || crate::backends::selector::get_backends_for_service_key(&candidate.service_key),
+        );
+        if let Some(&addr) = affinity_map.get(token) {
+            ctx.sp_target_addr = Some(addr);
+            ctx.sp_sticky_addr = Some(addr);
+            ctx.sp_token_scope = candidate.scope.clone();
+            return Some(candidate.slot);
+        }
+    }
+    ctx.sp_state = SessionPersistenceState::InjectNew;
+    None
+}
+
 /// Build the wire token. `<addrhash>` alone when no lifetime is configured;
 /// `<addrhash>.<now+ttl_secs>` (absolute expiry epoch, frozen at issuance) when
 /// it is. `<addrhash>` remains the affinity-map key.
@@ -323,6 +364,21 @@ mod tests {
         let t1 = generate_session_token("10.0.0.1:8080");
         let t2 = generate_session_token("10.0.0.2:8080");
         assert_ne!(t1, t2, "different addresses should produce different tokens");
+    }
+
+    #[test]
+    fn scoped_token_binds_direct_and_discovery_identity() {
+        let addr = "10.0.0.1:8080";
+        let first =
+            generate_scoped_session_token(Some("edgion.io/EdgionBackend/ns/first\0core/Service/ns/shared"), addr);
+        let other_direct =
+            generate_scoped_session_token(Some("edgion.io/EdgionBackend/ns/second\0core/Service/ns/shared"), addr);
+        let other_discovery =
+            generate_scoped_session_token(Some("edgion.io/EdgionBackend/ns/first\0core/Service/ns/other"), addr);
+
+        assert_ne!(first, other_direct);
+        assert_ne!(first, other_discovery);
+        assert_eq!(generate_scoped_session_token(None, addr), generate_session_token(addr));
     }
 
     /// Rule-scoped resolution walks backendRefs in declaration order and finds

@@ -38,9 +38,10 @@ pub use credential_outlier::{
 pub use attempt_plan::{AiAttemptPlan, AiCandidateModel, AiPlanCandidate, AiPlanError, ReadyAiAttemptPlan};
 
 pub use backend_store::{
-    count_ai_backends, create_ai_backend_handler, get_global_ai_backend_store, global_ai_backend_store,
-    AiBackendSnapshot, AiBackendStore, ResolvedModel, RuntimeAiBackend, RuntimeAiCredential, RuntimeAiCredentialPool,
-    RuntimeAiEndpoint,
+    count_ai_backends, create_edgion_backend_handler, get_global_ai_backend_store, get_global_edgion_backend_store,
+    global_ai_backend_store, global_edgion_backend_store, AiBackendSnapshot, AiBackendStore, EdgionBackendSnapshot,
+    EdgionBackendStore, ResolvedModel, RuntimeA2aBackend, RuntimeA2aExternalEndpoint, RuntimeA2aTarget,
+    RuntimeAiBackend, RuntimeAiCredential, RuntimeAiCredentialPool, RuntimeAiEndpoint, RuntimeEdgionBackend,
 };
 pub use usage::{
     estimated_cost_usd, AiProviderLabel, AiRequestContext, AiUsageShared, GenAiAttempt, GenAiAttemptFailure,

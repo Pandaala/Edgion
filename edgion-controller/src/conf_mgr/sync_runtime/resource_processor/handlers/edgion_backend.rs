@@ -11,8 +11,9 @@ use edgion_resources::credentials::AiApiKeyResolver;
 use edgion_resources::prelude_resources::EdgionBackend;
 use edgion_resources::resources::common::Condition;
 use edgion_resources::resources::edgion_backend::{
-    AiBackendReconcileOutcome, AiCredentialResolutionClass, AiCredentialResolutionError, EdgionBackendStatus,
-    AI_CREDENTIAL_ALIAS_MAX_BYTES,
+    A2aBackendReconcileOutcome, A2aTargetResolutionClass, AiBackendReconcileOutcome, AiCredentialResolutionClass,
+    AiCredentialResolutionError, EdgionBackendReconcileOutcome, EdgionBackendStatus, ResolvedA2aBackend,
+    ResolvedA2aTarget, AI_CREDENTIAL_ALIAS_MAX_BYTES,
 };
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::ResourceKind;
@@ -139,11 +140,102 @@ impl ProcessorHandler<EdgionBackend> for EdgionBackendHandler {
         );
 
         backend.spec.reconcile_outcome = None;
+        backend.spec.resolved_a2a = None;
         ctx.secret_ref_manager().clear_resource_refs(&owner);
+        ctx.runtime().service_ref_mgr.clear_resource_refs(&owner);
         ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&owner);
 
+        if let Some(a2a) = backend.spec.a2a.as_ref() {
+            let Some(service_ref) = a2a.target.service_ref.as_ref() else {
+                if let Ok(normalized_endpoint) = a2a.normalized_endpoint() {
+                    backend.spec.resolved_a2a = Some(ResolvedA2aBackend {
+                        target: ResolvedA2aTarget::External { normalized_endpoint },
+                    });
+                }
+                backend.spec.reconcile_outcome =
+                    Some(EdgionBackendReconcileOutcome::A2a(A2aBackendReconcileOutcome::default()));
+                return ProcessResult::Continue(backend);
+            };
+
+            let owner_ns = owner.namespace.as_deref().unwrap_or("default");
+            let service_ns = service_ref.namespace.as_deref().unwrap_or(owner_ns);
+            let service_key = format!("{service_ns}/{}", service_ref.name);
+            ctx.runtime()
+                .service_ref_mgr
+                .add_ref(service_key.clone(), owner.clone());
+            if service_ns != owner_ns {
+                ctx.runtime()
+                    .cross_ns_ref_mgr
+                    .add_ref(service_ns.to_string(), owner.clone());
+                let permitted = !crate::config::is_reference_grant_validation_enabled()
+                    || ctx.runtime().ref_grant_store.check_reference_allowed(
+                        owner_ns,
+                        "edgion.io",
+                        ResourceKind::EdgionBackend.as_str(),
+                        service_ns,
+                        "",
+                        "Service",
+                        Some(&service_ref.name),
+                    );
+                if !permitted {
+                    backend.spec.reconcile_outcome =
+                        Some(EdgionBackendReconcileOutcome::A2a(A2aBackendReconcileOutcome {
+                            error: Some(A2aTargetResolutionClass::RefNotPermitted),
+                        }));
+                    return ProcessResult::Continue(backend);
+                }
+            }
+
+            let service_port = ctx
+                .runtime()
+                .processor_registry
+                .get("Service")
+                .and_then(|processor| processor.get_raw_any(&service_key))
+                .and_then(|raw| raw.downcast::<k8s_openapi::api::core::v1::Service>().ok())
+                .and_then(|service| {
+                    service
+                        .spec
+                        .as_ref()
+                        .and_then(|spec| spec.ports.as_ref())
+                        .and_then(|ports| {
+                            ports
+                                .iter()
+                                .find(|port| port.port == i32::from(service_ref.port))
+                                .cloned()
+                        })
+                });
+            if service_port
+                .as_ref()
+                .and_then(|port| port.app_protocol.as_deref())
+                .is_some_and(|protocol| {
+                    matches!(
+                        protocol.to_ascii_lowercase().as_str(),
+                        "ws" | "wss" | "kubernetes.io/ws" | "kubernetes.io/wss"
+                    )
+                })
+            {
+                backend.spec.reconcile_outcome = Some(EdgionBackendReconcileOutcome::A2a(A2aBackendReconcileOutcome {
+                    error: Some(A2aTargetResolutionClass::UnsupportedProtocol),
+                }));
+            } else if service_port.is_some() {
+                backend.spec.resolved_a2a = Some(ResolvedA2aBackend {
+                    target: ResolvedA2aTarget::Service {
+                        namespace: service_ns.to_string(),
+                        name: service_ref.name.clone(),
+                        port: service_ref.port,
+                    },
+                });
+                backend.spec.reconcile_outcome =
+                    Some(EdgionBackendReconcileOutcome::A2a(A2aBackendReconcileOutcome::default()));
+            } else {
+                backend.spec.reconcile_outcome = Some(EdgionBackendReconcileOutcome::A2a(A2aBackendReconcileOutcome {
+                    error: Some(A2aTargetResolutionClass::TargetNotFound),
+                }));
+            }
+            return ProcessResult::Continue(backend);
+        }
+
         let Some(ai) = backend.spec.ai.as_mut() else {
-            backend.spec.reconcile_outcome = Some(AiBackendReconcileOutcome::default());
             return ProcessResult::Continue(backend);
         };
 
@@ -210,11 +302,11 @@ impl ProcessorHandler<EdgionBackend> for EdgionBackendHandler {
             }
         }
 
-        backend.spec.reconcile_outcome = Some(AiBackendReconcileOutcome {
+        backend.spec.reconcile_outcome = Some(EdgionBackendReconcileOutcome::Ai(AiBackendReconcileOutcome {
             resolved_count,
             total_count,
             credential_errors: errors,
-        });
+        }));
 
         ProcessResult::Continue(backend)
     }
@@ -230,6 +322,7 @@ impl ProcessorHandler<EdgionBackend> for EdgionBackendHandler {
             backend.metadata.name.clone().unwrap_or_default(),
         );
         ctx.secret_ref_manager().clear_resource_refs(&owner);
+        ctx.runtime().service_ref_mgr.clear_resource_refs(&owner);
         ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&owner);
         requeue_dependents(backend, ctx).await;
         tracing::debug!(
@@ -242,7 +335,66 @@ impl ProcessorHandler<EdgionBackend> for EdgionBackendHandler {
     fn update_status(&self, backend: &mut EdgionBackend, _ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = backend.metadata.generation;
         let outcome = backend.spec.reconcile_outcome.as_ref();
-        let structural_valid = validation_errors.is_empty() && backend.spec.ai.is_some();
+        let structural_valid = validation_errors.is_empty()
+            && usize::from(backend.spec.ai.is_some()) + usize::from(backend.spec.a2a.is_some()) == 1;
+
+        if backend.spec.a2a.is_some() {
+            let (mut accepted, mut resolved_refs) = if structural_valid {
+                let error = match outcome {
+                    Some(EdgionBackendReconcileOutcome::A2a(outcome)) => outcome.error,
+                    _ => Some(A2aTargetResolutionClass::TargetNotFound),
+                };
+                (
+                    condition_true(
+                        condition_types::ACCEPTED,
+                        condition_reasons::ACCEPTED,
+                        "Resource accepted",
+                        generation,
+                    ),
+                    match error {
+                        None => condition_true(
+                            condition_types::RESOLVED_REFS,
+                            condition_reasons::RESOLVED_REFS,
+                            "A2A target resolved",
+                            generation,
+                        ),
+                        Some(error) => condition_false(
+                            condition_types::RESOLVED_REFS,
+                            error.reason(),
+                            match error {
+                                A2aTargetResolutionClass::RefNotPermitted => "A2A Service reference is not permitted",
+                                A2aTargetResolutionClass::TargetNotFound => "A2A Service target or port was not found",
+                                A2aTargetResolutionClass::UnsupportedProtocol => {
+                                    "A2A Service target uses an unsupported protocol"
+                                }
+                            },
+                            generation,
+                        ),
+                    },
+                )
+            } else {
+                (
+                    condition_false(
+                        condition_types::ACCEPTED,
+                        condition_reasons::INVALID,
+                        "Backend configuration is invalid",
+                        generation,
+                    ),
+                    condition_false(
+                        condition_types::RESOLVED_REFS,
+                        condition_reasons::INVALID,
+                        "Backend configuration is invalid",
+                        generation,
+                    ),
+                )
+            };
+            let status = backend.status.get_or_insert_with(EdgionBackendStatus::default);
+            let old = std::mem::take(&mut status.conditions);
+            preserve_transition_time(&old, &mut accepted);
+            preserve_transition_time(&old, &mut resolved_refs);
+            status.conditions = vec![accepted, resolved_refs];
+            return;
+        }
 
         let (mut accepted, mut resolved_refs, mut partially_invalid) = if !structural_valid {
             (
@@ -266,7 +418,10 @@ impl ProcessorHandler<EdgionBackend> for EdgionBackendHandler {
                 ),
             )
         } else {
-            let outcome = outcome.cloned().unwrap_or_default();
+            let outcome = match outcome {
+                Some(EdgionBackendReconcileOutcome::Ai(outcome)) => outcome.clone(),
+                _ => AiBackendReconcileOutcome::default(),
+            };
             let first_error = outcome.credential_errors.first();
             let resolved = match first_error {
                 None if outcome.resolved_count == outcome.total_count && outcome.total_count > 0 => condition_true(
@@ -336,10 +491,11 @@ mod tests {
     use edgion_resources::constants::secret_keys::ai::API_KEY;
     use edgion_resources::resources::common::{Condition, SecretObjectReference, SecretSlot};
     use edgion_resources::resources::edgion_backend::{
-        AiBackendDefaults, AiBackendSpec, AiCredential, AiCredentialPool, AiModel, AiProvider, EdgionBackendSpec,
+        A2aBackendSpec, A2aBackendTarget, A2aServiceReference, AiBackendDefaults, AiBackendSpec, AiCredential,
+        AiCredentialPool, AiModel, AiProvider, EdgionBackendSpec,
     };
     use edgion_resources::resources::edgion_plugins::OnRedisFailure;
-    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::api::core::v1::{Secret, Service, ServicePort, ServiceSpec};
     use k8s_openapi::ByteString;
     use kube::api::ObjectMeta;
 
@@ -352,6 +508,66 @@ mod tests {
         runtime.secret_store.replace_all(secrets);
         let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
         (ctx, runtime)
+    }
+
+    fn install_services(runtime: &Arc<ControllerRuntime>, services: Vec<Service>) {
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::ServiceHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+
+        let processor = Arc::new(ResourceProcessor::<Service>::new(
+            "Service",
+            16,
+            Arc::new(ServiceHandler::new()),
+            runtime.clone(),
+        ));
+        let raw = Arc::new(LocalRawStore::new());
+        for service in services {
+            let key = format!(
+                "{}/{}",
+                service.metadata.namespace.as_deref().unwrap_or("default"),
+                service.metadata.name.as_deref().unwrap_or_default()
+            );
+            raw.upsert(key, Arc::new(service));
+        }
+        processor.set_raw_store(raw);
+        runtime.processor_registry.register(processor);
+    }
+
+    fn service(namespace: &str, name: &str, ports: &[i32]) -> Service {
+        Service {
+            metadata: ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: Some(ServiceSpec {
+                ports: Some(
+                    ports
+                        .iter()
+                        .map(|port| ServicePort {
+                            port: *port,
+                            ..Default::default()
+                        })
+                        .collect(),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn service_a2a_backend(namespace: Option<&str>, service_name: &str, port: u16) -> EdgionBackend {
+        a2a_backend(
+            A2aBackendTarget {
+                service_ref: Some(A2aServiceReference {
+                    name: service_name.to_string(),
+                    namespace: namespace.map(str::to_string),
+                    port,
+                }),
+                endpoint: None,
+            },
+            false,
+        )
     }
 
     fn secret(namespace: &str, name: &str, type_: Option<&str>, value: Option<&[u8]>) -> (String, Secret) {
@@ -418,6 +634,29 @@ mod tests {
                     }],
                     defaults: AiBackendDefaults::default(),
                 }),
+                a2a: None,
+                resolved_a2a: None,
+                reconcile_outcome: None,
+            },
+            status: None,
+        }
+    }
+
+    fn a2a_backend(target: A2aBackendTarget, allow_insecure_http: bool) -> EdgionBackend {
+        EdgionBackend {
+            metadata: ObjectMeta {
+                namespace: Some("tenant-a".to_string()),
+                name: Some("agent".to_string()),
+                generation: Some(1),
+                ..Default::default()
+            },
+            spec: EdgionBackendSpec {
+                ai: None,
+                a2a: Some(A2aBackendSpec {
+                    target,
+                    allow_insecure_http,
+                }),
+                resolved_a2a: None,
                 reconcile_outcome: None,
             },
             status: None,
@@ -471,6 +710,195 @@ mod tests {
             .secret_ref_manager()
             .get_refs("tenant-a/provider-key")
             .contains(&owner));
+    }
+
+    #[tokio::test]
+    async fn resolves_external_a2a_without_ai_status_or_dependencies() {
+        let (ctx, _) = context(HashMap::new());
+        let parsed = parse(
+            &EdgionBackendHandler::new(),
+            a2a_backend(
+                A2aBackendTarget {
+                    service_ref: None,
+                    endpoint: Some("https://agent.example.test/base/".to_string()),
+                },
+                false,
+            ),
+            &ctx,
+        )
+        .await;
+
+        assert_eq!(
+            parsed.spec.resolved_a2a,
+            Some(ResolvedA2aBackend {
+                target: ResolvedA2aTarget::External {
+                    normalized_endpoint: "https://agent.example.test/base".to_string(),
+                },
+            })
+        );
+        assert_eq!(condition(&parsed, condition_types::ACCEPTED).status, "True");
+        assert_eq!(condition(&parsed, condition_types::RESOLVED_REFS).status, "True");
+        assert_eq!(parsed.status.as_ref().unwrap().conditions.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn missing_a2a_service_keeps_dependency_and_withdraws_resolved_target() {
+        let (ctx, runtime) = context(HashMap::new());
+        let parsed = parse(
+            &EdgionBackendHandler::new(),
+            a2a_backend(
+                A2aBackendTarget {
+                    service_ref: Some(A2aServiceReference {
+                        name: "agent-svc".to_string(),
+                        namespace: None,
+                        port: 8080,
+                    }),
+                    endpoint: None,
+                },
+                false,
+            ),
+            &ctx,
+        )
+        .await;
+
+        assert!(parsed.spec.resolved_a2a.is_none());
+        assert_eq!(condition(&parsed, condition_types::ACCEPTED).status, "True");
+        let resolved = condition(&parsed, condition_types::RESOLVED_REFS);
+        assert_eq!(resolved.status, "False");
+        assert_eq!(resolved.reason, "TargetNotFound");
+        let owner = ResourceRef::new(
+            ResourceKind::EdgionBackend,
+            Some("tenant-a".to_string()),
+            "agent".to_string(),
+        );
+        assert!(runtime.service_ref_mgr.get_refs("tenant-a/agent-svc").contains(&owner));
+    }
+
+    #[tokio::test]
+    async fn same_namespace_a2a_service_and_port_resolve() {
+        let (ctx, runtime) = context(HashMap::new());
+        install_services(&runtime, vec![service("tenant-a", "agent-svc", &[8080])]);
+        let parsed = parse(
+            &EdgionBackendHandler::new(),
+            service_a2a_backend(None, "agent-svc", 8080),
+            &ctx,
+        )
+        .await;
+
+        assert_eq!(
+            parsed.spec.resolved_a2a,
+            Some(ResolvedA2aBackend {
+                target: ResolvedA2aTarget::Service {
+                    namespace: "tenant-a".to_string(),
+                    name: "agent-svc".to_string(),
+                    port: 8080,
+                },
+            })
+        );
+        assert_eq!(condition(&parsed, condition_types::RESOLVED_REFS).status, "True");
+    }
+
+    #[tokio::test]
+    async fn a2a_service_rejects_all_websocket_app_protocol_aliases() {
+        for app_protocol in ["ws", "wss", "kubernetes.io/ws", "kubernetes.io/wss"] {
+            let (ctx, runtime) = context(HashMap::new());
+            let mut websocket = service("tenant-a", "agent-ws", &[8080]);
+            websocket.spec.as_mut().unwrap().ports.as_mut().unwrap()[0].app_protocol = Some(app_protocol.to_string());
+            install_services(&runtime, vec![websocket]);
+
+            let parsed = parse(
+                &EdgionBackendHandler::new(),
+                service_a2a_backend(None, "agent-ws", 8080),
+                &ctx,
+            )
+            .await;
+            assert!(parsed.spec.resolved_a2a.is_none(), "accepted {app_protocol}");
+            let resolved = condition(&parsed, condition_types::RESOLVED_REFS);
+            assert_eq!(resolved.status, "False", "appProtocol={app_protocol}");
+            assert_eq!(resolved.reason, "UnsupportedProtocol", "appProtocol={app_protocol}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_service_missing_requested_port_is_unresolved() {
+        let (ctx, runtime) = context(HashMap::new());
+        install_services(&runtime, vec![service("tenant-a", "agent-svc", &[9090])]);
+        let parsed = parse(
+            &EdgionBackendHandler::new(),
+            service_a2a_backend(None, "agent-svc", 8080),
+            &ctx,
+        )
+        .await;
+
+        assert!(parsed.spec.resolved_a2a.is_none());
+        assert_eq!(
+            condition(&parsed, condition_types::RESOLVED_REFS).reason,
+            "TargetNotFound"
+        );
+    }
+
+    #[tokio::test]
+    async fn cross_namespace_a2a_service_denied_then_allowed_by_reference_grant() {
+        let (ctx, runtime) = context(HashMap::new());
+        install_services(&runtime, vec![service("shared", "agent-svc", &[8080])]);
+        let handler = EdgionBackendHandler::new();
+        let backend = service_a2a_backend(Some("shared"), "agent-svc", 8080);
+
+        let denied = parse(&handler, backend.clone(), &ctx).await;
+        assert!(denied.spec.resolved_a2a.is_none());
+        assert_eq!(
+            condition(&denied, condition_types::RESOLVED_REFS).reason,
+            "RefNotPermitted"
+        );
+
+        let grant: edgion_resources::resources::ReferenceGrant = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1",
+            "kind": "ReferenceGrant",
+            "metadata": {"name": "allow-agent", "namespace": "shared"},
+            "spec": {
+                "from": [{"group": "edgion.io", "kind": "EdgionBackend", "namespace": "tenant-a"}],
+                "to": [{"group": "", "kind": "Service", "name": "agent-svc"}]
+            }
+        }))
+        .unwrap();
+        runtime
+            .ref_grant_store
+            .upsert("shared/allow-agent".to_string(), Arc::new(grant));
+
+        let allowed = parse(&handler, backend, &ctx).await;
+        assert!(matches!(
+            allowed.spec.resolved_a2a.as_ref().map(|resolved| &resolved.target),
+            Some(ResolvedA2aTarget::Service { namespace, name, port })
+                if namespace == "shared" && name == "agent-svc" && *port == 8080
+        ));
+        assert_eq!(condition(&allowed, condition_types::RESOLVED_REFS).status, "True");
+    }
+
+    #[tokio::test]
+    async fn a2a_service_retarget_and_delete_replace_dependency_set() {
+        let (ctx, runtime) = context(HashMap::new());
+        install_services(
+            &runtime,
+            vec![
+                service("tenant-a", "agent-a", &[8080]),
+                service("tenant-a", "agent-b", &[8080]),
+            ],
+        );
+        let handler = EdgionBackendHandler::new();
+        let first = parse(&handler, service_a2a_backend(None, "agent-a", 8080), &ctx).await;
+        assert_eq!(runtime.service_ref_mgr.get_refs("tenant-a/agent-a").len(), 1);
+
+        let second = parse(&handler, service_a2a_backend(None, "agent-b", 8080), &ctx).await;
+        assert!(runtime.service_ref_mgr.get_refs("tenant-a/agent-a").is_empty());
+        assert_eq!(runtime.service_ref_mgr.get_refs("tenant-a/agent-b").len(), 1);
+
+        handler.on_delete(&second, &ctx).await;
+        assert!(runtime.service_ref_mgr.get_refs("tenant-a/agent-b").is_empty());
+
+        let recreated = parse(&handler, service_a2a_backend(None, "agent-a", 8080), &ctx).await;
+        assert!(recreated.spec.resolved_a2a.is_some());
+        assert_eq!(runtime.service_ref_mgr.get_refs("tenant-a/agent-a").len(), 1);
+        assert!(first.spec.resolved_a2a.is_some());
     }
 
     #[tokio::test]
@@ -767,11 +1195,11 @@ mod tests {
         let (ctx, _) = context(HashMap::new());
         let handler = EdgionBackendHandler::new();
         let mut backend = backend("provider-key", None);
-        backend.spec.reconcile_outcome = Some(AiBackendReconcileOutcome {
+        backend.spec.reconcile_outcome = Some(EdgionBackendReconcileOutcome::Ai(AiBackendReconcileOutcome {
             resolved_count: 1,
             total_count: 1,
             credential_errors: Vec::new(),
-        });
+        }));
         handler.update_status(&mut backend, &ctx, &[]);
         backend
             .status
@@ -793,14 +1221,14 @@ mod tests {
             .iter()
             .all(|condition| condition.last_transition_time == SENTINEL));
 
-        backend.spec.reconcile_outcome = Some(AiBackendReconcileOutcome {
+        backend.spec.reconcile_outcome = Some(EdgionBackendReconcileOutcome::Ai(AiBackendReconcileOutcome {
             resolved_count: 0,
             total_count: 1,
             credential_errors: vec![AiCredentialResolutionError {
                 alias: "primary".to_string(),
                 class: AiCredentialResolutionClass::SecretNotFound,
             }],
-        });
+        }));
         handler.update_status(&mut backend, &ctx, &[]);
         let conditions = &backend.status.as_ref().unwrap().conditions;
         assert_eq!(conditions[0].last_transition_time, SENTINEL);

@@ -61,7 +61,7 @@ fn raw_backend_capability(
     ctx: &HandlerContext,
 ) -> Result<Option<ResolvedPolicyTargetClass>, String> {
     let Some(processor) = ctx.runtime().processor_registry.get("EdgionBackend") else {
-        return Ok(Some(ResolvedPolicyTargetClass::Ai));
+        return Ok(None);
     };
     let key = format!("{}/{}", target.namespace, target.name);
     let Some(raw) = processor.get_raw_any(&key) else {
@@ -70,20 +70,47 @@ fn raw_backend_capability(
     let backend = raw
         .downcast::<EdgionBackend>()
         .map_err(|_| format!("EdgionBackend {key} has an incompatible cached representation"))?;
-    let Some(ai) = backend.spec.ai.as_ref() else {
+    backend
+        .spec
+        .validate()
+        .map_err(|_| format!("EdgionBackend {key} has an invalid backend specification"))?;
+    if let (Some(ai), None) = (backend.spec.ai.as_ref(), backend.spec.a2a.as_ref()) {
+        let endpoint = ai
+            .effective_endpoint()
+            .map_err(|_| format!("EdgionBackend {key} has an invalid AI endpoint"))?;
+        if endpoint.scheme() != "https" {
+            return Err(format!(
+                "EdgionBackend {key} must use an HTTPS endpoint for BackendTLSPolicy"
+            ));
+        }
+        return Ok(Some(ResolvedPolicyTargetClass::Ai));
+    }
+    if backend.spec.ai.is_some() || backend.spec.a2a.is_none() {
         return Err(format!(
-            "EdgionBackend {key} does not configure a supported spec.ai variant"
-        ));
-    };
-    let endpoint = ai
-        .effective_endpoint()
-        .map_err(|_| format!("EdgionBackend {key} has an invalid AI endpoint"))?;
-    if endpoint.scheme() != "https" {
-        return Err(format!(
-            "EdgionBackend {key} must use an HTTPS endpoint for BackendTLSPolicy"
+            "EdgionBackend {key} does not configure exactly one backend variant"
         ));
     }
-    Ok(Some(ResolvedPolicyTargetClass::Ai))
+    match backend.spec.a2a.as_ref() {
+        Some(a2a) if a2a.target.service_ref.is_some() && a2a.target.endpoint.is_none() => {
+            Ok(Some(ResolvedPolicyTargetClass::A2aService))
+        }
+        Some(a2a) if a2a.target.endpoint.is_some() && a2a.target.service_ref.is_none() => {
+            let endpoint = a2a
+                .normalized_endpoint()
+                .map_err(|_| format!("EdgionBackend {key} has an invalid A2A endpoint"))?;
+            if endpoint.starts_with("https://") {
+                Ok(Some(ResolvedPolicyTargetClass::A2aExternal))
+            } else {
+                Err(format!(
+                    "EdgionBackend {key} must use an HTTPS endpoint for BackendTLSPolicy"
+                ))
+            }
+        }
+        Some(_) => Ok(None),
+        None => Err(format!(
+            "EdgionBackend {key} does not configure a supported backend variant"
+        )),
+    }
 }
 
 /// Decide whether sibling BackendTLSPolicies (those targeting the same
@@ -1026,9 +1053,70 @@ mod tests {
         }
     }
 
+    fn a2a_external_backend(endpoint: &str, allow_insecure_http: bool) -> EdgionBackend {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "EdgionBackend",
+            "metadata": {"name": "agent", "namespace": "ns"},
+            "spec": {
+                "a2a": {
+                    "target": {"endpoint": endpoint},
+                    "allowInsecureHttp": allow_insecure_http
+                },
+                "resolvedA2a": {
+                    "target": {"type": "external", "normalized_endpoint": endpoint}
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    fn install_backend_processor(
+        runtime: &Arc<ControllerRuntime>,
+        backend: EdgionBackend,
+    ) -> (
+        Arc<crate::conf_mgr::sync_runtime::resource_processor::ResourceProcessor<EdgionBackend>>,
+        Arc<crate::conf_mgr::sync_runtime::resource_processor::LocalRawStore<EdgionBackend>>,
+    ) {
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
+
+        let processor = Arc::new(ResourceProcessor::<EdgionBackend>::new(
+            "EdgionBackend",
+            16,
+            Arc::new(EdgionBackendHandler::new()),
+            runtime.clone(),
+        ));
+        let key = format!(
+            "{}/{}",
+            backend.metadata.namespace.as_deref().unwrap_or("default"),
+            backend.metadata.name.as_deref().unwrap_or_default()
+        );
+        let raw = Arc::new(crate::conf_mgr::sync_runtime::resource_processor::LocalRawStore::new());
+        raw.upsert(key, Arc::new(backend.clone()));
+        processor.set_raw_store(raw.clone());
+        processor.save(backend, None);
+        runtime.processor_registry.register(processor.clone());
+        (processor, raw)
+    }
+
     #[tokio::test]
     async fn ai_target_publishes_typed_marker_and_dependency() {
         let (ctx, runtime) = make_ctx();
+        let backend: EdgionBackend = serde_json::from_value(serde_json::json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "EdgionBackend",
+            "metadata": {"name": "models", "namespace": "ns"},
+            "spec": {"ai": {
+                "provider": "OpenAI",
+                "credentialPool": {"credentials": [{
+                    "name": "primary", "secretRef": {"name": "provider-key"}
+                }]},
+                "models": [{"name": "model-a"}]
+            }}
+        }))
+        .unwrap();
+        install_backend_processor(&runtime, backend);
         let handler = BackendTlsPolicyHandler::default();
         let mut policy = make_btp("ns", "ai-tls", "models", "2026-01-01T00:00:00+00:00");
         policy.spec.target_refs[0].group = "edgion.io".to_string();
@@ -1050,6 +1138,162 @@ mod tests {
                 .get_dependencies("BackendTLSPolicy/ns/ai-tls"),
             vec![target.to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn a2a_service_target_uses_raw_generation_and_clears_invalid_staging() {
+        let (ctx, runtime) = make_ctx();
+        let raw_a2a: EdgionBackend = serde_json::from_value(serde_json::json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "EdgionBackend",
+            "metadata": {"name": "agent", "namespace": "ns"},
+            "spec": {
+                "a2a": {"target": {"serviceRef": {"name": "agent-svc", "port": 8080}}}
+            }
+        }))
+        .unwrap();
+        let (processor, raw) = install_backend_processor(&runtime, raw_a2a);
+        let processed_ai: EdgionBackend = serde_json::from_value(serde_json::json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "EdgionBackend",
+            "metadata": {"name": "agent", "namespace": "ns"},
+            "spec": {"ai": {
+                "provider": "OpenAI",
+                "credentialPool": {"credentials": [{
+                    "name": "primary", "secretRef": {"name": "provider-key"}
+                }]},
+                "models": [{"name": "model-a"}]
+            }}
+        }))
+        .unwrap();
+        processor.save(processed_ai, None);
+
+        let handler = BackendTlsPolicyHandler::default();
+        let mut policy = make_btp("ns", "a2a-tls", "agent", "2026-01-01T00:00:00+00:00");
+        policy.spec.target_refs[0].group = "edgion.io".to_string();
+        policy.spec.target_refs[0].kind = "EdgionBackend".to_string();
+
+        let ProcessResult::Continue(parsed) = handler.parse_policy(policy.clone(), &ctx).await else {
+            panic!("policy should continue");
+        };
+        assert_eq!(
+            parsed.spec.resolved_target_class,
+            Some(ResolvedPolicyTargetClass::A2aService)
+        );
+        let policy_key = "BackendTLSPolicy/ns/a2a-tls";
+        assert!(!runtime
+            .backend_tls_policy
+            .target_mgr()
+            .get_dependencies(policy_key)
+            .is_empty());
+
+        // Exactly-one and target-union failures in the newest raw generation
+        // must remove both the transport marker and conflict dependency. The
+        // processed cache deliberately remains on the older valid AI object.
+        for invalid_raw in [
+            serde_json::json!({
+                "apiVersion": "edgion.io/v1", "kind": "EdgionBackend",
+                "metadata": {"name": "agent", "namespace": "ns"},
+                "spec": {}
+            }),
+            serde_json::json!({
+                "apiVersion": "edgion.io/v1", "kind": "EdgionBackend",
+                "metadata": {"name": "agent", "namespace": "ns"},
+                "spec": {
+                    "ai": {
+                        "provider": "OpenAI",
+                        "credentialPool": {"credentials": [{
+                            "name": "primary", "secretRef": {"name": "provider-key"}
+                        }]},
+                        "models": [{"name": "model-a"}]
+                    },
+                    "a2a": {"target": {"endpoint": "https://agent.example.test"}}
+                }
+            }),
+            serde_json::json!({
+                "apiVersion": "edgion.io/v1", "kind": "EdgionBackend",
+                "metadata": {"name": "agent", "namespace": "ns"},
+                "spec": {"a2a": {"target": {
+                    "serviceRef": {"name": "agent-svc", "port": 8080},
+                    "endpoint": "https://agent.example.test"
+                }}}
+            }),
+        ] {
+            let invalid_backend: EdgionBackend = serde_json::from_value(invalid_raw).unwrap();
+            raw.upsert("ns/agent".to_string(), Arc::new(invalid_backend));
+            let ProcessResult::Continue(withdrawn) = handler.parse_policy(policy.clone(), &ctx).await else {
+                panic!("invalid target policy should continue with withdrawn staging");
+            };
+            assert!(withdrawn.spec.resolved_target_class.is_none());
+            assert!(runtime
+                .backend_tls_policy
+                .target_mgr()
+                .get_dependencies(policy_key)
+                .is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_external_https_publishes_marker_and_http_withdraws_it() {
+        let (ctx, runtime) = make_ctx();
+        let (_processor, raw) =
+            install_backend_processor(&runtime, a2a_external_backend("https://agent.example.test", false));
+        let handler = BackendTlsPolicyHandler::default();
+        let mut policy = make_btp("ns", "a2a-external", "agent", "2026-01-01T00:00:00+00:00");
+        policy.spec.target_refs[0].group = "edgion.io".to_string();
+        policy.spec.target_refs[0].kind = "EdgionBackend".to_string();
+
+        let ProcessResult::Continue(https) = handler.parse_policy(policy.clone(), &ctx).await else {
+            panic!("policy should continue");
+        };
+        assert_eq!(
+            https.spec.resolved_target_class,
+            Some(ResolvedPolicyTargetClass::A2aExternal)
+        );
+
+        let http_backend = a2a_external_backend("http://agent.example.test", true);
+        raw.upsert("ns/agent".to_string(), Arc::new(http_backend));
+        let errors = handler.validate(&policy, &ctx);
+        assert!(errors.iter().any(|error| error.contains("must use an HTTPS endpoint")));
+        let ProcessResult::Continue(http) = handler.parse_policy(policy, &ctx).await else {
+            panic!("policy should continue");
+        };
+        assert!(http.spec.resolved_target_class.is_none());
+        assert!(runtime
+            .backend_tls_policy
+            .target_mgr()
+            .get_dependencies("BackendTLSPolicy/ns/a2a-external")
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn a2a_target_rejects_section_and_unsupported_variant() {
+        let (ctx, runtime) = make_ctx();
+        let (_processor, raw) =
+            install_backend_processor(&runtime, a2a_external_backend("https://agent.example.test", false));
+        let handler = BackendTlsPolicyHandler::default();
+        let mut policy = make_btp("ns", "a2a-invalid", "agent", "2026-01-01T00:00:00+00:00");
+        policy.spec.target_refs[0].group = "edgion.io".to_string();
+        policy.spec.target_refs[0].kind = "EdgionBackend".to_string();
+        policy.spec.target_refs[0].section_name = Some("transport".to_string());
+        assert!(handler
+            .validate(&policy, &ctx)
+            .iter()
+            .any(|error| error.contains("sectionName is not supported")));
+
+        policy.spec.target_refs[0].section_name = None;
+        let unsupported: EdgionBackend = serde_json::from_value(serde_json::json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "EdgionBackend",
+            "metadata": {"name": "agent", "namespace": "ns"},
+            "spec": {}
+        }))
+        .unwrap();
+        raw.upsert("ns/agent".to_string(), Arc::new(unsupported.clone()));
+        assert!(handler
+            .validate(&policy, &ctx)
+            .iter()
+            .any(|error| error.contains("invalid backend specification")));
     }
 
     #[test]
