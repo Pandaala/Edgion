@@ -105,6 +105,12 @@ pub enum CompiledBackendTarget {
 }
 
 impl CompiledBackend {
+    /// Capture this compiled slot as immutable logical-plan input.
+    #[inline]
+    pub fn logical_handle(&self) -> crate::backends::LogicalBackendHandle {
+        crate::backends::LogicalBackendHandle::new(self.clone())
+    }
+
     pub fn is_service(&self) -> bool {
         matches!(self.target, CompiledBackendTarget::Service { .. })
     }

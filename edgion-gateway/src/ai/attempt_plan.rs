@@ -8,6 +8,7 @@ use edgion_resources::resources::edgion_backend::ParsedAiModelPricing;
 use edgion_resources::resources::edgion_plugins::AiBackendSelection;
 
 use crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy;
+use crate::backends::LogicalBackendHandle;
 
 use super::attempt::AttemptScheduler;
 use super::quota::AiQuotaRequest;
@@ -30,6 +31,8 @@ pub struct AiCandidateModel {
 /// One route backend slot retained for later attempt selection.
 #[derive(Clone)]
 pub struct AiPlanCandidate {
+    /// Complete compiled logical-slot proof captured with this request plan.
+    pub logical: LogicalBackendHandle,
     pub slot: usize,
     pub order: u8,
     pub weight: i32,
@@ -47,6 +50,7 @@ pub struct AiPlanCandidate {
 impl fmt::Debug for AiPlanCandidate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AiPlanCandidate")
+            .field("logical", &self.logical)
             .field("slot", &self.slot)
             .field("order", &self.order)
             .field("weight", &self.weight)

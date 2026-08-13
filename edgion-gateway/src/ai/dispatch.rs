@@ -20,28 +20,18 @@ use crate::ai::attempt::{
 };
 use crate::ai::routing::{pick, CandidateEligibility, CostSnapshot, PickerInput, RouteCandidate};
 use crate::ai::{
-    AdaptiveTelemetryState, AiAttemptPlan, AiProviderLabel, AiProxyError, AiRequestContext, AiUsageShared,
-    ReadyAiAttemptPlan, UsageExtractionProcessor,
+    AiAttemptPlan, AiProviderLabel, AiProxyError, AiRequestContext, AiUsageShared, ReadyAiAttemptPlan,
+    UsageExtractionProcessor,
 };
-use crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy;
+use crate::backends::{SelectedAiBackend, SelectedHttpBackend, SelectedLogicalBackend};
 use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
 use crate::plugins::runtime::traits::{PluginSession, StreamingResponseProcessor};
-use crate::routes::http::match_unit::CompiledBackend;
 use crate::EdgionHttpContext;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
-pub struct AiPeerTarget {
-    pub domain: String,
-    pub port: u16,
-    pub use_tls: bool,
-    pub sni: String,
-    pub backend_key: String,
-    pub backend_slot: usize,
-    pub effective_policy: Option<Arc<EffectiveBackendTrafficPolicy>>,
-    pub namespace: String,
-    pub backend_uid: String,
-    pub credential_alias: String,
+pub struct PreparedAiAttempt {
+    pub selected: SelectedAiBackend,
     pub provider: AiProviderLabel,
     pub pricing: Option<edgion_resources::resources::edgion_backend::ParsedAiModelPricing>,
     pub redis_ref: Option<String>,
@@ -51,8 +41,6 @@ pub struct AiPeerTarget {
     pub max_output_tokens: u64,
     pub usage: Arc<AiUsageShared>,
     pub eos: Arc<AtomicBool>,
-    pub credential_outlier: Option<crate::ai::AiCredentialOutlierHandle>,
-    pub adaptive: Option<Arc<AdaptiveTelemetryState>>,
     pub limiter_core: Arc<crate::plugins::common::redis_rate_limiter::RedisRateLimiter>,
     ai_context: Option<AiRequestContext>,
     response_processor: Option<Box<dyn StreamingResponseProcessor>>,
@@ -60,7 +48,7 @@ pub struct AiPeerTarget {
 
 pub fn commit_ai_attempt_context(
     ctx: &mut EdgionHttpContext,
-    target: &mut AiPeerTarget,
+    target: &mut PreparedAiAttempt,
 ) -> Result<(), AiDispatchError> {
     let quota = match ctx.ai_attempt_plan.as_mut() {
         Some(AiAttemptPlan::Ready(plan)) => plan.quota.take(),
@@ -146,7 +134,7 @@ pub fn prepare_first_attempt(
     entropy: u128,
     route_retry_cap: Option<u32>,
     global_retry_cap: u32,
-) -> Result<AiPeerTarget, AiDispatchError> {
+) -> Result<PreparedAiAttempt, AiDispatchError> {
     // Every predispatch scan iteration enters through this function. Re-check
     // both end-to-end deadlines before taking or mutating the plan so slow
     // admission/endpoint failures cannot keep scanning after the caller's
@@ -345,7 +333,7 @@ fn prepare_ready_attempt(
     ctx: &mut EdgionHttpContext,
     plan: &mut ReadyAiAttemptPlan,
     entropy: u128,
-) -> Result<AiPeerTarget, AiDispatchError> {
+) -> Result<PreparedAiAttempt, AiDispatchError> {
     if let Some(baseline) = ctx.ai_request_baseline.clone() {
         *session.req_header_mut() = baseline;
         let config = edgion_resources::path_normalization::get_path_normalization_config();
@@ -356,7 +344,7 @@ fn prepare_ready_attempt(
         .candidates
         .get(selected.candidate)
         .ok_or(AiDispatchError::InvalidConfiguration)?;
-    let selected_route_backend = selected_backend(ctx, candidate.slot)?;
+    let selected_route_backend = candidate.logical.compiled();
     let ai_backend = candidate.backend.as_ref().ok_or(AiDispatchError::Unavailable)?;
     let model = candidate.model.as_ref().ok_or(AiDispatchError::Unavailable)?;
     let credential = ai_backend
@@ -364,6 +352,22 @@ fn prepare_ready_attempt(
         .credentials
         .get(selected.credential)
         .ok_or(AiDispatchError::InvalidConfiguration)?;
+    let credential_outlier = candidate
+        .credential_outliers
+        .get(selected.credential)
+        .cloned()
+        .flatten();
+    let selected_backend = SelectedAiBackend::new(
+        candidate.logical.clone(),
+        Arc::clone(ai_backend),
+        candidate.effective_policy.clone(),
+        candidate.adaptive.clone(),
+        credential_outlier.clone(),
+        selected.credential,
+        credential.name.clone(),
+        candidate.weight,
+    )
+    .ok_or(AiDispatchError::InvalidConfiguration)?;
     let (body, requested_streaming, anthropic_usage_chunk) = match ai_backend.provider {
         AiProvider::OpenAI | AiProvider::OpenAICompatible => {
             let body = openai_provider_body(&plan.canonical_openai_body, &model.provider_model)?;
@@ -494,23 +498,11 @@ fn prepare_ready_attempt(
         eos: Arc::clone(&eos),
     });
 
-    ctx.selected_backend = Some(selected_route_backend);
-    let target = AiPeerTarget {
-        domain: ai_backend.endpoint.domain.clone(),
-        port: ai_backend.endpoint.port,
-        use_tls: ai_backend.endpoint.use_tls,
-        sni: ai_backend.endpoint.sni.clone(),
-        backend_key: candidate.backend_key.clone(),
-        backend_slot: candidate.slot,
-        effective_policy: candidate.effective_policy.clone(),
-        namespace: candidate
-            .backend_key
-            .split_once('/')
-            .map(|(namespace, _)| namespace)
-            .unwrap_or("default")
-            .to_string(),
-        backend_uid: ai_backend.uid.clone(),
-        credential_alias: credential.name.clone(),
+    ctx.selected_backend = Some(SelectedHttpBackend::Routed(SelectedLogicalBackend::Ai(
+        selected_backend.clone(),
+    )));
+    let target = PreparedAiAttempt {
+        selected: selected_backend,
         provider,
         pricing: model.pricing,
         redis_ref: ai_backend.credential_pool.redis_ref.clone(),
@@ -520,12 +512,6 @@ fn prepare_ready_attempt(
         max_output_tokens: effective_max_output_tokens(&plan.canonical_openai_body, ai_backend.max_output_tokens)?,
         usage,
         eos,
-        credential_outlier: candidate
-            .credential_outliers
-            .get(selected.credential)
-            .cloned()
-            .flatten(),
-        adaptive: candidate.adaptive.clone(),
         limiter_core: Arc::clone(&ai_backend.credential_pool.limiter_core),
         ai_context: Some(context),
         response_processor: Some(response_processor),
@@ -712,19 +698,10 @@ fn select_credential(
     })
 }
 
-fn selected_backend(ctx: &EdgionHttpContext, slot: usize) -> Result<CompiledBackend, AiDispatchError> {
-    ctx.route_unit
-        .as_ref()
-        .and_then(|route| route.backends.iter().find(|backend| backend.slot == slot))
-        .filter(|backend| backend.is_permitted_ai_backend())
-        .cloned()
-        .ok_or(AiDispatchError::InvalidConfiguration)
-}
-
 fn apply_backend_request_headers(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
-    backend: &CompiledBackend,
+    backend: &crate::routes::http::match_unit::CompiledBackend,
 ) -> Result<(), AiDispatchError> {
     let mut adapter = PingoraSessionAdapter::new(session, ctx);
     for filter in backend.schema.filters.as_deref().unwrap_or_default() {
@@ -869,9 +846,9 @@ mod tests {
         AiBackendStore, AiCandidateModel, AiPlanCandidate, ReadyAiAttemptPlan, RuntimeAiBackend, RuntimeAiCredential,
         RuntimeAiCredentialPool, RuntimeAiEndpoint,
     };
-    use crate::backends::policy::backend_traffic::RetryBudget;
+    use crate::backends::policy::backend_traffic::{EffectiveBackendTrafficPolicy, RetryBudget};
     use crate::plugins::PluginRuntime;
-    use crate::routes::http::match_unit::{HttpRouteRuleUnit, MatchSpecificity};
+    use crate::routes::http::match_unit::{CompiledBackend, HttpRouteRuleUnit, MatchSpecificity};
     use crate::{MatchInfo, Rsc};
     use edgion_resources::resources::common::RefDenied;
     use edgion_resources::resources::edgion_backend::AiCredentialLimits;
@@ -975,6 +952,7 @@ mod tests {
         let mut plan = candidate_plan();
         plan.scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &weights }], 0).unwrap();
         plan.candidates = vec![AiPlanCandidate {
+            logical: compiled_ai_logical(None),
             slot: 0,
             order: 0,
             weight: 1,
@@ -989,6 +967,26 @@ mod tests {
             credential_outliers,
         }];
         plan
+    }
+
+    fn compiled_ai_logical(ref_denied: Option<RefDenied>) -> crate::backends::LogicalBackendHandle {
+        CompiledBackend::compile(
+            HTTPBackendRef {
+                name: "provider".to_string(),
+                namespace: Some("default".to_string()),
+                port: None,
+                weight: Some(1),
+                group: Some("edgion.io".to_string()),
+                kind: Some("EdgionBackend".to_string()),
+                filters: None,
+                backend_tls_policy: None,
+                ref_denied,
+            },
+            "default",
+            0,
+            Arc::new(PluginRuntime::new()),
+        )
+        .logical_handle()
     }
 
     fn denied_route_unit() -> Arc<HttpRouteRuleUnit> {
@@ -1101,7 +1099,13 @@ mod tests {
         };
         let mut ctx = EdgionHttpContext::new();
         ctx.route_unit = Some(denied_route_unit());
-        ctx.ai_attempt_plan = Some(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
+        let mut plan = selectable_plan(vec![credential]);
+        plan.candidates[0].logical = compiled_ai_logical(Some(RefDenied {
+            target_namespace: "default".to_string(),
+            target_name: "provider".to_string(),
+            reason: Some("NoMatchingReferenceGrant".to_string()),
+        }));
+        ctx.ai_attempt_plan = Some(AiAttemptPlan::Ready(plan));
         let mut session = test_session().await;
 
         assert!(matches!(
@@ -1112,6 +1116,35 @@ mod tests {
         assert!(ctx.ai_request_baseline.is_none());
         assert!(ctx.request_body.read_all().await.unwrap().is_none());
         assert!(session.req_header().headers.get("authorization").is_none());
+    }
+
+    #[tokio::test]
+    async fn dispatch_uses_candidate_handle_after_route_snapshot_changes() {
+        let credential = RuntimeAiCredential {
+            name: "primary".to_string(),
+            weight: 1,
+            credential: "secret".to_string(),
+            limits: None,
+        };
+        let mut ctx = EdgionHttpContext::new();
+        use pingora_core::protocols::http::RequestBodyBuffer;
+        let (mut storage, view) = crate::request_body::BodyStorage::new(64 * 1024, 1024 * 1024);
+        storage.finish().await.unwrap();
+        ctx.request_body.install(view);
+        // This route generation contains a denied slot. The captured plan owns
+        // an earlier permitted logical handle and must not re-read this route.
+        ctx.route_unit = Some(denied_route_unit());
+        ctx.ai_attempt_plan = Some(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
+        let mut session = test_session().await;
+
+        let prepared = prepare_first_attempt(&mut session, &mut ctx, 0, None, 0).unwrap();
+
+        assert_eq!(prepared.selected.logical().identity().namespace, "default");
+        assert_eq!(prepared.selected.logical().identity().name, "provider");
+        assert!(matches!(
+            ctx.selected_backend.as_ref().and_then(SelectedHttpBackend::routed),
+            Some(SelectedLogicalBackend::Ai(_))
+        ));
     }
 
     #[tokio::test]

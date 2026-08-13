@@ -8,6 +8,7 @@ pub(crate) mod peer_builder;
 pub mod policy;
 pub mod port_resolver;
 pub mod preload;
+pub mod runtime;
 pub mod selector;
 pub mod service_kind;
 pub mod validation;
@@ -32,6 +33,9 @@ pub use policy::{
 };
 pub use port_resolver::resolve_target_port_key;
 pub use preload::preload_load_balancers;
+pub use runtime::{
+    LogicalBackendHandle, SelectedAiBackend, SelectedHttpBackend, SelectedLogicalBackend, SelectedServiceBackend,
+};
 pub use selector::{get_backends_for_service_key, select_roundrobin_backend_key};
 pub use service_kind::ServiceBackendKind;
 pub use validation::validate_endpoint_in_route;
@@ -65,47 +69,96 @@ use std::time::{Duration, Instant};
 
 use selector::{extract_hash_key, is_backend_healthy, select_from_endpoint_slice};
 
+type ServicePeerInput = (Option<i32>, Option<Arc<BackendTLSPolicy>>, String, ServiceBackendKind);
+
+/// Derive HTTP Service transport identity from the selected proof and use the
+/// mutable context only as an invariant check. A stale/mismatched context must
+/// never redirect a selected logical backend to another Service.
+fn selected_http_service_input(
+    selected: &SelectedServiceBackend,
+    backend_context: Option<&crate::BackendContext>,
+) -> Result<ServicePeerInput, EdgionStatus> {
+    let compiled = selected.logical().compiled();
+    let (namespace, name) = match selected.logical().target() {
+        crate::routes::http::match_unit::CompiledBackendTarget::Service { namespace, name } => (namespace, name),
+        crate::routes::http::match_unit::CompiledBackendTarget::EdgionBackend { .. }
+        | crate::routes::http::match_unit::CompiledBackendTarget::Invalid { .. } => {
+            return Err(EdgionStatus::UpstreamNotBackendRefs);
+        }
+    };
+    let service_key = format!("{namespace}/{name}");
+    let service_kind = ServiceBackendKind::from_kind(compiled.kind.as_ref());
+    let context_matches = backend_context.is_some_and(|context| {
+        context.service_key.as_deref() == Some(service_key.as_str())
+            && context.service_kind.as_ref() == Some(&service_kind)
+    });
+    if !context_matches {
+        return Err(EdgionStatus::UpstreamNotBackendRefs);
+    }
+    Ok((
+        compiled.port,
+        compiled.backend_tls_policy.clone(),
+        service_key,
+        service_kind,
+    ))
+}
+
 /// Internal: try to get peer, returns Result with EdgionStatus on error
 pub(crate) async fn try_get_peer(
     ctx: &mut EdgionHttpContext,
     session: &Session,
     is_grpc: bool,
+    selected_http: Option<&SelectedServiceBackend>,
 ) -> Result<Box<HttpPeer>, EdgionStatus> {
     let gateway_key = ctx.gateway_info.gateway_key();
     let gateway_key_ref = Some(gateway_key.as_str());
 
-    // Extract needed fields from backend_ref to avoid clone and borrow checker issues
-    let (br_port, backend_tls_policy) = if is_grpc {
+    // HTTP routed Service identity comes exclusively from the selected proof.
+    // gRPC and Invalid retain their existing context compatibility input.
+    let (br_port, backend_tls_policy, service_key, service_type) = if is_grpc {
         // gRPC backend
         let grpc_br = ctx
             .selected_grpc_backend
             .as_ref()
             .ok_or(EdgionStatus::GrpcUpstreamNotBackendRefs)?;
-        (grpc_br.port, &grpc_br.backend_tls_policy)
-    } else {
-        // HTTP backend
-        let http_br = ctx
-            .selected_backend
+        let (service_key, service_type) = ctx
+            .backend_context
             .as_ref()
+            .and_then(|bc| match (bc.service_key.clone(), bc.service_kind.clone()) {
+                (Some(key), Some(kind)) => Some((key, kind)),
+                _ => None,
+            })
             .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
-        (http_br.port, &http_br.backend_tls_policy)
+        (
+            grpc_br.port,
+            grpc_br.backend_tls_policy.clone(),
+            service_key,
+            service_type,
+        )
+    } else if let Some(selected) = selected_http {
+        selected_http_service_input(selected, ctx.backend_context.as_ref())?
+    } else {
+        let http_br = match ctx.selected_backend.as_ref() {
+            Some(SelectedHttpBackend::Invalid(compiled)) => compiled,
+            Some(SelectedHttpBackend::Routed(_)) | Some(SelectedHttpBackend::Direct(_)) | None => {
+                return Err(EdgionStatus::UpstreamNotBackendRefs)
+            }
+        };
+        let (service_key, service_type) = ctx
+            .backend_context
+            .as_ref()
+            .and_then(|bc| match (bc.service_key.clone(), bc.service_kind.clone()) {
+                (Some(key), Some(kind)) => Some((key, kind)),
+                _ => None,
+            })
+            .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
+        (
+            http_br.port,
+            http_br.backend_tls_policy.clone(),
+            service_key,
+            service_type,
+        )
     };
-
-    // Read service_key and service_kind from BackendContext (set by init_backend_context_if_needed).
-    // Bypass paths (DirectEndpoint / ExternalJump) leave service_key / service_kind as None and
-    // never reach this function — they construct peers via finish_static_peer instead.
-    let (service_key, service_type) = ctx
-        .backend_context
-        .as_ref()
-        .and_then(|bc| match (bc.service_key.clone(), bc.service_kind.clone()) {
-            (Some(sk), Some(skd)) => Some((sk, skd)),
-            _ => None,
-        })
-        .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
-
-    // Clone only the field we hand to build_peer_from_lb_selection as an owned value
-    // (the helper takes &mut ctx, which would invalidate the ctx-borrowed reference).
-    let backend_tls_policy = backend_tls_policy.clone();
 
     // Source the LB policy from the per-service EdgionBackendTrafficPolicy store
     // (single DashMap read). No policy => None => the RoundRobin default in selection.
@@ -545,9 +598,10 @@ pub async fn get_peer(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     is_grpc: bool,
+    selected_http: Option<&SelectedServiceBackend>,
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<Box<HttpPeer>> {
-    match try_get_peer(ctx, session, is_grpc).await {
+    match try_get_peer(ctx, session, is_grpc, selected_http).await {
         Ok(peer) => Ok(peer),
         Err(status) => {
             ctx.add_error(status);
@@ -564,5 +618,68 @@ pub async fn get_peer(
             }
             Err(PingoraError::new(ErrorType::InternalError))
         }
+    }
+}
+
+#[cfg(test)]
+mod selected_service_input_tests {
+    use super::*;
+    use crate::plugins::PluginRuntime;
+    use crate::routes::http::match_unit::CompiledBackend;
+    use edgion_resources::HTTPBackendRef;
+
+    fn selected_service(name: &str) -> SelectedServiceBackend {
+        let compiled = CompiledBackend::compile(
+            HTTPBackendRef {
+                name: name.to_string(),
+                namespace: Some("tenant".to_string()),
+                port: Some(8080),
+                weight: Some(1),
+                group: None,
+                kind: Some("Service".to_string()),
+                filters: None,
+                backend_tls_policy: None,
+                ref_denied: None,
+            },
+            "route-ns",
+            0,
+            Arc::new(PluginRuntime::new()),
+        );
+        SelectedServiceBackend::new(compiled.logical_handle()).unwrap()
+    }
+
+    fn backend_context(service_key: &str) -> crate::BackendContext {
+        crate::BackendContext {
+            source: None,
+            rsc: None,
+            service_key: Some(service_key.to_string()),
+            service_kind: Some(ServiceBackendKind::Service),
+            upstreams: Vec::new(),
+            current_upstream_id: None,
+            backend_ref_idx: Some(0),
+        }
+    }
+
+    #[test]
+    fn selected_identity_is_the_http_service_resolution_source() {
+        let selected = selected_service("service-a");
+        let context = backend_context("tenant/service-a");
+
+        let (port, _, service_key, kind) = selected_http_service_input(&selected, Some(&context)).unwrap();
+
+        assert_eq!(port, Some(8080));
+        assert_eq!(service_key, "tenant/service-a");
+        assert_eq!(kind, ServiceBackendKind::Service);
+    }
+
+    #[test]
+    fn mismatched_context_cannot_redirect_selected_service() {
+        let selected = selected_service("service-a");
+        let context = backend_context("tenant/service-b");
+
+        assert_eq!(
+            selected_http_service_input(&selected, Some(&context)).unwrap_err(),
+            EdgionStatus::UpstreamNotBackendRefs
+        );
     }
 }

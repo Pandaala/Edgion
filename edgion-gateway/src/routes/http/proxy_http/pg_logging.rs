@@ -476,8 +476,8 @@ mod tests {
     //! fields and calling per-backend atomic methods we reproduce the exact
     //! stage sequence that the proxy would emit.
     use super::*;
+    use crate::lb::commit_attempt;
     use crate::lb::edgion_backend::EdgionBackend;
-    use crate::lb::LbCommit;
     use crate::BackendContext;
     use pingora_core::protocols::l4::socket::SocketAddr;
     use pingora_load_balancing::Backend;
@@ -545,11 +545,13 @@ mod tests {
         }))
     }
 
-    /// Push a new upstream entry with lb_edgion_backend and lb_committed pre-set,
-    /// simulating the state that `connected_to_upstream` / `commit_attempt` would
-    /// produce. Does NOT call inc_conn/update_ewma — callers do that explicitly
-    /// so tests remain clear about which side-effects they are exercising.
-    fn setup_committed_attempt(ctx: &mut EdgionHttpContext, backend: Arc<EdgionBackend>, commit: LbCommit) {
+    /// Push and commit a new upstream entry through the production ownership path.
+    fn setup_committed_attempt(
+        ctx: &mut EdgionHttpContext,
+        backend: Arc<EdgionBackend>,
+        policy: edgion_resources::resources::lb_policy::ParsedLBPolicy,
+        start_time: Instant,
+    ) {
         if ctx.backend_context.is_none() {
             ctx.backend_context = Some(BackendContext {
                 source: None,
@@ -572,16 +574,17 @@ mod tests {
             et: None,
             wpt: None,
             response_body_size: None,
-            start_time: Instant::now(),
+            start_time,
             err: Vec::new(),
             lb_backend_addr: None,
             lb_edgion_backend: Some(backend),
             service_key: None,
-            lb_policy: None,
+            lb_policy: Some(policy),
             tls: None,
-            lb_committed: Some(commit),
+            lb_committed: None,
         });
         bc.current_upstream_id = Some(bc.upstreams.len() - 1);
+        commit_attempt(bc.upstreams.last_mut().unwrap());
     }
 
     #[test]
@@ -618,10 +621,13 @@ mod tests {
     fn cleanup_after_connected_balances_to_zero() {
         let a = make_backend([127, 0, 0, 2], 30001);
 
-        // Simulate connected_to_upstream: inc_conn then record commit.
-        a.inc_conn();
         let mut ctx = EdgionHttpContext::new();
-        setup_committed_attempt(&mut ctx, a.clone(), LbCommit::LeastConn);
+        setup_committed_attempt(
+            &mut ctx,
+            a.clone(),
+            edgion_resources::resources::lb_policy::ParsedLBPolicy::LeastConn,
+            Instant::now(),
+        );
         assert_eq!(a.conn(), 1);
 
         lb_runtime_cleanup(&mut ctx);
@@ -643,8 +649,12 @@ mod tests {
         let mut ctx = EdgionHttpContext::new();
 
         // Attempt 1: connected to A.
-        a.inc_conn();
-        setup_committed_attempt(&mut ctx, a.clone(), LbCommit::LeastConn);
+        setup_committed_attempt(
+            &mut ctx,
+            a.clone(),
+            edgion_resources::resources::lb_policy::ParsedLBPolicy::LeastConn,
+            Instant::now(),
+        );
         assert_eq!(a.conn(), 1);
 
         // Retry: begin_upstream_attempt finalizes attempt 1 with Discard (dec A),
@@ -659,10 +669,10 @@ mod tests {
         );
 
         // Attempt 2: connected to B.
-        b.inc_conn();
         if let Some(up) = ctx.get_current_upstream_mut() {
             up.lb_edgion_backend = Some(b.clone());
-            up.lb_committed = Some(LbCommit::LeastConn);
+            up.lb_policy = Some(edgion_resources::resources::lb_policy::ParsedLBPolicy::LeastConn);
+            commit_attempt(up);
         }
         assert_eq!(b.conn(), 1);
 
@@ -686,9 +696,8 @@ mod tests {
         setup_committed_attempt(
             &mut ctx,
             a.clone(),
-            LbCommit::Ewma {
-                started: Instant::now(),
-            },
+            edgion_resources::resources::lb_policy::ParsedLBPolicy::Ewma,
+            Instant::now(),
         );
 
         // Retry: Discard-mode finalize drops the EWMA sample (no update_ewma).
@@ -729,7 +738,9 @@ mod tests {
         ctx.push_upstream(None, None);
         if let Some(up) = ctx.get_current_upstream_mut() {
             up.lb_edgion_backend = Some(a.clone());
-            up.lb_committed = Some(LbCommit::Ewma { started: attempt_start });
+            up.lb_policy = Some(edgion_resources::resources::lb_policy::ParsedLBPolicy::Ewma);
+            up.start_time = attempt_start;
+            commit_attempt(up);
         }
 
         lb_runtime_cleanup(&mut ctx);
@@ -746,9 +757,13 @@ mod tests {
     fn cleanup_idempotent_on_double_call() {
         let a = make_backend([127, 0, 0, 7], 30001);
 
-        a.inc_conn();
         let mut ctx = EdgionHttpContext::new();
-        setup_committed_attempt(&mut ctx, a.clone(), LbCommit::LeastConn);
+        setup_committed_attempt(
+            &mut ctx,
+            a.clone(),
+            edgion_resources::resources::lb_policy::ParsedLBPolicy::LeastConn,
+            Instant::now(),
+        );
         assert_eq!(a.conn(), 1);
 
         lb_runtime_cleanup(&mut ctx);

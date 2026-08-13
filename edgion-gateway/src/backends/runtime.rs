@@ -1,0 +1,271 @@
+//! Proof-carrying backend identities between route selection and transport.
+
+use std::fmt;
+use std::ops::Deref;
+use std::sync::Arc;
+
+use crate::ai::{AdaptiveTelemetryState, AiCredentialOutlierHandle, RuntimeAiBackend};
+use crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy;
+use crate::routes::http::match_unit::{CompiledBackend, CompiledBackendTarget};
+
+/// One immutable, gateway-compiled HTTPRoute backend slot.
+#[derive(Clone)]
+pub struct LogicalBackendHandle {
+    compiled: CompiledBackend,
+}
+
+impl LogicalBackendHandle {
+    pub(crate) fn new(compiled: CompiledBackend) -> Self {
+        Self { compiled }
+    }
+
+    #[inline]
+    pub fn compiled(&self) -> &CompiledBackend {
+        &self.compiled
+    }
+
+    #[inline]
+    pub fn slot(&self) -> usize {
+        self.compiled.slot
+    }
+
+    #[inline]
+    pub fn identity(&self) -> &edgion_resources::LogicalBackendSlotIdentity {
+        &self.compiled.identity
+    }
+
+    #[inline]
+    pub fn target(&self) -> &CompiledBackendTarget {
+        &self.compiled.target
+    }
+
+    #[inline]
+    pub fn declared_weight(&self) -> i32 {
+        self.compiled.schema.weight.unwrap_or(1)
+    }
+
+    #[inline]
+    pub fn is_authorized(&self) -> bool {
+        self.compiled.schema.ref_denied.is_none()
+    }
+}
+
+impl fmt::Debug for LogicalBackendHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LogicalBackendHandle")
+            .field("slot", &self.slot())
+            .field("identity", &self.identity())
+            .field("target", &self.target())
+            .field("declared_weight", &self.declared_weight())
+            .field("authorized", &self.is_authorized())
+            .finish()
+    }
+}
+
+/// A Service slot after sticky/Internal/WRR logical selection and TLS-policy capture.
+#[derive(Clone, Debug)]
+pub struct SelectedServiceBackend {
+    logical: LogicalBackendHandle,
+}
+
+impl SelectedServiceBackend {
+    pub(crate) fn new(logical: LogicalBackendHandle) -> Option<Self> {
+        (logical.is_authorized() && matches!(logical.target(), CompiledBackendTarget::Service { .. }))
+            .then_some(Self { logical })
+    }
+
+    #[inline]
+    pub fn logical(&self) -> &LogicalBackendHandle {
+        &self.logical
+    }
+}
+
+/// An AI backend and credential chosen from one request-stable plan generation.
+#[derive(Clone)]
+pub struct SelectedAiBackend {
+    logical: LogicalBackendHandle,
+    pub backend: Arc<RuntimeAiBackend>,
+    pub effective_policy: Option<Arc<EffectiveBackendTrafficPolicy>>,
+    pub adaptive: Option<Arc<AdaptiveTelemetryState>>,
+    pub credential_outlier: Option<AiCredentialOutlierHandle>,
+    pub credential_index: usize,
+    pub credential_alias: String,
+    pub effective_weight: i32,
+}
+
+impl SelectedAiBackend {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        logical: LogicalBackendHandle,
+        backend: Arc<RuntimeAiBackend>,
+        effective_policy: Option<Arc<EffectiveBackendTrafficPolicy>>,
+        adaptive: Option<Arc<AdaptiveTelemetryState>>,
+        credential_outlier: Option<AiCredentialOutlierHandle>,
+        credential_index: usize,
+        credential_alias: String,
+        effective_weight: i32,
+    ) -> Option<Self> {
+        (logical.is_authorized() && matches!(logical.target(), CompiledBackendTarget::EdgionBackend { .. })).then_some(
+            Self {
+                logical,
+                backend,
+                effective_policy,
+                adaptive,
+                credential_outlier,
+                credential_index,
+                credential_alias,
+                effective_weight,
+            },
+        )
+    }
+
+    #[inline]
+    pub fn logical(&self) -> &LogicalBackendHandle {
+        &self.logical
+    }
+}
+
+impl fmt::Debug for SelectedAiBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SelectedAiBackend")
+            .field("logical", &self.logical)
+            .field("runtime_available", &true)
+            .field("effective_policy", &self.effective_policy.is_some())
+            .field("adaptive", &self.adaptive.is_some())
+            .field("credential_index", &self.credential_index)
+            .field("effective_weight", &self.effective_weight)
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum SelectedLogicalBackend {
+    Service(SelectedServiceBackend),
+    Ai(SelectedAiBackend),
+}
+
+impl SelectedLogicalBackend {
+    #[inline]
+    pub fn logical(&self) -> &LogicalBackendHandle {
+        match self {
+            Self::Service(selected) => selected.logical(),
+            Self::Ai(selected) => selected.logical(),
+        }
+    }
+
+    #[inline]
+    pub fn compiled(&self) -> &CompiledBackend {
+        self.logical().compiled()
+    }
+}
+
+/// The sole selected HTTP-backend fact stored in a request context.
+#[derive(Clone)]
+pub enum SelectedHttpBackend {
+    Routed(SelectedLogicalBackend),
+    Invalid(CompiledBackend),
+    Direct(CompiledBackend),
+}
+
+impl fmt::Debug for SelectedHttpBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Routed(selected) => f.debug_tuple("Routed").field(selected).finish(),
+            Self::Invalid(compiled) => f
+                .debug_struct("Invalid")
+                .field("slot", &compiled.slot)
+                .field("identity", &compiled.identity)
+                .field("target", &compiled.target)
+                .finish(),
+            Self::Direct(compiled) => f
+                .debug_struct("Direct")
+                .field("slot", &compiled.slot)
+                .field("identity", &compiled.identity)
+                .field("target", &compiled.target)
+                .finish(),
+        }
+    }
+}
+
+impl SelectedHttpBackend {
+    #[inline]
+    pub fn compiled(&self) -> &CompiledBackend {
+        match self {
+            Self::Routed(selected) => selected.compiled(),
+            Self::Invalid(compiled) | Self::Direct(compiled) => compiled,
+        }
+    }
+
+    #[inline]
+    pub fn routed(&self) -> Option<&SelectedLogicalBackend> {
+        match self {
+            Self::Routed(selected) => Some(selected),
+            Self::Invalid(_) | Self::Direct(_) => None,
+        }
+    }
+}
+
+impl Deref for SelectedHttpBackend {
+    type Target = CompiledBackend;
+
+    fn deref(&self) -> &Self::Target {
+        self.compiled()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugins::PluginRuntime;
+    use edgion_resources::HTTPBackendRef;
+
+    fn compiled(name: &str, slot: usize, weight: Option<i32>) -> CompiledBackend {
+        let schema = HTTPBackendRef {
+            name: name.to_string(),
+            namespace: Some("backend-ns".to_string()),
+            port: Some(8080),
+            weight,
+            group: None,
+            kind: Some("Service".to_string()),
+            filters: None,
+            backend_tls_policy: None,
+            ref_denied: None,
+        };
+        CompiledBackend::compile(schema, "route-ns", slot, Arc::new(PluginRuntime::new()))
+    }
+
+    #[test]
+    fn logical_handle_preserves_slot_identity_target_and_declared_weight() {
+        let logical = LogicalBackendHandle::new(compiled("api", 7, Some(0)));
+        assert_eq!(logical.slot(), 7);
+        assert_eq!(logical.declared_weight(), 0);
+        assert!(logical.is_authorized());
+        assert!(matches!(
+            logical.target(),
+            CompiledBackendTarget::Service { namespace, name }
+                if namespace == "backend-ns" && name == "api"
+        ));
+        assert_eq!(logical.identity().namespace, "backend-ns");
+        assert_eq!(logical.identity().name, "api");
+    }
+
+    #[test]
+    fn invalid_slot_cannot_materialize_selected_service() {
+        let mut backend = compiled("api", 2, None);
+        backend.target = CompiledBackendTarget::Invalid {
+            classified_kind: edgion_resources::HTTPBackendRefKind::Unsupported,
+        };
+        assert!(SelectedServiceBackend::new(LogicalBackendHandle::new(backend)).is_none());
+    }
+
+    #[test]
+    fn denied_service_cannot_materialize_selected_service() {
+        let mut backend = compiled("api", 2, Some(1));
+        backend.schema.ref_denied = Some(edgion_resources::resources::common::RefDenied {
+            target_namespace: "backend-ns".to_string(),
+            target_name: "api".to_string(),
+            reason: Some("NoMatchingReferenceGrant".to_string()),
+        });
+        assert!(SelectedServiceBackend::new(LogicalBackendHandle::new(backend)).is_none());
+    }
+}

@@ -1,7 +1,7 @@
 use super::EdgionHttpProxy;
 use crate::ai::dispatch::{
     ai_predispatch_deadline, commit_ai_attempt_context, prepare_first_attempt, AiDispatchError,
-    AiPeerPredispatchFailure, AiPeerTarget,
+    AiPeerPredispatchFailure, PreparedAiAttempt,
 };
 use crate::ai::{render_openai_error, AiProxyError};
 use crate::backends::policy::backend_traffic::authority::{render_authority, AuthorityError};
@@ -9,6 +9,7 @@ use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_
 use crate::backends::policy::backend_traffic::RetryBudget;
 use crate::backends::ServiceBackendKind;
 use crate::backends::{get_peer, try_get_peer};
+use crate::backends::{SelectedHttpBackend, SelectedLogicalBackend, SelectedServiceBackend};
 use crate::ctx::BackendSource;
 use crate::observe::metrics::record_authority_rejected;
 use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
@@ -424,8 +425,8 @@ fn apply_upstream_authority(
     peer: &mut HttpPeer,
 ) -> pingora_core::Result<()> {
     if matches!(
-        ctx.backend_context.as_ref().and_then(|context| context.source),
-        Some(BackendSource::AiBackend)
+        ctx.selected_backend.as_ref().and_then(SelectedHttpBackend::routed),
+        Some(SelectedLogicalBackend::Ai(_))
     ) {
         ctx.upstream_authority = None;
         return Ok(());
@@ -490,10 +491,10 @@ pub async fn upstream_peer_grpc(
     // when a cross-attempt retry re-selects via plain LB.
     sp_repin_on_strict_retry(ctx);
     let mut peer = if ctx.sp_target_addr.is_some() {
-        get_peer_with_sp_fallback(edgion_http, session, ctx, true).await?
+        get_peer_with_sp_fallback(edgion_http, session, ctx, true, None).await?
     } else {
         sp_refresh_on_cross_attempt_retry(ctx);
-        get_peer(session, ctx, true, &edgion_http.server_header_opts).await?
+        get_peer(session, ctx, true, None, &edgion_http.server_header_opts).await?
     };
 
     // 6. Force HTTP/2 for gRPC
@@ -547,13 +548,15 @@ pub async fn upstream_peer_http(
                     return Err(PingoraError::new(ErrorType::InternalError));
                 }
             };
+            let selected_identity = target.selected.logical().identity();
+            let selected_backend_key = format!("{}/{}", selected_identity.namespace, selected_identity.name);
             let admission = ctx
                 .ai_attempt_runtime
                 .admit(crate::ai::attempt_runtime::AiAttemptAdmissionInput {
-                    namespace: target.namespace.clone(),
-                    backend_uid: target.backend_uid.clone(),
-                    credential_alias: target.credential_alias.clone(),
-                    backend_name: target.backend_key.clone(),
+                    namespace: selected_identity.namespace.clone(),
+                    backend_uid: target.selected.backend.uid.clone(),
+                    credential_alias: target.selected.credential_alias.clone(),
+                    backend_name: selected_backend_key,
                     provider: target.provider,
                     pricing: target.pricing,
                     redis_ref: target.redis_ref.clone(),
@@ -563,9 +566,10 @@ pub async fn upstream_peer_http(
                     max_output_tokens: target.max_output_tokens,
                     usage: std::sync::Arc::clone(&target.usage),
                     eos: std::sync::Arc::clone(&target.eos),
-                    outlier: target.credential_outlier.clone(),
-                    adaptive: target.adaptive.clone(),
+                    outlier: target.selected.credential_outlier.clone(),
+                    adaptive: target.selected.adaptive.clone(),
                     circuit_breaker: target
+                        .selected
                         .effective_policy
                         .as_ref()
                         .and_then(|policy| policy.ai_circuit_breaker.clone()),
@@ -658,18 +662,32 @@ pub async fn upstream_peer_http(
     //    as None, which would otherwise silently drop those writes (P0 g1-001).
     begin_upstream_attempt(ctx);
 
+    let selected_service = ctx.selected_backend.as_ref().and_then(|selected| match selected {
+        SelectedHttpBackend::Routed(SelectedLogicalBackend::Service(service)) => Some(service.clone()),
+        SelectedHttpBackend::Routed(SelectedLogicalBackend::Ai(_))
+        | SelectedHttpBackend::Invalid(_)
+        | SelectedHttpBackend::Direct(_) => None,
+    });
+
     // 5. Get peer — common path defers to LB; the SP-affinity branch lives in its own helper.
     // On a strict cross-attempt retry, restore the sticky target so the retry
     // re-pins to the same backend (and fail-closes if it is now unhealthy)
     // instead of migrating via plain LB.
     sp_repin_on_strict_retry(ctx);
     let mut peer = if ctx.sp_target_addr.is_some() {
-        get_peer_with_sp_fallback(edgion_http, session, ctx, false).await?
+        get_peer_with_sp_fallback(edgion_http, session, ctx, false, selected_service.as_ref()).await?
     } else {
         // A retry that re-selects via plain LB after an earlier attempt consumed
         // the sticky target must refresh the token to the backend now serving.
         sp_refresh_on_cross_attempt_retry(ctx);
-        get_peer(session, ctx, false, &edgion_http.server_header_opts).await?
+        get_peer(
+            session,
+            ctx,
+            false,
+            selected_service.as_ref(),
+            &edgion_http.server_header_opts,
+        )
+        .await?
     };
 
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
@@ -786,7 +804,17 @@ pub async fn select_http_backend(
         return Err(PingoraError::new(ErrorType::InternalError));
     }
 
-    ctx.selected_backend = Some(backend_ref);
+    ctx.selected_backend = Some(match backend_ref.target {
+        CompiledBackendTarget::Service { .. } => {
+            let selected = SelectedServiceBackend::new(backend_ref.logical_handle())
+                .ok_or_else(|| PingoraError::new(ErrorType::InternalError))?;
+            SelectedHttpBackend::Routed(SelectedLogicalBackend::Service(selected))
+        }
+        CompiledBackendTarget::Invalid { .. } => SelectedHttpBackend::Invalid(backend_ref),
+        CompiledBackendTarget::EdgionBackend { .. } => {
+            return Err(PingoraError::new(ErrorType::InternalError));
+        }
+    });
     Ok(())
 }
 
@@ -817,6 +845,7 @@ async fn get_peer_with_sp_fallback(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     is_grpc: bool,
+    selected_http: Option<&SelectedServiceBackend>,
 ) -> pingora_core::Result<Box<HttpPeer>> {
     let sp_strict = ctx.effective_sp_strict();
     let fail_closed_err = || {
@@ -827,7 +856,7 @@ async fn get_peer_with_sp_fallback(
         }
     };
 
-    match try_get_peer(ctx, session, is_grpc).await {
+    match try_get_peer(ctx, session, is_grpc, selected_http).await {
         Ok(peer) => Ok(peer),
         Err(
             status @ (EdgionStatus::BackendLocalhostNotAllowed
@@ -842,7 +871,7 @@ async fn get_peer_with_sp_fallback(
             // Sticky target unhealthy → drop the SP target and refresh the token in the response.
             ctx.sp_target_addr = None; // already consumed by try_get_peer, but be explicit
             ctx.sp_state = SessionPersistenceState::InjectUpdate;
-            get_peer(session, ctx, is_grpc, &edgion_http.server_header_opts).await
+            get_peer(session, ctx, is_grpc, selected_http, &edgion_http.server_header_opts).await
         }
         Err(status) => {
             // Strict mode: the resolved sticky target cannot serve. Fail closed
@@ -1021,6 +1050,20 @@ fn resolve_connect_deadline(service_key: Option<&str>, global: std::time::Durati
     (!d.is_zero()).then_some(d)
 }
 
+#[inline]
+fn choose_typed_connect_deadline(
+    selected_is_ai: bool,
+    ai_timeout: Option<std::time::Duration>,
+    service_timeout: Option<std::time::Duration>,
+    global: std::time::Duration,
+) -> Option<std::time::Duration> {
+    if selected_is_ai {
+        ai_timeout.or_else(|| (!global.is_zero()).then_some(global))
+    } else {
+        service_timeout.or_else(|| (!global.is_zero()).then_some(global))
+    }
+}
+
 /// Replay-safety write bound for when the timeout fold produced no deadline:
 /// `Some(global default backendRequest)` only when a captured request body will
 /// replay to the upstream AND the global default itself is enabled (non-zero).
@@ -1063,11 +1106,25 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
     // deadline (degenerate `defaultConnectTimeout: "0s"`) yields None => left unset,
     // never an instant-fail connect (see resolve_connect_deadline).
     let service_key = ctx.backend_context.as_ref().and_then(|bc| bc.service_key.as_deref());
-    let connect_deadline = ctx
+    let selected_is_ai = matches!(
+        ctx.selected_backend.as_ref().and_then(SelectedHttpBackend::routed),
+        Some(SelectedLogicalBackend::Ai(_))
+    );
+    let ai_timeout = ctx
         .ai_effective_policy
         .as_ref()
-        .and_then(|policy| policy.connect_timeout)
-        .or_else(|| resolve_connect_deadline(service_key, backend_timeout.connect_timeout));
+        .and_then(|policy| policy.connect_timeout);
+    let service_timeout = if selected_is_ai {
+        None
+    } else {
+        resolve_connect_deadline(service_key, backend_timeout.connect_timeout)
+    };
+    let connect_deadline = choose_typed_connect_deadline(
+        selected_is_ai,
+        ai_timeout,
+        service_timeout,
+        backend_timeout.connect_timeout,
+    );
     if let Some(connect_deadline) = connect_deadline {
         peer.options.connection_timeout = Some(connect_deadline);
     }
@@ -1136,6 +1193,10 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
 /// this cleanup MUST run before `push_upstream` advances `current_upstream_id`.
 #[inline]
 pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
+    // The previous endpoint admission belongs to the previous attempt. Release
+    // it before any live policy lookup or endpoint resolution for the next one.
+    ctx.cb_permit = None;
+
     // On retry, discard the previous attempt's LB commit (dec LeastConn, drop EWMA sample).
     if let Some(upstream) = ctx.get_current_upstream_mut() {
         crate::lb::finalize_attempt(upstream, crate::lb::FinalizeMode::Discard);
@@ -1172,15 +1233,37 @@ pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
 /// Case 1.5, `pg_upstream_response_filter`).
 #[inline]
 pub(super) fn retry_budget_for(ctx: &EdgionHttpContext) -> Option<std::sync::Arc<RetryBudget>> {
-    if let Some(budget) = ctx
+    let selected_is_ai = matches!(
+        ctx.selected_backend.as_ref().and_then(SelectedHttpBackend::routed),
+        Some(SelectedLogicalBackend::Ai(_))
+    );
+    let ai_budget = ctx
         .ai_effective_policy
         .as_ref()
         .and_then(|policy| policy.retry_budget.as_ref())
-    {
-        return Some(std::sync::Arc::clone(budget));
+        .map(std::sync::Arc::clone);
+    if selected_is_ai {
+        return choose_typed_retry_budget(true, ai_budget, None);
     }
     let service_key = ctx.backend_context.as_ref()?.service_key.as_deref()?;
-    get_backend_traffic_policy_store().get_retry_budget(service_key)
+    choose_typed_retry_budget(
+        false,
+        ai_budget,
+        get_backend_traffic_policy_store().get_retry_budget(service_key),
+    )
+}
+
+#[inline]
+fn choose_typed_retry_budget(
+    selected_is_ai: bool,
+    ai_budget: Option<std::sync::Arc<RetryBudget>>,
+    service_budget: Option<std::sync::Arc<RetryBudget>>,
+) -> Option<std::sync::Arc<RetryBudget>> {
+    if selected_is_ai {
+        ai_budget
+    } else {
+        service_budget
+    }
 }
 
 /// Finish a peer that was constructed directly (i.e. without going through LB / try_get_peer):
@@ -1206,32 +1289,35 @@ fn finish_static_peer(
 async fn try_ai_backend_peer(
     edgion_http: &EdgionHttpProxy,
     ctx: &mut EdgionHttpContext,
-    target: &AiPeerTarget,
+    target: &PreparedAiAttempt,
 ) -> Result<Box<HttpPeer>, AiPeerPredispatchFailure> {
-    let addr = resolve_domain(&target.domain, target.port)
+    let endpoint = &target.selected.backend.endpoint;
+    let addr = resolve_domain(&endpoint.domain, endpoint.port)
         .await
         .map_err(|_| AiPeerPredispatchFailure::Endpoint)?;
-    let (namespace, name) = target
-        .backend_key
-        .split_once('/')
-        .unwrap_or(("", target.backend_key.as_str()));
+    let (namespace, name) = match target.selected.logical().target() {
+        CompiledBackendTarget::EdgionBackend { namespace, name } => (namespace.as_str(), name.as_str()),
+        CompiledBackendTarget::Service { .. } | CompiledBackendTarget::Invalid { .. } => {
+            return Err(AiPeerPredispatchFailure::Endpoint);
+        }
+    };
     ctx.backend_context = Some(crate::ctx::BackendContext {
         source: Some(BackendSource::AiBackend),
         rsc: Some(crate::Rsc::new("EdgionBackend", namespace, name)),
-        service_key: Some(target.backend_key.clone()),
+        service_key: Some(format!("{namespace}/{name}")),
         service_kind: None,
         upstreams: Vec::new(),
         current_upstream_id: None,
-        backend_ref_idx: Some(target.backend_slot),
+        backend_ref_idx: Some(target.selected.logical().slot()),
     });
-    ctx.ai_effective_policy = target.effective_policy.clone();
+    ctx.ai_effective_policy = target.selected.effective_policy.clone();
 
     if let Err(status) = validate_resolved_domain_addr(&addr, ctx.allow_loopback_upstream) {
         record_unsafe_resolved_upstream_attempt(ctx, addr, status);
         ctx.add_error(status);
         return Err(AiPeerPredispatchFailure::Endpoint);
     }
-    let mut peer = Box::new(HttpPeer::new(addr, target.use_tls, target.sni.clone()));
+    let mut peer = Box::new(HttpPeer::new(addr, endpoint.use_tls, endpoint.sni.clone()));
     begin_ai_peer_attempt(ctx);
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
     backfill_upstream_addr(&peer, ctx);
@@ -1565,14 +1651,15 @@ fn sp_should_repin_on_strict_retry(
 mod tests {
     use super::{
         ai_predispatch_deadline_mapping, ai_predispatch_error, apply_upstream_authority_decision,
-        apply_upstream_read_timeout_override, backoff_action, decide_upstream_authority, decide_want_raw,
-        fold_peer_timeouts, init_backend_context_if_needed, replay_write_floor,
+        apply_upstream_read_timeout_override, backoff_action, choose_typed_retry_budget, decide_upstream_authority,
+        decide_want_raw, fold_peer_timeouts, init_backend_context_if_needed, replay_write_floor,
         sp_should_refresh_on_cross_attempt_retry, sp_should_repin_on_strict_retry, stop_ai_predispatch_if_expired,
         AuthorityDecision, BackoffAction,
     };
     use crate::ai::dispatch::AiDispatchError;
     use crate::ai::{render_openai_error, AiProxyError};
     use crate::backends::policy::backend_traffic::authority::AuthorityError;
+    use crate::backends::policy::backend_traffic::RetryBudget;
     use crate::backends::ServiceBackendKind;
     use crate::plugins::PluginRuntime;
     use crate::routes::http::match_unit::{CompiledBackend, CompiledBackendTarget};
@@ -1582,6 +1669,7 @@ mod tests {
     use pingora_core::prelude::HttpPeer;
     use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
     use pingora_core::ErrorType;
+    use pingora_load_balancing::Backend;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -1668,7 +1756,7 @@ mod tests {
             }
         );
         let mut ctx = EdgionHttpContext::new();
-        ctx.selected_backend = Some(backend);
+        ctx.selected_backend = Some(crate::backends::SelectedHttpBackend::Invalid(backend));
 
         init_backend_context_if_needed(&mut ctx).unwrap();
 
@@ -2110,7 +2198,7 @@ mod tests {
 
     // ─── resolve_connect_deadline: per-backend BTP override, else global ───
 
-    use super::resolve_connect_deadline;
+    use super::{choose_typed_connect_deadline, resolve_connect_deadline};
     use crate::backends::policy::backend_traffic::store::{get_backend_traffic_policy_store, GLOBAL_STORE_TEST_LOCK};
 
     #[test]
@@ -2190,6 +2278,54 @@ mod tests {
         // Degenerate zero global => None (no connect bound), never an instant-fail.
         assert_eq!(resolve_connect_deadline(Some(key), Duration::ZERO), None);
         assert_eq!(resolve_connect_deadline(None, Duration::ZERO), None);
+    }
+
+    #[test]
+    fn ai_connect_timeout_never_falls_back_to_same_named_service_policy() {
+        let service_timeout = Some(Duration::from_millis(123));
+        let global = Duration::from_secs(5);
+
+        assert_eq!(
+            choose_typed_connect_deadline(true, None, service_timeout, global),
+            Some(global),
+            "an AI selection with no override must use the global default"
+        );
+        assert_eq!(
+            choose_typed_connect_deadline(false, None, service_timeout, global),
+            service_timeout,
+            "a Service selection retains its late policy override"
+        );
+    }
+
+    #[test]
+    fn ai_retry_budget_never_falls_back_to_same_named_service_policy() {
+        use edgion_resources::resources::edgion_backend_traffic_policy::{BudgetDetails, RetryConstraintConfig};
+
+        let service_budget = Arc::new(RetryBudget::from_config(&RetryConstraintConfig {
+            budget: BudgetDetails {
+                percent: 50,
+                interval: "1h".to_string(),
+            },
+            min_retry_rate: None,
+        }));
+        assert!(choose_typed_retry_budget(true, None, Some(service_budget.clone())).is_none());
+        assert!(Arc::ptr_eq(
+            &choose_typed_retry_budget(false, None, Some(service_budget.clone())).unwrap(),
+            &service_budget
+        ));
+    }
+
+    #[test]
+    fn begin_service_attempt_releases_previous_endpoint_permit_first() {
+        let backend = Arc::new(crate::lb::EdgionBackend::new(Backend::new("127.0.0.1:18080").unwrap()));
+        let mut ctx = EdgionHttpContext::new();
+        ctx.cb_permit = crate::backends::circuit_breaker::CbPermit::try_acquire(backend.clone(), 1);
+        assert_eq!(backend.cb_inflight(), 1);
+
+        super::begin_upstream_attempt(&mut ctx);
+
+        assert_eq!(backend.cb_inflight(), 0);
+        assert!(ctx.cb_permit.is_none());
     }
 
     // ─── route-06: retry backoff minimum-wait conformance (GEP-1731) ───

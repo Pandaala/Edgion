@@ -2,7 +2,7 @@ use crate::ai::terminal::{
     AiClientStreamDialect, FinalResponseEligibility, ResponseProcessorSlot, ResponseTerminalState,
 };
 use crate::ai::{AiAttemptPlan, AiRequestContext, GenAiSummary};
-use crate::backends::ServiceBackendKind;
+use crate::backends::{SelectedHttpBackend, ServiceBackendKind};
 use crate::lb::edgion_backend::EdgionBackend;
 use crate::observe::logs::LogBuffer;
 use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
@@ -10,7 +10,6 @@ use crate::plugins::runtime::PluginRuntime;
 use crate::plugins::{EdgionPluginsLog, StageLogs};
 use crate::request_body::RequestBodyState;
 use crate::routes::grpc::{CompiledGrpcBackend, GrpcRouteRuleUnit};
-use crate::routes::http::match_unit::CompiledBackend;
 use crate::routes::HttpRouteRuleUnit;
 use crate::runtime::GatewayInfo;
 use bytes::Bytes;
@@ -543,7 +542,7 @@ pub struct BackendTlsInfo {
 }
 
 /// Upstream connection information for a single connection attempt
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Serialize)]
 pub struct UpstreamInfo {
     /// Upstream IP address
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -585,8 +584,9 @@ pub struct UpstreamInfo {
     pub lb_backend_addr: Option<SocketAddr>,
     /// Live `EdgionBackend` shared with the `ServiceSelectorCell` snapshot.
     /// Set by `build_peer_from_lb_selection`; read by `connected_to_upstream`
-    /// to call `inc_conn()` and by `lb_runtime_cleanup` to call `dec_conn()` /
-    /// `update_ewma()`. None for SP-target or bypass paths.
+    /// to call `inc_conn()` and by other attempt hooks for endpoint metadata.
+    /// Sticky selection restores the same live Arc; bypass and non-LB paths
+    /// leave this field as `None`.
     #[serde(skip)]
     pub lb_edgion_backend: Option<Arc<EdgionBackend>>,
     /// Service key (`"namespace/name"`) that owns this backend, needed by
@@ -599,15 +599,16 @@ pub struct UpstreamInfo {
     /// Backend TLS connection information
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls: Option<BackendTlsInfo>,
-    /// LB per-attempt commit state. `Some` only when this attempt reached
+    /// Attempt-owned LB commit guard. `Some` only when this attempt reached
     /// `connected_to_upstream` AND its policy needs per-attempt accounting
     /// (LeastConn / EWMA). Consumed by `finalize_attempt`:
     ///   - `pg_upstream_peer::begin_upstream_attempt` on retry → FinalizeMode::Discard
     ///   - `pg_logging::lb_runtime_cleanup` at request end    → FinalizeMode::Settle
-    ///     Backend reference is read from `lb_edgion_backend` on this same entry;
-    ///     do NOT duplicate the Arc here.
+    /// The guard owns the live backend Arc required for cancellation-safe Drop;
+    /// `lb_edgion_backend` remains the selected-endpoint metadata used by other
+    /// attempt hooks.
     #[serde(skip)]
-    pub lb_committed: Option<crate::lb::LbCommit>,
+    pub lb_committed: Option<crate::lb::LbCommitGuard>,
 }
 
 impl UpstreamInfo {
@@ -689,7 +690,7 @@ pub enum BackendSource {
 /// which don't correspond to a K8s-selected backend resource. `source` is `Some` only on
 /// those bypass paths; `None` on the default K8s resource path. `upstreams` is always
 /// populated as attempts happen.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Serialize)]
 pub struct BackendContext {
     /// Bypass-path tag — `None` on the default K8s resource path.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1045,7 +1046,7 @@ pub struct EdgionHttpContext {
     pub route_unit: Option<Arc<HttpRouteRuleUnit>>,
 
     /// Selected HTTP backend from load balancing (schema + compiled plugin runtime)
-    pub selected_backend: Option<CompiledBackend>,
+    pub selected_backend: Option<SelectedHttpBackend>,
 
     /// Matched gRPC route unit (for gRPC routes)
     pub grpc_route_unit: Option<Arc<GrpcRouteRuleUnit>>,
@@ -1892,11 +1893,13 @@ impl EdgionHttpContext {
             // Plugin-injected direct endpoint: no backend-level plugin chain
             // (matches today, where the synthetic backend's runtime is empty).
             let route_namespace = backend_ref.namespace.as_deref().unwrap_or_default();
-            self.selected_backend = Some(CompiledBackend::compile(
-                backend_ref.as_ref().clone(),
-                route_namespace,
-                preset.backend_ref_idx,
-                Arc::new(PluginRuntime::new()),
+            self.selected_backend = Some(SelectedHttpBackend::Direct(
+                crate::routes::http::match_unit::CompiledBackend::compile(
+                    backend_ref.as_ref().clone(),
+                    route_namespace,
+                    preset.backend_ref_idx,
+                    Arc::new(PluginRuntime::new()),
+                ),
             ));
         }
         self.jump = Some(target);
