@@ -36,14 +36,14 @@ use crate::request_body::{
 use edgion_resources::filters::PluginRunningResult;
 
 use super::super::runtime::DslRuntime;
-use super::body_scanners::{
-    HmacSha256Scanner, JsonPathScanner, JsonScanValue, JsonSelectPlan, JsonSelectScanner, Md5Scanner,
-    StreamingRegexScanner,
-};
 use super::bytecode::*;
 use super::error::RuntimeError;
 use super::value::BodyValue;
 use super::value::Value;
+use crate::request_body::{
+    HmacSha256Scanner, JsonPathScanner, JsonScanValue, JsonSelectPlan, JsonSelectScanner, Md5Scanner,
+    StreamingRegexScanner,
+};
 use edgion_dsl::json_path::DefiniteJsonPath;
 
 pub(crate) trait RuntimeString {

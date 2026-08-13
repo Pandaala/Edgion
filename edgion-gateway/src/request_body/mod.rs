@@ -4,12 +4,17 @@
 //! request context, and body-aware plugins. It caches proxied request bodies
 //! only; proxied upstream responses remain streaming-only.
 
+mod body_scanners;
 pub mod config;
 pub(crate) mod observer;
 mod operation;
 mod state;
 mod storage;
 
+pub(crate) use body_scanners::{
+    HmacSha256Scanner, JsonDuplicatePolicy, JsonPathScanner, JsonScanValue, JsonSelectPlan, JsonSelectScanner,
+    Md5Scanner, StreamingRegexScanner,
+};
 pub use config::{ResolvedRequestBodyConfig, DEFAULT_MEMORY_BUFFER_BYTES};
 pub use operation::{
     BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, LossyTextScanner, RawBodyScanner,

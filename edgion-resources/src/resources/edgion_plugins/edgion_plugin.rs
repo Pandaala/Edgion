@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use super::dye::DyeOutcome;
 use super::plugin_configs::{
-    AiGuardConfig, AiProxyConfig, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CanaryConfig,
-    CorsConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig,
+    A2aGatewayConfig, AiGuardConfig, AiProxyConfig, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig,
+    CanaryConfig, CorsConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig,
     DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig,
     FormJsonTransformConfig, ForwardAuthConfig, GlobalAccessControlConfig, GuardrailConfig, HeaderCertAuthConfig,
     HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig,
@@ -49,6 +49,8 @@ pub enum EdgionPlugin {
     BasicAuth(BasicAuthConfig),
     /// Route OpenAI-compatible requests to an EdgionBackend AI capability.
     AiProxy(AiProxyConfig),
+    /// Serve a local A2A Agent Card and observe proxied JSON-RPC methods.
+    A2aGateway(A2aGatewayConfig),
     /// CORS (Cross-Origin Resource Sharing) filter
     Cors(CorsConfig),
     /// CSRF (Cross-Site Request Forgery) protection filter
@@ -215,6 +217,7 @@ impl EdgionPlugin {
             // compile — it can never silently default to "no body".
             HmacAuth(_)
             | AiProxy(_)
+            | A2aGateway(_)
             | RequestHeaderModifier(_)
             | ResponseHeaderModifier(_)
             | RequestRedirect(_)
@@ -284,6 +287,7 @@ impl EdgionPlugin {
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
             EdgionPlugin::BasicAuth(_) => "BasicAuth",
             EdgionPlugin::AiProxy(_) => "AiProxy",
+            EdgionPlugin::A2aGateway(_) => "A2aGateway",
             EdgionPlugin::Cors(_) => "Cors",
             EdgionPlugin::Csrf(_) => "Csrf",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
@@ -359,6 +363,7 @@ impl EdgionPlugin {
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
             | EdgionPlugin::AiProxy(_)
+            | EdgionPlugin::A2aGateway(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
             | EdgionPlugin::IpRestriction(_)
@@ -414,6 +419,7 @@ impl EdgionPlugin {
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
             | EdgionPlugin::AiProxy(_)
+            | EdgionPlugin::A2aGateway(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
             | EdgionPlugin::IpRestriction(_)
@@ -495,6 +501,7 @@ impl EdgionPlugin {
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
             | EdgionPlugin::AiProxy(_)
+            | EdgionPlugin::A2aGateway(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
             | EdgionPlugin::IpRestriction(_)
@@ -541,6 +548,7 @@ impl EdgionPlugin {
         match self {
             EdgionPlugin::CtxSet(c) => c.validation_error(),
             EdgionPlugin::AiProxy(c) => c.validation_error(),
+            EdgionPlugin::A2aGateway(c) => c.validation_error(),
             EdgionPlugin::DirectEndpoint(c) => c.validation_error(),
             EdgionPlugin::RegionRoute(c) => c.validation_error(),
             EdgionPlugin::DynamicInternalUpstream(c) => c.validation_error(),
@@ -586,6 +594,51 @@ impl EdgionPlugin {
             | EdgionPlugin::UrlRewrite(_)
             | EdgionPlugin::RequestMirror(_) => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod a2a_gateway_variant_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn plugin() -> EdgionPlugin {
+        EdgionPlugin::A2aGateway(A2aGatewayConfig {
+            card: json!({
+                "name": "example",
+                "description": "Example agent",
+                "version": "1.0.0",
+                "capabilities": {},
+                "supportedInterfaces": [{
+                    "url": "https://agent.example/rpc",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "1.0"
+                }],
+                "defaultInputModes": ["application/json"],
+                "defaultOutputModes": ["application/json"],
+                "skills": [{
+                    "id": "echo",
+                    "name": "Echo",
+                    "description": "Echo a message",
+                    "tags": ["example"]
+                }]
+            }),
+            external_url: None,
+            fail_open: false,
+        })
+    }
+
+    #[test]
+    fn variant_is_request_only_and_uses_on_demand_body_read() {
+        let plugin = plugin();
+        assert_eq!(plugin.type_name(), "A2aGateway");
+        assert!(plugin.validation_error().is_none());
+        // Attachment scope is broader than the matched A2A RPC rule. The
+        // request plugin therefore invokes the canonical BodyStorage read only
+        // after it has proved the request is an applicable RPC POST.
+        assert!(!plugin.accepts_body(BodyStage::Request));
+        assert!(!plugin.accepts_body(BodyStage::Response));
+        assert!(plugin.body_requirement(BodyStage::Request).is_none());
     }
 }
 

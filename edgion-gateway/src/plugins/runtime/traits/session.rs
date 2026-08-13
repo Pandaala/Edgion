@@ -322,6 +322,14 @@ pub trait PluginSession: Send + Sync {
     /// Get reference to EdgionHttpContext (for access log generation)
     fn ctx(&self) -> &EdgionHttpContext;
 
+    /// Claim request-scoped A2A Gateway ownership. Returns false on duplicate activation.
+    fn try_activate_a2a_gateway(&mut self) -> bool {
+        false
+    }
+
+    /// Pin the unified backend generation used by A2A rule classification.
+    fn pin_edgion_backend_snapshot(&mut self, _snapshot: crate::ai::EdgionBackendSnapshot) {}
+
     /// Append an EdgionStatus error to the gateway context so it surfaces in the
     /// access log `errors` array. Narrow interface — plugins cannot mutate other
     /// ctx fields; only the error list.

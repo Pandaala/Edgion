@@ -37,10 +37,10 @@ pub use plugin_configs::{
     ParsedJsonInstance,
 };
 pub use plugin_configs::{
-    compile_guard_pattern, AccessLogExternField, AiBackendSelection, AiBackendSelectionConfig, AiBackendSlotSelector,
-    AiGuardAction, AiGuardConfig, AiGuardEvaluator, AiGuardMatcher, AiGuardPiiDetector, AiGuardRejectionMode,
-    AiGuardRole, AiGuardRule, AiModelHeaderMatch, AiModelPattern, AiModelRoute, AiModelRouteAction,
-    AiModelRouteCandidate, AiModelRouteMatch, AiProxyConfig, AiTokenQuotaConfig, AiTokenQuotaLimit,
+    compile_guard_pattern, A2aGatewayConfig, AccessLogExternField, AiBackendSelection, AiBackendSelectionConfig,
+    AiBackendSlotSelector, AiGuardAction, AiGuardConfig, AiGuardEvaluator, AiGuardMatcher, AiGuardPiiDetector,
+    AiGuardRejectionMode, AiGuardRole, AiGuardRule, AiModelHeaderMatch, AiModelPattern, AiModelRoute,
+    AiModelRouteAction, AiModelRouteCandidate, AiModelRouteMatch, AiProxyConfig, AiTokenQuotaConfig, AiTokenQuotaLimit,
     AiTokenQuotaOnExceeded, AiTokenQuotaScope, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig,
     BasicAuthSecretGroup, CaseType, CertHeaderFormat, CertSourceMode, CompiledJsonBodyRewrite,
     CompiledJsonPatchOperation, CompiledJsonPatchValue, CompiledTemplate, ConsumerBy, CorsConfig, CsrfConfig,
@@ -61,9 +61,9 @@ pub use plugin_configs::{
     ResolvedJwtCredential, ResolvedJwtIssuerGroup, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig,
     RestrictionMode, RestrictionRule, RestrictionSource, RouteRule, RuleGroup, SanType, SchemaComplexityProfile,
     StrictJsonError, TemplateSegment, TemplateVarType, TransformConfig, TransformType, UnauthAction,
-    UpstreamHeaderConfig, VerificationMode, ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES,
-    MAX_JSON_INSTANCE_DEPTH, MAX_JSON_INSTANCE_NODES, MAX_JSON_PATCH_OPERATIONS, MAX_JSON_PATCH_PLAN_BYTES,
-    MAX_JSON_POINTER_BYTES, MAX_JSON_POINTER_TOKENS,
+    UpstreamHeaderConfig, VerificationMode, A2A_AGENT_CARD_MAX_BYTES, ABSOLUTE_INSTANCE_MAX_BYTES,
+    DEFAULT_INSTANCE_MAX_BYTES, MAX_JSON_INSTANCE_DEPTH, MAX_JSON_INSTANCE_NODES, MAX_JSON_PATCH_OPERATIONS,
+    MAX_JSON_PATCH_PLAN_BYTES, MAX_JSON_POINTER_BYTES, MAX_JSON_POINTER_TOKENS,
 };
 pub use plugin_validation::PluginValidation;
 pub use validate::{applicable_stages_by_name, StageSet, HTTP_PLUGIN_STAGE_EXCEPTIONS};

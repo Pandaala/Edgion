@@ -1051,6 +1051,21 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx
     }
 
+    fn try_activate_a2a_gateway(&mut self) -> bool {
+        if self.ctx.a2a_gateway_activated {
+            false
+        } else {
+            self.ctx.a2a_gateway_activated = true;
+            true
+        }
+    }
+
+    fn pin_edgion_backend_snapshot(&mut self, snapshot: crate::ai::EdgionBackendSnapshot) {
+        if self.ctx.edgion_backend_snapshot.is_none() {
+            self.ctx.edgion_backend_snapshot = Some(snapshot);
+        }
+    }
+
     fn add_error(&mut self, status: edgion_resources::EdgionStatus) {
         self.ctx.add_error(status);
     }
@@ -2528,6 +2543,15 @@ mod record_outcome_tests {
             ctx.request_body_stream_active,
             "install must set the monotonic retry/disposition latch"
         );
+    }
+
+    #[tokio::test]
+    async fn a2a_gateway_activation_is_request_scoped_first_writer_wins() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert!(adapter.try_activate_a2a_gateway());
+        assert!(!adapter.try_activate_a2a_gateway());
     }
 
     #[tokio::test]

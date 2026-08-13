@@ -188,6 +188,7 @@ impl EdgionPluginsHandler {
                 // variant forces a compile error here (fail-safe completeness guard).
                 EdgionPlugin::RequestHeaderModifier(_)
                 | EdgionPlugin::AiProxy(_)
+                | EdgionPlugin::A2aGateway(_)
                 | EdgionPlugin::ResponseHeaderModifier(_)
                 | EdgionPlugin::RequestRedirect(_)
                 | EdgionPlugin::UrlRewrite(_)
@@ -2600,6 +2601,7 @@ mod tests {
                 | EdgionPlugin::Canary(_) => true,
                 EdgionPlugin::RequestHeaderModifier(_)
                 | EdgionPlugin::AiProxy(_)
+                | EdgionPlugin::A2aGateway(_)
                 | EdgionPlugin::ResponseHeaderModifier(_)
                 | EdgionPlugin::RequestRedirect(_)
                 | EdgionPlugin::UrlRewrite(_)

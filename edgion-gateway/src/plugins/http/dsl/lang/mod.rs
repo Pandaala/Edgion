@@ -5,7 +5,6 @@
 //! compile/validate path. The re-exports below keep the historical
 //! `dsl::lang::*` paths working for the runtime side that stays here.
 
-mod body_scanners;
 pub mod builtins;
 pub mod vm;
 

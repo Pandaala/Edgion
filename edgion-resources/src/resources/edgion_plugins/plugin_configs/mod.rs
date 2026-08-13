@@ -1,3 +1,4 @@
+mod a2a_gateway;
 pub mod access_log_extern;
 mod ai_guard;
 mod ai_proxy;
@@ -45,6 +46,7 @@ mod trace_context;
 mod wasm;
 mod wasm_oci;
 
+pub use a2a_gateway::{A2aGatewayConfig, A2A_AGENT_CARD_MAX_BYTES};
 pub use access_log_extern::{is_blocked, AccessLogExternField, LogExtSource, ACCESS_LOG_BLOCKED_CTX_KEYS};
 pub use ai_guard::{
     compile_guard_pattern, AiGuardAction, AiGuardConfig, AiGuardEvaluator, AiGuardMatcher, AiGuardPiiDetector,

@@ -40,6 +40,8 @@ mod pg_upstream_response_body_filter;
 mod pg_upstream_response_filter;
 
 #[cfg(test)]
+pub(crate) use pg_upstream_peer::backend_snapshot_for_request;
+#[cfg(test)]
 pub(crate) use pg_upstream_response_body_filter::run_stream_processors;
 
 pub use content_type::{is_grpc_content_type, is_grpc_web_content_type};

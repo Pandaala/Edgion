@@ -950,6 +950,44 @@ mod tests {
     }
 
     #[test]
+    fn request_pin_keeps_variant_generation_stable_across_hot_reload() {
+        let store = EdgionBackendStore::new();
+        let key = "default/agent".to_string();
+
+        store.full_set(&HashMap::from([(
+            key.clone(),
+            resource("agent", "https://ai.example", Some(b"test-key")),
+        )]));
+        let old_ai = store.edgion_backend_snapshot();
+        store.full_set(&HashMap::from([(key.clone(), a2a_service_resource("agent", true))]));
+        let new_a2a = store.edgion_backend_snapshot();
+        let selected = crate::routes::http::proxy_http::backend_snapshot_for_request(Some(&old_ai), || new_a2a);
+        assert!(matches!(
+            selected.get_by_key(&key).as_deref(),
+            Some(RuntimeEdgionBackend::Ai(_))
+        ));
+        let selected = crate::routes::http::proxy_http::backend_snapshot_for_request(Some(&old_ai), || {
+            panic!("pinned requests must not load the current generation")
+        });
+        assert!(matches!(
+            selected.get_by_key(&key).as_deref(),
+            Some(RuntimeEdgionBackend::Ai(_))
+        ));
+
+        let old_a2a = store.edgion_backend_snapshot();
+        store.full_set(&HashMap::from([(
+            key.clone(),
+            resource("agent", "https://ai.example", Some(b"test-key")),
+        )]));
+        let new_ai = store.edgion_backend_snapshot();
+        let selected = crate::routes::http::proxy_http::backend_snapshot_for_request(Some(&old_a2a), || new_ai);
+        assert!(matches!(
+            selected.get_by_key(&key).as_deref(),
+            Some(RuntimeEdgionBackend::A2a(_))
+        ));
+    }
+
+    #[test]
     fn unresolved_or_mismatched_a2a_proof_withdraws_previous_generation() {
         let store = EdgionBackendStore::new();
         let key = "default/agent";

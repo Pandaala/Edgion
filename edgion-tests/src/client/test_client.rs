@@ -660,6 +660,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "forward-auth" | "forwardauth" => "EdgionPlugins/ForwardAuth".to_string(),
             "ext-proc" | "extproc" => "EdgionPlugins/ExtProc".to_string(),
             "ai-guard" | "aiguard" => "EdgionPlugins/AiGuard".to_string(),
+            "a2a-gateway" | "a2agateway" => "EdgionPlugins/A2aGateway".to_string(),
             "guardrail" => "EdgionPlugins/Guardrail".to_string(),
             "openid-connect" | "openidconnect" | "oidc" => "EdgionPlugins/OpenidConnect".to_string(),
             "webhook-keyget" | "webhookkeyget" => "EdgionPlugins/WebhookKeyGet".to_string(),
@@ -834,6 +835,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/ForwardAuth" => "EdgionPlugins",
         "EdgionPlugins/ExtProc" => "EdgionPlugins",
         "EdgionPlugins/AiGuard" => "EdgionBackend/SingleProvider",
+        "EdgionPlugins/A2aGateway" => "EdgionPlugins",
         "EdgionPlugins/Guardrail" => "EdgionBackend/SingleProvider",
         "EdgionPlugins/DirectEndpoint" => "EdgionPlugins",
         "EdgionPlugins/DynamicInternalUpstream" => "EdgionPlugins",
@@ -1773,6 +1775,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::AiGuardTestSuite));
+        }
+        "EdgionPlugins/A2aGateway" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/A2aGateway tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::A2aGatewayTestSuite));
         }
         "EdgionPlugins/Guardrail" => {
             if !gateway {

@@ -1,5 +1,6 @@
 //! Plugin store module for EdgionPlugins resources
 
+pub mod a2a_gateway;
 pub mod ai_guard;
 pub mod ai_proxy;
 pub mod all_endpoint_status;
@@ -44,6 +45,7 @@ pub mod response_rewrite;
 pub mod trace_context;
 pub mod wasm;
 
+pub use a2a_gateway::A2aGateway;
 pub use ai_guard::AiGuard;
 pub use ai_proxy::AiProxy;
 pub use all_endpoint_status::AllEndpointStatus;

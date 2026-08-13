@@ -1,7 +1,7 @@
 use crate::ai::terminal::{
     AiClientStreamDialect, FinalResponseEligibility, ResponseProcessorSlot, ResponseTerminalState,
 };
-use crate::ai::{AiAttemptPlan, AiRequestContext, GenAiSummary};
+use crate::ai::{AiAttemptPlan, AiRequestContext, EdgionBackendSnapshot, GenAiSummary};
 use crate::backends::{SelectedHttpBackend, ServiceBackendKind};
 use crate::lb::edgion_backend::EdgionBackend;
 use crate::observe::logs::LogBuffer;
@@ -379,7 +379,12 @@ impl NormalizedHostname {
             }
         } else {
             match h.rfind(':') {
-                Some(pos) if h[pos + 1..].bytes().all(|b| b.is_ascii_digit()) => &h[..pos],
+                // A registered name or IPv4 authority has at most one colon.
+                // Bare IPv6 has multiple colons and no syntactically distinct
+                // port suffix, so it must remain intact.
+                Some(pos) if h.matches(':').count() == 1 && h[pos + 1..].bytes().all(|b| b.is_ascii_digit()) => {
+                    &h[..pos]
+                }
                 _ => h,
             }
         };
@@ -417,6 +422,19 @@ impl AsRef<str> for NormalizedHostname {
 impl fmt::Display for NormalizedHostname {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+#[cfg(test)]
+mod normalized_hostname_tests {
+    use super::NormalizedHostname;
+
+    #[test]
+    fn normalization_strips_only_unambiguous_ports() {
+        assert_eq!(NormalizedHostname::new("Example.COM:8443").as_str(), "example.com");
+        assert_eq!(NormalizedHostname::new("127.0.0.1:8080").as_str(), "127.0.0.1");
+        assert_eq!(NormalizedHostname::new("[2001:db8::1]:443").as_str(), "2001:db8::1");
+        assert_eq!(NormalizedHostname::new("2001:db8::1").as_str(), "2001:db8::1");
     }
 }
 
@@ -1147,6 +1165,12 @@ pub struct EdgionHttpContext {
     /// invoked. Nested ExtensionRef execution replaces and restores this slot.
     pub(crate) current_plugin_entry: Option<CurrentPluginEntryIdentity>,
 
+    /// First-writer latch for an A2A Gateway activated by the matched rule.
+    pub(crate) a2a_gateway_activated: bool,
+
+    /// Unified backend generation pinned by A2A protocol classification.
+    pub(crate) edgion_backend_snapshot: Option<EdgionBackendSnapshot>,
+
     /// Number of connection attempts to backends
     pub try_cnt: u32,
 
@@ -1624,6 +1648,8 @@ impl EdgionHttpContext {
             pending_edgion_plugins_logs: Vec::new(),
             plugin_running_result: PluginRunningResult::Nothing,
             current_plugin_entry: None,
+            a2a_gateway_activated: false,
+            edgion_backend_snapshot: None,
             try_cnt: 0,
             retry_on_status: false,
             peer_timeout_source: None,

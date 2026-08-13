@@ -878,7 +878,9 @@ pub async fn select_http_backend(
     // per-request override — it wins over the sticky session, and the session
     // binding is left untouched (no resolution, state stays `Inactive`, no
     // cookie rewrite; the next non-jump request resolves normally).
-    let backend_snapshot = crate::ai::global_edgion_backend_store().edgion_backend_snapshot();
+    let backend_snapshot = backend_snapshot_for_request(ctx.edgion_backend_snapshot.as_ref(), || {
+        crate::ai::global_edgion_backend_store().edgion_backend_snapshot()
+    });
     let sp_idx = if sp_token.is_none() || matches!(ctx.jump.as_ref(), Some(UpstreamJumpTarget::Internal(_))) {
         None
     } else {
@@ -967,6 +969,13 @@ pub async fn select_http_backend(
         ctx.sp_token_scope = a2a_session_scope(selected);
     }
     Ok(())
+}
+
+pub(crate) fn backend_snapshot_for_request(
+    pinned: Option<&crate::ai::EdgionBackendSnapshot>,
+    current: impl FnOnce() -> crate::ai::EdgionBackendSnapshot,
+) -> crate::ai::EdgionBackendSnapshot {
+    pinned.cloned().unwrap_or_else(current)
 }
 
 fn sticky_candidate(

@@ -240,6 +240,10 @@ Resource structs in `edgion-resources/src/resources/` serve two paths: the **K8s
 
 These are architectural boundaries, not implementation suggestions:
 
+AI request-body processing does not default to streaming: choose canonical
+streaming observation or the existing request `BodyStorage` according to
+whether the feature needs incremental bytes or one complete document.
+
 1. **Only the proxied request body may be cached.** Request plugins that require
    the complete body share the request-scoped `BodyStorage`; it may spill from
    memory to disk and is bounded by the gateway physical body cap. Do not add a

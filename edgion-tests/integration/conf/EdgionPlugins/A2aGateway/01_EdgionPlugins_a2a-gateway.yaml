@@ -1,0 +1,89 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: a2a-gateway-card
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: A2aGateway
+      config:
+        externalUrl: https://public.agent.example:8443
+        card:
+          name: Integration agent
+          description: A2A Gateway integration fixture
+          version: 1.0.0
+          capabilities: {}
+          supportedInterfaces:
+            - url: https://private.agent.invalid/rpc?tenant=blue
+              protocolBinding: JSONRPC
+              protocolVersion: "1.0"
+              extensionField: preserved
+            - url: https://private.agent.invalid/http-json
+              protocolBinding: HTTP+JSON
+              protocolVersion: "0.3"
+            - url: https://private.agent.invalid/rpc-secondary
+              protocolBinding: JSONRPC
+              protocolVersion: "1.0"
+          defaultInputModes: [application/json]
+          defaultOutputModes: [application/json]
+          skills:
+            - id: echo
+              name: Echo
+              description: Echo a message
+              tags: [test]
+          extensionObject:
+            retained: true
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: a2a-gateway-rpc-close
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: A2aGateway
+      config:
+        failOpen: false
+        card:
+          name: Integration agent
+          description: A2A Gateway integration fixture
+          version: 1.0.0
+          capabilities: {}
+          supportedInterfaces:
+            - url: https://private.agent.invalid/rpc
+              protocolBinding: JSONRPC
+              protocolVersion: "1.0"
+          defaultInputModes: [application/json]
+          defaultOutputModes: [application/json]
+          skills:
+            - id: echo
+              name: Echo
+              description: Echo a message
+              tags: [test]
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: a2a-gateway-rpc-open
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: A2aGateway
+      config:
+        failOpen: true
+        card:
+          name: Integration agent
+          description: A2A Gateway integration fixture
+          version: 1.0.0
+          capabilities: {}
+          supportedInterfaces:
+            - url: https://private.agent.invalid/rpc
+              protocolBinding: JSONRPC
+              protocolVersion: "1.0"
+          defaultInputModes: [application/json]
+          defaultOutputModes: [application/json]
+          skills:
+            - id: echo
+              name: Echo
+              description: Echo a message
+              tags: [test]

@@ -29,6 +29,7 @@ description: edgion-gateway data plane architecture — Pingora integration, rou
 | [12-edgion-plugin-dev.md](12-edgion-plugin-dev.md) | HTTP plugin development guide | Develop a new EdgionPlugin |
 | [13-stream-plugin-dev.md](13-stream-plugin-dev.md) | Stream plugin development guide | Develop TCP/TLS layer plugins |
 | [14-link-sys-dev.md](14-link-sys-dev.md) | LinkSys connector development guide | Develop a new external-system connector |
+| [15-a2a-gateway.md](15-a2a-gateway.md) | A2A Gateway Phase 1 | Maintain local Agent Card publication and bounded JSON-RPC method observation |
 | [uri-normalization/SKILL.md](uri-normalization/SKILL.md) | URI normalization architecture (full-stack naming table, dual-view, iron rules, security guarantees) | Develop plugins that read/write path, review ACL code, troubleshoot path bypass |
 
 ## Architecture overview
