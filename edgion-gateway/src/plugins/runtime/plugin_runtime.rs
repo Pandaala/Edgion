@@ -1736,6 +1736,9 @@ impl PluginRuntime {
         let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
         for filter in &self.request_plugins {
+            let previous_identity = session_adapter.replace_plugin_entry_identity(
+                crate::ctx::CurrentPluginEntryIdentity::new(filter.name(), filter.alias()),
+            );
             // Install this entry's dye plan before invocation (Task 7's
             // record_outcome lifts it back out of ctx). Request-direction
             // anti-spoof strip runs here too, before the plugin's kill
@@ -1747,7 +1750,13 @@ impl PluginRuntime {
             let mut plugin_log = PluginLog::with_alias(filter.name(), filter.alias());
             let start = std::time::Instant::now();
 
+            // If this future is cancelled while the plugin is awaiting, the
+            // whole request-stage future and adapter are dropped; no later
+            // plugin can resume and register an observer under the stale
+            // identity. Every completed invocation restores before any result
+            // branch below.
             let result = filter.run_request(&mut session_adapter, &mut plugin_log).await;
+            session_adapter.restore_plugin_entry_identity(previous_identity);
 
             // Skip time_cost for ExtensionRef (identified by refer_to being set)
             if plugin_log.refer_to.is_none() {

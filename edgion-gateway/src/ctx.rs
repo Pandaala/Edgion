@@ -29,6 +29,79 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+const PLUGIN_ENTRY_NAME_CAPACITY: usize = crate::plugins::runtime::log::NAME_CAPACITY;
+const PLUGIN_ENTRY_ALIAS_CAPACITY: usize = 32;
+
+/// Allocation-free identity of the request-stage plugin entry currently being
+/// invoked. The runtime owns this slot; body observers may only snapshot it at
+/// registration time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CurrentPluginEntryIdentity {
+    name: [u8; PLUGIN_ENTRY_NAME_CAPACITY],
+    name_len: u8,
+    alias: [u8; PLUGIN_ENTRY_ALIAS_CAPACITY],
+    alias_len: u8,
+    has_alias: bool,
+}
+
+impl CurrentPluginEntryIdentity {
+    pub(crate) fn new(name: &str, alias: Option<&str>) -> Option<Self> {
+        if name.is_empty() || name.len() > PLUGIN_ENTRY_NAME_CAPACITY {
+            return None;
+        }
+        let alias = alias.unwrap_or_default();
+        if alias.len() > PLUGIN_ENTRY_ALIAS_CAPACITY {
+            return None;
+        }
+        let mut identity = Self {
+            name: [0; PLUGIN_ENTRY_NAME_CAPACITY],
+            name_len: name.len() as u8,
+            alias: [0; PLUGIN_ENTRY_ALIAS_CAPACITY],
+            alias_len: alias.len() as u8,
+            has_alias: !alias.is_empty(),
+        };
+        identity.name[..name.len()].copy_from_slice(name.as_bytes());
+        identity.alias[..alias.len()].copy_from_slice(alias.as_bytes());
+        Some(identity)
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        // Both arrays are populated exclusively from validated UTF-8 `str`
+        // slices and read back at their original lengths.
+        std::str::from_utf8(&self.name[..usize::from(self.name_len)]).expect("plugin identity must remain UTF-8")
+    }
+
+    pub(crate) fn alias(&self) -> Option<&str> {
+        self.has_alias.then(|| {
+            std::str::from_utf8(&self.alias[..usize::from(self.alias_len)])
+                .expect("plugin alias identity must remain UTF-8")
+        })
+    }
+}
+
+#[cfg(test)]
+mod plugin_entry_identity_tests {
+    use super::CurrentPluginEntryIdentity;
+
+    #[test]
+    fn preserves_bounded_name_and_alias() {
+        let identity = CurrentPluginEntryIdentity::new("A2aGateway", Some("edge.a2a-1")).unwrap();
+        assert_eq!(identity.name(), "A2aGateway");
+        assert_eq!(identity.alias(), Some("edge.a2a-1"));
+        assert_eq!(
+            CurrentPluginEntryIdentity::new("A2aGateway", None).unwrap().alias(),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_empty_or_overlong_identity_parts() {
+        assert!(CurrentPluginEntryIdentity::new("", None).is_none());
+        assert!(CurrentPluginEntryIdentity::new(&"x".repeat(37), None).is_none());
+        assert!(CurrentPluginEntryIdentity::new("A2aGateway", Some(&"x".repeat(33))).is_none());
+    }
+}
+
 /// Operator-defined log labels, resolved once per resource and shared by
 /// reference across `Rsc` clones (so the per-request path never re-allocates).
 ///
@@ -1070,6 +1143,10 @@ pub struct EdgionHttpContext {
     /// Plugin running result
     pub plugin_running_result: PluginRunningResult,
 
+    /// Host-owned identity of the request-stage plugin entry currently being
+    /// invoked. Nested ExtensionRef execution replaces and restores this slot.
+    pub(crate) current_plugin_entry: Option<CurrentPluginEntryIdentity>,
+
     /// Number of connection attempts to backends
     pub try_cnt: u32,
 
@@ -1240,6 +1317,11 @@ pub struct EdgionHttpContext {
     /// be monotonic, and a lost handler must fail the request rather than
     /// re-arm retries that would forward the remaining body uninspected.
     pub request_body_stream_active: bool,
+
+    /// Optional fixed-capacity, read-only request-body observer registry.
+    /// Allocated only when an internal request-stage plugin successfully
+    /// registers; it never owns or replays body bytes.
+    pub(crate) request_body_observers: Option<Box<crate::request_body::observer::RequestBodyObservers>>,
 
     /// First-write-wins request-chain guard for JSON Schema validation.
     ///
@@ -1541,6 +1623,7 @@ impl EdgionHttpContext {
             stage_logs: Vec::with_capacity(3),
             pending_edgion_plugins_logs: Vec::new(),
             plugin_running_result: PluginRunningResult::Nothing,
+            current_plugin_entry: None,
             try_cnt: 0,
             retry_on_status: false,
             peer_timeout_source: None,
@@ -1566,6 +1649,7 @@ impl EdgionHttpContext {
             request_body: RequestBodyState::default(),
             request_body_stream: Vec::new(),
             request_body_stream_active: false,
+            request_body_observers: None,
             json_schema_validation_claimed: false,
             resolved_global_plugins: None,
             resolved_gateway_plugins: None,

@@ -335,6 +335,33 @@ Current behavior:
 
 If you are debugging "ExtensionRef does not take effect / plugin logs are missing", start tracing from here.
 
+## Optional read-only request-body observation
+
+The Gateway has one internal, request-scoped observer seam for protocol
+frontends that need bounded metadata from the proxied request body without
+requiring full-body capture. It is not a general operator plugin API.
+
+- Registration is available only from the request stage through
+  `PluginSession::install_request_body_observer`. A false return always disables
+  observation and is failure-open; it must never reject the request.
+- Observers run synchronously after existing mutable request-body stream
+  handlers and before the mirror tee/upstream forwarding. They receive borrowed
+  immutable bytes and cannot replace, retain, replay, or aggregate the body.
+- The host caps slots, bytes, events, declared work, and retained scratch.
+  Retry reuses the canonical Pingora replay path and resets only fixed semantic
+  state; request-wide work counters do not reset.
+- BodyStorage remains the only request-body cache/spill owner. Installing an
+  observer does not enable capture, change framing, or disable retry.
+- Chunk processing emits no logs, metrics, or tracing. Exactly one static,
+  payload-free outcome per observer is drained through the existing access-log
+  stage at EOS or request cleanup.
+- Observer-owned factory, callback, retained-size, finalize, and destructor
+  panics use the canonical redacted panic scope and cannot expose their payload.
+
+Protocol parsing belongs to the registering frontend. It must use fixed-capacity
+state and charge semantic work before scanning; the generic seam does not
+contain JSON, A2A, method, or content-type recognition.
+
 ## Reading the request path
 
 > Authoritative architecture doc: [uri-normalization/SKILL.md](uri-normalization/SKILL.md)

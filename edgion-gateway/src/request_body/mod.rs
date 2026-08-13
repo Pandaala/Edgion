@@ -5,6 +5,7 @@
 //! only; proxied upstream responses remain streaming-only.
 
 pub mod config;
+pub(crate) mod observer;
 mod operation;
 mod state;
 mod storage;

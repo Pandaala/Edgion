@@ -242,6 +242,9 @@ impl ExtensionRefFilter {
         match stage {
             PluginRunningStage::Request => {
                 for plugin in plugin_runtime.request_plugins_iter() {
+                    let previous_identity = session.replace_plugin_entry_identity(
+                        crate::ctx::CurrentPluginEntryIdentity::new(plugin.name(), plugin.alias()),
+                    );
                     // Install this inner filter's dye plan + run the
                     // request-direction anti-spoof strip before invocation,
                     // mirroring `PluginRuntime::run_request_plugins` — an
@@ -253,6 +256,7 @@ impl ExtensionRefFilter {
                     session.strip_request_dye_once();
                     let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
                     let result = plugin.run_request(session, &mut inner_log).await;
+                    session.restore_plugin_entry_identity(previous_identity);
                     session.push_to_edgion_plugins_log(&log_token, inner_log);
 
                     if !matches!(result, PluginRunningResult::GoodNext | PluginRunningResult::Nothing) {
@@ -439,6 +443,65 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(format!("{}/{}", key_ns, name), compile_plugins(&ep));
         get_global_plugin_store().replace_all(map);
+    }
+
+    fn make_terminating_plugin(key_ns: &str, name: &str) {
+        let ep = EdgionPlugins {
+            metadata: ObjectMeta {
+                namespace: Some(key_ns.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: EdgionPluginsSpec {
+                request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::Mock(
+                    edgion_resources::resources::edgion_plugins::MockConfig::default(),
+                ))]),
+                ..Default::default()
+            },
+            status: None,
+        };
+        let mut map = HashMap::new();
+        map.insert(format!("{key_ns}/{name}"), compile_plugins(&ep));
+        get_global_plugin_store().replace_all(map);
+    }
+
+    #[tokio::test]
+    async fn request_inner_identity_restores_outer_on_early_result() {
+        make_terminating_plugin("ns", "terminating");
+        let outer = crate::ctx::CurrentPluginEntryIdentity::new("ExtensionRef", Some("outer"));
+        let outer_for_replace = outer;
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_start_edgion_plugins_log()
+            .returning(|_| EdgionPluginsLogToken::new(0));
+        session.expect_install_dye_plan().return_const(());
+        session.expect_strip_request_dye_once().return_const(());
+        session
+            .expect_replace_plugin_entry_identity()
+            .times(1)
+            .withf(|identity| identity.as_ref().is_some_and(|value| value.name() == "Mock"))
+            .returning(move |_| outer_for_replace);
+        session
+            .expect_restore_plugin_entry_identity()
+            .times(1)
+            .withf(|identity| identity.as_ref().is_some_and(|value| value.name() == "ExtensionRef"))
+            .return_const(());
+        session.expect_set_response_header().times(1).returning(|_, _| Ok(()));
+        session.expect_push_to_edgion_plugins_log().times(1).return_const(());
+
+        let filter = ExtensionRefFilter::new(
+            "ns".to_string(),
+            LocalObjectReference {
+                group: "".into(),
+                kind: "EdgionPlugins".into(),
+                name: "terminating".into(),
+                resolved_namespace: None,
+            },
+        );
+        let mut log = PluginLog::new("test");
+        let result = filter.run_request(&mut session, &mut log).await;
+        assert!(matches!(result, PluginRunningResult::ErrResponse { status: 200, .. }));
     }
 
     #[test]

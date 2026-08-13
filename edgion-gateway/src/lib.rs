@@ -14,6 +14,68 @@ compile_error!(
 #[cfg(all(feature = "boringssl", feature = "rustls"))]
 compile_error!("features `boringssl` and `rustls` are mutually exclusive; enable exactly one TLS backend");
 
+#[cfg(test)]
+mod test_allocation_counter {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    pub struct CountingAllocator;
+
+    thread_local! {
+        static ENABLED: Cell<bool> = const { Cell::new(false) };
+        static CALLS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            ENABLED.with(|enabled| {
+                if enabled.get() {
+                    CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
+                }
+            });
+            // SAFETY: this wrapper forwards the caller-provided layout without
+            // modification to the process system allocator.
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: ptr/layout came from the forwarded System allocation.
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            ENABLED.with(|enabled| {
+                if enabled.get() {
+                    CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
+                }
+            });
+            // SAFETY: ptr/layout came from System and new_size is forwarded.
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    pub fn count_allocations<R>(f: impl FnOnce() -> R) -> (R, usize) {
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                ENABLED.with(|enabled| enabled.set(false));
+            }
+        }
+
+        CALLS.with(|calls| calls.set(0));
+        ENABLED.with(|enabled| enabled.set(true));
+        let guard = Guard;
+        let value = f();
+        drop(guard);
+        let calls = CALLS.with(Cell::get);
+        (value, calls)
+    }
+}
+
+#[cfg(test)]
+#[global_allocator]
+static TEST_ALLOCATOR: test_allocation_counter::CountingAllocator = test_allocation_counter::CountingAllocator;
+
 /// Name of the active global memory allocator (selected by the binary's
 /// `allocator-*` feature). Reported in startup/version output.
 pub fn allocator_name() -> &'static str {

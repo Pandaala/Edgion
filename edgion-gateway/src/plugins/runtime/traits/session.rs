@@ -678,6 +678,37 @@ pub trait PluginSession: Send + Sync {
         None
     }
 
+    /// Replace the host-owned current request-plugin identity and return the
+    /// previous value. Runtime dispatchers pair this with
+    /// `restore_plugin_entry_identity`, including nested ExtensionRef calls.
+    #[doc(hidden)]
+    #[allow(private_interfaces)]
+    fn replace_plugin_entry_identity(
+        &mut self,
+        _identity: Option<crate::ctx::CurrentPluginEntryIdentity>,
+    ) -> Option<crate::ctx::CurrentPluginEntryIdentity> {
+        None
+    }
+
+    /// Restore the exact identity returned by
+    /// `replace_plugin_entry_identity`.
+    #[doc(hidden)]
+    #[allow(private_interfaces)]
+    fn restore_plugin_entry_identity(&mut self, _previous: Option<crate::ctx::CurrentPluginEntryIdentity>) {}
+
+    /// Install a bounded, synchronous and read-only request-body observer.
+    /// A false return only disables observation; callers must continue the
+    /// request under the seam's fixed failure-open contract.
+    #[allow(private_interfaces)]
+    fn install_request_body_observer(
+        &mut self,
+        factory: crate::request_body::observer::RequestBodyObserverFactory,
+        _limits: crate::request_body::observer::ObserverLimits,
+    ) -> bool {
+        let _ = edgion_common::startup::catch_redacted_panic(|| drop(factory));
+        false
+    }
+
     /// Install a per-chunk streamed request-body handler for this request.
     /// Returns `false` when the capability is unavailable (the handler is
     /// dropped, nothing was installed) — the caller must then apply its

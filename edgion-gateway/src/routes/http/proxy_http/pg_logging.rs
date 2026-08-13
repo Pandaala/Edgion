@@ -50,6 +50,7 @@ pub async fn logging(
     // early upstream response) still carry log entries — sweep them into the
     // stage logs before the access-log entry is assembled.
     super::pg_request_body_filter_action::drain_leftover_stream_logs(ctx);
+    super::pg_request_body_filter_action::drain_request_body_observer_logs(ctx);
     if let Some(processor) = ctx.semantic_response_processor.as_mut() {
         let (outcome, reason) = match _e.map(PingoraError::esource) {
             Some(ErrorSource::Upstream) => ("upstream-abort", "stream-error"),

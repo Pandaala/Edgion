@@ -1587,6 +1587,62 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.current_dye_plan.clone()
     }
 
+    #[allow(private_interfaces)]
+    fn replace_plugin_entry_identity(
+        &mut self,
+        identity: Option<crate::ctx::CurrentPluginEntryIdentity>,
+    ) -> Option<crate::ctx::CurrentPluginEntryIdentity> {
+        std::mem::replace(&mut self.ctx.current_plugin_entry, identity)
+    }
+
+    #[allow(private_interfaces)]
+    fn restore_plugin_entry_identity(&mut self, previous: Option<crate::ctx::CurrentPluginEntryIdentity>) {
+        self.ctx.current_plugin_entry = previous;
+    }
+
+    #[allow(private_interfaces)]
+    fn install_request_body_observer(
+        &mut self,
+        factory: crate::request_body::observer::RequestBodyObserverFactory,
+        limits: crate::request_body::observer::ObserverLimits,
+    ) -> bool {
+        let refuse = |factory| {
+            let _ = edgion_common::startup::catch_redacted_panic(|| drop(factory));
+            false
+        };
+        if !self.ctx.request_info.in_request_body_stage || self.request_headers_end_stream().is_none() {
+            return refuse(factory);
+        }
+        let req = self.inner.req_header();
+        if req.method == http::Method::CONNECT
+            || pingora_core::protocols::http::v1::common::is_upgrade_req(req)
+            || req.version < http::Version::HTTP_11
+        {
+            return refuse(factory);
+        }
+        let Some(identity) = self.ctx.current_plugin_entry else {
+            return refuse(factory);
+        };
+        if self
+            .ctx
+            .request_body_observers
+            .as_ref()
+            .is_some_and(|observers| observers.is_full())
+        {
+            return refuse(factory);
+        }
+        if let Some(observers) = self.ctx.request_body_observers.as_mut() {
+            return observers.try_install(identity, factory, limits);
+        }
+
+        let mut observers = Box::new(crate::request_body::observer::RequestBodyObservers::default());
+        if !observers.try_install(identity, factory, limits) {
+            return false;
+        }
+        self.ctx.request_body_observers = Some(observers);
+        true
+    }
+
     fn install_request_body_stream_handler(
         &mut self,
         handler: Box<dyn crate::plugins::runtime::traits::request_body_stream::RequestBodyStreamHandler>,
@@ -2410,6 +2466,54 @@ mod record_outcome_tests {
         }
     }
 
+    struct NoopObserver;
+
+    struct OversizedObserver;
+
+    struct PanickingFactoryCapture;
+
+    impl Drop for PanickingFactoryCapture {
+        fn drop(&mut self) {
+            panic!("captured factory detail must stay redacted");
+        }
+    }
+
+    impl crate::request_body::observer::sealed::Sealed for NoopObserver {}
+
+    impl crate::request_body::observer::RequestBodyObserver for NoopObserver {
+        fn retained_bytes(&self) -> usize {
+            1
+        }
+
+        fn observe(
+            &mut self,
+            _bytes: &[u8],
+            _event: RequestBodyEvent,
+            _budget: &mut crate::request_body::observer::ObserverBudget,
+        ) -> Result<crate::request_body::observer::ObserverControl, crate::request_body::observer::ObserverError>
+        {
+            Ok(crate::request_body::observer::ObserverControl::Continue)
+        }
+    }
+
+    impl crate::request_body::observer::sealed::Sealed for OversizedObserver {}
+
+    impl crate::request_body::observer::RequestBodyObserver for OversizedObserver {
+        fn retained_bytes(&self) -> usize {
+            crate::request_body::observer::MAX_OBSERVER_RETAINED_BYTES + 1
+        }
+
+        fn observe(
+            &mut self,
+            _bytes: &[u8],
+            _event: RequestBodyEvent,
+            _budget: &mut crate::request_body::observer::ObserverBudget,
+        ) -> Result<crate::request_body::observer::ObserverControl, crate::request_body::observer::ObserverError>
+        {
+            Ok(crate::request_body::observer::ObserverControl::Continue)
+        }
+    }
+
     /// A real H1 downstream can answer the transport facts, so the streamed
     /// handler seam installs into the ctx vector and sets the monotonic latch.
     #[tokio::test]
@@ -2424,6 +2528,128 @@ mod record_outcome_tests {
             ctx.request_body_stream_active,
             "install must set the monotonic retry/disposition latch"
         );
+    }
+
+    #[tokio::test]
+    async fn observer_install_requires_request_stage_and_runtime_identity() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.in_request_body_stage = true;
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        let make_factory = || {
+            Box::new(|| Ok(Box::new(NoopObserver) as Box<dyn crate::request_body::observer::RequestBodyObserver>))
+                as crate::request_body::observer::RequestBodyObserverFactory
+        };
+
+        assert!(!adapter
+            .install_request_body_observer(make_factory(), crate::request_body::observer::ObserverLimits::default(),));
+        assert!(adapter.ctx.request_body_observers.is_none());
+
+        let previous = adapter
+            .replace_plugin_entry_identity(crate::ctx::CurrentPluginEntryIdentity::new("A2aGateway", Some("entry")));
+        assert!(!adapter.install_request_body_observer(
+            Box::new(|| Err(crate::request_body::observer::ObserverInitError)),
+            crate::request_body::observer::ObserverLimits::default(),
+        ));
+        assert!(adapter.ctx.request_body_observers.is_none());
+        assert!(!adapter.install_request_body_observer(
+            Box::new(|| panic!("static factory panic")),
+            crate::request_body::observer::ObserverLimits::default(),
+        ));
+        assert!(adapter.ctx.request_body_observers.is_none());
+        assert!(!adapter.install_request_body_observer(
+            Box::new(|| Ok(Box::new(OversizedObserver))),
+            crate::request_body::observer::ObserverLimits::default(),
+        ));
+        assert!(adapter.ctx.request_body_observers.is_none());
+        assert!(adapter
+            .install_request_body_observer(make_factory(), crate::request_body::observer::ObserverLimits::default(),));
+        adapter.restore_plugin_entry_identity(previous);
+        assert!(adapter.ctx.request_body_observers.is_some());
+        assert!(!adapter.ctx.request_body_stream_active);
+    }
+
+    #[tokio::test]
+    async fn observer_registration_refuses_unsupported_stage_and_h1_transports() {
+        #[derive(Clone, Copy)]
+        enum Refusal {
+            Stage,
+            Connect,
+            Upgrade,
+            Http10,
+        }
+
+        async fn refused(case: Refusal) {
+            let mut session = test_session().await;
+            match case {
+                Refusal::Stage => {}
+                Refusal::Connect => session.req_header_mut().method = http::Method::CONNECT,
+                Refusal::Upgrade => {
+                    session.req_header_mut().insert_header("connection", "upgrade").unwrap();
+                    session.req_header_mut().insert_header("upgrade", "websocket").unwrap();
+                }
+                Refusal::Http10 => session.req_header_mut().version = http::Version::HTTP_10,
+            }
+            let mut ctx = EdgionHttpContext::default();
+            ctx.request_info.in_request_body_stage = !matches!(case, Refusal::Stage);
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            let previous = adapter.replace_plugin_entry_identity(crate::ctx::CurrentPluginEntryIdentity::new(
+                "A2aGateway",
+                Some("entry"),
+            ));
+            let captured = PanickingFactoryCapture;
+            let factory = Box::new(move || {
+                let _captured = &captured;
+                Ok(Box::new(NoopObserver) as Box<dyn crate::request_body::observer::RequestBodyObserver>)
+            });
+            assert!(!adapter
+                .install_request_body_observer(factory, crate::request_body::observer::ObserverLimits::default(),));
+            adapter.restore_plugin_entry_identity(previous);
+            assert!(adapter.ctx.request_body_observers.is_none());
+            assert!(!adapter.ctx.request_body_stream_active);
+        }
+
+        for case in [Refusal::Stage, Refusal::Connect, Refusal::Upgrade, Refusal::Http10] {
+            refused(case).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn plugin_entry_identity_nested_restore_is_exact() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+
+        let before_outer = adapter.replace_plugin_entry_identity(crate::ctx::CurrentPluginEntryIdentity::new(
+            "ExtensionRef",
+            Some("outer"),
+        ));
+        assert!(before_outer.is_none());
+        let before_inner = adapter
+            .replace_plugin_entry_identity(crate::ctx::CurrentPluginEntryIdentity::new("A2aGateway", Some("inner")));
+        assert_eq!(
+            before_inner.as_ref().map(|identity| identity.name()),
+            Some("ExtensionRef")
+        );
+        adapter.restore_plugin_entry_identity(before_inner);
+        assert_eq!(
+            adapter
+                .ctx
+                .current_plugin_entry
+                .as_ref()
+                .map(|identity| identity.name()),
+            Some("ExtensionRef")
+        );
+        assert_eq!(
+            adapter
+                .ctx
+                .current_plugin_entry
+                .as_ref()
+                .and_then(|identity| identity.alias()),
+            Some("outer")
+        );
+        adapter.restore_plugin_entry_identity(before_outer);
+        assert!(adapter.ctx.current_plugin_entry.is_none());
     }
 
     #[tokio::test]

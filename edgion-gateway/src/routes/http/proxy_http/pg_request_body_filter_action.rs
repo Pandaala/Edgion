@@ -68,6 +68,13 @@ pub async fn request_body_filter_action(
         ctx.request_body_stream = handlers;
     }
 
+    // Observation sees the exact post-mutation bytes about to reach the
+    // mirror tee and primary upstream. It is synchronous, read-only and
+    // failure-open, so it cannot change the body action or backpressure path.
+    if let Some(observers) = ctx.request_body_observers.as_mut() {
+        observers.observe(body.as_deref().unwrap_or_default(), event, ctx.try_cnt);
+    }
+
     pg_request_body_filter::request_body_filter(edgion_http, session, body, event, ctx).await?;
     Ok(RequestBodyAction::Continue)
 }
@@ -169,4 +176,20 @@ pub fn drain_leftover_stream_logs(ctx: &mut EdgionHttpContext) {
     let mut handlers = std::mem::take(&mut ctx.request_body_stream);
     drain_handler_logs(&mut handlers, ctx);
     ctx.request_body_stream = handlers;
+}
+
+/// Idempotent observer cleanup/log sweep for EOS, cancellation, early local
+/// replies, and upstream aborts. Observer failures never affect the request.
+pub fn drain_request_body_observer_logs(ctx: &mut EdgionHttpContext) {
+    let Some(observers) = ctx.request_body_observers.as_mut() else {
+        return;
+    };
+    let filters = observers.finalize_incomplete_and_take_logs();
+    if !filters.is_empty() {
+        ctx.stage_logs.push(StageLogs {
+            stage: "request_body_observers",
+            filters,
+            edgion_plugins: Vec::new(),
+        });
+    }
 }
