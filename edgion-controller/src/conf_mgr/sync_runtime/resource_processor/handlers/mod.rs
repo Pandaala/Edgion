@@ -5,6 +5,7 @@
 //! is handled by ResourceProcessor.
 
 pub mod auth_spec;
+mod backend_capability;
 mod backend_tls_policy;
 pub(crate) mod config_data_ref_mark;
 mod configmap;

@@ -28,6 +28,8 @@
 //! Treat `Zeroizing` here as **defense-in-depth, not a strict end-to-end
 //! guarantee**.
 
+use std::fmt;
+
 use zeroize::Zeroizing;
 
 /// Shared by Redis / Etcd / ES basic / Webhook basic auth.
@@ -45,9 +47,18 @@ pub struct EsApiKeyMaterial {
 }
 
 /// Elasticsearch / Webhook bearer auth.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct BearerMaterial {
     pub token: String,
+}
+
+impl fmt::Debug for BearerMaterial {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BearerMaterial")
+            .field("token", &"[redacted]")
+            .finish()
+    }
 }
 
 /// Webhook HMAC auth.
@@ -161,6 +172,16 @@ mod tests {
         assert_send_sync::<AiApiKeyMaterial>();
         assert_send_sync::<AcmeAccountMaterial>();
         assert_send_sync::<TlsMaterial>();
+    }
+
+    #[test]
+    fn bearer_debug_is_redacted() {
+        let material = BearerMaterial {
+            token: "private-token".to_string(),
+        };
+        let debug = format!("{material:?}");
+        assert!(debug.contains("[redacted]"));
+        assert!(!debug.contains("private-token"));
     }
 
     #[test]

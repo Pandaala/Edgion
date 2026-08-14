@@ -22,8 +22,8 @@ pub use materials::{
     AcmeAccountMaterial, AiApiKeyMaterial, BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial, HmacMaterial,
     TlsMaterial,
 };
-pub use resolver::{ResolveError, SecretMaterialResolver};
+pub use resolver::{InvalidValueClass, ResolveError, SecretMaterialResolver};
 pub use resolvers::{
     AcmeAccountResolver, AiApiKeyResolver, BasicAuthResolver, BearerResolver, EsApiKeyResolver, HmacResolver,
-    TlsCertsResolver, ACME_ACCOUNT_KEY, TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY,
+    TlsCertsResolver, ACME_ACCOUNT_KEY, BEARER_TOKEN_KEY, TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY,
 };

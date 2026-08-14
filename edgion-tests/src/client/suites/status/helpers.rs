@@ -2,6 +2,7 @@
 
 use crate::framework::TestContext;
 use serde_json::Value;
+use std::time::{Duration, Instant};
 
 /// Fetch a namespaced resource from Controller Admin API (configserver endpoint)
 pub async fn fetch_resource_status(
@@ -41,6 +42,46 @@ pub async fn fetch_resource_status(
     }
 
     Ok(body["data"].clone())
+}
+
+/// Poll a namespaced resource until `accept` matches the observed status.
+///
+/// The Controller writes status asynchronously, and a resource whose refs are
+/// unresolved is reprocessed once its dependency store settles, so the first
+/// generation a reader observes can still carry an empty ancestor list. Waiting
+/// for the expected condition keeps the assertion meaningful under full-suite
+/// load; the error carries the last observed status so a real regression still
+/// reports what the Controller published.
+pub async fn wait_resource_status<F>(
+    ctx: &TestContext,
+    kind: &str,
+    namespace: &str,
+    name: &str,
+    timeout: Duration,
+    accept: F,
+) -> Result<Value, String>
+where
+    F: Fn(&Value) -> bool,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        let observed = match fetch_resource_status(ctx, kind, namespace, name).await {
+            Ok(resource) => {
+                if accept(&resource) {
+                    return Ok(resource);
+                }
+                format!(
+                    "got status: {}",
+                    serde_json::to_string_pretty(&resource["status"]).unwrap_or_default()
+                )
+            }
+            Err(error) => error,
+        };
+        if Instant::now() >= deadline {
+            return Err(observed);
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
 }
 
 /// Fetch a cluster-scoped resource from Controller Admin API

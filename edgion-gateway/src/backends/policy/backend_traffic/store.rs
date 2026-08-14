@@ -7,7 +7,9 @@
 //! published in one typed immutable snapshot for AI request capture.
 
 use super::retry_budget::RetryBudget;
-use crate::ai::{get_ai_credential_outlier_store, AiCredentialOutlierBackendHandle};
+use crate::ai::{
+    get_ai_credential_outlier_store, AiCredentialOutlierBackendHandle, EdgionBackendStore, RuntimeMcpTarget,
+};
 use crate::backends::health::check::{get_hc_config_store, get_health_check_manager};
 use crate::backends::outlier_detection::get_outlier_detection_store;
 use crate::backends::panic_threshold::get_panic_threshold_store;
@@ -35,6 +37,7 @@ pub fn get_backend_traffic_policy_store() -> Arc<BackendTrafficPolicyStore> {
 /// Store owning the synced policy cache, typed winners/effective snapshots, and
 /// the existing Service-only request-path maps.
 pub struct BackendTrafficPolicyStore {
+    backend_store: Arc<EdgionBackendStore>,
     /// Synced policies keyed by resource key (`namespace/name`).
     policies: DashMap<String, Arc<EdgionBackendTrafficPolicy>>,
     /// Winning policy key per typed destination identity.
@@ -70,6 +73,7 @@ pub struct BackendTrafficPolicyStore {
 /// normalized values suitable for future AI-attempt state handles.
 #[derive(Clone)]
 pub struct EffectiveBackendTrafficPolicy {
+    pub resolved_target_class: ResolvedPolicyTargetClass,
     pub load_balancer: Option<ParsedLBPolicy>,
     pub upstream_authority: Option<Arc<CompiledUpstreamAuthority>>,
     pub(crate) upstream_authority_config: Option<UpstreamAuthorityConfig>,
@@ -114,7 +118,8 @@ fn effective_snapshot_eq(
     match (left, right) {
         (None, None) => true,
         (Some(left), Some(right)) => {
-            left.circuit_breaker_limit == right.circuit_breaker_limit
+            left.resolved_target_class == right.resolved_target_class
+                && left.circuit_breaker_limit == right.circuit_breaker_limit
                 && left.load_balancer == right.load_balancer
                 && left.upstream_authority_config == right.upstream_authority_config
                 && left.connect_timeout == right.connect_timeout
@@ -147,7 +152,12 @@ impl Default for BackendTrafficPolicyStore {
 
 impl BackendTrafficPolicyStore {
     pub fn new() -> Self {
+        Self::with_backend_store(crate::ai::get_global_edgion_backend_store())
+    }
+
+    pub(crate) fn with_backend_store(backend_store: Arc<EdgionBackendStore>) -> Self {
         Self {
+            backend_store,
             policies: DashMap::new(),
             applied: DashMap::new(),
             effective: ArcSwap::from_pointee(EffectivePolicySnapshotData {
@@ -168,12 +178,19 @@ impl BackendTrafficPolicyStore {
 
     /// Typed destination keys a valid policy attaches to. Same-namespace
     /// attachment is enforced by the schema.
-    fn policy_target_keys(policy: &EdgionBackendTrafficPolicy) -> Vec<PolicyTargetKey> {
-        let ns = policy.metadata.namespace.clone().unwrap_or_default();
+    fn canonical_target_keys(policy: &EdgionBackendTrafficPolicy) -> Vec<PolicyTargetKey> {
+        let namespace = policy.metadata.namespace.as_deref().unwrap_or_default();
+        policy.spec.canonical_target_keys(namespace).unwrap_or_default()
+    }
+
+    fn policy_target_keys(&self, policy: &EdgionBackendTrafficPolicy) -> Vec<PolicyTargetKey> {
         let Some(resolved_class) = policy.spec.resolved_target_class else {
             return Vec::new();
         };
-        let keys = policy.spec.canonical_target_keys(&ns).unwrap_or_default();
+        if !Self::fields_supported_for_class(policy, resolved_class) {
+            return Vec::new();
+        }
+        let keys = Self::canonical_target_keys(policy);
         let matches_resolved_class = keys.iter().all(|key| {
             matches!(
                 (resolved_class, key.target_kind),
@@ -181,9 +198,58 @@ impl BackendTrafficPolicyStore {
                     | (ResolvedPolicyTargetClass::Ai, PolicyTargetKind::EdgionBackend)
                     | (ResolvedPolicyTargetClass::A2aService, PolicyTargetKind::EdgionBackend)
                     | (ResolvedPolicyTargetClass::A2aExternal, PolicyTargetKind::EdgionBackend)
+                    | (ResolvedPolicyTargetClass::McpService, PolicyTargetKind::EdgionBackend)
+                    | (ResolvedPolicyTargetClass::McpExternal, PolicyTargetKind::EdgionBackend)
             )
         });
-        matches_resolved_class.then_some(keys).unwrap_or_default()
+        if !matches_resolved_class {
+            return Vec::new();
+        }
+        let backend_snapshot = self.backend_store.edgion_backend_snapshot();
+        let mcp_runtime_matches = keys.iter().all(|key| {
+            if key.target_kind != PolicyTargetKind::EdgionBackend {
+                return true;
+            }
+            let runtime_key = format!("{}/{}", key.namespace, key.name);
+            match backend_snapshot.get_mcp_by_key(&runtime_key) {
+                Some(runtime) => matches!(
+                    (resolved_class, &runtime.target),
+                    (ResolvedPolicyTargetClass::McpService, RuntimeMcpTarget::Service { .. })
+                        | (ResolvedPolicyTargetClass::McpExternal, RuntimeMcpTarget::External(_))
+                ),
+                None => !matches!(
+                    resolved_class,
+                    ResolvedPolicyTargetClass::McpService | ResolvedPolicyTargetClass::McpExternal
+                ),
+            }
+        });
+        mcp_runtime_matches.then_some(keys).unwrap_or_default()
+    }
+
+    /// Defense-in-depth capability validation for Controller eligibility
+    /// markers received over conf-sync. Unsupported MCP fields invalidate the
+    /// complete typed publication; no allowed subset is retained.
+    fn fields_supported_for_class(policy: &EdgionBackendTrafficPolicy, class: ResolvedPolicyTargetClass) -> bool {
+        match class {
+            ResolvedPolicyTargetClass::McpService => {
+                policy.spec.health_check.is_none()
+                    && policy.spec.outlier_detection.is_none()
+                    && policy.spec.retry_constraint.is_none()
+                    && policy
+                        .spec
+                        .load_balancer
+                        .as_ref()
+                        .is_none_or(|load_balancer| load_balancer.panic_threshold.is_none())
+            }
+            ResolvedPolicyTargetClass::McpExternal => {
+                policy.spec.load_balancer.is_none()
+                    && policy.spec.health_check.is_none()
+                    && policy.spec.outlier_detection.is_none()
+                    && policy.spec.upstream_authority.is_none()
+                    && policy.spec.retry_constraint.is_none()
+            }
+            _ => true,
+        }
     }
 
     fn service_target(service_key: &str) -> PolicyTargetKey {
@@ -295,7 +361,7 @@ impl BackendTrafficPolicyStore {
             if !policy.spec.get_validation_errors().is_empty() {
                 continue;
             }
-            if !Self::policy_target_keys(policy).iter().any(|key| key == target) {
+            if !self.policy_target_keys(policy).iter().any(|key| key == target) {
                 continue;
             }
             let pk = precedence_key(&policy.metadata);
@@ -441,17 +507,21 @@ impl BackendTrafficPolicyStore {
                 self.applied.insert(target.clone(), policy_key_str.clone());
                 let target_class = policy.spec.resolved_target_class;
                 let is_ai = target_class == Some(ResolvedPolicyTargetClass::Ai);
-                let is_a2a_service = target_class == Some(ResolvedPolicyTargetClass::A2aService);
+                let is_service_wrapped_backend = matches!(
+                    target_class,
+                    Some(ResolvedPolicyTargetClass::A2aService | ResolvedPolicyTargetClass::McpService)
+                );
                 let ai_credential_outlier = is_ai
                     .then(|| {
                         get_ai_credential_outlier_store().publish_policy(target.clone(), normalized_outlier.clone())
                     })
                     .flatten();
                 let candidate = Arc::new(EffectiveBackendTrafficPolicy {
-                    load_balancer: is_a2a_service
+                    resolved_target_class: target_class.expect("eligible policy has a resolved target class"),
+                    load_balancer: is_service_wrapped_backend
                         .then(|| policy.spec.load_balancer.as_ref().and_then(|lb| lb.to_parsed()))
                         .flatten(),
-                    upstream_authority: is_a2a_service
+                    upstream_authority: is_service_wrapped_backend
                         .then(|| {
                             policy
                                 .spec
@@ -461,7 +531,9 @@ impl BackendTrafficPolicyStore {
                                 .map(Arc::new)
                         })
                         .flatten(),
-                    upstream_authority_config: is_a2a_service.then(|| policy.spec.upstream_authority.clone()).flatten(),
+                    upstream_authority_config: is_service_wrapped_backend
+                        .then(|| policy.spec.upstream_authority.clone())
+                        .flatten(),
                     retry_budget: self.retry_budgets.get(target).map(|entry| Arc::clone(&entry.value().1)),
                     circuit_breaker_limit: self.circuit_breakers.get(target).map(|entry| *entry.value()),
                     connect_timeout: self.connect_timeouts.get(target).map(|entry| *entry.value()),
@@ -574,10 +646,10 @@ impl BackendTrafficPolicyStore {
     pub fn full_set_policies(&self, data: HashMap<String, Arc<EdgionBackendTrafficPolicy>>) -> usize {
         let mut affected: HashSet<PolicyTargetKey> = HashSet::new();
         for entry in self.policies.iter() {
-            affected.extend(Self::policy_target_keys(entry.value()));
+            affected.extend(Self::canonical_target_keys(entry.value()));
         }
         for policy in data.values() {
-            affected.extend(Self::policy_target_keys(policy));
+            affected.extend(Self::canonical_target_keys(policy));
         }
 
         self.policies.clear();
@@ -609,12 +681,12 @@ impl BackendTrafficPolicyStore {
         // Old target keys of the entries being updated or removed.
         for key in update.keys().chain(remove.iter()) {
             if let Some(old) = self.policies.get(key) {
-                affected.extend(Self::policy_target_keys(old.value()));
+                affected.extend(Self::canonical_target_keys(old.value()));
             }
         }
         // New target keys of the entries being added or updated.
         for policy in add.values().chain(update.values()) {
-            affected.extend(Self::policy_target_keys(policy));
+            affected.extend(Self::canonical_target_keys(policy));
         }
 
         // Apply cache mutations.
@@ -651,11 +723,16 @@ pub(crate) static GLOBAL_STORE_TEST_LOCK: LazyLock<parking_lot::Mutex<()>> =
 mod tests {
     use super::*;
     use crate::backends::panic_threshold::{configure_lb_panic_default, resolve_panic_threshold};
+    use edgion_common::conf_sync::traits::ConfHandler;
     use edgion_resources::resources::edgion_backend_traffic_policy::{
         EdgionBackendTrafficPolicySpec, LoadBalancerConfig, LoadBalancerType, PolicyTargetRef,
     };
     use edgion_resources::resources::health_check::{ActiveHealthCheckConfig, ServiceHealthCheck};
     use edgion_resources::resources::outlier_detection::OutlierDetectionConfig;
+    use edgion_resources::resources::{
+        BackendServiceReference, EdgionBackend, EdgionBackendSpec, McpBackendSpec, McpBackendTarget, McpTransport,
+        McpTransportType, ResolvedMcpBackend, ResolvedMcpTarget,
+    };
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, Time};
 
     fn ts(rfc3339: &str) -> Time {
@@ -788,6 +865,70 @@ mod tests {
             health_check_host: None,
         });
         policy
+    }
+
+    fn mcp_backend(namespace: &str, name: &str, service: bool) -> Arc<EdgionBackend> {
+        let (target, resolved_target) = if service {
+            (
+                McpBackendTarget {
+                    service_ref: Some(BackendServiceReference {
+                        name: "tools-service".to_string(),
+                        namespace: Some(namespace.to_string()),
+                        port: 8080,
+                    }),
+                    endpoint: None,
+                    path: Some("/mcp".to_string()),
+                },
+                ResolvedMcpTarget::Service {
+                    namespace: namespace.to_string(),
+                    name: "tools-service".to_string(),
+                    port: 8080,
+                    path: "/mcp".to_string(),
+                },
+            )
+        } else {
+            (
+                McpBackendTarget {
+                    service_ref: None,
+                    endpoint: Some("https://tools.example.test/mcp".to_string()),
+                    path: None,
+                },
+                ResolvedMcpTarget::External {
+                    normalized_endpoint: "https://tools.example.test/mcp".to_string(),
+                },
+            )
+        };
+        let mut backend = EdgionBackend::new(
+            name,
+            EdgionBackendSpec {
+                ai: None,
+                a2a: None,
+                mcp: Some(McpBackendSpec {
+                    target,
+                    allow_insecure_http: false,
+                    transport: McpTransport {
+                        r#type: McpTransportType::StreamableHTTP,
+                    },
+                    authentication: None,
+                }),
+                resolved_a2a: None,
+                resolved_mcp: Some(ResolvedMcpBackend {
+                    target: resolved_target,
+                }),
+                reconcile_outcome: None,
+            },
+        );
+        backend.metadata.namespace = Some(namespace.to_string());
+        Arc::new(backend)
+    }
+
+    fn mcp_backend_store(namespace: &str, name: &str) -> Arc<EdgionBackendStore> {
+        let store = Arc::new(EdgionBackendStore::new());
+        store.full_set(&HashMap::from([(
+            format!("{namespace}/{name}"),
+            mcp_backend(namespace, name, true),
+        )]));
+        store
     }
 
     // (a) A single valid policy populates all four data-plane stores and the
@@ -1080,7 +1221,8 @@ mod tests {
                 "marker-mismatch/forged".to_string(),
                 Arc::new(forged),
             )])),
-            0
+            1,
+            "the typed target is affected even though the forged marker publishes nothing"
         );
         assert_eq!(store.get_lb_policy("marker-mismatch/svc"), None);
     }
@@ -1493,6 +1635,104 @@ mod tests {
         assert!(effective.logical_circuit_breaker.is_some());
         assert!(get_ai_credential_outlier_store().current_handle(&target).is_none());
         assert!(!get_outlier_detection_store().keys().contains(&target.to_string()));
+    }
+
+    #[test]
+    fn mcp_capability_is_published_all_or_nothing_and_rejects_forged_retry() {
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let backend_store = mcp_backend_store("mcp-policy", "tools");
+        let store = BackendTrafficPolicyStore::with_backend_store(Arc::clone(&backend_store));
+        let target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionBackend,
+            namespace: "mcp-policy".to_string(),
+            name: "tools".to_string(),
+        };
+        let mut supported = a2a_policy(
+            "mcp-policy",
+            "supported",
+            "tools",
+            ResolvedPolicyTargetClass::McpService,
+        );
+        let supported_spec = &mut Arc::get_mut(&mut supported).expect("new policy fixture").spec;
+        supported_spec.retry_constraint = None;
+        supported_spec.outlier_detection = None;
+        assert_eq!(
+            store.full_set_policies(HashMap::from([("mcp-policy/supported".to_string(), supported)])),
+            1
+        );
+        let effective = store.get_effective(&target).expect("supported MCP Service policy");
+        assert_eq!(effective.load_balancer, Some(ParsedLBPolicy::LeastConn));
+        assert!(effective.upstream_authority.is_some());
+        assert!(effective.retry_budget.is_none());
+        assert_eq!(effective.circuit_breaker_limit, Some(7));
+        assert_eq!(effective.connect_timeout, Some(std::time::Duration::from_millis(750)));
+
+        let forged = a2a_policy("mcp-policy", "forged", "tools", ResolvedPolicyTargetClass::McpService);
+        assert_eq!(
+            store.full_set_policies(HashMap::from([("mcp-policy/forged".to_string(), forged)])),
+            1,
+            "replacing the previous valid target affects that typed identity"
+        );
+        assert!(
+            store.get_effective(&target).is_none(),
+            "forged retry/outlier fields must withdraw the whole MCP publication"
+        );
+
+        let forged_a2a = a2a_policy(
+            "mcp-policy",
+            "forged-a2a",
+            "tools",
+            ResolvedPolicyTargetClass::A2aService,
+        );
+        assert_eq!(
+            store.full_set_policies(HashMap::from([("mcp-policy/forged-a2a".to_string(), forged_a2a,)])),
+            1,
+            "canonical target identity remains affected even when the marker is ineligible"
+        );
+        assert!(
+            store.get_effective(&target).is_none(),
+            "an actual MCP runtime must reject a stale A2A capability marker"
+        );
+
+        let mut service_policy = a2a_policy(
+            "mcp-policy",
+            "service-again",
+            "tools",
+            ResolvedPolicyTargetClass::McpService,
+        );
+        {
+            let spec = &mut Arc::get_mut(&mut service_policy).unwrap().spec;
+            spec.retry_constraint = None;
+            spec.outlier_detection = None;
+        }
+        store.full_set_policies(HashMap::from([(
+            "mcp-policy/service-again".to_string(),
+            Arc::clone(&service_policy),
+        )]));
+        assert!(store.get_effective(&target).is_some());
+
+        backend_store.full_set(&HashMap::from([(
+            "mcp-policy/tools".to_string(),
+            mcp_backend("mcp-policy", "tools", false),
+        )]));
+        let mut invalidated = (*service_policy).clone();
+        invalidated.spec.resolved_target_class = None;
+        store.partial_update_policies(
+            HashMap::new(),
+            HashMap::from([("mcp-policy/service-again".to_string(), Arc::new(invalidated))]),
+            HashSet::new(),
+        );
+        assert!(
+            store.get_effective(&target).is_none(),
+            "an invalid marker update after Service-to-external transition must withdraw the old target"
+        );
+
+        backend_store.full_set(&HashMap::new());
+        store.full_set_policies(HashMap::new());
+        assert!(
+            store.get_effective(&target).is_none(),
+            "full resync and missing runtime must not retain an old MCP publication"
+        );
     }
 
     #[test]

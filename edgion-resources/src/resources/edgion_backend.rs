@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::common::{Condition, SecretSlot};
+use super::common::{Condition, SecretObjectReference, SecretSlot};
 use super::edgion_plugins::OnRedisFailure;
 
 pub const OPENAI_DEFAULT_ENDPOINT: &str = "https://api.openai.com";
@@ -42,10 +42,16 @@ pub struct EdgionBackendSpec {
     pub ai: Option<AiBackendSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub a2a: Option<A2aBackendSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<McpBackendSpec>,
     /// Controller-resolved A2A target shipped to the Gateway over conf_sync.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_a2a: Option<ResolvedA2aBackend>,
+    /// Controller-resolved MCP target shipped to the Gateway over conf_sync.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_mcp: Option<ResolvedMcpBackend>,
     /// Controller-only resolution outcome used to build current-generation status.
     #[serde(skip)]
     #[schemars(skip)]
@@ -66,7 +72,7 @@ pub struct A2aBackendSpec {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct A2aBackendTarget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub service_ref: Option<A2aServiceReference>,
+    pub service_ref: Option<BackendServiceReference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
 }
@@ -74,7 +80,7 @@ pub struct A2aBackendTarget {
 /// Typed reference to one port of a core Kubernetes Service.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct A2aServiceReference {
+pub struct BackendServiceReference {
     #[schemars(length(min = 1, max = 63), pattern(A2A_SERVICE_NAME_PATTERN))]
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -82,6 +88,80 @@ pub struct A2aServiceReference {
     pub namespace: Option<String>,
     #[schemars(range(min = 1, max = 65535))]
     pub port: u16,
+}
+
+/// MCP backend identity and stateless Streamable HTTP transport target.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpBackendSpec {
+    pub target: McpBackendTarget,
+    #[serde(default)]
+    pub allow_insecure_http: bool,
+    pub transport: McpTransport,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authentication: Option<McpAuthentication>,
+}
+
+/// Strict exactly-one target union for an MCP backend.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpBackendTarget {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_ref: Option<BackendServiceReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// Fixed MCP transport identity. It does not select a wire HTTP version.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpTransport {
+    pub r#type: McpTransportType,
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, JsonSchema, PartialEq, Eq)]
+pub enum McpTransportType {
+    StreamableHTTP,
+}
+
+/// Optional static bearer authentication for an MCP upstream.
+#[derive(Deserialize, Serialize, Clone, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpAuthentication {
+    pub bearer_token: SecretSlot,
+}
+
+impl std::fmt::Debug for McpAuthentication {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("McpAuthentication")
+            .field("secret_ref", &self.bearer_token.secret_ref)
+            .field("secret", &"[redacted]")
+            .finish()
+    }
+}
+
+/// Current-generation MCP target proved by the Controller.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedMcpBackend {
+    pub target: ResolvedMcpTarget,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ResolvedMcpTarget {
+    Service {
+        namespace: String,
+        name: String,
+        port: u16,
+        path: String,
+    },
+    External {
+        normalized_endpoint: String,
+    },
 }
 
 /// Current-generation A2A target proved by the Controller.
@@ -127,6 +207,7 @@ pub struct AiBackendReconcileOutcome {
 pub enum EdgionBackendReconcileOutcome {
     Ai(AiBackendReconcileOutcome),
     A2a(A2aBackendReconcileOutcome),
+    Mcp(McpBackendReconcileOutcome),
 }
 
 /// Bounded result of resolving an A2A target reference.
@@ -141,6 +222,53 @@ pub enum A2aTargetResolutionClass {
     RefNotPermitted,
     TargetNotFound,
     UnsupportedProtocol,
+}
+
+/// Independent, bounded MCP target and credential resolution results.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct McpBackendReconcileOutcome {
+    pub target_error: Option<McpTargetResolutionClass>,
+    pub credential_error: Option<McpCredentialResolutionClass>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpTargetResolutionClass {
+    RefNotPermitted,
+    BackendNotFound,
+    UnsupportedProtocol,
+}
+
+impl McpTargetResolutionClass {
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::RefNotPermitted => "RefNotPermitted",
+            Self::BackendNotFound => "BackendNotFound",
+            Self::UnsupportedProtocol => "UnsupportedProtocol",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpCredentialResolutionClass {
+    RefNotPermitted,
+    SecretNotFound,
+    MissingKeys,
+    DecodeError,
+    InvalidValue,
+    InvalidSecretType,
+}
+
+impl McpCredentialResolutionClass {
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::RefNotPermitted => "RefNotPermitted",
+            Self::SecretNotFound => "SecretNotFound",
+            Self::MissingKeys => "MissingKeys",
+            Self::DecodeError => "DecodeError",
+            Self::InvalidValue => "InvalidValue",
+            Self::InvalidSecretType => "InvalidSecretType",
+        }
+    }
 }
 
 impl A2aTargetResolutionClass {
@@ -428,13 +556,15 @@ pub struct EdgionBackendStatus {
 impl EdgionBackendSpec {
     /// Validate the backend union and its selected capability.
     pub fn validate(&self) -> Result<(), Vec<String>> {
-        let configured_variants = usize::from(self.ai.is_some()) + usize::from(self.a2a.is_some());
+        let configured_variants =
+            usize::from(self.ai.is_some()) + usize::from(self.a2a.is_some()) + usize::from(self.mcp.is_some());
         if configured_variants != 1 {
             return Err(vec!["spec must configure exactly one backend variant".to_string()]);
         }
-        match (self.ai.as_ref(), self.a2a.as_ref()) {
-            (Some(ai), None) => ai.validate(),
-            (None, Some(a2a)) => a2a.validate(),
+        match (self.ai.as_ref(), self.a2a.as_ref(), self.mcp.as_ref()) {
+            (Some(ai), None, None) => ai.validate(),
+            (None, Some(a2a), None) => a2a.validate(),
+            (None, None, Some(mcp)) => mcp.validate(),
             _ => Err(vec!["spec must configure exactly one backend variant".to_string()]),
         }
     }
@@ -449,7 +579,7 @@ impl A2aBackendSpec {
                 if self.allow_insecure_http {
                     errors.push("allowInsecureHttp must be false for a Service target".to_string());
                 }
-                errors.extend(service_ref.validation_errors());
+                errors.extend(service_ref.validation_errors("a2a.target.serviceRef"));
             }
             (None, Some(_)) => {
                 if let Err(error) = self.normalized_endpoint() {
@@ -472,63 +602,166 @@ impl A2aBackendSpec {
             .endpoint
             .as_deref()
             .ok_or_else(|| "a2a.target.endpoint is required for an external target".to_string())?;
-        let mut parsed = Url::parse(endpoint)
-            .map_err(|_| "a2a.target.endpoint must be an absolute HTTP or HTTPS URL".to_string())?;
-        if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
-            return Err("a2a.target.endpoint must be an absolute HTTP or HTTPS URL".to_string());
-        }
-        if !parsed.username().is_empty() || parsed.password().is_some() {
-            return Err("a2a.target.endpoint must not contain user information".to_string());
-        }
-        if parsed.port() == Some(0) {
-            return Err("a2a.target.endpoint port must be in 1..=65535".to_string());
-        }
-        if parsed.query().is_some() {
-            return Err("a2a.target.endpoint must not contain a query".to_string());
-        }
-        if parsed.fragment().is_some() {
-            return Err("a2a.target.endpoint must not contain a fragment".to_string());
-        }
-        if parsed.scheme() == "http" && !self.allow_insecure_http {
-            return Err("HTTP a2a.target.endpoint requires allowInsecureHttp: true".to_string());
-        }
-        let lower_endpoint = endpoint.to_ascii_lowercase();
-        let path = parsed.path();
-        if endpoint.contains('\\')
-            || path.contains("//")
-            || lower_endpoint.contains("%2f")
-            || lower_endpoint.contains("%5c")
-            || lower_endpoint.contains("%2e")
-            || path.split('/').any(|segment| matches!(segment, "." | ".."))
-        {
-            return Err("a2a.target.endpoint path must be unambiguous and confined".to_string());
-        }
-        if parsed.path() != "/" {
-            let normalized_path = parsed.path().trim_end_matches('/').to_string();
-            parsed.set_path(&normalized_path);
-        }
-        Ok(parsed.to_string().trim_end_matches('/').to_string())
+        normalize_external_http_endpoint(endpoint, self.allow_insecure_http, "a2a.target.endpoint")
     }
 }
 
-impl A2aServiceReference {
-    fn validation_errors(&self) -> Vec<String> {
+impl McpBackendSpec {
+    /// Validate and normalize this MCP target without performing I/O.
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        match (&self.target.service_ref, &self.target.endpoint) {
+            (Some(service_ref), None) => {
+                if self.allow_insecure_http {
+                    errors.push("allowInsecureHttp must be false for a Service target".to_string());
+                }
+                errors.extend(service_ref.validation_errors("mcp.target.serviceRef"));
+                match self.target.path.as_deref() {
+                    Some(path) => {
+                        if let Err(error) = normalize_absolute_backend_path(path, "mcp.target.path") {
+                            errors.push(error);
+                        }
+                    }
+                    None => errors.push("mcp.target.path is required for a Service target".to_string()),
+                }
+            }
+            (None, Some(_)) => {
+                if self.target.path.is_some() {
+                    errors.push("mcp.target.path must be absent for an external target".to_string());
+                }
+                if let Err(error) = self.normalized_endpoint() {
+                    errors.push(error);
+                }
+            }
+            _ => errors.push("mcp.target must configure exactly one of serviceRef or endpoint".to_string()),
+        }
+        if let Some(authentication) = &self.authentication {
+            errors.extend(secret_ref_validation_errors(
+                &authentication.bearer_token.secret_ref,
+                "mcp.authentication.bearerToken.secretRef",
+            ));
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    pub fn normalized_service_path(&self) -> Result<String, String> {
+        let path = self
+            .target
+            .path
+            .as_deref()
+            .ok_or_else(|| "mcp.target.path is required for a Service target".to_string())?;
+        normalize_absolute_backend_path(path, "mcp.target.path")
+    }
+
+    pub fn normalized_endpoint(&self) -> Result<String, String> {
+        let endpoint = self
+            .target
+            .endpoint
+            .as_deref()
+            .ok_or_else(|| "mcp.target.endpoint is required for an external target".to_string())?;
+        if self.allow_insecure_http
+            && Url::parse(endpoint)
+                .ok()
+                .is_some_and(|parsed| parsed.scheme() == "https")
+        {
+            return Err("allowInsecureHttp must be false for an HTTPS target".to_string());
+        }
+        normalize_external_http_endpoint(endpoint, self.allow_insecure_http, "mcp.target.endpoint")
+    }
+}
+
+impl BackendServiceReference {
+    pub fn validation_errors(&self, field: &str) -> Vec<String> {
         let mut errors = Vec::new();
         if !valid_service_name(&self.name) {
-            errors.push("a2a.target.serviceRef.name must be a valid Kubernetes name".to_string());
+            errors.push(format!("{field}.name must be a valid Kubernetes name"));
         }
         if self
             .namespace
             .as_deref()
             .is_some_and(|namespace| !valid_dns_label(namespace))
         {
-            errors.push("a2a.target.serviceRef.namespace must be a valid Kubernetes namespace".to_string());
+            errors.push(format!("{field}.namespace must be a valid Kubernetes namespace"));
         }
         if self.port == 0 {
-            errors.push("a2a.target.serviceRef.port must be in 1..=65535".to_string());
+            errors.push(format!("{field}.port must be in 1..=65535"));
         }
         errors
     }
+}
+
+/// Normalize one absolute backend path while rejecting ambiguous forms.
+pub fn normalize_absolute_backend_path(path: &str, field: &str) -> Result<String, String> {
+    let lower_path = path.to_ascii_lowercase();
+    if path.is_empty()
+        || !path.starts_with('/')
+        || path.contains('?')
+        || path.contains('#')
+        || path.contains('\\')
+        || path.contains("//")
+        || path.chars().any(char::is_control)
+        || lower_path.contains("%2f")
+        || lower_path.contains("%5c")
+        || lower_path.contains("%2e")
+        || path.split('/').any(|segment| matches!(segment, "." | ".."))
+    {
+        return Err(format!("{field} must be an absolute, unambiguous path"));
+    }
+    if path == "/" {
+        Ok(path.to_string())
+    } else {
+        Ok(path.trim_end_matches('/').to_string())
+    }
+}
+
+/// Normalize one absolute external HTTP(S) endpoint for backend variants.
+pub fn normalize_external_http_endpoint(
+    endpoint: &str,
+    allow_insecure_http: bool,
+    field: &str,
+) -> Result<String, String> {
+    if endpoint.chars().any(char::is_control) {
+        return Err(format!("{field} must not contain control characters"));
+    }
+    let mut parsed = Url::parse(endpoint).map_err(|_| format!("{field} must be an absolute HTTP or HTTPS URL"))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(format!("{field} must be an absolute HTTP or HTTPS URL"));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(format!("{field} must not contain user information"));
+    }
+    if parsed.port() == Some(0) {
+        return Err(format!("{field} port must be in 1..=65535"));
+    }
+    if parsed.query().is_some() {
+        return Err(format!("{field} must not contain a query"));
+    }
+    if parsed.fragment().is_some() {
+        return Err(format!("{field} must not contain a fragment"));
+    }
+    if parsed.scheme() == "http" && !allow_insecure_http {
+        return Err(format!("HTTP {field} requires allowInsecureHttp: true"));
+    }
+    let lower_endpoint = endpoint.to_ascii_lowercase();
+    let path = parsed.path();
+    if endpoint.contains('\\')
+        || path.contains("//")
+        || lower_endpoint.contains("%2f")
+        || lower_endpoint.contains("%5c")
+        || lower_endpoint.contains("%2e")
+        || path.split('/').any(|segment| matches!(segment, "." | ".."))
+    {
+        return Err(format!("{field} path must be unambiguous and confined"));
+    }
+    if parsed.path() != "/" {
+        let normalized_path = parsed.path().trim_end_matches('/').to_string();
+        parsed.set_path(&normalized_path);
+    }
+    Ok(parsed.to_string().trim_end_matches('/').to_string())
 }
 
 impl AiBackendSpec {
@@ -760,31 +993,10 @@ impl AiCredentialPool {
                     "credentialPool.credentials[{index}].weight must be in 1..={AI_CREDENTIAL_WEIGHT_MAX}"
                 ));
             }
-            let secret_ref = &credential.credential.secret_ref;
-            if !matches!(secret_ref.group.as_deref(), None | Some("") | Some("core")) {
-                errors.push(format!(
-                    "credentialPool.credentials[{index}].secretRef.group must be empty or core"
-                ));
-            }
-            if !matches!(secret_ref.kind.as_deref(), None | Some("Secret")) {
-                errors.push(format!(
-                    "credentialPool.credentials[{index}].secretRef.kind must be Secret"
-                ));
-            }
-            if !valid_kube_name(&secret_ref.name) {
-                errors.push(format!(
-                    "credentialPool.credentials[{index}].secretRef.name must be a valid non-empty Kubernetes name"
-                ));
-            }
-            if secret_ref
-                .namespace
-                .as_deref()
-                .is_some_and(|namespace| !valid_dns_label(namespace))
-            {
-                errors.push(format!(
-                    "credentialPool.credentials[{index}].secretRef.namespace must be a valid Kubernetes namespace"
-                ));
-            }
+            errors.extend(secret_ref_validation_errors(
+                &credential.credential.secret_ref,
+                &format!("credentialPool.credentials[{index}].secretRef"),
+            ));
             if let Some(limits) = &credential.limits {
                 has_limits = true;
                 if limits.requests_per_minute.is_none() && limits.tokens_per_minute.is_none() {
@@ -844,6 +1056,27 @@ fn valid_dns_label(value: &str) -> bool {
 
 fn valid_kube_name(value: &str) -> bool {
     !value.is_empty() && value.len() <= 253 && value.split('.').all(valid_dns_label)
+}
+
+fn secret_ref_validation_errors(secret_ref: &SecretObjectReference, field: &str) -> Vec<String> {
+    let mut errors = Vec::new();
+    if !matches!(secret_ref.group.as_deref(), None | Some("") | Some("core")) {
+        errors.push(format!("{field}.group must be empty or core"));
+    }
+    if !matches!(secret_ref.kind.as_deref(), None | Some("Secret")) {
+        errors.push(format!("{field}.kind must be Secret"));
+    }
+    if !valid_kube_name(&secret_ref.name) {
+        errors.push(format!("{field}.name must be a valid non-empty Kubernetes name"));
+    }
+    if secret_ref
+        .namespace
+        .as_deref()
+        .is_some_and(|namespace| !valid_dns_label(namespace))
+    {
+        errors.push(format!("{field}.namespace must be a valid Kubernetes namespace"));
+    }
+    errors
 }
 
 fn valid_service_name(value: &str) -> bool {
@@ -912,7 +1145,9 @@ mod tests {
         EdgionBackendSpec {
             ai: Some(ai_spec(provider)),
             a2a: None,
+            mcp: None,
             resolved_a2a: None,
+            resolved_mcp: None,
             reconcile_outcome: None,
         }
     }
@@ -922,7 +1157,7 @@ mod tests {
             ai: None,
             a2a: Some(A2aBackendSpec {
                 target: A2aBackendTarget {
-                    service_ref: Some(A2aServiceReference {
+                    service_ref: Some(BackendServiceReference {
                         name: "agent-service".to_string(),
                         namespace: Some("agents".to_string()),
                         port: 8080,
@@ -931,7 +1166,45 @@ mod tests {
                 },
                 allow_insecure_http: false,
             }),
+            mcp: None,
             resolved_a2a: None,
+            resolved_mcp: None,
+            reconcile_outcome: None,
+        }
+    }
+
+    fn mcp_service_spec() -> EdgionBackendSpec {
+        EdgionBackendSpec {
+            ai: None,
+            a2a: None,
+            mcp: Some(McpBackendSpec {
+                target: McpBackendTarget {
+                    service_ref: Some(BackendServiceReference {
+                        name: "mcp-server".to_string(),
+                        namespace: Some("tools".to_string()),
+                        port: 8080,
+                    }),
+                    endpoint: None,
+                    path: Some("/mcp".to_string()),
+                },
+                allow_insecure_http: false,
+                transport: McpTransport {
+                    r#type: McpTransportType::StreamableHTTP,
+                },
+                authentication: Some(McpAuthentication {
+                    bearer_token: SecretSlot {
+                        secret_ref: SecretObjectReference {
+                            group: None,
+                            kind: None,
+                            name: "mcp-credential".to_string(),
+                            namespace: None,
+                        },
+                        secret: None,
+                    },
+                }),
+            }),
+            resolved_a2a: None,
+            resolved_mcp: None,
             reconcile_outcome: None,
         }
     }
@@ -952,7 +1225,9 @@ mod tests {
         let missing = EdgionBackendSpec {
             ai: None,
             a2a: None,
+            mcp: None,
             resolved_a2a: None,
+            resolved_mcp: None,
             reconcile_outcome: None,
         };
         assert_eq!(
@@ -961,6 +1236,7 @@ mod tests {
         );
         assert!(spec(AiProvider::OpenAI).validate().is_ok());
         assert!(a2a_service_spec().validate().is_ok());
+        assert!(mcp_service_spec().validate().is_ok());
 
         let mut both = spec(AiProvider::OpenAI);
         both.a2a = a2a_service_spec().a2a;
@@ -968,6 +1244,190 @@ mod tests {
             both.validate().unwrap_err(),
             vec!["spec must configure exactly one backend variant"]
         );
+
+        for (ai, a2a, mcp) in [(true, false, true), (false, true, true), (true, true, true)] {
+            let mut value = mcp_service_spec();
+            value.ai = ai.then(|| ai_spec(AiProvider::OpenAI));
+            value.a2a = a2a.then(|| a2a_service_spec().a2a.unwrap());
+            value.mcp = mcp.then(|| mcp_service_spec().mcp.unwrap());
+            assert_eq!(
+                value.validate().unwrap_err(),
+                vec!["spec must configure exactly one backend variant"]
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_service_target_path_transport_and_auth_are_strict() {
+        let mut value = mcp_service_spec();
+        let mcp = value.mcp.as_mut().unwrap();
+        assert_eq!(mcp.normalized_service_path().unwrap(), "/mcp");
+        mcp.target.path = Some("/base/tools///".to_string());
+        assert!(mcp.validate().is_err());
+
+        for path in [
+            "",
+            "relative",
+            "/base//tools",
+            "/base/../tools",
+            "/base/%2ftools",
+            "/base?x=1",
+            "/base#f",
+            "/base\\tools",
+            "/base\n",
+        ] {
+            mcp.target.path = Some(path.to_string());
+            assert!(mcp.validate().is_err(), "invalid MCP path was accepted: {path:?}");
+        }
+        mcp.target.path = Some("/base/tools/".to_string());
+        assert_eq!(mcp.normalized_service_path().unwrap(), "/base/tools");
+
+        for yaml in [
+            "target:\n  serviceRef:\n    name: mcp\n    port: 8080\n  path: /mcp\ntransport:\n  type: StreamableHTTP\nunknown: true\n",
+            "target:\n  serviceRef:\n    name: mcp\n    port: 8080\n    unknown: true\n  path: /mcp\ntransport:\n  type: StreamableHTTP\n",
+            "target:\n  serviceRef:\n    name: mcp\n    port: 8080\n  path: /mcp\ntransport:\n  type: StreamableHTTP\n  version: 2026-07-28\n",
+            "target:\n  serviceRef:\n    name: mcp\n    port: 8080\n  path: /mcp\ntransport:\n  type: Other\n",
+            "target:\n  serviceRef:\n    name: mcp\n    port: 8080\n  path: /mcp\ntransport:\n  type: StreamableHTTP\nauthentication: {}\n",
+            "target:\n  serviceRef:\n    name: mcp\n    port: 8080\n  path: /mcp\ntransport:\n  type: StreamableHTTP\nauthentication:\n  bearerToken:\n    token: inline\n",
+        ] {
+            assert!(serde_yaml::from_str::<McpBackendSpec>(yaml).is_err(), "invalid MCP YAML was accepted: {yaml}");
+        }
+    }
+
+    #[test]
+    fn mcp_bearer_secret_ref_enforces_core_secret_identity() {
+        let mut value = mcp_service_spec();
+        let secret_ref = &mut value
+            .mcp
+            .as_mut()
+            .unwrap()
+            .authentication
+            .as_mut()
+            .unwrap()
+            .bearer_token
+            .secret_ref;
+        secret_ref.name.clear();
+        secret_ref.group = Some("external.example".to_string());
+        secret_ref.kind = Some("ConfigMap".to_string());
+        secret_ref.namespace = Some("Invalid_Namespace".to_string());
+        let errors = value.validate().unwrap_err().join("\n");
+        for field in ["group", "kind", "name", "namespace"] {
+            assert!(errors.contains(field), "missing validation error for {field}: {errors}");
+        }
+
+        let secret_ref = &mut value
+            .mcp
+            .as_mut()
+            .unwrap()
+            .authentication
+            .as_mut()
+            .unwrap()
+            .bearer_token
+            .secret_ref;
+        secret_ref.group = Some("core".to_string());
+        secret_ref.kind = Some("Secret".to_string());
+        secret_ref.name = "tools-token".to_string();
+        secret_ref.namespace = Some("credential-ns".to_string());
+        assert!(value.validate().is_ok());
+    }
+
+    #[test]
+    fn mcp_target_union_and_external_endpoint_are_strict() {
+        let external = |endpoint: &str, allow_insecure_http| McpBackendSpec {
+            target: McpBackendTarget {
+                service_ref: None,
+                endpoint: Some(endpoint.to_string()),
+                path: None,
+            },
+            allow_insecure_http,
+            transport: McpTransport {
+                r#type: McpTransportType::StreamableHTTP,
+            },
+            authentication: None,
+        };
+        assert_eq!(
+            external("https://tools.example.com/base/mcp/", false)
+                .normalized_endpoint()
+                .unwrap(),
+            "https://tools.example.com/base/mcp"
+        );
+        assert!(external("http://tools.example.com/mcp", true).validate().is_ok());
+        assert!(external("http://tools.example.com/mcp", false).validate().is_err());
+        assert!(external("https://tools.example.com/mcp", true).validate().is_err());
+        for endpoint in [
+            "tools.example.com/mcp",
+            "ftp://tools.example.com/mcp",
+            "https://user@tools.example.com/mcp",
+            "https://tools.example.com:0/mcp",
+            "https://tools.example.com/mcp?q=1",
+            "https://tools.example.com/mcp#fragment",
+            "https://tools.example.com/base//mcp",
+            "https://tools.example.com/base/%2e%2e/mcp",
+            "https://tools.example.com/base\\mcp",
+        ] {
+            assert!(
+                external(endpoint, false).validate().is_err(),
+                "invalid endpoint was accepted: {endpoint}"
+            );
+        }
+
+        let mut both = mcp_service_spec().mcp.unwrap();
+        both.target.endpoint = Some("https://tools.example.com/mcp".to_string());
+        assert!(both.validate().unwrap_err().join("\n").contains("exactly one"));
+
+        let mut external_with_path = external("https://tools.example.com/mcp", false);
+        external_with_path.target.path = Some("/other".to_string());
+        assert!(external_with_path
+            .validate()
+            .unwrap_err()
+            .join("\n")
+            .contains("must be absent"));
+    }
+
+    #[test]
+    fn resolved_mcp_and_secret_are_transport_visible_but_schema_hidden_and_admin_redacted() {
+        let mut value = mcp_service_spec();
+        value.resolved_mcp = Some(ResolvedMcpBackend {
+            target: ResolvedMcpTarget::Service {
+                namespace: "tools".to_string(),
+                name: "mcp-server".to_string(),
+                port: 8080,
+                path: "/mcp".to_string(),
+            },
+        });
+        let secret = Secret {
+            data: Some(BTreeMap::from([(
+                "bearerToken".to_string(),
+                ByteString(b"private-token".to_vec()),
+            )])),
+            ..Default::default()
+        };
+        value
+            .mcp
+            .as_mut()
+            .unwrap()
+            .authentication
+            .as_mut()
+            .unwrap()
+            .bearer_token
+            .secret = Some(secret);
+
+        let transported = serde_json::to_value(&value).unwrap();
+        assert_eq!(transported["resolvedMcp"]["target"]["type"], "service");
+        assert!(transported["mcp"]["authentication"]["bearerToken"]["secret"]["data"]
+            .get("bearerToken")
+            .is_some());
+        let redacted = {
+            let _guard = AdminRedactGuard::new();
+            serde_json::to_value(&value).unwrap()
+        };
+        assert_eq!(redacted["mcp"]["authentication"]["bearerToken"]["secret"], "[redacted]");
+        assert!(!redacted.to_string().contains("private-token"));
+        assert!(!format!("{value:?}").contains("private-token"));
+
+        let schema = serde_json::to_value(schemars::schema_for!(EdgionBackendSpec)).unwrap();
+        assert!(schema["properties"].get("resolvedMcp").is_none());
+        assert!(!schema.to_string().contains("\"secret\""));
     }
 
     #[test]
@@ -1051,6 +1511,7 @@ mod tests {
             assert!(value.validate().is_err(), "invalid endpoint case {case} was accepted");
         }
         assert!(external("http://agent.example.com", true).validate().is_ok());
+        assert!(external("https://agent.example.com", true).validate().is_ok());
     }
 
     #[test]

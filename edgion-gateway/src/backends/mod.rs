@@ -35,7 +35,7 @@ pub use port_resolver::resolve_target_port_key;
 pub use preload::preload_load_balancers;
 pub use runtime::{
     LogicalBackendHandle, SelectedA2aBackend, SelectedAiBackend, SelectedHttpBackend, SelectedLogicalBackend,
-    SelectedServiceBackend,
+    SelectedMcpBackend, SelectedServiceBackend,
 };
 pub use selector::{get_backends_for_service_key, select_roundrobin_backend_key};
 pub use service_kind::ServiceBackendKind;

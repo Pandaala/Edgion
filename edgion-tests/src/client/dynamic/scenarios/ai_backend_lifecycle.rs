@@ -871,24 +871,42 @@ async fn policy_lifecycle(ctx: &ScenarioCtx) -> Result<()> {
 
 async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
     reference_lifecycle(ctx).await?;
-    anyhow::ensure!(
-        gateway_store_count(ctx, "ai_backend_store").await? >= 2,
-        "AI backend runtime store did not publish both lifecycle backends"
-    );
+    // The unified EdgionBackend store holds every variant published by the
+    // whole harness, so publication is proven by this scenario's own pair
+    // rather than by a global total.
+    wait_backend_presence(ctx, BACKEND_A, true).await?;
+    wait_backend_presence(ctx, BACKEND_B, true).await?;
     policy_lifecycle(ctx).await
 }
 
 fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
     Box::pin(async move {
         cleanup(&ctx).await;
-        let baseline = gateway_store_count(&ctx, "ai_backend_store").await?;
+        // The store is shared with every other scenario, so the baseline is
+        // only captured once the Gateway has dropped this scenario's own
+        // backends.
+        let baseline = async {
+            wait_backend_presence(&ctx, BACKEND_A, false).await?;
+            wait_backend_presence(&ctx, BACKEND_B, false).await?;
+            gateway_store_count(&ctx, "edgion_backend_store").await
+        }
+        .await?;
         let result = run_inner(&ctx).await;
         cleanup(&ctx).await;
-        let cleanup_result = wait_for(
-            "lifecycle AI runtime-store cleanup",
-            Duration::from_secs(15),
-            || async { Ok(gateway_store_count(&ctx, "ai_backend_store").await? == baseline) },
-        )
+        // Cleanup is proven by this scenario's own entries leaving the runtime
+        // store. The unified count only has to stay at or below the baseline:
+        // an unrelated scenario's pending removal may still land here, but a
+        // leaked lifecycle backend would push the total above it.
+        let cleanup_result = async {
+            wait_backend_presence(&ctx, BACKEND_A, false).await?;
+            wait_backend_presence(&ctx, BACKEND_B, false).await?;
+            wait_for(
+                "lifecycle AI runtime-store cleanup",
+                Duration::from_secs(15),
+                || async { Ok(gateway_store_count(&ctx, "edgion_backend_store").await? <= baseline) },
+            )
+            .await
+        }
         .await;
         cleanup_result?;
         result

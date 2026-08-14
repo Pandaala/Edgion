@@ -7,13 +7,14 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, HandlerContext, ProcessResult,
     ProcessorHandler, ResourceRef,
 };
-use edgion_resources::credentials::AiApiKeyResolver;
+use edgion_resources::credentials::{AiApiKeyResolver, BearerResolver};
 use edgion_resources::prelude_resources::EdgionBackend;
 use edgion_resources::resources::common::Condition;
 use edgion_resources::resources::edgion_backend::{
     A2aBackendReconcileOutcome, A2aTargetResolutionClass, AiBackendReconcileOutcome, AiCredentialResolutionClass,
-    AiCredentialResolutionError, EdgionBackendReconcileOutcome, EdgionBackendStatus, ResolvedA2aBackend,
-    ResolvedA2aTarget, AI_CREDENTIAL_ALIAS_MAX_BYTES,
+    AiCredentialResolutionError, EdgionBackendReconcileOutcome, EdgionBackendStatus, McpBackendReconcileOutcome,
+    McpCredentialResolutionClass, McpTargetResolutionClass, ResolvedA2aBackend, ResolvedA2aTarget, ResolvedMcpBackend,
+    ResolvedMcpTarget, AI_CREDENTIAL_ALIAS_MAX_BYTES,
 };
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::ResourceKind;
@@ -52,6 +53,9 @@ fn outcome_to_class(
         ResolveOutcome::Invalid(InvalidCredentialError::DecodeError { .. }) => {
             Err(AiCredentialResolutionClass::DecodeError)
         }
+        ResolveOutcome::Invalid(InvalidCredentialError::InvalidValue { .. }) => {
+            Err(AiCredentialResolutionClass::DecodeError)
+        }
         ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType { .. }) => {
             Err(AiCredentialResolutionClass::InvalidSecretType)
         }
@@ -65,6 +69,32 @@ fn requires_secret_edit(class: &AiCredentialResolutionClass) -> bool {
             | AiCredentialResolutionClass::DecodeError
             | AiCredentialResolutionClass::InvalidSecretType
     )
+}
+
+fn mcp_credential_class(
+    outcome: ResolveOutcome<k8s_openapi::api::core::v1::Secret>,
+) -> Result<k8s_openapi::api::core::v1::Secret, McpCredentialResolutionClass> {
+    match outcome {
+        ResolveOutcome::Ok(secret) => Ok(secret),
+        ResolveOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
+            Err(McpCredentialResolutionClass::SecretNotFound)
+        }
+        ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing { .. }) => {
+            Err(McpCredentialResolutionClass::RefNotPermitted)
+        }
+        ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(_)) => {
+            Err(McpCredentialResolutionClass::MissingKeys)
+        }
+        ResolveOutcome::Invalid(InvalidCredentialError::DecodeError { .. }) => {
+            Err(McpCredentialResolutionClass::DecodeError)
+        }
+        ResolveOutcome::Invalid(InvalidCredentialError::InvalidValue { .. }) => {
+            Err(McpCredentialResolutionClass::InvalidValue)
+        }
+        ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType { .. }) => {
+            Err(McpCredentialResolutionClass::InvalidSecretType)
+        }
+    }
 }
 
 async fn requeue_dependents(backend: &EdgionBackend, ctx: &HandlerContext) {
@@ -126,6 +156,50 @@ fn preserve_transition_time(old: &[Condition], condition: &mut Condition) {
     }
 }
 
+fn mcp_status_failure(outcome: &McpBackendReconcileOutcome) -> Option<(&'static str, &'static str)> {
+    if outcome.target_error == Some(McpTargetResolutionClass::RefNotPermitted)
+        || outcome.credential_error == Some(McpCredentialResolutionClass::RefNotPermitted)
+    {
+        return Some(("RefNotPermitted", "MCP target or credential reference is not permitted"));
+    }
+    if outcome.target_error == Some(McpTargetResolutionClass::UnsupportedProtocol) {
+        return Some(("UnsupportedProtocol", "MCP Service target uses an unsupported protocol"));
+    }
+    for (class, reason, message) in [
+        (
+            McpCredentialResolutionClass::InvalidSecretType,
+            "InvalidSecretType",
+            "MCP bearer Secret type is unsupported",
+        ),
+        (
+            McpCredentialResolutionClass::MissingKeys,
+            "MissingKeys",
+            "MCP bearer Secret is missing required data",
+        ),
+        (
+            McpCredentialResolutionClass::DecodeError,
+            "DecodeError",
+            "MCP bearer Secret data is malformed",
+        ),
+        (
+            McpCredentialResolutionClass::InvalidValue,
+            "InvalidValue",
+            "MCP bearer Secret value is invalid",
+        ),
+    ] {
+        if outcome.credential_error == Some(class) {
+            return Some((reason, message));
+        }
+    }
+    if outcome.target_error == Some(McpTargetResolutionClass::BackendNotFound) {
+        return Some(("BackendNotFound", "MCP Service target or port was not found"));
+    }
+    if outcome.credential_error == Some(McpCredentialResolutionClass::SecretNotFound) {
+        return Some(("SecretNotFound", "MCP bearer Secret was not found"));
+    }
+    None
+}
+
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionBackend> for EdgionBackendHandler {
     fn preparse(&self, backend: &mut EdgionBackend, _ctx: &HandlerContext) -> Vec<String> {
@@ -133,6 +207,7 @@ impl ProcessorHandler<EdgionBackend> for EdgionBackendHandler {
     }
 
     async fn parse(&self, mut backend: EdgionBackend, ctx: &HandlerContext) -> ProcessResult<EdgionBackend> {
+        let backend_structurally_valid = backend.spec.validate().is_ok();
         let owner = ResourceRef::new(
             ResourceKind::EdgionBackend,
             backend.metadata.namespace.clone(),
@@ -141,6 +216,10 @@ impl ProcessorHandler<EdgionBackend> for EdgionBackendHandler {
 
         backend.spec.reconcile_outcome = None;
         backend.spec.resolved_a2a = None;
+        backend.spec.resolved_mcp = None;
+        if let Some(authentication) = backend.spec.mcp.as_mut().and_then(|mcp| mcp.authentication.as_mut()) {
+            authentication.bearer_token.secret = None;
+        }
         ctx.secret_ref_manager().clear_resource_refs(&owner);
         ctx.runtime().service_ref_mgr.clear_resource_refs(&owner);
         ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&owner);
@@ -232,6 +311,131 @@ impl ProcessorHandler<EdgionBackend> for EdgionBackendHandler {
                     error: Some(A2aTargetResolutionClass::TargetNotFound),
                 }));
             }
+            return ProcessResult::Continue(backend);
+        }
+
+        if let Some(mcp) = backend.spec.mcp.clone() {
+            let owner_ns = owner.namespace.as_deref().unwrap_or("default");
+            let (resolved_target, target_error) = if let Some(service_ref) = mcp.target.service_ref.as_ref() {
+                let service_ns = service_ref.namespace.as_deref().unwrap_or(owner_ns);
+                let service_key = format!("{service_ns}/{}", service_ref.name);
+                ctx.runtime()
+                    .service_ref_mgr
+                    .add_ref(service_key.clone(), owner.clone());
+
+                let permitted = if service_ns != owner_ns {
+                    ctx.runtime()
+                        .cross_ns_ref_mgr
+                        .add_ref(service_ns.to_string(), owner.clone());
+                    !crate::config::is_reference_grant_validation_enabled()
+                        || ctx.runtime().ref_grant_store.check_reference_allowed(
+                            owner_ns,
+                            "edgion.io",
+                            ResourceKind::EdgionBackend.as_str(),
+                            service_ns,
+                            "",
+                            "Service",
+                            Some(&service_ref.name),
+                        )
+                } else {
+                    true
+                };
+
+                if !permitted {
+                    (None, Some(McpTargetResolutionClass::RefNotPermitted))
+                } else {
+                    let service_port = ctx
+                        .runtime()
+                        .processor_registry
+                        .get("Service")
+                        .and_then(|processor| processor.get_raw_any(&service_key))
+                        .and_then(|raw| raw.downcast::<k8s_openapi::api::core::v1::Service>().ok())
+                        .and_then(|service| {
+                            service
+                                .spec
+                                .as_ref()
+                                .and_then(|spec| spec.ports.as_ref())
+                                .and_then(|ports| {
+                                    ports
+                                        .iter()
+                                        .find(|port| port.port == i32::from(service_ref.port))
+                                        .cloned()
+                                })
+                        });
+                    if service_port
+                        .as_ref()
+                        .and_then(|port| port.app_protocol.as_deref())
+                        .is_some_and(|protocol| {
+                            matches!(
+                                protocol.to_ascii_lowercase().as_str(),
+                                "ws" | "wss" | "kubernetes.io/ws" | "kubernetes.io/wss"
+                            )
+                        })
+                    {
+                        (None, Some(McpTargetResolutionClass::UnsupportedProtocol))
+                    } else if service_port.is_some() {
+                        match mcp.normalized_service_path() {
+                            Ok(path) => (
+                                Some(ResolvedMcpTarget::Service {
+                                    namespace: service_ns.to_string(),
+                                    name: service_ref.name.clone(),
+                                    port: service_ref.port,
+                                    path,
+                                }),
+                                None,
+                            ),
+                            Err(_) => (None, Some(McpTargetResolutionClass::BackendNotFound)),
+                        }
+                    } else {
+                        (None, Some(McpTargetResolutionClass::BackendNotFound))
+                    }
+                }
+            } else {
+                match mcp.normalized_endpoint() {
+                    Ok(normalized_endpoint) => (Some(ResolvedMcpTarget::External { normalized_endpoint }), None),
+                    Err(_) => (None, Some(McpTargetResolutionClass::BackendNotFound)),
+                }
+            };
+
+            let (resolved_secret, credential_error) = if let Some(authentication) = mcp.authentication.as_ref() {
+                let secret_ref = &authentication.bearer_token.secret_ref;
+                let secret_ns = secret_ref.effective_namespace(owner_ns);
+                if secret_ns != owner_ns {
+                    ctx.runtime()
+                        .cross_ns_ref_mgr
+                        .add_ref(secret_ns.to_string(), owner.clone());
+                }
+                match mcp_credential_class(
+                    resolve_secret(
+                        ctx,
+                        &owner,
+                        "edgion.io",
+                        ResourceKind::EdgionBackend.as_str(),
+                        secret_ref,
+                        &BearerResolver,
+                    )
+                    .await,
+                ) {
+                    Ok(secret) => (Some(secret), None),
+                    Err(error) => (None, Some(error)),
+                }
+            } else {
+                (None, None)
+            };
+
+            if backend_structurally_valid && target_error.is_none() && credential_error.is_none() {
+                backend.spec.resolved_mcp = resolved_target.map(|target| ResolvedMcpBackend { target });
+                if let (Some(secret), Some(authentication)) = (
+                    resolved_secret,
+                    backend.spec.mcp.as_mut().and_then(|mcp| mcp.authentication.as_mut()),
+                ) {
+                    authentication.bearer_token.secret = Some(secret);
+                }
+            }
+            backend.spec.reconcile_outcome = Some(EdgionBackendReconcileOutcome::Mcp(McpBackendReconcileOutcome {
+                target_error,
+                credential_error,
+            }));
             return ProcessResult::Continue(backend);
         }
 
@@ -336,7 +540,63 @@ impl ProcessorHandler<EdgionBackend> for EdgionBackendHandler {
         let generation = backend.metadata.generation;
         let outcome = backend.spec.reconcile_outcome.as_ref();
         let structural_valid = validation_errors.is_empty()
-            && usize::from(backend.spec.ai.is_some()) + usize::from(backend.spec.a2a.is_some()) == 1;
+            && usize::from(backend.spec.ai.is_some())
+                + usize::from(backend.spec.a2a.is_some())
+                + usize::from(backend.spec.mcp.is_some())
+                == 1;
+
+        if backend.spec.mcp.is_some() {
+            let (mut accepted, mut resolved_refs) = if structural_valid {
+                let outcome = match outcome {
+                    Some(EdgionBackendReconcileOutcome::Mcp(outcome)) => outcome.clone(),
+                    _ => McpBackendReconcileOutcome {
+                        target_error: Some(McpTargetResolutionClass::BackendNotFound),
+                        credential_error: None,
+                    },
+                };
+                let failure = mcp_status_failure(&outcome);
+                (
+                    condition_true(
+                        condition_types::ACCEPTED,
+                        condition_reasons::ACCEPTED,
+                        "Resource accepted",
+                        generation,
+                    ),
+                    match failure {
+                        None => condition_true(
+                            condition_types::RESOLVED_REFS,
+                            condition_reasons::RESOLVED_REFS,
+                            "MCP target and credential references resolved",
+                            generation,
+                        ),
+                        Some((reason, message)) => {
+                            condition_false(condition_types::RESOLVED_REFS, reason, message, generation)
+                        }
+                    },
+                )
+            } else {
+                (
+                    condition_false(
+                        condition_types::ACCEPTED,
+                        condition_reasons::INVALID,
+                        "Backend configuration is invalid",
+                        generation,
+                    ),
+                    condition_false(
+                        condition_types::RESOLVED_REFS,
+                        condition_reasons::INVALID,
+                        "Backend configuration is invalid",
+                        generation,
+                    ),
+                )
+            };
+            let status = backend.status.get_or_insert_with(EdgionBackendStatus::default);
+            let old = std::mem::take(&mut status.conditions);
+            preserve_transition_time(&old, &mut accepted);
+            preserve_transition_time(&old, &mut resolved_refs);
+            status.conditions = vec![accepted, resolved_refs];
+            return;
+        }
 
         if backend.spec.a2a.is_some() {
             let (mut accepted, mut resolved_refs) = if structural_valid {
@@ -491,8 +751,8 @@ mod tests {
     use edgion_resources::constants::secret_keys::ai::API_KEY;
     use edgion_resources::resources::common::{Condition, SecretObjectReference, SecretSlot};
     use edgion_resources::resources::edgion_backend::{
-        A2aBackendSpec, A2aBackendTarget, A2aServiceReference, AiBackendDefaults, AiBackendSpec, AiCredential,
-        AiCredentialPool, AiModel, AiProvider, EdgionBackendSpec,
+        A2aBackendSpec, A2aBackendTarget, AiBackendDefaults, AiBackendSpec, AiCredential, AiCredentialPool, AiModel,
+        AiProvider, BackendServiceReference, EdgionBackendSpec,
     };
     use edgion_resources::resources::edgion_plugins::OnRedisFailure;
     use k8s_openapi::api::core::v1::{Secret, Service, ServicePort, ServiceSpec};
@@ -559,7 +819,7 @@ mod tests {
     fn service_a2a_backend(namespace: Option<&str>, service_name: &str, port: u16) -> EdgionBackend {
         a2a_backend(
             A2aBackendTarget {
-                service_ref: Some(A2aServiceReference {
+                service_ref: Some(BackendServiceReference {
                     name: service_name.to_string(),
                     namespace: namespace.map(str::to_string),
                     port,
@@ -585,6 +845,35 @@ mod tests {
                 ..Default::default()
             },
         )
+    }
+
+    fn bearer_secret(namespace: &str, name: &str, type_: Option<&str>, value: &[u8]) -> (String, Secret) {
+        (
+            format!("{namespace}/{name}"),
+            Secret {
+                metadata: ObjectMeta {
+                    namespace: Some(namespace.to_string()),
+                    name: Some(name.to_string()),
+                    ..Default::default()
+                },
+                data: Some(BTreeMap::from([(
+                    "bearerToken".to_string(),
+                    ByteString(value.to_vec()),
+                )])),
+                type_: type_.map(str::to_string),
+                ..Default::default()
+            },
+        )
+    }
+
+    fn mcp_backend(spec: serde_json::Value) -> EdgionBackend {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "EdgionBackend",
+            "metadata": {"namespace": "tenant-a", "name": "tools", "generation": 1},
+            "spec": {"mcp": spec}
+        }))
+        .unwrap()
     }
 
     fn backend(secret_name: &str, secret_namespace: Option<&str>) -> EdgionBackend {
@@ -635,7 +924,9 @@ mod tests {
                     defaults: AiBackendDefaults::default(),
                 }),
                 a2a: None,
+                mcp: None,
                 resolved_a2a: None,
+                resolved_mcp: None,
                 reconcile_outcome: None,
             },
             status: None,
@@ -656,7 +947,9 @@ mod tests {
                     target,
                     allow_insecure_http,
                 }),
+                mcp: None,
                 resolved_a2a: None,
+                resolved_mcp: None,
                 reconcile_outcome: None,
             },
             status: None,
@@ -748,7 +1041,7 @@ mod tests {
             &EdgionBackendHandler::new(),
             a2a_backend(
                 A2aBackendTarget {
-                    service_ref: Some(A2aServiceReference {
+                    service_ref: Some(BackendServiceReference {
                         name: "agent-svc".to_string(),
                         namespace: None,
                         port: 8080,
@@ -1169,6 +1462,321 @@ mod tests {
         assert_eq!(ctx.secret_ref_manager().get_refs("tenant-a/provider-key").len(), 1);
         handler.on_delete(&backend, &ctx).await;
         assert!(ctx.secret_ref_manager().get_refs("tenant-a/provider-key").is_empty());
+    }
+
+    #[tokio::test]
+    async fn mcp_service_and_bearer_resolve_atomically() {
+        let (key, credential) = bearer_secret("tenant-a", "tools-token", None, b"token-value==");
+        let (ctx, runtime) = context(HashMap::from([(key, credential)]));
+        install_services(&runtime, vec![service("tenant-a", "tools-svc", &[8080])]);
+        let parsed = parse(
+            &EdgionBackendHandler::new(),
+            mcp_backend(serde_json::json!({
+                "target": {
+                    "serviceRef": {"name": "tools-svc", "port": 8080},
+                    "path": "/mcp/"
+                },
+                "transport": {"type": "StreamableHTTP"},
+                "authentication": {"bearerToken": {"secretRef": {"name": "tools-token"}}}
+            })),
+            &ctx,
+        )
+        .await;
+
+        assert_eq!(
+            parsed.spec.resolved_mcp,
+            Some(ResolvedMcpBackend {
+                target: ResolvedMcpTarget::Service {
+                    namespace: "tenant-a".to_string(),
+                    name: "tools-svc".to_string(),
+                    port: 8080,
+                    path: "/mcp".to_string(),
+                }
+            })
+        );
+        assert!(parsed
+            .spec
+            .mcp
+            .as_ref()
+            .unwrap()
+            .authentication
+            .as_ref()
+            .unwrap()
+            .bearer_token
+            .secret
+            .is_some());
+        assert_eq!(runtime.service_ref_mgr.get_refs("tenant-a/tools-svc").len(), 1);
+        assert_eq!(ctx.secret_ref_manager().get_refs("tenant-a/tools-token").len(), 1);
+        assert_eq!(condition(&parsed, condition_types::RESOLVED_REFS).status, "True");
+    }
+
+    #[tokio::test]
+    async fn mcp_service_rejects_websocket_protocol_and_invalid_secret_identity() {
+        let (key, credential) = bearer_secret("tenant-a", "tools-token", None, b"token-value");
+        let (ctx, runtime) = context(HashMap::from([(key, credential)]));
+        let mut websocket = service("tenant-a", "tools-svc", &[8080]);
+        websocket.spec.as_mut().unwrap().ports.as_mut().unwrap()[0].app_protocol = Some("kubernetes.io/ws".to_string());
+        install_services(&runtime, vec![websocket]);
+        let handler = EdgionBackendHandler::new();
+        let mut backend = mcp_backend(serde_json::json!({
+            "target": {"serviceRef": {"name": "tools-svc", "port": 8080}, "path": "/mcp"},
+            "transport": {"type": "StreamableHTTP"},
+            "authentication": {"bearerToken": {"secretRef": {"name": "tools-token"}}}
+        }));
+        let parsed = parse(&handler, backend.clone(), &ctx).await;
+        assert!(parsed.spec.resolved_mcp.is_none());
+        assert_eq!(
+            condition(&parsed, condition_types::RESOLVED_REFS).reason,
+            "UnsupportedProtocol"
+        );
+
+        backend
+            .spec
+            .mcp
+            .as_mut()
+            .unwrap()
+            .authentication
+            .as_mut()
+            .unwrap()
+            .bearer_token
+            .secret_ref
+            .kind = Some("ConfigMap".to_string());
+        let errors = handler.preparse(&mut backend, &ctx);
+        assert!(errors.iter().any(|error| error.contains("must be Secret")));
+        handler.update_status(&mut backend, &ctx, &errors);
+        assert_eq!(condition(&backend, condition_types::ACCEPTED).status, "False");
+        assert!(backend.spec.resolved_mcp.is_none());
+    }
+
+    #[tokio::test]
+    async fn mcp_target_and_credential_failures_keep_both_dependencies_and_publish_no_proof() {
+        let (key, credential) = bearer_secret("tenant-a", "tools-token", None, b"invalid token");
+        let (ctx, runtime) = context(HashMap::from([(key, credential)]));
+        install_services(&runtime, Vec::new());
+        let parsed = parse(
+            &EdgionBackendHandler::new(),
+            mcp_backend(serde_json::json!({
+                "target": {
+                    "serviceRef": {"name": "missing-tools", "port": 8080},
+                    "path": "/mcp"
+                },
+                "transport": {"type": "StreamableHTTP"},
+                "authentication": {"bearerToken": {"secretRef": {"name": "tools-token"}}}
+            })),
+            &ctx,
+        )
+        .await;
+
+        assert!(parsed.spec.resolved_mcp.is_none());
+        assert!(parsed
+            .spec
+            .mcp
+            .as_ref()
+            .unwrap()
+            .authentication
+            .as_ref()
+            .unwrap()
+            .bearer_token
+            .secret
+            .is_none());
+        assert_eq!(runtime.service_ref_mgr.get_refs("tenant-a/missing-tools").len(), 1);
+        assert_eq!(ctx.secret_ref_manager().get_refs("tenant-a/tools-token").len(), 1);
+        let resolved = condition(&parsed, condition_types::RESOLVED_REFS);
+        assert_eq!(resolved.reason, "InvalidValue");
+        assert_eq!(resolved.message, "MCP bearer Secret value is invalid");
+        assert!(!resolved.message.contains("invalid token"));
+    }
+
+    #[tokio::test]
+    async fn mcp_bearer_failure_classes_fail_close_without_material() {
+        let cases = [
+            (
+                Secret {
+                    metadata: ObjectMeta {
+                        namespace: Some("tenant-a".to_string()),
+                        name: Some("tools-token".to_string()),
+                        ..Default::default()
+                    },
+                    data: Some(BTreeMap::new()),
+                    ..Default::default()
+                },
+                "MissingKeys",
+            ),
+            (bearer_secret("tenant-a", "tools-token", None, &[0xff]).1, "DecodeError"),
+            (
+                bearer_secret("tenant-a", "tools-token", Some("kubernetes.io/tls"), b"token").1,
+                "InvalidSecretType",
+            ),
+        ];
+        for (secret, reason) in cases {
+            let (ctx, runtime) = context(HashMap::from([("tenant-a/tools-token".to_string(), secret)]));
+            install_services(&runtime, vec![service("tenant-a", "tools-svc", &[8080])]);
+            let parsed = parse(
+                &EdgionBackendHandler::new(),
+                mcp_backend(serde_json::json!({
+                    "target": {"serviceRef": {"name": "tools-svc", "port": 8080}, "path": "/mcp"},
+                    "transport": {"type": "StreamableHTTP"},
+                    "authentication": {"bearerToken": {"secretRef": {"name": "tools-token"}}}
+                })),
+                &ctx,
+            )
+            .await;
+            assert!(parsed.spec.resolved_mcp.is_none(), "reason={reason}");
+            assert!(parsed
+                .spec
+                .mcp
+                .as_ref()
+                .unwrap()
+                .authentication
+                .as_ref()
+                .unwrap()
+                .bearer_token
+                .secret
+                .is_none());
+            assert_eq!(condition(&parsed, condition_types::RESOLVED_REFS).reason, reason);
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_cross_namespace_service_and_secret_follow_grant_revoke_cycle() {
+        let (key, credential) = bearer_secret("shared", "tools-token", None, b"token-value");
+        let (ctx, runtime) = context(HashMap::from([(key, credential)]));
+        install_services(&runtime, vec![service("shared", "tools-svc", &[8080])]);
+        let handler = EdgionBackendHandler::new();
+        let backend = mcp_backend(serde_json::json!({
+            "target": {
+                "serviceRef": {"name": "tools-svc", "namespace": "shared", "port": 8080},
+                "path": "/mcp"
+            },
+            "transport": {"type": "StreamableHTTP"},
+            "authentication": {"bearerToken": {"secretRef": {"name": "tools-token", "namespace": "shared"}}}
+        }));
+        let denied = parse(&handler, backend.clone(), &ctx).await;
+        assert!(denied.spec.resolved_mcp.is_none());
+        assert_eq!(
+            condition(&denied, condition_types::RESOLVED_REFS).reason,
+            "RefNotPermitted"
+        );
+        assert_eq!(runtime.service_ref_mgr.get_refs("shared/tools-svc").len(), 1);
+        assert_eq!(ctx.secret_ref_manager().get_refs("shared/tools-token").len(), 1);
+
+        let grant: edgion_resources::resources::ReferenceGrant = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1",
+            "kind": "ReferenceGrant",
+            "metadata": {"name": "allow-tools", "namespace": "shared"},
+            "spec": {
+                "from": [{"group": "edgion.io", "kind": "EdgionBackend", "namespace": "tenant-a"}],
+                "to": [
+                    {"group": "", "kind": "Service", "name": "tools-svc"},
+                    {"group": "", "kind": "Secret", "name": "tools-token"}
+                ]
+            }
+        }))
+        .unwrap();
+        runtime
+            .ref_grant_store
+            .upsert("shared/allow-tools".to_string(), Arc::new(grant));
+        let allowed = parse(&handler, backend.clone(), &ctx).await;
+        assert!(allowed.spec.resolved_mcp.is_some());
+        assert_eq!(condition(&allowed, condition_types::RESOLVED_REFS).status, "True");
+
+        runtime.ref_grant_store.remove("shared/allow-tools");
+        let revoked = parse(&handler, backend, &ctx).await;
+        assert!(revoked.spec.resolved_mcp.is_none());
+        assert_eq!(
+            condition(&revoked, condition_types::RESOLVED_REFS).reason,
+            "RefNotPermitted"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_service_and_dependency_generations_withdraw_replace_and_repair() {
+        let (old_key, old_secret) = bearer_secret("tenant-a", "old-token", None, b"old-token");
+        let (new_key, new_secret) = bearer_secret("tenant-a", "new-token", None, b"new-token");
+        let (ctx, runtime) = context(HashMap::from([(old_key, old_secret), (new_key, new_secret)]));
+        install_services(&runtime, vec![service("tenant-a", "old-svc", &[8080])]);
+        let handler = EdgionBackendHandler::new();
+        let build = |service_name: &str, secret_name: &str| {
+            mcp_backend(serde_json::json!({
+                "target": {"serviceRef": {"name": service_name, "port": 8080}, "path": "/mcp"},
+                "transport": {"type": "StreamableHTTP"},
+                "authentication": {"bearerToken": {"secretRef": {"name": secret_name}}}
+            }))
+        };
+        let first = parse(&handler, build("old-svc", "old-token"), &ctx).await;
+        assert!(first.spec.resolved_mcp.is_some());
+
+        install_services(&runtime, vec![service("tenant-a", "old-svc", &[9090])]);
+        let port_changed = parse(&handler, build("old-svc", "old-token"), &ctx).await;
+        assert!(port_changed.spec.resolved_mcp.is_none());
+
+        install_services(&runtime, Vec::new());
+        let deleted = parse(&handler, build("old-svc", "old-token"), &ctx).await;
+        assert!(deleted.spec.resolved_mcp.is_none());
+
+        install_services(&runtime, vec![service("tenant-a", "new-svc", &[8080])]);
+        let replaced = parse(&handler, build("new-svc", "new-token"), &ctx).await;
+        assert!(replaced.spec.resolved_mcp.is_some());
+        assert!(runtime.service_ref_mgr.get_refs("tenant-a/old-svc").is_empty());
+        assert!(ctx.secret_ref_manager().get_refs("tenant-a/old-token").is_empty());
+        assert_eq!(runtime.service_ref_mgr.get_refs("tenant-a/new-svc").len(), 1);
+        assert_eq!(ctx.secret_ref_manager().get_refs("tenant-a/new-token").len(), 1);
+
+        handler.on_delete(&replaced, &ctx).await;
+        assert!(runtime.service_ref_mgr.get_refs("tenant-a/new-svc").is_empty());
+        assert!(ctx.secret_ref_manager().get_refs("tenant-a/new-token").is_empty());
+    }
+
+    #[tokio::test]
+    async fn mcp_external_without_authentication_resolves_without_dependencies() {
+        let (ctx, runtime) = context(HashMap::new());
+        let parsed = parse(
+            &EdgionBackendHandler::new(),
+            mcp_backend(serde_json::json!({
+                "target": {"endpoint": "https://tools.example.test/base/mcp/"},
+                "transport": {"type": "StreamableHTTP"}
+            })),
+            &ctx,
+        )
+        .await;
+
+        assert_eq!(
+            parsed.spec.resolved_mcp,
+            Some(ResolvedMcpBackend {
+                target: ResolvedMcpTarget::External {
+                    normalized_endpoint: "https://tools.example.test/base/mcp".to_string()
+                }
+            })
+        );
+        assert!(runtime
+            .service_ref_mgr
+            .get_dependencies("EdgionBackend/tenant-a/tools")
+            .is_empty());
+        assert!(ctx
+            .secret_ref_manager()
+            .get_dependencies("EdgionBackend/tenant-a/tools")
+            .is_empty());
+    }
+
+    #[test]
+    fn mcp_status_failure_priority_is_deterministic() {
+        let outcome = McpBackendReconcileOutcome {
+            target_error: Some(McpTargetResolutionClass::BackendNotFound),
+            credential_error: Some(McpCredentialResolutionClass::InvalidSecretType),
+        };
+        assert_eq!(
+            mcp_status_failure(&outcome).map(|failure| failure.0),
+            Some("InvalidSecretType")
+        );
+
+        let outcome = McpBackendReconcileOutcome {
+            target_error: Some(McpTargetResolutionClass::RefNotPermitted),
+            credential_error: Some(McpCredentialResolutionClass::InvalidSecretType),
+        };
+        assert_eq!(
+            mcp_status_failure(&outcome).map(|failure| failure.0),
+            Some("RefNotPermitted")
+        );
     }
 
     #[test]

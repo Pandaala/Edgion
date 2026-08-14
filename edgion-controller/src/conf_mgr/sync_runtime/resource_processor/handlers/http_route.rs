@@ -1265,6 +1265,7 @@ enum ForwardingBackendClass {
     Service,
     Ai,
     A2a,
+    Mcp,
     Missing,
     Denied,
     Invalid,
@@ -1355,14 +1356,40 @@ fn runtime_ai_rule_invalid_reason(
                         {
                             Some(backend) if backend.spec.validate().is_err() => ForwardingBackendClass::Invalid,
                             Some(backend)
-                                if matches!((backend.spec.ai.is_some(), backend.spec.a2a.is_some()), (true, false)) =>
+                                if matches!(
+                                    (
+                                        backend.spec.ai.is_some(),
+                                        backend.spec.a2a.is_some(),
+                                        backend.spec.mcp.is_some()
+                                    ),
+                                    (true, false, false)
+                                ) =>
                             {
                                 ForwardingBackendClass::Ai
                             }
                             Some(backend)
-                                if matches!((backend.spec.ai.is_some(), backend.spec.a2a.is_some()), (false, true)) =>
+                                if matches!(
+                                    (
+                                        backend.spec.ai.is_some(),
+                                        backend.spec.a2a.is_some(),
+                                        backend.spec.mcp.is_some()
+                                    ),
+                                    (false, true, false)
+                                ) =>
                             {
                                 ForwardingBackendClass::A2a
+                            }
+                            Some(backend)
+                                if matches!(
+                                    (
+                                        backend.spec.ai.is_some(),
+                                        backend.spec.a2a.is_some(),
+                                        backend.spec.mcp.is_some()
+                                    ),
+                                    (false, false, true)
+                                ) =>
+                            {
+                                ForwardingBackendClass::Mcp
                             }
                             Some(_) => ForwardingBackendClass::Invalid,
                             None => ForwardingBackendClass::Missing,
@@ -1400,7 +1427,10 @@ fn runtime_ai_rule_invalid_reason(
     if classes.iter().any(|(_, _, class)| {
         matches!(
             class,
-            ForwardingBackendClass::Service | ForwardingBackendClass::A2a | ForwardingBackendClass::Invalid
+            ForwardingBackendClass::Service
+                | ForwardingBackendClass::A2a
+                | ForwardingBackendClass::Mcp
+                | ForwardingBackendClass::Invalid
         )
     }) {
         return Some("AI EdgionBackend slots must not be mixed with other forwarding backend variants".to_string());
@@ -1499,14 +1529,40 @@ fn runtime_a2a_rule_invalid_reason(
                         {
                             Some(backend) if backend.spec.validate().is_err() => ForwardingBackendClass::Invalid,
                             Some(backend)
-                                if matches!((backend.spec.ai.is_some(), backend.spec.a2a.is_some()), (true, false)) =>
+                                if matches!(
+                                    (
+                                        backend.spec.ai.is_some(),
+                                        backend.spec.a2a.is_some(),
+                                        backend.spec.mcp.is_some()
+                                    ),
+                                    (true, false, false)
+                                ) =>
                             {
                                 ForwardingBackendClass::Ai
                             }
                             Some(backend)
-                                if matches!((backend.spec.ai.is_some(), backend.spec.a2a.is_some()), (false, true)) =>
+                                if matches!(
+                                    (
+                                        backend.spec.ai.is_some(),
+                                        backend.spec.a2a.is_some(),
+                                        backend.spec.mcp.is_some()
+                                    ),
+                                    (false, true, false)
+                                ) =>
                             {
                                 ForwardingBackendClass::A2a
+                            }
+                            Some(backend)
+                                if matches!(
+                                    (
+                                        backend.spec.ai.is_some(),
+                                        backend.spec.a2a.is_some(),
+                                        backend.spec.mcp.is_some()
+                                    ),
+                                    (false, false, true)
+                                ) =>
+                            {
+                                ForwardingBackendClass::Mcp
                             }
                             Some(_) => ForwardingBackendClass::Invalid,
                             None => ForwardingBackendClass::Missing,
@@ -1563,7 +1619,10 @@ fn runtime_a2a_rule_invalid_reason(
     if classes.iter().any(|class| {
         matches!(
             class,
-            ForwardingBackendClass::Service | ForwardingBackendClass::Ai | ForwardingBackendClass::Invalid
+            ForwardingBackendClass::Service
+                | ForwardingBackendClass::Ai
+                | ForwardingBackendClass::Mcp
+                | ForwardingBackendClass::Invalid
         )
     }) {
         return Some(
@@ -2092,6 +2151,15 @@ mod tests {
                     }
                 }),
             ),
+            (
+                "tools",
+                serde_json::json!({
+                    "mcp": {
+                        "target": {"endpoint": "https://tools.example.test/mcp"},
+                        "transport": {"type": "StreamableHTTP"}
+                    }
+                }),
+            ),
         ]);
         let rpc_matches = serde_json::json!([{"method": "POST"}]);
         let backend = |name: &str, extra: serde_json::Value| {
@@ -2139,6 +2207,7 @@ mod tests {
 
         for (label, backends) in [
             ("AI", serde_json::json!([backend("model", serde_json::json!({}))])),
+            ("MCP", serde_json::json!([backend("tools", serde_json::json!({}))])),
             (
                 "mixed",
                 serde_json::json!([
@@ -2595,7 +2664,9 @@ modelRoutes:
                 spec: EdgionBackendSpec {
                     ai: None,
                     a2a: None,
+                    mcp: None,
                     resolved_a2a: None,
+                    resolved_mcp: None,
                     reconcile_outcome: None,
                 },
                 status: None,
@@ -2654,7 +2725,9 @@ modelRoutes:
                     },
                     allow_insecure_http: false,
                 }),
+                mcp: None,
                 resolved_a2a: None,
+                resolved_mcp: None,
                 reconcile_outcome: None,
             },
             status: None,
@@ -2713,7 +2786,9 @@ modelRoutes:
                 spec: EdgionBackendSpec {
                     ai: None,
                     a2a: None,
+                    mcp: None,
                     resolved_a2a: None,
+                    resolved_mcp: None,
                     reconcile_outcome: None,
                 },
                 status: None,
@@ -2919,7 +2994,9 @@ modelRoutes:
                 spec: EdgionBackendSpec {
                     ai: None,
                     a2a: None,
+                    mcp: None,
                     resolved_a2a: None,
+                    resolved_mcp: None,
                     reconcile_outcome: None,
                 },
                 status: None,

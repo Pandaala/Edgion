@@ -591,14 +591,15 @@ mod tests {
         );
 
         let selector = HttpRouteRuleUnit::build_backend_selector(&runtime.backends);
-        // Service-family and invalid slots retain their declared traffic share;
-        // the valid AI slot remains owned by AI dispatch and is excluded.
+        // Service, EdgionBackend, and invalid slots retain their declared
+        // traffic share. Two complete WRR cycles make the assertion independent
+        // of the smooth sequence's partial-cycle ordering.
         let mut seen = [0u32; 6];
-        for _ in 0..24 {
+        for _ in 0..30 {
             let selected = selector.select().unwrap();
             seen[selected.slot] += 1;
         }
-        assert_eq!(seen, [14, 2, 4, 0, 2, 2]);
+        assert_eq!(seen, [14, 2, 4, 6, 2, 2]);
     }
 
     fn make_specificity(

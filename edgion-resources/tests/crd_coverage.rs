@@ -243,8 +243,11 @@ fn edgion_backend_spec_has_no_uncovered_fields() {
         "EdgionBackend CRD must not expose any controller-resolved Secret"
     );
     assert!(
-        !contains_property_named(&expected, "resolvedA2a") && !contains_property_named(&actual, "resolvedA2a"),
-        "resolvedA2a must remain conf_sync-only and absent from both generated and committed schemas"
+        !contains_property_named(&expected, "resolvedA2a")
+            && !contains_property_named(&actual, "resolvedA2a")
+            && !contains_property_named(&expected, "resolvedMcp")
+            && !contains_property_named(&actual, "resolvedMcp"),
+        "resolved backend proofs must remain conf_sync-only and absent from both generated and committed schemas"
     );
     assert!(
         actual["properties"]["ai"]["properties"]["defaults"]["properties"]
@@ -260,6 +263,11 @@ fn edgion_backend_spec_has_no_uncovered_fields() {
     assert!(
         !service_name_pattern.contains("(?:"),
         "Kubernetes RE2 admission patterns must not use unsupported non-capturing groups"
+    );
+    assert_eq!(
+        actual["properties"]["mcp"]["properties"]["target"]["properties"]["serviceRef"]["properties"]["name"]
+            ["pattern"],
+        service_name_pattern
     );
 }
 
@@ -279,6 +287,20 @@ fn edgion_backend_provider_enum_matches_crd_bidirectionally() {
         missing_from_crd.is_empty() && stale_in_crd.is_empty(),
         "EdgionBackend provider enum drift:\n  missing from CRD (Direction-1): {missing_from_crd:?}\n  stale in CRD (Direction-2): {stale_in_crd:?}"
     );
+}
+
+#[test]
+fn edgion_backend_mcp_transport_enum_matches_crd_bidirectionally() {
+    let generated = serde_json::to_value(schema_for!(
+        edgion_resources::resources::edgion_backend::McpTransportType
+    ))
+    .unwrap();
+    let expected = string_enum_values(&generated);
+
+    let actual_schema = crd_section("edgion_backend_crd.yaml", "spec");
+    let actual_transport = &actual_schema["properties"]["mcp"]["properties"]["transport"]["properties"]["type"];
+    let actual = string_enum_values(actual_transport);
+    assert_eq!(actual, expected, "MCP transport enum drift");
 }
 
 fn contains_property_named(node: &Value, needle: &str) -> bool {
@@ -332,16 +354,35 @@ fn edgion_backend_crd_is_recursively_structural_and_secret_free() {
     assert_eq!(schema["required"], serde_json::json!(["spec"]));
     assert!(
         schema["properties"]["spec"]["required"].is_null(),
-        "spec.ai presence is enforced by the exactly-one CEL rule so Kubernetes 1.26 evaluates its message"
+        "backend variant presence is enforced by the exactly-one CEL rule so Kubernetes 1.26 evaluates its message"
     );
     assert_eq!(
         schema["properties"]["spec"]["x-kubernetes-validations"][0]["rule"],
-        "[has(self.ai), has(self.a2a)].filter(present, present).size() == 1"
+        "[has(self.ai), has(self.a2a), has(self.mcp)].filter(present, present).size() == 1"
     );
     assert_eq!(
         schema["properties"]["spec"]["properties"]["a2a"]["properties"]["target"]["x-kubernetes-validations"][0]
             ["rule"],
         "[has(self.serviceRef), has(self.endpoint)].filter(present, present).size() == 1"
+    );
+    assert_eq!(
+        schema["properties"]["spec"]["properties"]["mcp"]["properties"]["target"]["x-kubernetes-validations"][0]
+            ["rule"],
+        "[has(self.serviceRef), has(self.endpoint)].filter(present, present).size() == 1"
+    );
+    let mcp_path_rules = schema["properties"]["spec"]["properties"]["mcp"]["properties"]["target"]
+        ["x-kubernetes-validations"]
+        .to_string();
+    assert!(mcp_path_rules.contains("\\\\x00-\\\\x1F\\\\x7F"));
+    let mcp_endpoint_rules = schema["properties"]["spec"]["properties"]["mcp"]["x-kubernetes-validations"].to_string();
+    assert!(mcp_endpoint_rules.contains("([^:/?#@]+|\\\\[[0-9A-Fa-f:.]+\\\\])"));
+    assert!(mcp_endpoint_rules.contains(":0+"));
+    assert!(mcp_endpoint_rules.contains("\\\\x00-\\\\x1F\\\\x7F"));
+    assert_eq!(
+        string_enum_values(
+            &schema["properties"]["spec"]["properties"]["mcp"]["properties"]["transport"]["properties"]["type"]
+        ),
+        BTreeSet::from(["StreamableHTTP".to_string()])
     );
 }
 

@@ -171,6 +171,8 @@ pub enum ResolvedPolicyTargetClass {
     Ai,
     A2aService,
     A2aExternal,
+    McpService,
+    McpExternal,
 }
 
 impl PolicyTargetKind {

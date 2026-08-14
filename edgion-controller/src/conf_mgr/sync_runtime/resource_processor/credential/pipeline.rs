@@ -52,6 +52,12 @@ pub enum InvalidCredentialError {
     /// A key's value could not be decoded (e.g., non-UTF-8).
     DecodeError { key: &'static str, detail: String },
 
+    /// A required value decoded successfully but violates its fixed syntax.
+    InvalidValue {
+        key: &'static str,
+        class: edgion_resources::credentials::InvalidValueClass,
+    },
+
     /// The `Secret.type` is not in the resolver's accepted whitelist.
     InvalidSecretType {
         got: String,
@@ -278,6 +284,7 @@ fn map_parse_error(err: ResolveError) -> InvalidCredentialError {
             key,
             detail: format!("{source}"),
         },
+        ResolveError::InvalidValue { key, class } => InvalidCredentialError::InvalidValue { key, class },
         ResolveError::InvalidSecretType { got, allowed } => InvalidCredentialError::InvalidSecretType { got, allowed },
     }
 }

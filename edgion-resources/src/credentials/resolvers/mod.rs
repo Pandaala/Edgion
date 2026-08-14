@@ -14,7 +14,7 @@ pub mod webhook_api_key;
 pub use acme::{AcmeAccountResolver, ACME_ACCOUNT_KEY};
 pub use ai_api_key::AiApiKeyResolver;
 pub use basic::BasicAuthResolver;
-pub use bearer::BearerResolver;
+pub use bearer::{BearerResolver, BEARER_TOKEN_KEY};
 pub use dns_credential::{DnsCredentialMaterial, DnsCredentialResolver};
 pub use es_api_key::EsApiKeyResolver;
 pub use hmac::HmacResolver;

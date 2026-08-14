@@ -9,15 +9,19 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use k8s_openapi::ByteString;
 
 use crate::conf_mgr::sync_runtime::resource_processor::backend_tls_policy_ref::make_target_conflict_key;
+use crate::conf_mgr::sync_runtime::resource_processor::handlers::backend_capability::classify_raw_backend;
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, format_secret_key, update_condition,
     HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use chrono::{DateTime, Utc};
 use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
-use edgion_resources::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3, EdgionBackend};
+#[cfg(test)]
+use edgion_resources::prelude_resources::EdgionBackend;
+use edgion_resources::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3};
 use edgion_resources::resources::backend_tls_policy::{
-    BackendTLSPolicyCACertificateRef, BackendTLSPolicyStatus, BackendTLSPolicyTargetRef, BtpSpecView,
+    backend_tls_identity_validation_errors, BackendTLSPolicyCACertificateRef, BackendTLSPolicyStatus,
+    BackendTLSPolicyTargetRef, BtpSpecView, OPTION_CLIENT_CERTIFICATE_REF,
 };
 use edgion_resources::resources::common::{is_core_api_group, ParentReference, PolicyAncestorStatus};
 use edgion_resources::resources::edgion_backend_traffic_policy::{
@@ -54,63 +58,6 @@ fn raw_service_exists(target: &PolicyTargetKey, ctx: &HandlerContext) -> bool {
         .get_raw_any(&format!("{}/{}", target.namespace, target.name))
         .and_then(|raw| raw.downcast::<Service>().ok())
         .is_some()
-}
-
-fn raw_backend_capability(
-    target: &PolicyTargetKey,
-    ctx: &HandlerContext,
-) -> Result<Option<ResolvedPolicyTargetClass>, String> {
-    let Some(processor) = ctx.runtime().processor_registry.get("EdgionBackend") else {
-        return Ok(None);
-    };
-    let key = format!("{}/{}", target.namespace, target.name);
-    let Some(raw) = processor.get_raw_any(&key) else {
-        return Ok(None);
-    };
-    let backend = raw
-        .downcast::<EdgionBackend>()
-        .map_err(|_| format!("EdgionBackend {key} has an incompatible cached representation"))?;
-    backend
-        .spec
-        .validate()
-        .map_err(|_| format!("EdgionBackend {key} has an invalid backend specification"))?;
-    if let (Some(ai), None) = (backend.spec.ai.as_ref(), backend.spec.a2a.as_ref()) {
-        let endpoint = ai
-            .effective_endpoint()
-            .map_err(|_| format!("EdgionBackend {key} has an invalid AI endpoint"))?;
-        if endpoint.scheme() != "https" {
-            return Err(format!(
-                "EdgionBackend {key} must use an HTTPS endpoint for BackendTLSPolicy"
-            ));
-        }
-        return Ok(Some(ResolvedPolicyTargetClass::Ai));
-    }
-    if backend.spec.ai.is_some() || backend.spec.a2a.is_none() {
-        return Err(format!(
-            "EdgionBackend {key} does not configure exactly one backend variant"
-        ));
-    }
-    match backend.spec.a2a.as_ref() {
-        Some(a2a) if a2a.target.service_ref.is_some() && a2a.target.endpoint.is_none() => {
-            Ok(Some(ResolvedPolicyTargetClass::A2aService))
-        }
-        Some(a2a) if a2a.target.endpoint.is_some() && a2a.target.service_ref.is_none() => {
-            let endpoint = a2a
-                .normalized_endpoint()
-                .map_err(|_| format!("EdgionBackend {key} has an invalid A2A endpoint"))?;
-            if endpoint.starts_with("https://") {
-                Ok(Some(ResolvedPolicyTargetClass::A2aExternal))
-            } else {
-                Err(format!(
-                    "EdgionBackend {key} must use an HTTPS endpoint for BackendTLSPolicy"
-                ))
-            }
-        }
-        Some(_) => Ok(None),
-        None => Err(format!(
-            "EdgionBackend {key} does not configure a supported backend variant"
-        )),
-    }
 }
 
 /// Decide whether sibling BackendTLSPolicies (those targeting the same
@@ -216,11 +163,27 @@ impl BackendTlsPolicyHandler {
             errors.push("must specify either caCertificateRefs or wellKnownCACertificates".to_string());
         }
 
+        if let Err(error) = spec.client_certificate_secret_ref() {
+            errors.push(error);
+        }
+
         if let Some(refs) = &validation.ca_certificate_refs {
+            let mut seen_refs = BTreeSet::new();
             for ca_ref in refs {
                 if ca_ref.namespace.is_some() {
                     errors.push(format!(
                         "caCertificateRef {}/{} must not specify namespace; BackendTLSPolicy references are same-namespace",
+                        ca_ref.kind, ca_ref.name
+                    ));
+                }
+                let canonical_group = if is_core_api_group(&ca_ref.group) {
+                    ""
+                } else {
+                    ca_ref.group.as_str()
+                };
+                if !seen_refs.insert((canonical_group, ca_ref.kind.as_str(), ca_ref.name.as_str())) {
+                    errors.push(format!(
+                        "duplicate caCertificateRef {}/{} is not allowed",
                         ca_ref.kind, ca_ref.name
                     ));
                 }
@@ -267,13 +230,44 @@ impl BackendTlsPolicyHandler {
                     evaluation.missing_targets.insert(target.clone());
                 }
             }
-            PolicyTargetKind::EdgionBackend => match raw_backend_capability(&target, ctx) {
-                Ok(Some(class)) => evaluation.target_class = Some(class),
+            PolicyTargetKind::EdgionBackend => match classify_raw_backend(&target, ctx) {
+                Ok(Some(capability)) if capability.supports_tls_policy => {
+                    evaluation.target_class = Some(capability.target_class)
+                }
+                Ok(Some(_)) => evaluation.errors.push(format!(
+                    "EdgionBackend {}/{} must use an HTTPS endpoint for BackendTLSPolicy",
+                    target.namespace, target.name
+                )),
                 Ok(None) => {
                     evaluation.missing_targets.insert(target.clone());
                 }
                 Err(error) => evaluation.errors.push(error),
             },
+        }
+        if matches!(
+            evaluation.target_class,
+            Some(ResolvedPolicyTargetClass::McpService | ResolvedPolicyTargetClass::McpExternal)
+        ) {
+            evaluation
+                .errors
+                .extend(backend_tls_identity_validation_errors(spec.validation()));
+            if spec
+                .options()
+                .is_some_and(|options| options.keys().any(|key| key != OPTION_CLIENT_CERTIFICATE_REF))
+            {
+                evaluation
+                    .errors
+                    .push("MCP BackendTLSPolicy options contain an unsupported key".to_string());
+            }
+            if let Some(refs) = &spec.validation().ca_certificate_refs {
+                let mut names = BTreeSet::new();
+                if refs.iter().any(|reference| !names.insert(reference.name.as_str())) {
+                    evaluation.errors.push(
+                        "MCP caCertificateRefs must use unique names across Secret and ConfigMap references"
+                            .to_string(),
+                    );
+                }
+            }
         }
         evaluation.target = Some(target);
         if !evaluation.errors.is_empty() || !evaluation.missing_targets.is_empty() {
@@ -853,16 +847,24 @@ impl BackendTlsPolicyHandler {
 
     #[inline]
     fn is_ca_resolved<S: BtpSpecView>(spec: &S, name: &str) -> bool {
-        spec.resolved_ca_certificates()
-            .is_some_and(|secrets| secrets.iter().any(|s| s.metadata.name.as_deref() == Some(name)))
+        spec.resolved_ca_certificates().is_some_and(|secrets| {
+            secrets.iter().any(|secret| {
+                secret.metadata.name.as_deref() == Some(name)
+                    && secret
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get(CA_CERT))
+                        .is_some_and(|value| !value.0.is_empty())
+            })
+        })
     }
 
     #[inline]
     fn secret_has_client_cert_pair(secret: &k8s_openapi::api::core::v1::Secret) -> bool {
-        secret
-            .data
-            .as_ref()
-            .is_some_and(|d| d.contains_key(CERT) && d.contains_key(KEY))
+        secret.data.as_ref().is_some_and(|data| {
+            data.get(CERT).is_some_and(|value| !value.0.is_empty())
+                && data.get(KEY).is_some_and(|value| !value.0.is_empty())
+        })
     }
 }
 
@@ -949,11 +951,14 @@ mod tests {
     use crate::conf_mgr::ControllerRuntime;
     use chrono::{DateTime, Utc};
     use edgion_resources::resources::backend_tls_policy::{
-        BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation, WellKnownCACertificates,
+        BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation, SubjectAltName,
+        SubjectAltNameType, WellKnownCACertificates, OPTION_CLIENT_CERTIFICATE_REF,
     };
     use edgion_resources::ResourceKind;
+    use k8s_openapi::api::core::v1::{ConfigMap, Secret};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
     use kube::api::ObjectMeta;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     // -------- should_requeue_siblings (pure decision) --------
@@ -1069,6 +1074,80 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    fn mcp_backend(target: serde_json::Value, allow_insecure_http: bool) -> EdgionBackend {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "EdgionBackend",
+            "metadata": {"name": "tools", "namespace": "ns"},
+            "spec": {"mcp": {
+                "target": target,
+                "allowInsecureHttp": allow_insecure_http,
+                "transport": {"type": "StreamableHTTP"}
+            }}
+        }))
+        .unwrap()
+    }
+
+    fn wire_backend_to_gateway(rt: &ControllerRuntime, ns: &str, backend: &str, route: &str, gateway: &str) {
+        let target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionBackend,
+            namespace: ns.to_string(),
+            name: backend.to_string(),
+        };
+        rt.backend_ref_mgr.add_ref(
+            target.to_string(),
+            ResourceRef::new(ResourceKind::HTTPRoute, Some(ns.to_string()), route.to_string()),
+        );
+        rt.gateway_route_index.update_route(
+            ResourceKind::HTTPRoute,
+            &format!("{ns}/{route}"),
+            &[ParentReference {
+                group: Some("gateway.networking.k8s.io".to_string()),
+                kind: Some("Gateway".to_string()),
+                namespace: Some(ns.to_string()),
+                name: gateway.to_string(),
+                section_name: None,
+                port: None,
+            }],
+            ns,
+        );
+    }
+
+    fn secret_with_data(ns: &str, name: &str, entries: &[(&str, &[u8])]) -> Secret {
+        Secret {
+            metadata: ObjectMeta {
+                namespace: Some(ns.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            data: Some(
+                entries
+                    .iter()
+                    .map(|(key, value)| ((*key).to_string(), ByteString(value.to_vec())))
+                    .collect(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    fn ancestor_condition<'a>(
+        policy: &'a BackendTLSPolicy,
+        condition_type: &str,
+    ) -> &'a edgion_resources::resources::common::Condition {
+        policy
+            .status
+            .as_ref()
+            .expect("policy status should exist")
+            .ancestors
+            .iter()
+            .find(|ancestor| ancestor.ancestor_ref.name == "gw")
+            .expect("gateway ancestor should exist")
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == condition_type)
+            .unwrap_or_else(|| panic!("condition {condition_type} should exist"))
     }
 
     fn install_backend_processor(
@@ -1264,6 +1343,348 @@ mod tests {
             .target_mgr()
             .get_dependencies("BackendTLSPolicy/ns/a2a-external")
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn mcp_service_and_https_external_publish_typed_tls_markers_while_http_withdraws() {
+        let (ctx, runtime) = make_ctx();
+        let service_backend = mcp_backend(
+            serde_json::json!({
+                "serviceRef": {"name": "tools-svc", "port": 8080},
+                "path": "/mcp"
+            }),
+            false,
+        );
+        let (_processor, raw) = install_backend_processor(&runtime, service_backend);
+        let handler = BackendTlsPolicyHandler::default();
+        let mut policy = make_btp("ns", "mcp-tls", "tools", "2026-01-01T00:00:00+00:00");
+        policy.spec.target_refs[0].group = "edgion.io".to_string();
+        policy.spec.target_refs[0].kind = "EdgionBackend".to_string();
+
+        let ProcessResult::Continue(service) = handler.parse_policy(policy.clone(), &ctx).await else {
+            panic!("MCP Service TLS policy should continue");
+        };
+        assert_eq!(
+            service.spec.resolved_target_class,
+            Some(ResolvedPolicyTargetClass::McpService)
+        );
+
+        raw.upsert(
+            "ns/tools".to_string(),
+            Arc::new(mcp_backend(
+                serde_json::json!({"endpoint": "https://tools.example.test/mcp"}),
+                false,
+            )),
+        );
+        let ProcessResult::Continue(https) = handler.parse_policy(policy.clone(), &ctx).await else {
+            panic!("MCP HTTPS external TLS policy should continue");
+        };
+        assert_eq!(
+            https.spec.resolved_target_class,
+            Some(ResolvedPolicyTargetClass::McpExternal)
+        );
+
+        raw.upsert(
+            "ns/tools".to_string(),
+            Arc::new(mcp_backend(
+                serde_json::json!({"endpoint": "http://tools.example.test/mcp"}),
+                true,
+            )),
+        );
+        let errors = handler.validate(&policy, &ctx);
+        assert!(errors.iter().any(|error| error.contains("must use an HTTPS endpoint")));
+        let ProcessResult::Continue(http) = handler.parse_policy(policy, &ctx).await else {
+            panic!("MCP HTTP policy should continue with withdrawn marker");
+        };
+        assert!(http.spec.resolved_target_class.is_none());
+        assert!(runtime
+            .backend_tls_policy
+            .target_mgr()
+            .get_dependencies("BackendTLSPolicy/ns/mcp-tls")
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn mcp_ca_secret_requires_nonempty_ca_material_before_publication() {
+        let (ctx, runtime) = make_ctx();
+        install_backend_processor(
+            &runtime,
+            mcp_backend(serde_json::json!({"endpoint": "https://tools.example.test/mcp"}), false),
+        );
+        wire_backend_to_gateway(&runtime, "ns", "tools", "route", "gw");
+        let handler = BackendTlsPolicyHandler::default();
+        let mut policy = make_btp("ns", "mcp-ca", "tools", "2026-01-01T00:00:00+00:00");
+        policy.spec.target_refs[0].group = "edgion.io".to_string();
+        policy.spec.target_refs[0].kind = "EdgionBackend".to_string();
+        policy.spec.validation.well_known_ca_certificates = None;
+        policy.spec.validation.ca_certificate_refs = Some(vec![BackendTLSPolicyCACertificateRef {
+            group: String::new(),
+            kind: "Secret".to_string(),
+            name: "mcp-ca".to_string(),
+            namespace: None,
+        }]);
+
+        for secret in [
+            None,
+            Some(secret_with_data("ns", "mcp-ca", &[])),
+            Some(secret_with_data("ns", "mcp-ca", &[(CA_CERT, b"")])),
+        ] {
+            runtime.secret_store.replace_all(
+                secret
+                    .map(|secret| HashMap::from([("ns/mcp-ca".to_string(), secret)]))
+                    .unwrap_or_default(),
+            );
+            let ProcessResult::Continue(mut parsed) = handler.parse_policy(policy.clone(), &ctx).await else {
+                panic!("MCP CA policy should continue with withdrawn runtime staging");
+            };
+            assert!(parsed.spec.resolved_target_class.is_none());
+            handler.update_status(&mut parsed, &ctx, &[]);
+            let accepted = ancestor_condition(&parsed, condition_types::ACCEPTED);
+            assert_eq!(accepted.status, "False");
+            assert_eq!(accepted.reason, condition_reasons::NO_VALID_CA_CERTIFICATE);
+            let resolved_refs = ancestor_condition(&parsed, condition_types::RESOLVED_REFS);
+            assert_eq!(resolved_refs.status, "False");
+            assert_eq!(resolved_refs.reason, condition_reasons::INVALID_CA_CERTIFICATE_REF);
+        }
+
+        runtime.secret_store.replace_all(HashMap::from([(
+            "ns/mcp-ca".to_string(),
+            secret_with_data("ns", "mcp-ca", &[(CA_CERT, b"complete-ca")]),
+        )]));
+        let ProcessResult::Continue(mut parsed) = handler.parse_policy(policy, &ctx).await else {
+            panic!("complete MCP CA policy should continue");
+        };
+        assert_eq!(
+            parsed.spec.resolved_target_class,
+            Some(ResolvedPolicyTargetClass::McpExternal)
+        );
+        handler.update_status(&mut parsed, &ctx, &[]);
+        assert_eq!(ancestor_condition(&parsed, condition_types::ACCEPTED).status, "True");
+        assert_eq!(
+            ancestor_condition(&parsed, condition_types::RESOLVED_REFS).status,
+            "True"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_client_secret_requires_nonempty_certificate_and_key_before_publication() {
+        let (ctx, runtime) = make_ctx();
+        install_backend_processor(
+            &runtime,
+            mcp_backend(serde_json::json!({"endpoint": "https://tools.example.test/mcp"}), false),
+        );
+        wire_backend_to_gateway(&runtime, "ns", "tools", "route", "gw");
+        let handler = BackendTlsPolicyHandler::default();
+        let mut policy = make_btp("ns", "mcp-client", "tools", "2026-01-01T00:00:00+00:00");
+        policy.spec.target_refs[0].group = "edgion.io".to_string();
+        policy.spec.target_refs[0].kind = "EdgionBackend".to_string();
+        policy.spec.options = Some(HashMap::from([(
+            OPTION_CLIENT_CERTIFICATE_REF.to_string(),
+            "mcp-client".to_string(),
+        )]));
+
+        for entries in [
+            vec![(CERT, b"".as_slice()), (KEY, b"complete-key".as_slice())],
+            vec![(CERT, b"complete-cert".as_slice()), (KEY, b"".as_slice())],
+        ] {
+            runtime.secret_store.replace_all(HashMap::from([(
+                "ns/mcp-client".to_string(),
+                secret_with_data("ns", "mcp-client", &entries),
+            )]));
+            let ProcessResult::Continue(mut parsed) = handler.parse_policy(policy.clone(), &ctx).await else {
+                panic!("MCP client certificate policy should continue with withdrawn runtime staging");
+            };
+            assert!(parsed.spec.resolved_target_class.is_none());
+            handler.update_status(&mut parsed, &ctx, &[]);
+            let resolved_refs = ancestor_condition(&parsed, condition_types::RESOLVED_REFS);
+            assert_eq!(resolved_refs.status, "False");
+            assert_eq!(resolved_refs.reason, condition_reasons::INVALID_CA_CERTIFICATE_REF);
+        }
+
+        runtime.secret_store.replace_all(HashMap::from([(
+            "ns/mcp-client".to_string(),
+            secret_with_data("ns", "mcp-client", &[(CERT, b"complete-cert"), (KEY, b"complete-key")]),
+        )]));
+        let ProcessResult::Continue(mut parsed) = handler.parse_policy(policy, &ctx).await else {
+            panic!("complete MCP client certificate policy should continue");
+        };
+        assert_eq!(
+            parsed.spec.resolved_target_class,
+            Some(ResolvedPolicyTargetClass::McpExternal)
+        );
+        handler.update_status(&mut parsed, &ctx, &[]);
+        assert_eq!(
+            ancestor_condition(&parsed, condition_types::RESOLVED_REFS).status,
+            "True"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_options_reject_unknown_empty_and_invalid_client_secret_names() {
+        let (ctx, runtime) = make_ctx();
+        install_backend_processor(
+            &runtime,
+            mcp_backend(serde_json::json!({"endpoint": "https://tools.example.test/mcp"}), false),
+        );
+        wire_backend_to_gateway(&runtime, "ns", "tools", "route", "gw");
+        let handler = BackendTlsPolicyHandler::default();
+        let mut policy = make_btp("ns", "mcp-options", "tools", "2026-01-01T00:00:00+00:00");
+        policy.spec.target_refs[0].group = "edgion.io".to_string();
+        policy.spec.target_refs[0].kind = "EdgionBackend".to_string();
+
+        for options in [
+            HashMap::from([("example.io/unknown".to_string(), "value".to_string())]),
+            HashMap::from([(OPTION_CLIENT_CERTIFICATE_REF.to_string(), String::new())]),
+            HashMap::from([(OPTION_CLIENT_CERTIFICATE_REF.to_string(), "   ".to_string())]),
+            HashMap::from([(OPTION_CLIENT_CERTIFICATE_REF.to_string(), "Invalid_Name".to_string())]),
+        ] {
+            policy.spec.options = Some(options);
+            let errors = handler.validate(&policy, &ctx);
+            assert!(!errors.is_empty());
+            let ProcessResult::Continue(mut parsed) = handler.parse_policy(policy.clone(), &ctx).await else {
+                panic!("invalid MCP option policy should continue with withdrawn staging");
+            };
+            assert!(parsed.spec.resolved_target_class.is_none());
+            handler.update_status(&mut parsed, &ctx, &errors);
+            let accepted = ancestor_condition(&parsed, condition_types::ACCEPTED);
+            assert_eq!(accepted.status, "False");
+            assert_eq!(accepted.reason, condition_reasons::INVALID);
+        }
+
+        policy.spec.options = None;
+        policy.spec.validation.subject_alt_names = Some(vec![
+            SubjectAltName {
+                san_type: SubjectAltNameType::Hostname,
+                hostname: Some("*.example.test".to_string()),
+                uri: None,
+            },
+            SubjectAltName {
+                san_type: SubjectAltNameType::URI,
+                hostname: None,
+                uri: Some("spiffe://trust.example/workload".to_string()),
+            },
+        ]);
+        let ProcessResult::Continue(valid) = handler.parse_policy(policy.clone(), &ctx).await else {
+            panic!("valid typed SAN policy should continue");
+        };
+        assert_eq!(
+            valid.spec.resolved_target_class,
+            Some(ResolvedPolicyTargetClass::McpExternal)
+        );
+
+        for (hostname, sans) in [
+            ("", None),
+            ("backend.example.com", Some(Vec::new())),
+            (
+                "backend.example.com",
+                Some(vec![SubjectAltName {
+                    san_type: SubjectAltNameType::Hostname,
+                    hostname: None,
+                    uri: Some("spiffe://trust.example/workload".to_string()),
+                }]),
+            ),
+            (
+                "backend.example.com",
+                Some(vec![SubjectAltName {
+                    san_type: SubjectAltNameType::URI,
+                    hostname: Some("backend.example.com".to_string()),
+                    uri: Some("not an absolute uri".to_string()),
+                }]),
+            ),
+            (
+                "backend.example.com",
+                Some(vec![SubjectAltName {
+                    san_type: SubjectAltNameType::URI,
+                    hostname: None,
+                    uri: Some(format!("https://example.com/{}", "a".repeat(240))),
+                }]),
+            ),
+        ] {
+            policy.spec.validation.hostname = hostname.to_string();
+            policy.spec.validation.subject_alt_names = sans;
+            let errors = handler.validate(&policy, &ctx);
+            assert!(!errors.is_empty());
+            let ProcessResult::Continue(parsed) = handler.parse_policy(policy.clone(), &ctx).await else {
+                panic!("invalid MCP identity policy should continue with withdrawn staging");
+            };
+            assert!(parsed.spec.resolved_target_class.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_duplicate_ca_names_are_rejected_with_one_or_both_kinds_present() {
+        let (ctx, runtime) = make_ctx();
+        install_backend_processor(
+            &runtime,
+            mcp_backend(serde_json::json!({"endpoint": "https://tools.example.test/mcp"}), false),
+        );
+        wire_backend_to_gateway(&runtime, "ns", "tools", "route", "gw");
+        runtime.secret_store.replace_all(HashMap::from([(
+            "ns/mcp-ca".to_string(),
+            secret_with_data("ns", "mcp-ca", &[(CA_CERT, b"complete-ca")]),
+        )]));
+
+        let handler = BackendTlsPolicyHandler::default();
+        let mut policy = make_btp("ns", "mcp-duplicate-ca", "tools", "2026-01-01T00:00:00+00:00");
+        policy.spec.target_refs[0].group = "edgion.io".to_string();
+        policy.spec.target_refs[0].kind = "EdgionBackend".to_string();
+        policy.spec.validation.well_known_ca_certificates = None;
+        policy.spec.validation.ca_certificate_refs = Some(vec![
+            BackendTLSPolicyCACertificateRef {
+                group: String::new(),
+                kind: "Secret".to_string(),
+                name: "mcp-ca".to_string(),
+                namespace: None,
+            },
+            BackendTLSPolicyCACertificateRef {
+                group: String::new(),
+                kind: "ConfigMap".to_string(),
+                name: "mcp-ca".to_string(),
+                namespace: None,
+            },
+        ]);
+        policy.spec.resolved_ca_certificates = Some(vec![secret_with_data(
+            "ns",
+            "forged-extra-ca",
+            &[(CA_CERT, b"forged-ca")],
+        )]);
+
+        for both_kinds_present in [false, true] {
+            runtime.configmap_store.replace_all(if both_kinds_present {
+                HashMap::from([(
+                    "ns/mcp-ca".to_string(),
+                    ConfigMap {
+                        metadata: ObjectMeta {
+                            name: Some("mcp-ca".to_string()),
+                            namespace: Some("ns".to_string()),
+                            ..Default::default()
+                        },
+                        data: Some(BTreeMap::from([(CA_CERT.to_string(), "configmap-ca".to_string())])),
+                        ..Default::default()
+                    },
+                )])
+            } else {
+                HashMap::new()
+            });
+            let errors = handler.validate(&policy, &ctx);
+            assert!(errors.iter().any(|error| error
+                .contains("MCP caCertificateRefs must use unique names across Secret and ConfigMap references")));
+            let ProcessResult::Continue(mut parsed) = handler.parse_policy(policy.clone(), &ctx).await else {
+                panic!("duplicate-name MCP CA policy should continue with withdrawn runtime staging");
+            };
+            assert!(parsed.spec.resolved_target_class.is_none());
+            assert!(parsed
+                .spec
+                .resolved_ca_certificates
+                .as_ref()
+                .expect("available referenced CA objects should replace forged material")
+                .iter()
+                .all(|secret| secret.metadata.name.as_deref() == Some("mcp-ca")));
+            handler.update_status(&mut parsed, &ctx, &errors);
+            let accepted = ancestor_condition(&parsed, condition_types::ACCEPTED);
+            assert_eq!(accepted.status, "False");
+            assert_eq!(accepted.reason, condition_reasons::INVALID);
+        }
     }
 
     #[tokio::test]

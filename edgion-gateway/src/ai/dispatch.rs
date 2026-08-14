@@ -904,6 +904,8 @@ mod tests {
             min_retry_rate: None,
         }));
         let policy = Arc::new(EffectiveBackendTrafficPolicy {
+            resolved_target_class:
+                edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass::Ai,
             load_balancer: None,
             upstream_authority: None,
             upstream_authority_config: None,

@@ -11,12 +11,14 @@ use std::sync::{Arc, LazyLock};
 
 use arc_swap::ArcSwap;
 use edgion_common::conf_sync::traits::ConfHandler;
-use edgion_resources::credentials::{AiApiKeyResolver, SecretMaterialResolver};
+use edgion_resources::credentials::{AiApiKeyResolver, BearerResolver, SecretMaterialResolver};
 use edgion_resources::resources::edgion_backend::{
-    AiCredentialLimits, AiProvider, EdgionBackend, ParsedAiModelPricing, ResolvedA2aTarget,
+    AiCredentialLimits, AiProvider, EdgionBackend, McpTransportType, ParsedAiModelPricing, ResolvedA2aTarget,
+    ResolvedMcpTarget,
 };
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::resources::edgion_plugins::OnRedisFailure;
+use http::HeaderValue;
 use url::{Host, Url};
 
 type RuntimeMap = HashMap<String, Arc<RuntimeEdgionBackend>>;
@@ -42,10 +44,10 @@ pub struct RuntimeAiEndpoint {
     pub path_prefix: String,
 }
 
-/// Cold-compiled external A2A endpoint. Resolution still happens through the
+/// Cold-compiled external HTTP endpoint. Resolution still happens through the
 /// canonical routed-external resolver at dial time.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RuntimeA2aExternalEndpoint {
+pub struct RuntimeExternalHttpEndpoint {
     pub domain: String,
     pub port: u16,
     pub use_tls: bool,
@@ -58,7 +60,7 @@ pub struct RuntimeA2aExternalEndpoint {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuntimeA2aTarget {
     Service { namespace: String, name: String, port: u16 },
-    External(RuntimeA2aExternalEndpoint),
+    External(RuntimeExternalHttpEndpoint),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -66,6 +68,63 @@ pub struct RuntimeA2aBackend {
     /// Stable logical-backend identity for policy and attempt state.
     pub uid: String,
     pub target: RuntimeA2aTarget,
+}
+
+/// Fixed MCP protocol/transport identity compiled by WP9.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeMcpTransport {
+    StreamableHttp20260728,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuntimeMcpTarget {
+    Service {
+        namespace: String,
+        name: String,
+        port: u16,
+        path: String,
+    },
+    External(RuntimeExternalHttpEndpoint),
+}
+
+#[derive(Clone)]
+pub struct RuntimeMcpBearer {
+    secret_namespace: String,
+    secret_name: String,
+    authorization: HeaderValue,
+}
+
+impl PartialEq for RuntimeMcpBearer {
+    fn eq(&self, other: &Self) -> bool {
+        self.secret_namespace == other.secret_namespace
+            && self.secret_name == other.secret_name
+            && self.authorization == other.authorization
+    }
+}
+
+impl Eq for RuntimeMcpBearer {}
+
+impl RuntimeMcpBearer {
+    /// Sensitive, ready-to-inject Authorization value for the future WP10 owner.
+    pub fn authorization_header_value(&self) -> HeaderValue {
+        self.authorization.clone()
+    }
+}
+
+impl fmt::Debug for RuntimeMcpBearer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RuntimeMcpBearer")
+            .field("authorization", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeMcpBackend {
+    pub uid: String,
+    pub transport: RuntimeMcpTransport,
+    pub target: RuntimeMcpTarget,
+    pub bearer: Option<RuntimeMcpBearer>,
 }
 
 /// Canonical model selected by either its canonical name or an alias.
@@ -185,14 +244,16 @@ impl fmt::Debug for RuntimeAiBackend {
 pub enum RuntimeEdgionBackend {
     Ai(Arc<RuntimeAiBackend>),
     A2a(Arc<RuntimeA2aBackend>),
+    Mcp(Arc<RuntimeMcpBackend>),
 }
 
 struct Snapshot {
+    generation: u64,
     backends: RuntimeMap,
     credential_outliers: Arc<super::AiCredentialOutlierStore>,
 }
 
-/// Request-stable view of all activatable AI backends.
+/// Request-stable AI-only view of the unified EdgionBackend snapshot.
 ///
 /// A route with multiple AI backends captures this once, then resolves every
 /// candidate from the same generation without repeated ArcSwap loads.
@@ -205,7 +266,7 @@ impl AiBackendSnapshot {
     pub fn get_by_key(&self, key: &str) -> Option<Arc<RuntimeAiBackend>> {
         match self.inner.backends.get(key)?.as_ref() {
             RuntimeEdgionBackend::Ai(backend) => Some(Arc::clone(backend)),
-            RuntimeEdgionBackend::A2a(_) => None,
+            RuntimeEdgionBackend::A2a(_) | RuntimeEdgionBackend::Mcp(_) => None,
         }
     }
 
@@ -230,6 +291,10 @@ pub struct EdgionBackendSnapshot {
 }
 
 impl EdgionBackendSnapshot {
+    pub fn generation(&self) -> u64 {
+        self.inner.generation
+    }
+
     pub fn get_by_key(&self, key: &str) -> Option<Arc<RuntimeEdgionBackend>> {
         self.inner.backends.get(key).cloned()
     }
@@ -237,7 +302,14 @@ impl EdgionBackendSnapshot {
     pub fn get_a2a_by_key(&self, key: &str) -> Option<Arc<RuntimeA2aBackend>> {
         match self.inner.backends.get(key)?.as_ref() {
             RuntimeEdgionBackend::A2a(backend) => Some(Arc::clone(backend)),
-            RuntimeEdgionBackend::Ai(_) => None,
+            RuntimeEdgionBackend::Ai(_) | RuntimeEdgionBackend::Mcp(_) => None,
+        }
+    }
+
+    pub fn get_mcp_by_key(&self, key: &str) -> Option<Arc<RuntimeMcpBackend>> {
+        match self.inner.backends.get(key)?.as_ref() {
+            RuntimeEdgionBackend::Mcp(backend) => Some(Arc::clone(backend)),
+            RuntimeEdgionBackend::Ai(_) | RuntimeEdgionBackend::A2a(_) => None,
         }
     }
 }
@@ -271,6 +343,7 @@ impl EdgionBackendStore {
     fn with_credential_outlier_store(credential_outliers: Arc<super::AiCredentialOutlierStore>) -> Self {
         Self {
             snapshot: ArcSwap::from_pointee(Snapshot {
+                generation: 0,
                 backends: HashMap::new(),
                 credential_outliers: Arc::clone(&credential_outliers),
             }),
@@ -318,7 +391,7 @@ impl EdgionBackendStore {
     pub fn get_by_key(&self, key: &str) -> Option<Arc<RuntimeAiBackend>> {
         match self.snapshot.load().backends.get(key)?.as_ref() {
             RuntimeEdgionBackend::Ai(backend) => Some(Arc::clone(backend)),
-            RuntimeEdgionBackend::A2a(_) => None,
+            RuntimeEdgionBackend::A2a(_) | RuntimeEdgionBackend::Mcp(_) => None,
         }
     }
 
@@ -375,6 +448,9 @@ impl EdgionBackendStore {
                 compile_backend_entry(key, resource, current.backends.get(key)).map(|backend| (key.clone(), backend))
             })
             .collect();
+        if runtime_maps_share_entries(&current.backends, &backends) {
+            return;
+        }
         let adaptive_targets = changed_ai_backend_targets(&current.backends, &backends);
         for key in current.backends.keys() {
             if !backends.contains_key(key) {
@@ -385,6 +461,10 @@ impl EdgionBackendStore {
             self.publish_credentials(key, Some(backend));
         }
         self.snapshot.store(Arc::new(Snapshot {
+            generation: current
+                .generation
+                .checked_add(1)
+                .expect("EdgionBackend snapshot generation overflow"),
             backends,
             credential_outliers: Arc::clone(&self.credential_outliers),
         }));
@@ -402,23 +482,35 @@ impl EdgionBackendStore {
         let mut backends = current.backends.clone();
         for key in remove {
             backends.remove(key);
-            self.publish_credentials(key, None);
         }
         for (key, resource) in add_or_update {
             match compile_backend_entry(&key, &resource, backends.get(&key)) {
                 Some(backend) => {
-                    self.publish_credentials(&key, Some(&backend));
                     backends.insert(key, backend);
                 }
                 None => {
                     // An invalid update must deactivate the previous generation.
                     backends.remove(&key);
-                    self.publish_credentials(&key, None);
                 }
             }
         }
+        if runtime_maps_share_entries(&current.backends, &backends) {
+            return;
+        }
         let adaptive_targets = changed_ai_backend_targets(&current.backends, &backends);
+        for key in current.backends.keys() {
+            if !backends.contains_key(key) {
+                self.publish_credentials(key, None);
+            }
+        }
+        for (key, backend) in &backends {
+            self.publish_credentials(key, Some(backend));
+        }
         self.snapshot.store(Arc::new(Snapshot {
+            generation: current
+                .generation
+                .checked_add(1)
+                .expect("EdgionBackend snapshot generation overflow"),
             backends,
             credential_outliers: Arc::clone(&self.credential_outliers),
         }));
@@ -432,6 +524,13 @@ impl EdgionBackendStore {
     }
 }
 
+fn runtime_maps_share_entries(current: &RuntimeMap, next: &RuntimeMap) -> bool {
+    current.len() == next.len()
+        && next
+            .iter()
+            .all(|(key, backend)| current.get(key).is_some_and(|existing| Arc::ptr_eq(existing, backend)))
+}
+
 fn changed_ai_backend_targets(current: &RuntimeMap, next: &RuntimeMap) -> Vec<PolicyTargetKey> {
     current
         .keys()
@@ -443,9 +542,8 @@ fn changed_ai_backend_targets(current: &RuntimeMap, next: &RuntimeMap) -> Vec<Po
                 (RuntimeEdgionBackend::Ai(previous), RuntimeEdgionBackend::Ai(updated)) => {
                     !Arc::ptr_eq(previous, updated)
                 }
-                (RuntimeEdgionBackend::Ai(_), RuntimeEdgionBackend::A2a(_))
-                | (RuntimeEdgionBackend::A2a(_), RuntimeEdgionBackend::Ai(_)) => true,
-                (RuntimeEdgionBackend::A2a(_), RuntimeEdgionBackend::A2a(_)) => false,
+                (RuntimeEdgionBackend::Ai(_), _) | (_, RuntimeEdgionBackend::Ai(_)) => true,
+                _ => false,
             },
             (Some(previous), None) => matches!(previous.as_ref(), RuntimeEdgionBackend::Ai(_)),
             (None, Some(updated)) => matches!(updated.as_ref(), RuntimeEdgionBackend::Ai(_)),
@@ -483,6 +581,10 @@ pub fn create_edgion_backend_handler() -> Box<dyn ConfHandler<EdgionBackend> + S
 
 pub fn count_ai_backends() -> usize {
     GLOBAL_EDGION_BACKEND_STORE.count()
+}
+
+pub fn count_edgion_backends() -> usize {
+    GLOBAL_EDGION_BACKEND_STORE.count_all()
 }
 
 #[cfg(test)]
@@ -580,13 +682,16 @@ fn compile_backend_entry(
 
 fn try_compile_edgion_backend(key: &str, resource: &EdgionBackend) -> Result<RuntimeEdgionBackend, &'static str> {
     resource.spec.validate().map_err(|_| "invalid configuration")?;
-    match (&resource.spec.ai, &resource.spec.a2a) {
-        (Some(_), None) => try_compile_backend(key, resource)
+    match (&resource.spec.ai, &resource.spec.a2a, &resource.spec.mcp) {
+        (Some(_), None, None) => try_compile_backend(key, resource)
             .map(Arc::new)
             .map(RuntimeEdgionBackend::Ai),
-        (None, Some(_)) => try_compile_a2a_backend(key, resource)
+        (None, Some(_), None) => try_compile_a2a_backend(key, resource)
             .map(Arc::new)
             .map(RuntimeEdgionBackend::A2a),
+        (None, None, Some(_)) => try_compile_mcp_backend(key, resource)
+            .map(Arc::new)
+            .map(RuntimeEdgionBackend::Mcp),
         _ => Err("invalid backend variant"),
     }
 }
@@ -634,13 +739,103 @@ fn try_compile_a2a_backend(key: &str, resource: &EdgionBackend) -> Result<Runtim
             if a2a.normalized_endpoint().as_deref() == Ok(normalized_endpoint.as_str()) =>
         {
             let endpoint = Url::parse(normalized_endpoint).map_err(|_| "invalid resolved A2A endpoint")?;
-            RuntimeA2aTarget::External(compile_a2a_endpoint(&endpoint).ok_or("invalid resolved A2A endpoint")?)
+            RuntimeA2aTarget::External(
+                compile_external_http_endpoint(&endpoint).ok_or("invalid resolved A2A endpoint")?,
+            )
         }
         _ => return Err("resolved A2A target does not match the configured target"),
     };
     Ok(RuntimeA2aBackend {
         uid: runtime_uid(key, resource)?,
         target,
+    })
+}
+
+fn try_compile_mcp_backend(key: &str, resource: &EdgionBackend) -> Result<RuntimeMcpBackend, &'static str> {
+    let mcp = resource.spec.mcp.as_ref().ok_or("missing MCP backend capability")?;
+    if mcp.transport.r#type != McpTransportType::StreamableHTTP {
+        return Err("unsupported MCP transport");
+    }
+    let resolved = resource
+        .spec
+        .resolved_mcp
+        .as_ref()
+        .ok_or("missing resolved MCP target")?;
+    let key_namespace = key
+        .split_once('/')
+        .map(|(namespace, _)| namespace)
+        .ok_or("invalid resource key")?;
+    let target = match (&mcp.target.service_ref, &resolved.target) {
+        (
+            Some(configured),
+            ResolvedMcpTarget::Service {
+                namespace,
+                name,
+                port,
+                path,
+            },
+        ) if configured.name == *name
+            && configured.namespace.as_deref().unwrap_or(key_namespace) == namespace
+            && configured.port == *port
+            && mcp.normalized_service_path().as_deref() == Ok(path.as_str()) =>
+        {
+            RuntimeMcpTarget::Service {
+                namespace: namespace.clone(),
+                name: name.clone(),
+                port: *port,
+                path: path.clone(),
+            }
+        }
+        (None, ResolvedMcpTarget::External { normalized_endpoint })
+            if mcp.normalized_endpoint().as_deref() == Ok(normalized_endpoint.as_str()) =>
+        {
+            let endpoint = Url::parse(normalized_endpoint).map_err(|_| "invalid resolved MCP endpoint")?;
+            RuntimeMcpTarget::External(
+                compile_external_http_endpoint(&endpoint).ok_or("invalid resolved MCP endpoint")?,
+            )
+        }
+        _ => return Err("resolved MCP target does not match the configured target"),
+    };
+
+    let bearer = match mcp.authentication.as_ref() {
+        None => None,
+        Some(authentication) => {
+            let secret_ref = &authentication.bearer_token.secret_ref;
+            let secret = authentication
+                .bearer_token
+                .secret
+                .as_ref()
+                .ok_or("missing resolved MCP bearer Secret")?;
+            let expected_namespace = secret_ref.namespace.as_deref().unwrap_or(key_namespace);
+            if secret.metadata.name.as_deref() != Some(secret_ref.name.as_str())
+                || secret.metadata.namespace.as_deref() != Some(expected_namespace)
+            {
+                return Err("resolved MCP bearer Secret does not match the configured reference");
+            }
+            let resolver = BearerResolver;
+            let secret_type = secret.type_.as_deref().unwrap_or("");
+            if !resolver.allowed_secret_types().contains(&secret_type) {
+                return Err("invalid MCP bearer Secret type");
+            }
+            let material = resolver
+                .parse(secret.data.as_ref().ok_or("missing MCP bearer Secret data")?)
+                .map_err(|_| "invalid MCP bearer Secret data")?;
+            let mut authorization = HeaderValue::from_str(&format!("Bearer {}", material.token))
+                .map_err(|_| "invalid MCP bearer authorization value")?;
+            authorization.set_sensitive(true);
+            Some(RuntimeMcpBearer {
+                secret_namespace: expected_namespace.to_string(),
+                secret_name: secret_ref.name.clone(),
+                authorization,
+            })
+        }
+    };
+
+    Ok(RuntimeMcpBackend {
+        uid: runtime_uid(key, resource)?,
+        transport: RuntimeMcpTransport::StreamableHttp20260728,
+        target,
+        bearer,
     })
 }
 
@@ -777,9 +972,9 @@ fn compile_endpoint(endpoint: &Url) -> Option<RuntimeAiEndpoint> {
     })
 }
 
-fn compile_a2a_endpoint(endpoint: &Url) -> Option<RuntimeA2aExternalEndpoint> {
+fn compile_external_http_endpoint(endpoint: &Url) -> Option<RuntimeExternalHttpEndpoint> {
     let endpoint = compile_endpoint(endpoint)?;
-    Some(RuntimeA2aExternalEndpoint {
+    Some(RuntimeExternalHttpEndpoint {
         domain: endpoint.domain,
         port: endpoint.port,
         use_tls: endpoint.use_tls,
@@ -794,10 +989,12 @@ mod tests {
     use super::*;
     use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
     use edgion_resources::resources::edgion_backend::{
-        A2aBackendSpec, A2aBackendTarget, A2aServiceReference, AiBackendDefaults, AiBackendSpec, AiCredential,
-        AiCredentialPool, AiModel, AiModelPricing, EdgionBackendSpec, ResolvedA2aBackend,
+        A2aBackendSpec, A2aBackendTarget, AiBackendDefaults, AiBackendSpec, AiCredential, AiCredentialPool, AiModel,
+        AiModelPricing, BackendServiceReference, EdgionBackendSpec, McpAuthentication, McpBackendSpec,
+        McpBackendTarget, McpTransport, ResolvedA2aBackend, ResolvedMcpBackend,
     };
     use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use k8s_openapi::ByteString;
     use std::collections::BTreeMap;
 
@@ -841,7 +1038,9 @@ mod tests {
                 },
             }),
             a2a: None,
+            mcp: None,
             resolved_a2a: None,
+            resolved_mcp: None,
             reconcile_outcome: None,
         };
         let mut resource = EdgionBackend::new(name, spec);
@@ -854,7 +1053,7 @@ mod tests {
             ai: None,
             a2a: Some(A2aBackendSpec {
                 target: A2aBackendTarget {
-                    service_ref: Some(A2aServiceReference {
+                    service_ref: Some(BackendServiceReference {
                         name: "agent-service".to_string(),
                         namespace: Some("agents".to_string()),
                         port: 8080,
@@ -863,6 +1062,7 @@ mod tests {
                 },
                 allow_insecure_http: false,
             }),
+            mcp: None,
             resolved_a2a: resolved.then(|| ResolvedA2aBackend {
                 target: ResolvedA2aTarget::Service {
                     namespace: "agents".to_string(),
@@ -870,6 +1070,7 @@ mod tests {
                     port: 8080,
                 },
             }),
+            resolved_mcp: None,
             reconcile_outcome: None,
         };
         let mut resource = EdgionBackend::new(name, spec);
@@ -887,9 +1088,123 @@ mod tests {
                 },
                 allow_insecure_http: endpoint.starts_with("http://"),
             }),
+            mcp: None,
             resolved_a2a: Some(ResolvedA2aBackend {
                 target: ResolvedA2aTarget::External {
                     normalized_endpoint: resolved_endpoint.to_string(),
+                },
+            }),
+            resolved_mcp: None,
+            reconcile_outcome: None,
+        };
+        let mut resource = EdgionBackend::new(name, spec);
+        resource.metadata.namespace = Some("default".to_string());
+        Arc::new(resource)
+    }
+
+    fn mcp_external_resource(name: &str, endpoint: &str, token: Option<&[u8]>) -> Arc<EdgionBackend> {
+        let authentication = token.map(|token| McpAuthentication {
+            bearer_token: SecretSlot {
+                secret_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "mcp-bearer".to_string(),
+                    namespace: None,
+                },
+                secret: Some(Secret {
+                    metadata: ObjectMeta {
+                        name: Some("mcp-bearer".to_string()),
+                        namespace: Some("default".to_string()),
+                        ..Default::default()
+                    },
+                    data: Some(BTreeMap::from([(
+                        "bearerToken".to_string(),
+                        ByteString(token.to_vec()),
+                    )])),
+                    ..Default::default()
+                }),
+            },
+        });
+        let normalized = endpoint.trim_end_matches('/').to_string();
+        let spec = EdgionBackendSpec {
+            ai: None,
+            a2a: None,
+            mcp: Some(McpBackendSpec {
+                target: McpBackendTarget {
+                    service_ref: None,
+                    endpoint: Some(endpoint.to_string()),
+                    path: None,
+                },
+                allow_insecure_http: endpoint.starts_with("http://"),
+                transport: McpTransport {
+                    r#type: McpTransportType::StreamableHTTP,
+                },
+                authentication,
+            }),
+            resolved_a2a: None,
+            resolved_mcp: Some(ResolvedMcpBackend {
+                target: ResolvedMcpTarget::External {
+                    normalized_endpoint: normalized,
+                },
+            }),
+            reconcile_outcome: None,
+        };
+        let mut resource = EdgionBackend::new(name, spec);
+        resource.metadata.namespace = Some("default".to_string());
+        Arc::new(resource)
+    }
+
+    fn with_mcp_secret_identity(
+        resource: Arc<EdgionBackend>,
+        reference_namespace: Option<&str>,
+        resolved_name: &str,
+        resolved_namespace: &str,
+    ) -> Arc<EdgionBackend> {
+        let mut resource = (*resource).clone();
+        let authentication = resource
+            .spec
+            .mcp
+            .as_mut()
+            .and_then(|mcp| mcp.authentication.as_mut())
+            .expect("MCP bearer authentication");
+        authentication.bearer_token.secret_ref.namespace = reference_namespace.map(str::to_string);
+        let secret = authentication
+            .bearer_token
+            .secret
+            .as_mut()
+            .expect("resolved MCP bearer Secret");
+        secret.metadata.name = Some(resolved_name.to_string());
+        secret.metadata.namespace = Some(resolved_namespace.to_string());
+        Arc::new(resource)
+    }
+
+    fn mcp_service_resource(name: &str, path: &str) -> Arc<EdgionBackend> {
+        let spec = EdgionBackendSpec {
+            ai: None,
+            a2a: None,
+            mcp: Some(McpBackendSpec {
+                target: McpBackendTarget {
+                    service_ref: Some(BackendServiceReference {
+                        name: "mcp-service".to_string(),
+                        namespace: Some("tools".to_string()),
+                        port: 9090,
+                    }),
+                    endpoint: None,
+                    path: Some(path.to_string()),
+                },
+                allow_insecure_http: false,
+                transport: McpTransport {
+                    r#type: McpTransportType::StreamableHTTP,
+                },
+                authentication: None,
+            }),
+            resolved_a2a: None,
+            resolved_mcp: Some(ResolvedMcpBackend {
+                target: ResolvedMcpTarget::Service {
+                    namespace: "tools".to_string(),
+                    name: "mcp-service".to_string(),
+                    port: 9090,
+                    path: path.to_string(),
                 },
             }),
             reconcile_outcome: None,
@@ -905,6 +1220,257 @@ mod tests {
         assert_eq!(store.count(), 0);
         assert!(store.keys().is_empty());
         assert!(store.get_by_key("default/missing").is_none());
+    }
+
+    #[test]
+    fn mcp_external_compiles_and_secret_rotation_controls_generation() {
+        let store = EdgionBackendStore::new();
+        let key = "default/tools";
+        let initial = mcp_external_resource("tools", "https://tools.example.test/mcp/", Some(b"token-a"));
+        store.full_set(&HashMap::from([(key.to_string(), initial)]));
+        let first_snapshot = store.edgion_backend_snapshot();
+        let first = first_snapshot.get_mcp_by_key(key).unwrap();
+        assert_eq!(first_snapshot.generation(), 1);
+        let RuntimeMcpTarget::External(endpoint) = &first.target else {
+            panic!("expected external MCP target");
+        };
+        assert_eq!(endpoint.authority, "tools.example.test");
+        assert_eq!(endpoint.path_prefix, "/mcp");
+        assert_eq!(
+            first.bearer.as_ref().unwrap().authorization_header_value().as_bytes(),
+            b"Bearer token-a"
+        );
+        assert!(!format!("{:?}", first.bearer.as_ref().unwrap()).contains("token-a"));
+
+        store.full_set(&HashMap::from([(
+            key.to_string(),
+            mcp_external_resource("tools", "https://tools.example.test/mcp/", Some(b"token-a")),
+        )]));
+        let equivalent_snapshot = store.edgion_backend_snapshot();
+        let equivalent = equivalent_snapshot.get_mcp_by_key(key).unwrap();
+        assert_eq!(equivalent_snapshot.generation(), first_snapshot.generation());
+        assert!(Arc::ptr_eq(&first, &equivalent));
+
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(
+                key.to_string(),
+                mcp_external_resource("tools", "https://tools.example.test/mcp/", Some(b"token-b")),
+            )]),
+            HashSet::new(),
+        );
+        let rotated_snapshot = store.edgion_backend_snapshot();
+        let rotated = rotated_snapshot.get_mcp_by_key(key).unwrap();
+        assert_eq!(rotated_snapshot.generation(), first_snapshot.generation() + 1);
+        assert!(!Arc::ptr_eq(&first, &rotated));
+        assert_eq!(
+            rotated.bearer.as_ref().unwrap().authorization_header_value().as_bytes(),
+            b"Bearer token-b"
+        );
+    }
+
+    #[test]
+    fn mcp_service_compiles_from_exact_controller_proof() {
+        let store = EdgionBackendStore::new();
+        let key = "default/tools";
+        store.full_set(&HashMap::from([(
+            key.to_string(),
+            mcp_service_resource("tools", "/mcp"),
+        )]));
+
+        let runtime = store.edgion_backend_snapshot().get_mcp_by_key(key).unwrap();
+        assert_eq!(
+            runtime.target,
+            RuntimeMcpTarget::Service {
+                namespace: "tools".to_string(),
+                name: "mcp-service".to_string(),
+                port: 9090,
+                path: "/mcp".to_string(),
+            }
+        );
+        assert_eq!(runtime.transport, RuntimeMcpTransport::StreamableHttp20260728);
+        assert!(runtime.bearer.is_none());
+
+        let mut forged = (*mcp_service_resource("tools", "/mcp")).clone();
+        forged.spec.resolved_mcp = Some(ResolvedMcpBackend {
+            target: ResolvedMcpTarget::Service {
+                namespace: "tools".to_string(),
+                name: "mcp-service".to_string(),
+                port: 9090,
+                path: "/other".to_string(),
+            },
+        });
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.to_string(), Arc::new(forged))]),
+            HashSet::new(),
+        );
+        assert!(store.edgion_backend_snapshot().get_mcp_by_key(key).is_none());
+    }
+
+    #[test]
+    fn empty_and_invalid_noop_updates_preserve_snapshot_identity_and_generation() {
+        let store = EdgionBackendStore::new();
+        let initial = store.edgion_backend_snapshot();
+
+        store.partial_update(HashMap::new(), HashMap::new(), HashSet::new());
+        let empty_noop = store.edgion_backend_snapshot();
+        assert_eq!(empty_noop.generation(), 0);
+        assert!(Arc::ptr_eq(&initial.inner, &empty_noop.inner));
+
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(
+                "default/invalid".to_string(),
+                mcp_external_resource("invalid", "https://tools.example.test/mcp", Some(b"bad token")),
+            )]),
+            HashSet::new(),
+        );
+        let invalid_noop = store.edgion_backend_snapshot();
+        assert_eq!(invalid_noop.generation(), 0);
+        assert!(Arc::ptr_eq(&initial.inner, &invalid_noop.inner));
+    }
+
+    #[test]
+    fn invalid_mcp_credential_withdraws_previous_runtime() {
+        let store = EdgionBackendStore::new();
+        let key = "default/tools";
+        store.full_set(&HashMap::from([(
+            key.to_string(),
+            mcp_external_resource("tools", "https://tools.example.test/mcp", Some(b"valid-token")),
+        )]));
+        assert!(store.edgion_backend_snapshot().get_mcp_by_key(key).is_some());
+
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(
+                key.to_string(),
+                mcp_external_resource("tools", "https://tools.example.test/mcp", Some(b"bad token")),
+            )]),
+            HashSet::new(),
+        );
+        assert!(store.edgion_backend_snapshot().get_mcp_by_key(key).is_none());
+    }
+
+    #[test]
+    fn mcp_bearer_secret_identity_is_exact_and_mismatch_withdraws_runtime() {
+        let store = EdgionBackendStore::new();
+        let key = "default/tools";
+        let same_namespace = mcp_external_resource("tools", "https://tools.example.test/mcp", Some(b"valid-token"));
+        store.full_set(&HashMap::from([(key.to_string(), same_namespace)]));
+        let initial = store.edgion_backend_snapshot();
+        let initial_runtime = initial.get_mcp_by_key(key).unwrap();
+
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(
+                key.to_string(),
+                mcp_external_resource("tools", "https://tools.example.test/mcp", Some(b"valid-token")),
+            )]),
+            HashSet::new(),
+        );
+        let equivalent = store.edgion_backend_snapshot();
+        assert_eq!(equivalent.generation(), initial.generation());
+        assert!(Arc::ptr_eq(&initial.inner, &equivalent.inner));
+        assert!(Arc::ptr_eq(&initial_runtime, &equivalent.get_mcp_by_key(key).unwrap()));
+
+        let cross_namespace = with_mcp_secret_identity(
+            mcp_external_resource("tools", "https://tools.example.test/mcp", Some(b"valid-token")),
+            Some("credentials"),
+            "mcp-bearer",
+            "credentials",
+        );
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.to_string(), cross_namespace)]),
+            HashSet::new(),
+        );
+        let changed_identity = store.edgion_backend_snapshot();
+        assert_eq!(changed_identity.generation(), equivalent.generation() + 1);
+        assert!(!Arc::ptr_eq(&equivalent.inner, &changed_identity.inner));
+        assert!(!Arc::ptr_eq(
+            &initial_runtime,
+            &changed_identity.get_mcp_by_key(key).unwrap()
+        ));
+
+        let wrong_name = with_mcp_secret_identity(
+            mcp_external_resource("tools", "https://tools.example.test/mcp", Some(b"valid-token")),
+            None,
+            "other-bearer",
+            "default",
+        );
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.to_string(), wrong_name)]),
+            HashSet::new(),
+        );
+        assert!(store.edgion_backend_snapshot().get_mcp_by_key(key).is_none());
+
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(
+                key.to_string(),
+                mcp_external_resource("tools", "https://tools.example.test/mcp", Some(b"valid-token")),
+            )]),
+            HashSet::new(),
+        );
+        assert!(store.edgion_backend_snapshot().get_mcp_by_key(key).is_some());
+
+        let wrong_namespace = with_mcp_secret_identity(
+            mcp_external_resource("tools", "https://tools.example.test/mcp", Some(b"valid-token")),
+            Some("credentials"),
+            "mcp-bearer",
+            "default",
+        );
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.to_string(), wrong_namespace)]),
+            HashSet::new(),
+        );
+        assert!(store.edgion_backend_snapshot().get_mcp_by_key(key).is_none());
+    }
+
+    #[test]
+    fn mcp_to_ai_and_a2a_variant_switches_are_atomic() {
+        let store = EdgionBackendStore::new();
+        let key = "default/tools";
+        store.full_set(&HashMap::from([(
+            key.to_string(),
+            mcp_external_resource("tools", "https://tools.example.test/mcp", None),
+        )]));
+        assert!(store.edgion_backend_snapshot().get_mcp_by_key(key).is_some());
+
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(
+                key.to_string(),
+                resource("tools", "https://ai.example.test", Some(b"key")),
+            )]),
+            HashSet::new(),
+        );
+        let ai = store.edgion_backend_snapshot();
+        assert!(ai.get_mcp_by_key(key).is_none());
+        assert!(matches!(
+            ai.get_by_key(key).as_deref(),
+            Some(RuntimeEdgionBackend::Ai(_))
+        ));
+
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(
+                key.to_string(),
+                mcp_external_resource("tools", "https://tools.example.test/mcp", None),
+            )]),
+            HashSet::new(),
+        );
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.to_string(), a2a_service_resource("tools", true))]),
+            HashSet::new(),
+        );
+        let a2a = store.edgion_backend_snapshot();
+        assert!(a2a.get_mcp_by_key(key).is_none());
+        assert!(a2a.get_a2a_by_key(key).is_some());
     }
 
     #[test]

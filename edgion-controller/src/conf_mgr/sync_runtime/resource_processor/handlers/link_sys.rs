@@ -71,6 +71,12 @@ fn outcome_to_result<T>(outcome: ResolveOutcome<T>) -> Result<T, ResolvedRefsErr
         ResolveOutcome::Invalid(InvalidCredentialError::DecodeError { key, detail }) => {
             Err(ResolvedRefsError::DecodeError { key, detail })
         }
+        ResolveOutcome::Invalid(InvalidCredentialError::InvalidValue { key, class }) => {
+            Err(ResolvedRefsError::DecodeError {
+                key,
+                detail: class.to_string(),
+            })
+        }
         ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType { got, allowed }) => {
             Err(ResolvedRefsError::InvalidSecretType { got, allowed })
         }

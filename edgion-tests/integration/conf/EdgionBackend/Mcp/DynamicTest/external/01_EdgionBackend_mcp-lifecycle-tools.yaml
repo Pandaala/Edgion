@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: mcp-lifecycle-tools
+  namespace: edgion-test
+spec:
+  mcp:
+    target:
+      endpoint: http://127.0.0.1:30002/mcp
+    allowInsecureHttp: true
+    transport:
+      type: StreamableHTTP
+    authentication:
+      bearerToken:
+        secretRef:
+          name: mcp-lifecycle-bearer

@@ -9,6 +9,21 @@ use k8s_openapi::ByteString;
 use std::collections::BTreeMap;
 use thiserror::Error;
 
+/// Fixed, non-user-controlled classification for a syntactically invalid
+/// credential value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InvalidValueClass {
+    BearerToken,
+}
+
+impl std::fmt::Display for InvalidValueClass {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BearerToken => formatter.write_str("invalid bearer token"),
+        }
+    }
+}
+
 /// Resolver responsibility: declare required keys + translate `Secret.data`
 /// into the corresponding [`Material`](Self::Material).
 pub trait SecretMaterialResolver: Send + Sync {
@@ -35,6 +50,8 @@ pub trait SecretMaterialResolver: Send + Sync {
     ///
     /// Missing keys yield [`ResolveError::MissingKeys`] (all missing keys
     /// reported at once). Decode failures yield [`ResolveError::DecodeError`].
+    /// Resolvers with a constrained value syntax use
+    /// [`ResolveError::InvalidValue`] with a fixed classification.
     fn parse(&self, data: &BTreeMap<String, ByteString>) -> Result<Self::Material, ResolveError>;
 }
 
@@ -48,6 +65,12 @@ pub enum ResolveError {
         key: &'static str,
         #[source]
         source: anyhow::Error,
+    },
+
+    #[error("invalid value for key `{key}`: {class}")]
+    InvalidValue {
+        key: &'static str,
+        class: InvalidValueClass,
     },
 
     #[error("Secret type {got:?} not in allowed set {allowed:?}")]

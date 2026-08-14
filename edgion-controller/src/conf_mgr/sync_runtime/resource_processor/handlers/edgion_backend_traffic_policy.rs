@@ -60,13 +60,16 @@ fn bounded_status_message(mut message: String) -> String {
     message
 }
 
+use crate::conf_mgr::sync_runtime::resource_processor::handlers::backend_capability::classify_raw_backend;
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::resolve_policy_ancestor_gateways_for_targets;
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, condition_types, update_condition,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler, ResourceRef};
 use chrono::{DateTime, Utc};
-use edgion_resources::prelude_resources::{EdgionBackend, EdgionBackendTrafficPolicy};
+#[cfg(test)]
+use edgion_resources::prelude_resources::EdgionBackend;
+use edgion_resources::prelude_resources::EdgionBackendTrafficPolicy;
 use edgion_resources::resources::common::{ParentReference, PolicyAncestorStatus};
 use edgion_resources::resources::edgion_backend_traffic_policy::{
     EdgionBackendTrafficPolicyStatus, PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass,
@@ -227,47 +230,6 @@ fn raw_service_exists(target: &PolicyTargetKey, ctx: &HandlerContext) -> bool {
         .is_some()
 }
 
-fn raw_backend_capability(
-    target: &PolicyTargetKey,
-    ctx: &HandlerContext,
-) -> Result<Option<ResolvedPolicyTargetClass>, String> {
-    let Some(processor) = ctx.runtime().processor_registry.get("EdgionBackend") else {
-        return Ok(None);
-    };
-    let key = format!("{}/{}", target.namespace, target.name);
-    let Some(raw) = processor.get_raw_any(&key) else {
-        return Ok(None);
-    };
-    let backend = raw
-        .downcast::<EdgionBackend>()
-        .map_err(|_| format!("EdgionBackend {key} has an incompatible cached representation"))?;
-    backend
-        .spec
-        .validate()
-        .map_err(|_| format!("EdgionBackend {key} has an invalid backend specification"))?;
-    match (backend.spec.ai.is_some(), backend.spec.a2a.is_some()) {
-        (true, false) => return Ok(Some(ResolvedPolicyTargetClass::Ai)),
-        (false, true) => {}
-        _ => {
-            return Err(format!(
-                "EdgionBackend {key} does not configure exactly one backend variant"
-            ))
-        }
-    }
-    match backend.spec.a2a.as_ref().map(|a2a| &a2a.target) {
-        Some(target) if target.service_ref.is_some() && target.endpoint.is_none() => {
-            Ok(Some(ResolvedPolicyTargetClass::A2aService))
-        }
-        Some(target) if target.endpoint.is_some() && target.service_ref.is_none() => {
-            Ok(Some(ResolvedPolicyTargetClass::A2aExternal))
-        }
-        Some(_) => Ok(None),
-        None => Err(format!(
-            "EdgionBackend {key} does not configure a supported backend variant"
-        )),
-    }
-}
-
 /// Complete, side-effect-free eligibility evaluation shared by validation,
 /// publication staging, and status construction.
 fn evaluate_policy(p: &EdgionBackendTrafficPolicy, ctx: &HandlerContext) -> PolicyEvaluation {
@@ -318,9 +280,9 @@ fn evaluate_policy(p: &EdgionBackendTrafficPolicy, ctx: &HandlerContext) -> Poli
                     evaluation.missing_targets.insert(target.clone());
                 }
             }
-            PolicyTargetKind::EdgionBackend => match raw_backend_capability(target, ctx) {
-                Ok(Some(class)) => {
-                    observe_class(class);
+            PolicyTargetKind::EdgionBackend => match classify_raw_backend(target, ctx) {
+                Ok(Some(capability)) => {
+                    observe_class(capability.target_class);
                 }
                 Ok(None) => {
                     evaluation.missing_targets.insert(target.clone());
@@ -396,6 +358,76 @@ fn evaluate_policy(p: &EdgionBackendTrafficPolicy, ctx: &HandlerContext) -> Poli
                 evaluation
                     .errors
                     .push("upstreamAuthority is not supported for A2A external targets".to_string());
+            }
+        }
+        Some(ResolvedPolicyTargetClass::McpService) => {
+            if p.spec
+                .load_balancer
+                .as_ref()
+                .is_some_and(|load_balancer| load_balancer.panic_threshold.is_some())
+            {
+                evaluation
+                    .errors
+                    .push("loadBalancer.panicThreshold is not supported for MCP Service targets".to_string());
+            }
+            if p.spec.health_check.is_some() {
+                evaluation
+                    .errors
+                    .push("healthCheck is not supported for MCP Service targets".to_string());
+            }
+            if p.spec.outlier_detection.is_some() {
+                evaluation
+                    .errors
+                    .push("outlierDetection is not supported for MCP Service targets".to_string());
+            }
+            if p.spec.retry_constraint.is_some() {
+                evaluation
+                    .errors
+                    .push("retryConstraint is not supported for MCP Service targets".to_string());
+            }
+            if let Some(authority) = &p.spec.upstream_authority {
+                let records = load_backend_tls_policies(ctx);
+                for target in evaluation
+                    .targets
+                    .iter()
+                    .filter(|target| target.target_kind == PolicyTargetKind::EdgionBackend)
+                {
+                    for (key, hostname) in backend_tls_hostnames_for_edgion_backend(namespace, &target.name, &records) {
+                        if !host_matches_pattern(hostname, &authority.pattern) {
+                            evaluation.errors.push(format!(
+                                "BackendTLSPolicy {} validation.hostname '{}' on EdgionBackend {}/{} is outside upstreamAuthority.pattern '{}'",
+                                key, hostname, namespace, target.name, authority.pattern
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        Some(ResolvedPolicyTargetClass::McpExternal) => {
+            if p.spec.load_balancer.is_some() {
+                evaluation
+                    .errors
+                    .push("loadBalancer is not supported for MCP external targets".to_string());
+            }
+            if p.spec.health_check.is_some() {
+                evaluation
+                    .errors
+                    .push("healthCheck is not supported for MCP external targets".to_string());
+            }
+            if p.spec.outlier_detection.is_some() {
+                evaluation
+                    .errors
+                    .push("outlierDetection is not supported for MCP external targets".to_string());
+            }
+            if p.spec.upstream_authority.is_some() {
+                evaluation
+                    .errors
+                    .push("upstreamAuthority is not supported for MCP external targets".to_string());
+            }
+            if p.spec.retry_constraint.is_some() {
+                evaluation
+                    .errors
+                    .push("retryConstraint is not supported for MCP external targets".to_string());
             }
         }
         Some(ResolvedPolicyTargetClass::Service) | None => {}
@@ -859,6 +891,32 @@ mod tests {
         runtime.processor_registry.register(processor);
     }
 
+    fn install_raw_mcp_backend(runtime: &Arc<ControllerRuntime>, name: &str, target: serde_json::Value) {
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+
+        let backend: EdgionBackend = serde_json::from_value(json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "EdgionBackend",
+            "metadata": {"namespace": "ns", "name": name},
+            "spec": {"mcp": {
+                "target": target,
+                "transport": {"type": "StreamableHTTP"}
+            }}
+        }))
+        .unwrap();
+        let processor = Arc::new(ResourceProcessor::<EdgionBackend>::new(
+            "EdgionBackend",
+            16,
+            Arc::new(EdgionBackendHandler::new()),
+            runtime.clone(),
+        ));
+        let raw = Arc::new(LocalRawStore::new());
+        raw.upsert(format!("ns/{name}"), Arc::new(backend));
+        processor.set_raw_store(raw);
+        runtime.processor_registry.register(processor);
+    }
+
     #[tokio::test]
     async fn same_named_service_and_backend_do_not_conflict() {
         let (ctx, rt) = make_ctx();
@@ -968,6 +1026,118 @@ mod tests {
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
         assert_eq!(parsed.spec.resolved_target_class, Some(ResolvedPolicyTargetClass::Ai));
+    }
+
+    #[tokio::test]
+    async fn mcp_policy_capability_matrix_is_complete_and_atomic() {
+        let (ctx, runtime) = make_ctx();
+        let handler = make_handler();
+        install_raw_mcp_backend(
+            &runtime,
+            "tools",
+            json!({"serviceRef": {"name": "tools-svc", "port": 8080}, "path": "/mcp"}),
+        );
+
+        let mut supported = make_ai_policy("mcp-service", "tools", "2026-01-01T00:00:00Z");
+        supported.spec.retry_constraint = None;
+        supported.spec.outlier_detection = None;
+        supported.spec.load_balancer = Some(serde_json::from_value(json!({"type": "RoundRobin"})).unwrap());
+        supported.spec.upstream_authority = Some(
+            serde_json::from_value(json!({
+                "pattern": "*.example.test",
+                "template": "${ctx:tenant}.example.test"
+            }))
+            .unwrap(),
+        );
+        let ProcessResult::Continue(parsed) = handler.parse(supported.clone(), &ctx).await else {
+            panic!("supported MCP Service policy must continue");
+        };
+        assert_eq!(
+            parsed.spec.resolved_target_class,
+            Some(ResolvedPolicyTargetClass::McpService)
+        );
+
+        let rejected_service_fields = [
+            (
+                "panicThreshold",
+                json!({"loadBalancer": {"type": "RoundRobin", "panicThreshold": 20}}),
+            ),
+            (
+                "healthCheck",
+                json!({"healthCheck": {"active": {"type": "http", "path": "/health"}}}),
+            ),
+            (
+                "outlierDetection",
+                json!({"outlierDetection": {"consecutiveErrors": 3}}),
+            ),
+            ("retryConstraint", json!({"retryConstraint": {}})),
+        ];
+        for (field, patch) in rejected_service_fields {
+            let mut policy = supported.clone();
+            let patch_spec: edgion_resources::resources::edgion_backend_traffic_policy::EdgionBackendTrafficPolicySpec =
+                serde_json::from_value({
+                    let mut value = serde_json::to_value(&policy.spec).unwrap();
+                    value
+                        .as_object_mut()
+                        .unwrap()
+                        .extend(patch.as_object().unwrap().clone());
+                    value
+                })
+                .unwrap();
+            policy.spec = patch_spec;
+            let errors = handler.validate(&policy, &ctx);
+            assert!(errors.iter().any(|error| error.contains(field)), "{field}: {errors:?}");
+            let ProcessResult::Continue(withdrawn) = handler.parse(policy, &ctx).await else {
+                panic!("rejected policy must continue with withdrawn marker");
+            };
+            assert!(withdrawn.spec.resolved_target_class.is_none());
+        }
+
+        install_raw_mcp_backend(
+            &runtime,
+            "external-tools",
+            json!({"endpoint": "https://tools.example.test/mcp"}),
+        );
+        let mut external = make_ai_policy("mcp-external", "external-tools", "2026-01-01T00:00:00Z");
+        external.spec.retry_constraint = None;
+        external.spec.outlier_detection = None;
+        let ProcessResult::Continue(parsed) = handler.parse(external.clone(), &ctx).await else {
+            panic!("supported MCP external policy must continue");
+        };
+        assert_eq!(
+            parsed.spec.resolved_target_class,
+            Some(ResolvedPolicyTargetClass::McpExternal)
+        );
+
+        for (field, patch) in [
+            ("loadBalancer", json!({"loadBalancer": {"type": "RoundRobin"}})),
+            (
+                "healthCheck",
+                json!({"healthCheck": {"active": {"type": "http", "path": "/health"}}}),
+            ),
+            (
+                "outlierDetection",
+                json!({"outlierDetection": {"consecutiveErrors": 3}}),
+            ),
+            (
+                "upstreamAuthority",
+                json!({"upstreamAuthority": {
+                    "pattern": "*.example.test",
+                    "template": "${ctx:tenant}.example.test"
+                }}),
+            ),
+            ("retryConstraint", json!({"retryConstraint": {}})),
+        ] {
+            let mut policy = external.clone();
+            let mut value = serde_json::to_value(&policy.spec).unwrap();
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(patch.as_object().unwrap().clone());
+            policy.spec = serde_json::from_value(value).unwrap();
+            let errors = handler.validate(&policy, &ctx);
+            assert!(errors.iter().any(|error| error.contains(field)), "{field}: {errors:?}");
+        }
     }
 
     #[tokio::test]

@@ -1,0 +1,20 @@
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: mcp-lifecycle-tools
+  namespace: edgion-test
+spec:
+  mcp:
+    target:
+      serviceRef:
+        name: mcp-lifecycle-upstream
+        namespace: edgion-default
+        port: 8080
+      path: /mcp
+    transport:
+      type: StreamableHTTP
+    authentication:
+      bearerToken:
+        secretRef:
+          name: mcp-lifecycle-bearer
+          namespace: edgion-default

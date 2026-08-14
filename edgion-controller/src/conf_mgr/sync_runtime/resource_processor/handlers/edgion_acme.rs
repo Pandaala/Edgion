@@ -540,6 +540,21 @@ fn outcome_to_resolved_refs_action<T>(
             ))
         }
 
+        (ResolveOutcome::Invalid(InvalidCredentialError::InvalidValue { key, class }), Account) => {
+            tracing::error!(
+                edgion_acme = %resource_key,
+                key = %key,
+                class = %class,
+                "ACME account Secret contains an invalid credential value"
+            );
+            Abort(condition_false(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::INVALID,
+                format!("credential value is invalid for key '{}': {}", key, class),
+                generation,
+            ))
+        }
+
         // ── Invalid::InvalidSecretType ────────────────────────────────────
         (ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType { got, allowed }), Account) => {
             tracing::error!(
@@ -643,6 +658,21 @@ fn outcome_to_resolved_refs_action<T>(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::DECODE_ERROR,
                 format!("DNS credential decode failed for key '{}': {}", key, detail),
+                generation,
+            ))
+        }
+
+        (ResolveOutcome::Invalid(InvalidCredentialError::InvalidValue { key, class }), Dns { .. }) => {
+            tracing::error!(
+                edgion_acme = %resource_key,
+                key = %key,
+                class = %class,
+                "DNS credential Secret contains an invalid credential value"
+            );
+            Continue(condition_false(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::INVALID,
+                format!("DNS credential value is invalid for key '{}': {}", key, class),
                 generation,
             ))
         }

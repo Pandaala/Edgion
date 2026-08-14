@@ -23,7 +23,7 @@ spec:
             spec:
               type: object
               x-kubernetes-validations:
-                - rule: "[has(self.ai), has(self.a2a)].filter(present, present).size() == 1"
+                - rule: "[has(self.ai), has(self.a2a), has(self.mcp)].filter(present, present).size() == 1"
                   message: "spec must configure exactly one backend variant"
               properties:
                 ai:
@@ -247,6 +247,106 @@ spec:
                       message: "a2a.target.endpoint must be an absolute HTTP or HTTPS URL without user information, query, or fragment"
                     - rule: "!has(self.target.endpoint) || !self.target.endpoint.startsWith('http://') || self.allowInsecureHttp"
                       message: "HTTP a2a.target.endpoint requires allowInsecureHttp: true"
+                mcp:
+                  type: object
+                  description: Stateless MCP 2026-07-28 Streamable HTTP backend identity and transport target.
+                  required:
+                    - target
+                    - transport
+                  properties:
+                    target:
+                      type: object
+                      description: Exactly one Service reference or external HTTP(S) endpoint.
+                      x-kubernetes-validations:
+                        - rule: "[has(self.serviceRef), has(self.endpoint)].filter(present, present).size() == 1"
+                          message: "mcp.target must configure exactly one of serviceRef or endpoint"
+                        - rule: "has(self.serviceRef) == has(self.path)"
+                          message: "mcp.target.path is required for Service targets and forbidden for external targets"
+                        - rule: "!has(self.path) || (self.path.startsWith('/') && !self.path.matches('.*[\\x00-\\x1F\\x7F].*') && !self.path.contains('//') && !self.path.contains('\\\\') && !self.path.contains('?') && !self.path.contains('#') && !self.path.matches('(?i).*(%2f|%5c|%2e).*') && !self.path.matches('.*/(\\\\.|\\\\.\\\\.)(/|$).*'))"
+                          message: "mcp.target.path must be an absolute, unambiguous path"
+                      properties:
+                        serviceRef:
+                          type: object
+                          description: Typed reference to one port of a core Kubernetes Service.
+                          required:
+                            - name
+                            - port
+                          properties:
+                            name:
+                              type: string
+                              minLength: 1
+                              maxLength: 63
+                              pattern: '^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$'
+                            namespace:
+                              type: string
+                              minLength: 1
+                              maxLength: 63
+                              pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                            port:
+                              type: integer
+                              format: int32
+                              minimum: 1
+                              maximum: 65535
+                        endpoint:
+                          type: string
+                          description: Absolute HTTP(S) endpoint without user information, query, or fragment.
+                        path:
+                          type: string
+                          minLength: 1
+                          description: Absolute MCP endpoint path for a Service target.
+                    allowInsecureHttp:
+                      type: boolean
+                      default: false
+                      description: Allow an explicit external http endpoint. Disabled by default.
+                    transport:
+                      type: object
+                      required:
+                        - type
+                      properties:
+                        type:
+                          type: string
+                          enum: [StreamableHTTP]
+                    authentication:
+                      type: object
+                      required:
+                        - bearerToken
+                      properties:
+                        bearerToken:
+                          type: object
+                          required:
+                            - secretRef
+                          properties:
+                            secretRef:
+                              type: object
+                              description: Reference to the Secret whose bearerToken data key authenticates the upstream.
+                              required:
+                                - name
+                              properties:
+                                group:
+                                  type: string
+                                  enum: ["", core]
+                                kind:
+                                  type: string
+                                  enum: [Secret]
+                                name:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 253
+                                  pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+                                namespace:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 63
+                                  pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                  x-kubernetes-validations:
+                    - rule: "!has(self.target.serviceRef) || !self.allowInsecureHttp"
+                      message: "allowInsecureHttp must be false for a Service target"
+                    - rule: "!has(self.target.endpoint) || self.target.endpoint.matches('^https?://([^:/?#@]+|\\[[0-9A-Fa-f:.]+\\])(:[0-9]+)?(/[^?#]*)?$')"
+                      message: "mcp.target.endpoint must be an absolute HTTP or HTTPS URL without user information, query, or fragment"
+                    - rule: "!has(self.target.endpoint) || (!self.target.endpoint.matches('.*[\\x00-\\x1F\\x7F].*') && !self.target.endpoint.contains('\\\\') && !self.target.endpoint.matches('(?i).*(%2f|%5c|%2e).*') && !self.target.endpoint.matches('^https?://[^/]*:0+(/|$).*') && !self.target.endpoint.matches('^https?://[^/]+//.*') && !self.target.endpoint.matches('^https?://[^/]+/.*//.*') && !self.target.endpoint.matches('^https?://[^/]+/(\\\\.|\\\\.\\\\.)(/|$).*') && !self.target.endpoint.matches('^https?://[^/]+/.*/(\\\\.|\\\\.\\\\.)(/|$).*'))"
+                      message: "mcp.target.endpoint path and port must be unambiguous and confined"
+                    - rule: "!has(self.target.endpoint) || (self.target.endpoint.startsWith('http://') ? self.allowInsecureHttp : !self.allowInsecureHttp)"
+                      message: "allowInsecureHttp must be true only for an external HTTP target"
             status:
               type: object
               properties:

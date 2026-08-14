@@ -266,6 +266,52 @@ pub enum WellKnownCACertificates {
     System,
 }
 
+/// Runtime validation twin for BackendTLSPolicy hostname and SAN admission rules.
+///
+/// Controller FS/etcd ingest and Gateway defensive publication must not rely on
+/// Kubernetes schema validation having run first.
+pub fn backend_tls_identity_validation_errors(validation: &BackendTLSPolicyValidation) -> Vec<String> {
+    use regex::Regex;
+
+    let mut errors = Vec::new();
+    let precise_hostname = Regex::new(crate::gwapi_types::PRECISE_HOSTNAME_PATTERN)
+        .expect("canonical precise-hostname pattern must compile");
+    if validation.hostname.len() > crate::gwapi_types::HOSTNAME_MAX_LEN as usize
+        || !precise_hostname.is_match(&validation.hostname)
+    {
+        errors.push("validation.hostname must be a valid precise hostname".to_string());
+    }
+
+    if let Some(subject_alt_names) = &validation.subject_alt_names {
+        if subject_alt_names.is_empty() || subject_alt_names.len() > 5 {
+            errors.push("validation.subjectAltNames must contain between one and five entries".to_string());
+        }
+        let hostname =
+            Regex::new(crate::gwapi_types::HOSTNAME_PATTERN).expect("canonical hostname pattern must compile");
+        for san in subject_alt_names {
+            let valid = match san.san_type {
+                SubjectAltNameType::Hostname => {
+                    san.uri.is_none()
+                        && san.hostname.as_ref().is_some_and(|value| {
+                            value.len() <= crate::gwapi_types::HOSTNAME_MAX_LEN as usize && hostname.is_match(value)
+                        })
+                }
+                SubjectAltNameType::URI => {
+                    san.hostname.is_none()
+                        && san.uri.as_ref().is_some_and(|value| {
+                            value.len() <= crate::gwapi_types::HOSTNAME_MAX_LEN as usize
+                                && url::Url::parse(value).is_ok()
+                        })
+                }
+            };
+            if !valid {
+                errors.push("validation.subjectAltNames contains an invalid typed value".to_string());
+            }
+        }
+    }
+    errors
+}
+
 /// Parse implementation-specific client certificate Secret reference from a BTP options map.
 ///
 /// Supported value format:
@@ -275,19 +321,15 @@ pub enum WellKnownCACertificates {
 pub fn parse_client_certificate_option(
     options: Option<&HashMap<String, String>>,
 ) -> Result<Option<SecretObjectReference>, String> {
-    let raw = options
-        .and_then(|o| o.get(OPTION_CLIENT_CERTIFICATE_REF))
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty());
-
-    let Some(raw) = raw else {
+    let Some(raw) = options.and_then(|options| options.get(OPTION_CLIENT_CERTIFICATE_REF)) else {
         return Ok(None);
     };
+    let raw = raw.trim();
 
-    if raw.contains('/') {
+    if !valid_kube_name(raw) {
         let msg = format!(
-            "Option {} must be a secret name in the same namespace, got '{}'",
-            OPTION_CLIENT_CERTIFICATE_REF, raw
+            "Option {} must be a valid same-namespace Secret name",
+            OPTION_CLIENT_CERTIFICATE_REF
         );
         return Err(msg);
     }
@@ -298,6 +340,20 @@ pub fn parse_client_certificate_option(
         name: raw.to_string(),
         namespace: None,
     }))
+}
+
+fn valid_kube_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 253
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+                && label.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+                && label.as_bytes().last().is_some_and(u8::is_ascii_alphanumeric)
+        })
 }
 
 /// Read-only view over the fields shared by `BackendTLSPolicySpec` and
@@ -503,6 +559,77 @@ mod tests {
         );
         let policy = make_policy(Some(options));
         assert!(policy.client_certificate_secret_ref().is_err());
+    }
+
+    #[test]
+    fn test_client_certificate_secret_ref_rejects_empty_and_invalid_names() {
+        for value in ["", "   ", "Invalid_Name", "-leading", "trailing-"] {
+            let policy = make_policy(Some(HashMap::from([(
+                OPTION_CLIENT_CERTIFICATE_REF.to_string(),
+                value.to_string(),
+            )])));
+            assert!(policy.client_certificate_secret_ref().is_err(), "accepted {value:?}");
+        }
+    }
+
+    #[test]
+    fn backend_tls_runtime_identity_validation_covers_hostname_and_typed_sans() {
+        let mut validation = BackendTLSPolicyValidation {
+            ca_certificate_refs: None,
+            hostname: "backend.example.com".to_string(),
+            subject_alt_names: Some(vec![
+                SubjectAltName {
+                    san_type: SubjectAltNameType::Hostname,
+                    hostname: Some("*.example.com".to_string()),
+                    uri: None,
+                },
+                SubjectAltName {
+                    san_type: SubjectAltNameType::URI,
+                    hostname: None,
+                    uri: Some("spiffe://trust.example/workload".to_string()),
+                },
+            ]),
+            well_known_ca_certificates: Some(WellKnownCACertificates::System),
+        };
+        assert!(backend_tls_identity_validation_errors(&validation).is_empty());
+
+        validation.hostname.clear();
+        assert!(!backend_tls_identity_validation_errors(&validation).is_empty());
+        validation.hostname = "backend.example.com".to_string();
+
+        for sans in [
+            Vec::new(),
+            vec![SubjectAltName {
+                san_type: SubjectAltNameType::Hostname,
+                hostname: None,
+                uri: None,
+            }],
+            vec![SubjectAltName {
+                san_type: SubjectAltNameType::Hostname,
+                hostname: Some("backend.example.com".to_string()),
+                uri: Some("spiffe://trust.example/workload".to_string()),
+            }],
+            vec![SubjectAltName {
+                san_type: SubjectAltNameType::URI,
+                hostname: None,
+                uri: Some("not an absolute uri".to_string()),
+            }],
+            vec![SubjectAltName {
+                san_type: SubjectAltNameType::URI,
+                hostname: None,
+                uri: Some(format!("https://example.com/{}", "a".repeat(240))),
+            }],
+            (0..6)
+                .map(|index| SubjectAltName {
+                    san_type: SubjectAltNameType::Hostname,
+                    hostname: Some(format!("backend-{index}.example.com")),
+                    uri: None,
+                })
+                .collect(),
+        ] {
+            validation.subject_alt_names = Some(sans);
+            assert!(!backend_tls_identity_validation_errors(&validation).is_empty());
+        }
     }
 
     #[test]

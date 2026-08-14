@@ -398,7 +398,7 @@ struct StoreStatsResponse {
     health_check_config_store: SimpleCountStats,
     gateway_backend_tls_store: SimpleCountStats,
     edgion_config_data_store: SimpleCountStats,
-    ai_backend_store: SimpleCountStats,
+    edgion_backend_store: SimpleCountStats,
     ai_credential_outlier_store: SimpleCountStats,
     adaptive_telemetry_store: SimpleCountStats,
     link_sys_runtime: LinkSysRuntimeStats,
@@ -550,8 +550,8 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         count: crate::plugins::runtime::edgion_config_data::count_edgion_config_data(),
     };
 
-    let ai_backend_store = SimpleCountStats {
-        count: crate::ai::count_ai_backends(),
+    let edgion_backend_store = SimpleCountStats {
+        count: crate::ai::count_edgion_backends(),
     };
     let (ai_credential_outlier_store, adaptive_telemetry_store) = collect_ai_runtime_store_counts(
         crate::ai::get_ai_credential_outlier_store().as_ref(),
@@ -598,7 +598,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         health_check_config_store,
         gateway_backend_tls_store,
         edgion_config_data_store,
-        ai_backend_store,
+        edgion_backend_store,
         ai_credential_outlier_store,
         adaptive_telemetry_store,
         link_sys_runtime,
@@ -1769,7 +1769,9 @@ mod edgion_backend_admin_tests {
                 defaults: AiBackendDefaults::default(),
             }),
             a2a: None,
+            mcp: None,
             resolved_a2a: None,
+            resolved_mcp: None,
             reconcile_outcome: None,
         };
         let mut service = EdgionBackend::new(name, spec);
@@ -1940,7 +1942,7 @@ mod store_stats_tests {
             health_check_config_store: SimpleCountStats { count: 0 },
             gateway_backend_tls_store: SimpleCountStats { count: 0 },
             edgion_config_data_store: SimpleCountStats { count: 0 },
-            ai_backend_store: SimpleCountStats { count: 0 },
+            edgion_backend_store: SimpleCountStats { count: 0 },
             ai_credential_outlier_store: SimpleCountStats { count: 0 },
             adaptive_telemetry_store: SimpleCountStats { count: 0 },
             link_sys_runtime: LinkSysRuntimeStats {
@@ -1960,7 +1962,7 @@ mod store_stats_tests {
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json.is_object());
         assert!(json.get("client_caches").is_some());
-        assert!(json.get("ai_backend_store").is_some());
+        assert!(json.get("edgion_backend_store").is_some());
         assert_eq!(json["ai_credential_outlier_store"]["count"], 0);
         assert_eq!(json["adaptive_telemetry_store"]["count"], 0);
         assert!(json.get("plugin_store_v2").is_some());
