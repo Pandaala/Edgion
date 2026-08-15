@@ -62,16 +62,17 @@ async fn coalesced_recreate_requeues_btp_on_dropped_backend_service() {
     ));
     runtime.processor_registry.register(btp_processor.clone());
 
-    // A BackendTLSPolicy targets default/svc-a (registered in the BTP target index,
-    // as BackendTlsPolicyHandler::parse_policy would do).
+    // A BackendTLSPolicy targets default/svc-a. `parse_policy` registers the
+    // target dependency in `service_ref_mgr` unconditionally — before the target
+    // or the CA refs are known to resolve — so registering only there also
+    // covers a policy whose refs never resolve.
     let btp_ref = ResourceRef::new(
         ResourceKind::BackendTLSPolicy,
         Some("default".to_string()),
         "btp-a".to_string(),
     );
     runtime
-        .backend_tls_policy
-        .target_mgr()
+        .service_ref_mgr
         .add_ref("default/svc-a".to_string(), btp_ref.clone());
 
     let handler = TcpRouteHandler::default();
