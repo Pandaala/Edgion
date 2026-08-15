@@ -5,7 +5,6 @@ use crate::dynamic::ScenarioCtx;
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use serde_json::Value;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 const NAMESPACE: &str = "edgion-test";
@@ -14,7 +13,25 @@ const BACKEND: &str = "mcp-lifecycle-tools";
 const SECRET: &str = "mcp-lifecycle-bearer";
 const CROSS_SERVICE: &str = "mcp-lifecycle-upstream";
 const GRANT: &str = "allow-mcp-lifecycle-dependencies";
-static RUNTIME_BASELINE: AtomicU64 = AtomicU64::new(0);
+/// Key of this scenario's backend in the unified runtime index.
+fn runtime_key() -> String {
+    format!("{NAMESPACE}/{BACKEND}")
+}
+
+/// Whether the unified runtime index currently holds this scenario's backend.
+///
+/// The store is shared with every other EdgionBackend in the harness, so
+/// residency is read by key. A global total would also move whenever an
+/// unrelated backend is published or withdrawn, and the runtime index lags the
+/// published config cache by up to one conf_sync batch.
+fn runtime_key_resident(stats_body: &Value) -> Result<bool, String> {
+    let keys = stats_body
+        .pointer("/data/edgion_backend_store/keys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("Gateway stats omit unified backend keys: {stats_body}"))?;
+    let key = runtime_key();
+    Ok(keys.iter().any(|entry| entry.as_str() == Some(key.as_str())))
+}
 
 #[derive(Clone, Copy)]
 enum ExpectedPhase {
@@ -250,27 +267,24 @@ async fn check_phase(ctx: TestContext, expected: ExpectedPhase) -> TestResult {
         Ok(body) => body,
         Err(error) => return TestResult::failed(start.elapsed(), format!("invalid Gateway stats JSON: {error}")),
     };
-    let Some(runtime_count) = stats_body
-        .pointer("/data/edgion_backend_store/count")
-        .and_then(Value::as_u64)
-    else {
-        return TestResult::failed(
-            start.elapsed(),
-            format!("Gateway stats omit unified backend count: {stats_body}"),
-        );
-    };
     if !stats_status.is_success() {
         return TestResult::failed(
             start.elapsed(),
             format!("Gateway stats returned {stats_status}: {stats_body}"),
         );
     }
-    let expected_count = RUNTIME_BASELINE.load(Ordering::SeqCst)
-        + u64::from(matches!(expected, ExpectedPhase::Valid | ExpectedPhase::WrongVariant));
-    if runtime_count != expected_count {
+    let resident = match runtime_key_resident(&stats_body) {
+        Ok(resident) => resident,
+        Err(error) => return TestResult::failed(start.elapsed(), error),
+    };
+    let expect_resident = matches!(expected, ExpectedPhase::Valid | ExpectedPhase::WrongVariant);
+    if resident != expect_resident {
         return TestResult::failed(
             start.elapsed(),
-            format!("unified MCP runtime count is {runtime_count}, expected {expected_count}"),
+            format!(
+                "unified runtime residency for {} is {resident}, expected {expect_resident}",
+                runtime_key()
+            ),
         );
     }
     let backend = gateway_body["data"].as_array().and_then(|items| {
@@ -353,7 +367,7 @@ async fn cleanup(ctx: &ScenarioCtx) {
     }
 }
 
-async fn gateway_runtime_count(ctx: &ScenarioCtx) -> anyhow::Result<u64> {
+async fn gateway_runtime_resident(ctx: &ScenarioCtx) -> anyhow::Result<bool> {
     let response = authed_gateway(ctx.test_ctx.http_client.get(format!(
         "{}/api/v1/debug/store-stats",
         ctx.gateway_url.trim_end_matches('/')
@@ -363,9 +377,7 @@ async fn gateway_runtime_count(ctx: &ScenarioCtx) -> anyhow::Result<u64> {
     let status = response.status();
     let body: Value = response.json().await?;
     anyhow::ensure!(status.is_success(), "Gateway stats returned {status}: {body}");
-    body.pointer("/data/edgion_backend_store/count")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| anyhow::anyhow!("Gateway stats omit unified backend count: {body}"))
+    runtime_key_resident(&body).map_err(anyhow::Error::msg)
 }
 
 async fn gateway_backend_published(ctx: &ScenarioCtx) -> anyhow::Result<bool> {
@@ -387,22 +399,26 @@ async fn gateway_backend_published(ctx: &ScenarioCtx) -> anyhow::Result<bool> {
     }))
 }
 
-/// Wait until the Gateway no longer publishes this scenario's backend.
+/// Wait until the Gateway has withdrawn this scenario's backend from both the
+/// published config cache and the unified runtime index.
 ///
 /// The static integration conf loader also loads this scenario's fixture
 /// directory, so the backend is normally still resident when the scenario
-/// starts. A baseline captured before the Gateway observes the cleanup delete
-/// would make the first apply an update instead of an add, and the phase
-/// assertion could never reach `baseline + 1`. EdgionBackend events are
-/// delivered in order, so observing our own removal also proves every earlier
-/// EdgionBackend event — including residue from a preceding scenario — has
-/// already been applied to the unified runtime store.
+/// starts, and the first phase would otherwise pass on the stale generation.
+/// Both views must be checked: the config cache is updated the moment a
+/// conf_sync event is received, while the runtime index is only rebuilt when
+/// the compressed-event batch is flushed, so the config cache can report the
+/// removal up to one batch interval before the runtime store applies it.
 async fn wait_backend_withdrawn(ctx: &ScenarioCtx) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut last_error = None;
     loop {
         match gateway_backend_published(ctx).await {
-            Ok(false) => return Ok(()),
+            Ok(false) => match gateway_runtime_resident(ctx).await {
+                Ok(false) => return Ok(()),
+                Ok(true) => {}
+                Err(error) => last_error = Some(error),
+            },
             Ok(true) => {}
             Err(error) => last_error = Some(error),
         }
@@ -492,7 +508,6 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
     Box::pin(async move {
         cleanup(&ctx).await;
         wait_backend_withdrawn(&ctx).await?;
-        RUNTIME_BASELINE.store(gateway_runtime_count(&ctx).await?, Ordering::SeqCst);
         let result = run_inner(&ctx).await;
         cleanup(&ctx).await;
         result

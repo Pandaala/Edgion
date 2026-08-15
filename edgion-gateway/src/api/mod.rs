@@ -398,7 +398,7 @@ struct StoreStatsResponse {
     health_check_config_store: SimpleCountStats,
     gateway_backend_tls_store: SimpleCountStats,
     edgion_config_data_store: SimpleCountStats,
-    edgion_backend_store: SimpleCountStats,
+    edgion_backend_store: EdgionBackendStoreStats,
     ai_credential_outlier_store: SimpleCountStats,
     adaptive_telemetry_store: SimpleCountStats,
     link_sys_runtime: LinkSysRuntimeStats,
@@ -431,6 +431,19 @@ struct LinkSysStoreStats {
 #[derive(Serialize)]
 struct SimpleCountStats {
     count: usize,
+}
+
+/// Unified EdgionBackend runtime index stats.
+///
+/// The store is process-global and shared by every AI/A2A/MCP resource, so a
+/// bare total cannot tell a caller whether one specific backend compiled into
+/// the activatable index. `keys` names the resident entries so a test can
+/// assert its own backend directly instead of doing arithmetic on a total that
+/// other resources move underneath it.
+#[derive(Serialize)]
+struct EdgionBackendStoreStats {
+    count: usize,
+    keys: Vec<String>,
 }
 
 fn collect_ai_runtime_store_counts(
@@ -550,8 +563,13 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         count: crate::plugins::runtime::edgion_config_data::count_edgion_config_data(),
     };
 
-    let edgion_backend_store = SimpleCountStats {
-        count: crate::ai::count_edgion_backends(),
+    let edgion_backend_store = {
+        let mut keys = crate::ai::global_edgion_backend_store().keys_all();
+        keys.sort_unstable();
+        EdgionBackendStoreStats {
+            count: keys.len(),
+            keys,
+        }
     };
     let (ai_credential_outlier_store, adaptive_telemetry_store) = collect_ai_runtime_store_counts(
         crate::ai::get_ai_credential_outlier_store().as_ref(),
@@ -1942,7 +1960,10 @@ mod store_stats_tests {
             health_check_config_store: SimpleCountStats { count: 0 },
             gateway_backend_tls_store: SimpleCountStats { count: 0 },
             edgion_config_data_store: SimpleCountStats { count: 0 },
-            edgion_backend_store: SimpleCountStats { count: 0 },
+            edgion_backend_store: EdgionBackendStoreStats {
+                count: 0,
+                keys: Vec::new(),
+            },
             ai_credential_outlier_store: SimpleCountStats { count: 0 },
             adaptive_telemetry_store: SimpleCountStats { count: 0 },
             link_sys_runtime: LinkSysRuntimeStats {

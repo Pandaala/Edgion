@@ -583,10 +583,6 @@ pub fn count_ai_backends() -> usize {
     GLOBAL_EDGION_BACKEND_STORE.count()
 }
 
-pub fn count_edgion_backends() -> usize {
-    GLOBAL_EDGION_BACKEND_STORE.count_all()
-}
-
 #[cfg(test)]
 static GLOBAL_AI_BACKEND_TEST_LOCK: LazyLock<parking_lot::Mutex<()>> = LazyLock::new(|| parking_lot::Mutex::new(()));
 
