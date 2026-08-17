@@ -52,9 +52,10 @@ spec:
 | `Cors` | CORS cross-origin resource sharing |
 | `Csrf` | CSRF protection |
 | `IpRestriction` | IP allow/deny list (CIDR supported). Inline `allow`/`deny` groups are **partial-good**: a bad CIDR entry is skipped (not fatal); the plugin loads with the valid entries. Bad entries surface as a `PartiallyInvalid` status condition (reason `RuleInvalid`); `Accepted` stays `True`. A skipped inline deny entry also increments `edgion_ip_deny_entries_skipped_total{scope="http"}`. |
-| `RequestRestriction` | Request restrictions (header/body/geo rules). `RestrictionSource::ClientGeo`/`DirectGeo` add country/continent/city/subdivision matching, backed by the gateway's process-wide GeoIP provider — see `docs/en/ops-guide/gateway/geoip.md`. |
+| `RequestRestriction` | Request restrictions (header/body match rules). Geo matching is not part of this plugin — combine it with `GeoIpLocation` (below) as a separate, ordered plugin-list entry instead. |
 | `RequestBodyBuffer` | Explicitly populate the shared request-body cache for later-stage consumers |
-| `GlobalAccessControl` | L7 allow-list with IP/CIDR and composite request match groups; shares `RestrictionSource` with `RequestRestriction`, so it also gets `ClientGeo`/`DirectGeo` — note its `IpSource` naming is inverted relative to `RequestInfo` (see the GeoIP guide). |
+| `GlobalAccessControl` | L7 allow-list with IP/CIDR and composite request match groups. Geo matching is not part of this plugin — see `GeoIpLocation` below. |
+| `GeoIpLocation` | Country/continent/city/subdivision (and CIDR) matching backed by the gateway's process-wide GeoIP provider, shared verbatim between this HTTP registration and the `EdgionStreamPlugins` L4 (Stage-1) registration of the same name. Parse-only (`config: {}`) just resolves geo into the access log; rule mode adds `defaultAction`/`failOpen`/`denyRuleGroups`/`allowRuleGroups`. Combine with `IpRestriction`/`RequestRestriction` by chaining plugin-list entries, not by embedding. See `docs/en/ops-guide/gateway/geoip.md`. |
 
 ### Traffic Control
 

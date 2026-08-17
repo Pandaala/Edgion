@@ -12,8 +12,8 @@ use std::path::PathBuf;
 /// GeoIP configuration. All keys are snake_case, matching `GatewayConfig`.
 ///
 /// `deny_unknown_fields` is load-bearing: without it a camelCase typo would
-/// deserialize into an all-defaults struct (`enabled: false`) with no error,
-/// leaving geo rules configured but silently unenforced.
+/// deserialize into an all-defaults struct — `db_path: None`, i.e. no database
+/// — with no error, leaving every configured geo rule silently unenforced.
 ///
 /// `Debug` is derived, not hand-written: `update_url` is a `RedactedString`,
 /// whose own `Debug` always prints `[redacted]` (see

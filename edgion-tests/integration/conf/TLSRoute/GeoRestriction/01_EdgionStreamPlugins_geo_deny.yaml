@@ -1,8 +1,11 @@
-# One geo-deny profile, enough to prove layer="tls" is wired and counted.
+# Two-plugin chain, enough to prove layer="tls" is wired and counted, and
+# that the "plugins: [...]" order still holds at this layer:
+# GlobalConnectionIpRestriction (non-geo IP deny, first) THEN GeoIpLocation
+# (geo-only, second).
 #
-# Uses the legacy `plugins` field (Stage-1 shape, GlobalConnectionIpRestriction
-# supports geo; the Stage-2 `tlsRoutePlugins` enum only offers IpRestriction —
-# see edgion-resources/src/resources/edgion_stream_plugins/tls_route_plugins.rs).
+# Uses the legacy `plugins` field (Stage-1 shape; the Stage-2 `tlsRoutePlugins`
+# enum only offers IpRestriction — see
+# edgion-resources/src/resources/edgion_stream_plugins/tls_route_plugins.rs).
 # Referencing this ESP directly from the TLSRoute (not the Gateway) means
 # `tls_route_plugin_runtime` is empty and routes/tls/mod.rs::check_tls_route_plugins
 # falls back to running the Stage-1 `stream_plugin_runtime` with
@@ -18,10 +21,21 @@ spec:
     - type: GlobalConnectionIpRestriction
       config:
         enable: true
-        activeProfile: geo-deny-ru
+        activeProfile: default
         profiles:
-          geo-deny-ru:
+          default:
             defaultAction: allow
-            geo:
-              denyCountries: ["RU"]
-              failOpen: false
+            deny:
+              - name: deny-unrelated-source
+                cidrs:
+                  - "127.0.0.9/32"
+    - type: GeoIpLocation
+      config:
+        defaultAction: allow
+        failOpen: false
+        denyRuleGroups:
+          - name: block-ru
+            rules:
+              - source: DirectPeerIp
+                key: country
+                values: ["RU"]

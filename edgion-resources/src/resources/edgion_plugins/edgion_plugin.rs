@@ -9,11 +9,11 @@ use super::plugin_configs::{
     A2aGatewayConfig, AiGuardConfig, AiProxyConfig, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig,
     CanaryConfig, CorsConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig,
     DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig,
-    FormJsonTransformConfig, ForwardAuthConfig, GlobalAccessControlConfig, GuardrailConfig, HeaderCertAuthConfig,
-    HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig,
-    LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig,
-    RealIpConfig, RegionRouteConfig, RequestBodyBufferConfig, RequestMirrorPluginConfig, RequestRestrictionConfig,
-    ResponseRewriteConfig, TraceContextConfig, WasmConfig, DEFAULT_INSTANCE_MAX_BYTES,
+    FormJsonTransformConfig, ForwardAuthConfig, GeoIpLocationConfig, GlobalAccessControlConfig, GuardrailConfig,
+    HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig,
+    JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig,
+    RateLimitRedisConfig, RealIpConfig, RegionRouteConfig, RequestBodyBufferConfig, RequestMirrorPluginConfig,
+    RequestRestrictionConfig, ResponseRewriteConfig, TraceContextConfig, WasmConfig, DEFAULT_INSTANCE_MAX_BYTES,
 };
 use crate::resources::http_route::{HTTPHeaderFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter};
 
@@ -123,6 +123,8 @@ pub enum EdgionPlugin {
     AiGuard(AiGuardConfig),
     /// GlobalAccessControl filter (L7 allow-list: IP/CIDR and header/cookie/... composite, OR groups)
     GlobalAccessControl(GlobalAccessControlConfig),
+    /// GeoIpLocation filter (resolve peer geo; optional deny/allow rule groups over IP/country/continent/city/subdivision)
+    GeoIpLocation(GeoIpLocationConfig),
     /// Canary filter (100% traffic to one named backend, switchable via a Selector EdgionConfigData)
     Canary(CanaryConfig),
     /// Wasm filter (proxy-wasm ABI guest module executed via wasmtime)
@@ -260,6 +262,7 @@ impl EdgionPlugin {
             | Dsl(_)
             | GlobalAccessControl(_)
             | Canary(_)
+            | GeoIpLocation(_)
             | Wasm(_) => None,
         }
     }
@@ -324,6 +327,7 @@ impl EdgionPlugin {
             EdgionPlugin::Guardrail(_) => "Guardrail",
             EdgionPlugin::AiGuard(_) => "AiGuard",
             EdgionPlugin::GlobalAccessControl(_) => "GlobalAccessControl",
+            EdgionPlugin::GeoIpLocation(_) => "GeoIpLocation",
             EdgionPlugin::Canary(_) => "Canary",
             EdgionPlugin::Wasm(_) => "Wasm",
         }
@@ -389,7 +393,8 @@ impl EdgionPlugin {
             | EdgionPlugin::TraceContext(_)
             | EdgionPlugin::Guardrail(_)
             | EdgionPlugin::AiGuard(_)
-            | EdgionPlugin::GlobalAccessControl(_) => &[],
+            | EdgionPlugin::GlobalAccessControl(_)
+            | EdgionPlugin::GeoIpLocation(_) => &[],
         }
     }
 
@@ -445,7 +450,8 @@ impl EdgionPlugin {
             | EdgionPlugin::TraceContext(_)
             | EdgionPlugin::Guardrail(_)
             | EdgionPlugin::AiGuard(_)
-            | EdgionPlugin::GlobalAccessControl(_) => "",
+            | EdgionPlugin::GlobalAccessControl(_)
+            | EdgionPlugin::GeoIpLocation(_) => "",
         }
     }
 
@@ -535,6 +541,7 @@ impl EdgionPlugin {
             | EdgionPlugin::AiGuard(_)
             | EdgionPlugin::GlobalAccessControl(_)
             | EdgionPlugin::Canary(_)
+            | EdgionPlugin::GeoIpLocation(_)
             | EdgionPlugin::Wasm(_) => Vec::new(),
         }
     }
@@ -585,6 +592,7 @@ impl EdgionPlugin {
             EdgionPlugin::Guardrail(c) => c.validation_error(),
             EdgionPlugin::AiGuard(c) => c.validation_error(),
             EdgionPlugin::GlobalAccessControl(c) => c.validation_error(),
+            EdgionPlugin::GeoIpLocation(c) => c.validation_error(),
             EdgionPlugin::Canary(c) => c.validation_error(),
             EdgionPlugin::Wasm(c) => c.validation_error(),
             // Gateway API filter variants (foreign types): no PluginValidation impl.
@@ -737,7 +745,6 @@ mod global_access_control_variant_tests {
             status: 403,
             message: None,
             ip_source: crate::resources::edgion_plugins::plugin_configs::IpSource::RemoteAddr,
-            fail_open: None,
         };
         let p = EdgionPlugin::GlobalAccessControl(cfg);
         assert!(p.validation_error().unwrap().contains("activeProfile"));

@@ -1,33 +1,34 @@
-// TCPRoute GeoRestriction (L4 geo) integration suite — design §6.3 rows.
+// TCPRoute GeoRestriction (L4) integration suite — coverage for the
+// `GeoIpLocation` stream plugin (`EdgionStreamPlugin::GeoIpLocation`).
 //
-// Coverage against edgion-tests/integration/conf/TCPRoute/GeoRestriction/:
+// Against edgion-tests/integration/conf/TCPRoute/GeoRestriction/:
 //   - the "tcp" (Stage-2, post route-match) layer via tcp-geo-gw:31951 /
 //     tcp-geo-route (route-level edgion-stream-plugins annotation);
 //   - the "stage1" (pre-accept ConnectionFilter) layer via
 //     tcp-geo-bare-gw:31952 (gateway-level annotation, no TCPRoute at all).
+// Both listeners reference the SAME `tcp-geo-esp` EdgionStreamPlugins
+// resource, hot-swapped via `ctx.apply_yaml` before each test case (its flat
+// config has no per-profile Selector envelope to switch instead).
 //
 // Every source address is the client's OWN bound source address (client-side
-// source binding, per task-15-brief.md), never a spoofed header — this is
-// what makes L4 geo (`DirectGeo`-equivalent; L4 has no HTTP layer at all)
-// testable from a closed harness with no production backdoor. The fixture's
-// authored address map (edgion-tests/geoip/README.md):
-//   127.0.0.1 CN, 127.0.0.5 RU, 127.0.0.6 US, 127.0.0.7 HK.
+// source binding), never a spoofed header — L4 has no XFF at all, so
+// `GeoIpLocation` accepts only `DirectPeerIp`-sourced rules here (enforced at
+// validation). The fixture's authored address map
+// (edgion-tests/geoip/README.md): 127.0.0.1 CN, 127.0.0.5 RU, 127.0.0.6 US.
 //
-// Per design §6.6, an L4 geo denial is never logged and carries no client
-// address — the metric `edgion_geoip_denied_total{layer,reason}` is the ONLY
-// observable. Every denial row below asserts it (via the shared
-// `metrics_helper::counter_value` scrape helper) in addition to the
-// connection-level verdict, and also asserts the negative for a plain IP-deny
-// row (no geo counter bump — the geo stage was never reached, row 1/2 are
-// terminal before geo per plugin.rs's `on_connection`).
+// A geo denial at L4 is never logged and carries no client address — the
+// metric `edgion_geoip_denied_total{layer,reason}` is the ONLY observable.
+// Every geo-denial row below asserts it (via the shared `metrics_helper::
+// counter_value` scrape helper) in addition to the connection-level verdict.
+// A row denied by a DIFFERENT stage (the chained `GlobalConnectionIpRestriction`
+// plugin, before GeoIpLocation ever runs) instead asserts the negative — no
+// geo counter bump — via `edgion_conn_ip_restriction_events_total{result="denied"}`.
 //
-// Verdict discipline: `probe_tcp_echo` below classifies a failed `connect()`
-// as `Inconclusive`, NOT `Closed` — mirroring
-// suites/tcp_route/global_connection_ip_restriction/global_connection_ip_restriction.rs,
-// NOT the looser suites/tls_route/stream_plugins.rs pattern. A GCIR/geo denial
-// is observed as a post-accept EOF; a `connect()` failure (e.g. because the
-// test failed to bind its own claimed source address) must be loud, not
-// silently counted as "successfully denied".
+// Verdict discipline: `probe_from` below classifies a failed `connect()` as
+// `Inconclusive`, NOT `Closed` — a GeoIpLocation/GCIR denial is observed as a
+// post-accept EOF; a `connect()` failure (e.g. because the test failed to
+// bind its own claimed source address) must be loud, not silently counted as
+// "successfully denied".
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::{Duration, Instant};
@@ -108,18 +109,13 @@ async fn wait_for_echo(src: &str, addr: &str, test_data: &[u8]) -> Result<usize,
 /// bump confirms actually reached the geo stage for the intended reason, not
 /// just "the connection was refused".
 ///
-/// A single connect-then-scrape is not safe here: `switch_profile` returns as
-/// soon as the API call is acknowledged, before the Selector change has
-/// propagated to the gateway via conf_sync (every other row's retry loop
-/// tolerates this lag transparently). If the *previous* row happened to leave
-/// an active profile whose own IP-deny/allow-miss rule also matches this
-/// row's source address, the very first probe can be denied for that stale,
-/// unrelated reason — satisfying a bare "was it closed?" check on the first
-/// try, before propagation completes, with no retry left to reach the
-/// intended geo-driven denial. The client cannot distinguish "denied by geo"
-/// from "denied for any other reason" (§6.6: an L4 geo denial carries no
-/// signal beyond a reset), so the metric bump is folded into the SAME retry
-/// loop as the connection probe: only a `Closed` result whose immediately
+/// A single connect-then-scrape is not safe here: a hot-swap's conf_sync
+/// propagation lags the apply acknowledgement, so the very first probe can be
+/// denied for a stale, unrelated reason from the previous row's still-active
+/// config — satisfying a bare "was it closed?" check before propagation
+/// completes. The client cannot distinguish "denied by geo" from "denied for
+/// any other reason", so the metric bump is folded into the SAME retry loop
+/// as the connection probe: only a `Closed` result whose immediately
 /// following scrape shows the target `layer`/`reason` delta counts as
 /// success. `baseline` is captured once, before the loop, so a
 /// cross-test-cumulative counter can't produce a false positive.
@@ -185,20 +181,20 @@ impl GeoDeniedSnapshot {
     }
 }
 
-/// For rows that are denied *without* ever reaching the geo stage (a
-/// terminal IP-deny/allow-miss hit, or a "geo had no opinion" fall-through):
-/// asserts the connection-level plugin's own `edgion_conn_ip_restriction_events_total{result="denied"}`
-/// counter bumped, proving the deny path actually fired rather than the test
-/// having silently stopped exercising it — the symmetric counterpart to
-/// `wait_for_geo_denial` above, and also proves the geo-reason counters did
-/// NOT bump (the geo stage was never reached).
+/// For rows that are denied *without* ever reaching the geo stage (a chained
+/// `GlobalConnectionIpRestriction` deny that runs before `GeoIpLocation`):
+/// asserts the connection-level plugin's own
+/// `edgion_conn_ip_restriction_events_total{result="denied"}` counter bumped,
+/// proving the deny path actually fired rather than the test having silently
+/// stopped exercising it — and also proves the geo-reason counters did NOT
+/// bump (the geo stage was never reached, since the runtime stops at the
+/// first `Deny` — see `StreamPluginRuntime::run`).
 ///
 /// The geo-counter comparison is scoped to a single retry iteration
 /// (snapshot immediately before that one probe, snapshot immediately after),
-/// NOT to the whole retry loop: while `switch_profile` is still propagating,
-/// earlier iterations can land on the previous row's still-active profile
-/// and produce their own, unrelated geo denials (observable as this suite's
-/// own prior rows re-triggering) — those must not be blamed on the
+/// NOT to the whole retry loop: while a hot-swap is still propagating,
+/// earlier iterations can land on the previous row's still-active config and
+/// produce their own, unrelated geo denials — those must not be blamed on the
 /// eventually-confirmed connection.
 async fn wait_for_non_geo_denial(ctx: &TestContext, src: &str, addr: &str, test_data: &[u8]) -> Result<String, String> {
     let mut last = "no probe completed".to_string();
@@ -220,24 +216,15 @@ async fn wait_for_non_geo_denial(ctx: &TestContext, src: &str, addr: &str, test_
                     if geo_after.any_increased_since(&geo_before) {
                         return Err(format!(
                             "denied ({close_reason}) via the IP stage as expected, but a geo-reason counter also \
-                             bumped during this exact connection (stage1/deny_country {}->{}, tcp/deny_country {}->{}, \
-                             stage1/allow_miss {}->{}, tcp/allow_miss {}->{}) — the geo stage should never have been \
-                             reached for this row",
-                            geo_before.stage1_deny,
-                            geo_after.stage1_deny,
-                            geo_before.tcp_deny,
-                            geo_after.tcp_deny,
-                            geo_before.stage1_miss,
-                            geo_after.stage1_miss,
-                            geo_before.tcp_miss,
-                            geo_after.tcp_miss,
+                             bumped during this exact connection — the geo stage should never have been reached \
+                             for this row"
                         ));
                     }
                     return Ok(format!("{close_reason}, ip-restriction metric={ip_after}"));
                 }
                 last = format!(
                     "{close_reason} (edgion_conn_ip_restriction_events_total{{result=\"denied\"}} not yet bumped: \
-                     {ip_after}, baseline {ip_before} — likely still denied by a stale prior profile)"
+                     {ip_after}, baseline {ip_before} — likely still denied by a stale prior config)"
                 );
             }
             TcpEchoProbe::Echoed(n) => last = format!("received {n} echo bytes"),
@@ -247,24 +234,64 @@ async fn wait_for_non_geo_denial(ctx: &TestContext, src: &str, addr: &str, test_
     }
 }
 
-fn selector_yaml_with(active_profile: &str) -> String {
-    format!(
-        r#"apiVersion: edgion.io/v1
-kind: EdgionConfigData
-metadata:
-  name: tcp-geo-selector
-  namespace: edgion-test
-spec:
-  data:
-    type: Selector
-    config:
-      active: {active_profile}
-"#,
-    )
+/// Poll `/configserver/EdgionStreamPlugins` until `tcp-geo-esp`'s `Accepted`
+/// condition reaches `want_status`.
+///
+/// The controller uses lenient admission: a `preparse` error does NOT fail the
+/// apply, it stores the resource and reports the problem as
+/// `Accepted: False`. So an invalid config is asserted here, on the status
+/// condition, not on `apply_esp`'s return value. Mirrors
+/// suites/edgion_plugins/geo_restriction's `wait_for_accepted`.
+async fn wait_for_esp_accepted(ctx: &TestContext, want_status: &str) -> Result<String, String> {
+    let mut last = String::new();
+    for _ in 0..40 {
+        let mut req = ctx.http_client.get(format!(
+            "{}/configserver/EdgionStreamPlugins?namespace=edgion-test&name=tcp-geo-esp",
+            ctx.admin_api_url()
+        ));
+        if let Some(token) = &ctx.admin_token {
+            req = req.header("Authorization", format!("Bearer {token}"));
+        }
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+                Ok(body) if body["success"].as_bool().unwrap_or(false) => {
+                    if let Some(conditions) = body["data"]["status"]["conditions"].as_array() {
+                        if let Some(accepted) = conditions.iter().find(|c| c["type"].as_str() == Some("Accepted")) {
+                            if accepted["status"].as_str() == Some(want_status) {
+                                return Ok(accepted["message"].as_str().unwrap_or("").to_string());
+                            }
+                            last = format!("Accepted={accepted:?}");
+                        } else {
+                            last = "status.conditions lacks Accepted".to_string();
+                        }
+                    } else {
+                        last = "status.conditions not present".to_string();
+                    }
+                }
+                Ok(body) => last = format!("API error: {}", body["error"].as_str().unwrap_or("unknown")),
+                Err(e) => last = format!("JSON parse error: {e}"),
+            },
+            Ok(resp) => last = format!("HTTP {}", resp.status()),
+            Err(e) => last = format!("request error: {e}"),
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    Err(format!("Accepted never reached '{want_status}'; last: {last}"))
 }
 
-async fn switch_profile(ctx: &TestContext, profile: &str) -> Result<(), String> {
-    ctx.apply_yaml(&selector_yaml_with(profile)).await
+async fn apply_esp(ctx: &TestContext, plugins_yaml: &str) -> Result<(), String> {
+    let yaml = format!(
+        r#"apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: tcp-geo-esp
+  namespace: edgion-test
+spec:
+  plugins:
+{plugins_yaml}
+"#
+    );
+    ctx.apply_yaml(&yaml).await
 }
 
 async fn geoip_denied_total(ctx: &TestContext, layer: &str, reason: &str) -> f64 {
@@ -279,12 +306,10 @@ async fn geoip_denied_total(ctx: &TestContext, layer: &str, reason: &str) -> f64
     )
 }
 
-/// `edgion_conn_ip_restriction_events_total{result="denied"}` — bumped by the
-/// SAME `GlobalConnectionIpRestrictionPlugin::on_connection` for every deny
-/// verdict that never reaches (or never triggers) the geo stage: a terminal
-/// IP-deny hit (row 1), and the "geo has no opinion" fall-through to the
-/// original IP-stage decision (rows 4 / 4'). Not layer-scoped (the plugin
-/// records it identically regardless of which listener stage invoked it).
+/// `edgion_conn_ip_restriction_events_total{result="denied"}` — bumped by
+/// `GlobalConnectionIpRestrictionPlugin::on_connection` for a terminal IP-deny
+/// hit. Not layer-scoped (the plugin records it identically regardless of
+/// which listener stage invoked it).
 async fn conn_ip_restriction_denied_total(ctx: &TestContext) -> f64 {
     let metrics = crate::metrics_helper::MetricsClient::from_host_port(&ctx.target_host, 12090);
     let Ok(raw) = metrics.fetch_raw_metrics().await else {
@@ -293,66 +318,33 @@ async fn conn_ip_restriction_denied_total(ctx: &TestContext) -> f64 {
     crate::metrics_helper::counter_value(&raw, "edgion_conn_ip_restriction_events_total", &[("result", "denied")])
 }
 
+const GEO_DENY_RU: &str = "    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-ru\n            rules:\n              - source: DirectPeerIp\n                key: country\n                values: [\"RU\"]\n";
+
+const GEO_ALLOW_CN: &str = "    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        allowRuleGroups:\n          - name: cn-only\n            rules:\n              - source: DirectPeerIp\n                key: country\n                values: [\"CN\"]\n";
+
+const GEO_DENY_CIDR_RU: &str = "    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-ru-cidr\n            rules:\n              - source: DirectPeerIp\n                key: cidr\n                values: [\"127.0.0.5/32\"]\n";
+
+const GEO_PARSE_ONLY: &str = "    - type: GeoIpLocation\n      config: {}\n";
+
+const CHAIN_IP_DENY_THEN_GEO: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: allow\n            deny:\n              - name: deny-ru-source\n                cidrs:\n                  - \"127.0.0.5/32\"\n    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-ru\n            rules:\n              - source: DirectPeerIp\n                key: country\n                values: [\"RU\"]\n";
+
+const GCIR_ONLY_LOOPBACK_ALLOW: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: deny\n            allow:\n              - name: loopback\n                cidrs:\n                  - \"127.0.0.0/8\"\n";
+
 impl TcpGeoRestrictionTestSuite {
-    /// Row 1: `deny: 127.0.0.5/32`, `geo.allowCountries: [RU]`, source
-    /// 127.0.0.5 (RU) — IP deny is terminal; the geo stage never runs (no
-    /// `geo:*` denial reason, no geo counter bump).
-    fn row1_ip_deny_terminal() -> TestCase {
+    /// A bare `denyRuleGroups`/country hit denies at the "tcp" layer, and
+    /// bumps `edgion_geoip_denied_total{layer="tcp",reason="deny_country"}`.
+    fn geo_deny_country() -> TestCase {
         TestCase::new(
-            "row1_ip_deny_terminal",
-            "row 1: an IP deny hit wins over geo and is terminal",
+            "geo_deny_country",
+            "a denyRuleGroups/country hit denies at the tcp layer",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if let Err(e) = switch_profile(&ctx, "row1_ip_deny_terminal").await {
-                        return TestResult::failed(start.elapsed(), format!("switch profile: {e}"));
+                    if let Err(e) = apply_esp(&ctx, GEO_DENY_RU).await {
+                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let addr = ctx.tcp_addr();
-                    match wait_for_non_geo_denial(&ctx, "127.0.0.5", &addr, b"row1").await {
-                        Ok(msg) => TestResult::passed_with_message(start.elapsed(), format!("denied ({msg})")),
-                        Err(e) => TestResult::failed(start.elapsed(), e),
-                    }
-                })
-            },
-        )
-    }
-
-    /// Row 2: `allow: 127.0.0.5/32`, `geo.denyCountries: [RU]`, source
-    /// 127.0.0.5 (RU) — the IP allow hit EXEMPTS a geo deny; this is the
-    /// expressive value of merging geo into this plugin.
-    fn row2_ip_allow_exempts() -> TestCase {
-        TestCase::new(
-            "row2_ip_allow_exempts",
-            "row 2: an IP allow hit exempts a geo deny",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    if let Err(e) = switch_profile(&ctx, "row2_ip_allow_exempts").await {
-                        return TestResult::failed(start.elapsed(), format!("switch profile: {e}"));
-                    }
-                    let addr = ctx.tcp_addr();
-                    match wait_for_echo("127.0.0.5", &addr, b"row2").await {
-                        Ok(n) => TestResult::passed_with_message(start.elapsed(), format!("allowed, echoed {n} bytes")),
-                        Err(e) => TestResult::failed(start.elapsed(), e),
-                    }
-                })
-            },
-        )
-    }
-
-    /// Row 3b: `geo.denyCountries: [RU]` only, source 127.0.0.5 (RU) — denied.
-    fn row3b_deny_hit() -> TestCase {
-        TestCase::new(
-            "row3b_deny_hit",
-            "row 3b: a bare geo denyCountries hit denies",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    if let Err(e) = switch_profile(&ctx, "row3b_and_3d").await {
-                        return TestResult::failed(start.elapsed(), format!("switch profile: {e}"));
-                    }
-                    let addr = ctx.tcp_addr();
-                    match wait_for_geo_denial(&ctx, "127.0.0.5", &addr, b"row3b", "tcp", "deny_country").await {
+                    match wait_for_geo_denial(&ctx, "127.0.0.5", &addr, b"deny", "tcp", "deny_country").await {
                         Ok((reason, bumped)) => TestResult::passed_with_message(
                             start.elapsed(),
                             format!("denied ({reason}), metric={bumped}"),
@@ -364,66 +356,41 @@ impl TcpGeoRestrictionTestSuite {
         )
     }
 
-    /// Row 3d: same `row3b_and_3d` profile, source 127.0.0.1 (CN, not in
-    /// denyCountries) — geo has no opinion, falls through to the profile's
+    /// A whitelist (`allowRuleGroups`) hit passes.
+    fn geo_allow_whitelist_hit_passes() -> TestCase {
+        TestCase::new(
+            "geo_allow_whitelist_hit_passes",
+            "an allowRuleGroups hit passes",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    if let Err(e) = apply_esp(&ctx, GEO_ALLOW_CN).await {
+                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
+                    }
+                    let addr = ctx.tcp_addr();
+                    match wait_for_echo("127.0.0.1", &addr, b"allow-hit").await {
+                        Ok(n) => TestResult::passed_with_message(start.elapsed(), format!("allowed, echoed {n} bytes")),
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Same whitelist, a miss denies with reason `allow_miss` even under
     /// `defaultAction: allow`.
-    fn row3d_falls_through() -> TestCase {
+    fn geo_allow_whitelist_miss_denies() -> TestCase {
         TestCase::new(
-            "row3d_falls_through",
-            "row 3d: geo has no opinion on a non-listed country, falls through to defaultAction",
+            "geo_allow_whitelist_miss_denies",
+            "an allowRuleGroups miss denies (reason=allow_miss) even under defaultAction: allow",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if let Err(e) = switch_profile(&ctx, "row3b_and_3d").await {
-                        return TestResult::failed(start.elapsed(), format!("switch profile: {e}"));
+                    if let Err(e) = apply_esp(&ctx, GEO_ALLOW_CN).await {
+                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let addr = ctx.tcp_addr();
-                    match wait_for_echo("127.0.0.1", &addr, b"row3d").await {
-                        Ok(n) => TestResult::passed_with_message(start.elapsed(), format!("allowed, echoed {n} bytes")),
-                        Err(e) => TestResult::failed(start.elapsed(), e),
-                    }
-                })
-            },
-        )
-    }
-
-    /// Row 3c hit: `defaultAction: deny`, `geo.allowCountries: [HK]`, source
-    /// 127.0.0.7 (HK) — allow-mode geo is terminal: allowed even though
-    /// `defaultAction` is deny.
-    fn row3c_hit() -> TestCase {
-        TestCase::new(
-            "row3c_hit",
-            "row 3c hit: an allowCountries match is terminal, overriding defaultAction: deny",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    if let Err(e) = switch_profile(&ctx, "row3c_terminal").await {
-                        return TestResult::failed(start.elapsed(), format!("switch profile: {e}"));
-                    }
-                    let addr = ctx.tcp_addr();
-                    match wait_for_echo("127.0.0.7", &addr, b"row3c-hit").await {
-                        Ok(n) => TestResult::passed_with_message(start.elapsed(), format!("allowed, echoed {n} bytes")),
-                        Err(e) => TestResult::failed(start.elapsed(), e),
-                    }
-                })
-            },
-        )
-    }
-
-    /// Row 3c miss: same profile, source 127.0.0.6 (US, not in
-    /// allowCountries) — an allow-mode miss denies.
-    fn row3c_miss() -> TestCase {
-        TestCase::new(
-            "row3c_miss",
-            "row 3c miss: allow-mode geo denies a non-listed country",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    if let Err(e) = switch_profile(&ctx, "row3c_terminal").await {
-                        return TestResult::failed(start.elapsed(), format!("switch profile: {e}"));
-                    }
-                    let addr = ctx.tcp_addr();
-                    match wait_for_geo_denial(&ctx, "127.0.0.6", &addr, b"row3c-miss", "tcp", "allow_miss").await {
+                    match wait_for_geo_denial(&ctx, "127.0.0.6", &addr, b"allow-miss", "tcp", "allow_miss").await {
                         Ok((reason, bumped)) => TestResult::passed_with_message(
                             start.elapsed(),
                             format!("denied ({reason}), metric={bumped}"),
@@ -435,54 +402,89 @@ impl TcpGeoRestrictionTestSuite {
         )
     }
 
-    /// Row 4 — the regression this whole design exists to prevent:
-    /// `allow: 127.0.0.9/32` (unrelated -> whitelist mode), `defaultAction:
-    /// allow` (the INERT default under whitelist mode), `geo.denyCountries:
-    /// [RU]`, `failOpen: true`, source 127.0.0.6 (US) — not in the allowlist,
-    /// not geo-denied (RU only), yet must still be DENIED:
-    /// `DenyByWhitelistMiss` must survive the geo stage untouched, never
-    /// resurrecting `defaultAction: allow`.
-    fn row4_regression() -> TestCase {
+    /// A `key: cidr` rule matches by IP membership, independent of geo data.
+    fn geo_cidr_rule_matches() -> TestCase {
         TestCase::new(
-            "row4_regression",
-            "row 4: an allowlist miss stays denied even though geo has no opinion and defaultAction is allow",
+            "geo_cidr_rule_matches",
+            "a key: cidr denyRuleGroups rule matches by IP membership",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if let Err(e) = switch_profile(&ctx, "row4_regression").await {
-                        return TestResult::failed(start.elapsed(), format!("switch profile: {e}"));
+                    if let Err(e) = apply_esp(&ctx, GEO_DENY_CIDR_RU).await {
+                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let addr = ctx.tcp_addr();
-                    match wait_for_non_geo_denial(&ctx, "127.0.0.6", &addr, b"row4").await {
-                        Ok(msg) => TestResult::passed_with_message(
+                    if let Err(e) =
+                        wait_for_geo_denial(&ctx, "127.0.0.5", &addr, b"cidr-hit", "tcp", "deny_country").await
+                    {
+                        return TestResult::failed(start.elapsed(), format!("in-CIDR: {e}"));
+                    }
+                    match wait_for_echo("127.0.0.1", &addr, b"cidr-miss").await {
+                        Ok(n) => TestResult::passed_with_message(
                             start.elapsed(),
-                            format!("denied ({msg}) — defaultAction: allow was correctly NOT resurrected"),
+                            format!("out-of-CIDR source allowed, echoed {n} bytes"),
                         ),
-                        Err(e) => TestResult::failed(
-                            start.elapsed(),
-                            format!("{e} — THIS IS THE REGRESSION: an inert defaultAction: allow leaked through"),
-                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("out-of-CIDR: {e}")),
                     }
                 })
             },
         )
     }
 
-    /// Row 4': no `allow` (blacklist/default mode), `defaultAction: deny`,
-    /// deny-only geo with no hit, source 127.0.0.1 (CN, not RU) — falls
-    /// through to the plain `defaultAction: deny`.
-    fn row4prime_default_deny() -> TestCase {
+    /// Parse-only (`config: {}`) is rejected at L4 admission. It is a valid
+    /// HTTP mode — there it fills the access log's `geo` block — but L4 has no
+    /// access log and `StreamContext` carries no logging sink, so a resolved
+    /// location would have nowhere to go and the plugin could provably do
+    /// nothing. Accepting it would let an operator ship a security control that
+    /// silently does not run.
+    fn parse_only_is_rejected_at_l4() -> TestCase {
         TestCase::new(
-            "row4prime_default_deny",
-            "row 4': no geo hit falls through to a plain defaultAction: deny",
+            "parse_only_is_rejected_at_l4",
+            "config: {} is refused at L4 admission rather than accepted as a no-op",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if let Err(e) = switch_profile(&ctx, "row4prime_default_deny").await {
-                        return TestResult::failed(start.elapsed(), format!("switch profile: {e}"));
+                    // Lenient admission: the apply itself succeeds; the refusal
+                    // surfaces as the Accepted condition.
+                    if let Err(e) = apply_esp(&ctx, GEO_PARSE_ONLY).await {
+                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
+                    }
+                    match wait_for_esp_accepted(&ctx, "False").await {
+                        Ok(msg) => {
+                            if msg.contains("at least one") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("rule-less L4 config correctly refused: {msg}"),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Accepted=False, but not for the rule-less reason: {msg}"),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Two-plugin chain: `GlobalConnectionIpRestriction` (first) denies a
+    /// matching source before `GeoIpLocation` (second) ever runs — no geo
+    /// counter bump.
+    fn chain_ip_deny_precedes_geo() -> TestCase {
+        TestCase::new(
+            "chain_ip_deny_precedes_geo",
+            "a chained GlobalConnectionIpRestriction deny is terminal; GeoIpLocation never runs",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    if let Err(e) = apply_esp(&ctx, CHAIN_IP_DENY_THEN_GEO).await {
+                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let addr = ctx.tcp_addr();
-                    match wait_for_non_geo_denial(&ctx, "127.0.0.1", &addr, b"row4prime").await {
+                    match wait_for_non_geo_denial(&ctx, "127.0.0.5", &addr, b"chain-ip-deny").await {
                         Ok(msg) => TestResult::passed_with_message(start.elapsed(), format!("denied ({msg})")),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
@@ -491,17 +493,41 @@ impl TcpGeoRestrictionTestSuite {
         )
     }
 
-    /// No geo block at all: byte-for-byte legacy GlobalConnectionIpRestriction
-    /// behavior (source 127.0.0.1, in the loopback allowlist -> allowed).
-    fn no_geo_block_unchanged() -> TestCase {
+    /// Same chain, a source matching neither stage passes both.
+    fn chain_allows_both() -> TestCase {
         TestCase::new(
-            "no_geo_block_unchanged",
-            "a profile with no geo block behaves exactly as before this feature",
+            "chain_allows_both",
+            "a source matching neither the IP nor the geo stage is allowed",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if let Err(e) = switch_profile(&ctx, "no_geo_baseline").await {
-                        return TestResult::failed(start.elapsed(), format!("switch profile: {e}"));
+                    if let Err(e) = apply_esp(&ctx, CHAIN_IP_DENY_THEN_GEO).await {
+                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
+                    }
+                    let addr = ctx.tcp_addr();
+                    let result = match wait_for_echo("127.0.0.1", &addr, b"chain-allow").await {
+                        Ok(n) => TestResult::passed_with_message(start.elapsed(), format!("allowed, echoed {n} bytes")),
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    };
+                    // Restore a known-good baseline for whatever runs next.
+                    let _ = apply_esp(&ctx, GEO_DENY_RU).await;
+                    result
+                })
+            },
+        )
+    }
+
+    /// No `GeoIpLocation` plugin at all: byte-for-byte plain
+    /// GlobalConnectionIpRestriction behavior.
+    fn no_geo_plugin_unchanged() -> TestCase {
+        TestCase::new(
+            "no_geo_plugin_unchanged",
+            "an ESP with no GeoIpLocation entry behaves exactly as plain GlobalConnectionIpRestriction",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    if let Err(e) = apply_esp(&ctx, GCIR_ONLY_LOOPBACK_ALLOW).await {
+                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let addr = ctx.tcp_addr();
                     let result = match wait_for_echo("127.0.0.1", &addr, b"no-geo").await {
@@ -509,7 +535,7 @@ impl TcpGeoRestrictionTestSuite {
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     };
                     // Restore a known-good baseline for whatever runs next.
-                    let _ = switch_profile(&ctx, "row1_ip_deny_terminal").await;
+                    let _ = apply_esp(&ctx, GEO_DENY_RU).await;
                     result
                 })
             },
@@ -527,8 +553,8 @@ impl TcpGeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if let Err(e) = switch_profile(&ctx, "row3b_and_3d").await {
-                        return TestResult::failed(start.elapsed(), format!("switch profile: {e}"));
+                    if let Err(e) = apply_esp(&ctx, GEO_DENY_RU).await {
+                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let addr = format!("{}:{}", ctx.target_host, BARE_PORT);
                     // The bare listener has no backend to echo from; a geo deny at
@@ -555,15 +581,14 @@ impl TestSuite for TcpGeoRestrictionTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
-            TcpGeoRestrictionTestSuite::row1_ip_deny_terminal(),
-            TcpGeoRestrictionTestSuite::row2_ip_allow_exempts(),
-            TcpGeoRestrictionTestSuite::row3b_deny_hit(),
-            TcpGeoRestrictionTestSuite::row3d_falls_through(),
-            TcpGeoRestrictionTestSuite::row3c_hit(),
-            TcpGeoRestrictionTestSuite::row3c_miss(),
-            TcpGeoRestrictionTestSuite::row4_regression(),
-            TcpGeoRestrictionTestSuite::row4prime_default_deny(),
-            TcpGeoRestrictionTestSuite::no_geo_block_unchanged(),
+            TcpGeoRestrictionTestSuite::geo_deny_country(),
+            TcpGeoRestrictionTestSuite::geo_allow_whitelist_hit_passes(),
+            TcpGeoRestrictionTestSuite::geo_allow_whitelist_miss_denies(),
+            TcpGeoRestrictionTestSuite::geo_cidr_rule_matches(),
+            TcpGeoRestrictionTestSuite::parse_only_is_rejected_at_l4(),
+            TcpGeoRestrictionTestSuite::chain_ip_deny_precedes_geo(),
+            TcpGeoRestrictionTestSuite::chain_allows_both(),
+            TcpGeoRestrictionTestSuite::no_geo_plugin_unchanged(),
             TcpGeoRestrictionTestSuite::bare_listener_is_stage1(),
         ]
     }

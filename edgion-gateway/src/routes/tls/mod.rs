@@ -267,95 +267,12 @@ mod fail_close_tests {
         assert!(!is_geo_deny_reason("ip restriction denied"));
     }
 
-    /// BLOCKER 3 regression: design spec §6.6 — an L4 geo denial must write no
-    /// log entry carrying the geo reason (which flows into the same JSON
-    /// object as `client_addr` at `routes/tls/proxy.rs`). Drives a real
-    /// `GlobalConnectionIpRestriction` Stage 1 plugin (geo block,
-    /// `failOpen: false`) through the Stage-1-compat fallback path with no
-    /// GeoIP database loaded, forcing a `"geo:deny:db-unavailable"` denial,
-    /// and asserts that detail never reaches `ctx.err_log`.
-    #[tokio::test]
-    async fn tls_stage1_compat_geo_denial_never_logs_the_geo_reason() {
-        use crate::geoip::{GeoIpProvider, GEO_TEST_LOCK};
-        use crate::plugins::stream::{get_global_stream_plugin_store, CompiledStreamPlugins, StreamPluginRuntime};
-        use edgion_resources::resources::edgion_plugins::DefaultAction;
-        use edgion_resources::resources::edgion_stream_plugins::{
-            EdgionStreamPlugin, GeoRules, GlobalConnectionIpRestrictionConfig, ProfileRules, StreamPluginEntry,
-        };
-        use edgion_resources::resources::EdgionStreamPlugins;
-        use std::collections::{HashMap, HashSet};
-        use std::sync::Arc;
-
-        {
-            let _guard = GEO_TEST_LOCK.lock();
-            GeoIpProvider::global().clear();
-        }
-
-        let mut geo = GeoRules {
-            allow_countries: vec![],
-            deny_countries: vec!["RU".to_string()],
-            fail_open: false,
-        };
-        geo.compile().expect("geo rules must compile");
-
-        let mut profiles = HashMap::new();
-        profiles.insert(
-            "main".to_string(),
-            ProfileRules {
-                allow: None,
-                deny: None,
-                default_action: DefaultAction::Allow,
-                allow_refs: None,
-                deny_refs: None,
-                geo: Some(geo),
-                allow_matcher: None,
-                deny_matcher: None,
-            },
-        );
-        let gcir_config = GlobalConnectionIpRestrictionConfig {
-            enable: true,
-            active_profile: "main".to_string(),
-            profiles,
-            description: None,
-            active_profile_ref: None,
-        };
-        let entry = StreamPluginEntry {
-            enable: true,
-            policy_action: None,
-            plugin: EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir_config),
-        };
-        let key = "default/__tls_geo_denial_no_log_test__".to_string();
-        let runtime = Arc::new(StreamPluginRuntime::from_stream_plugins(&[entry], "default", &key));
-        let esp = EdgionStreamPlugins::new(
-            "__tls_geo_denial_no_log_test__",
-            edgion_resources::resources::edgion_stream_plugins::EdgionStreamPluginsSpec {
-                plugins: None,
-                tls_route_plugins: None,
-            },
-        );
-        let compiled = CompiledStreamPlugins {
-            spec: Arc::new(esp),
-            stream_plugin_runtime: runtime,
-            tls_route_plugin_runtime: Arc::default(),
-        };
-
-        let store = get_global_stream_plugin_store();
-        store.update(HashMap::from([(key.clone(), Arc::new(compiled))]), &HashSet::new());
-
-        let mut ctx = TlsContext::new(443, "127.0.0.5".to_string(), 50000, "127.0.0.5".to_string());
-        let allowed = run_tls_route_plugins(Some(key.as_str()), &mut ctx, "example.com", 443, None, false).await;
-
-        assert!(!allowed, "failOpen:false with no database loaded must deny");
-        let err = ctx.err_log.as_deref().unwrap_or("");
-        assert!(
-            !err.to_lowercase().contains("geo"),
-            "a geo denial must never write its reason into err_log, got: {err}"
-        );
-        assert!(
-            !err.contains("db-unavailable") && !err.contains(&ctx.client_addr),
-            "a geo denial must never carry the geo reason or the client address, got: {err}"
-        );
-
-        store.update(HashMap::new(), &HashSet::from([key]));
-    }
+    // The former `tls_stage1_compat_geo_denial_never_logs_the_geo_reason`
+    // regression test drove a real `GlobalConnectionIpRestriction` geo block
+    // through this path. GCIR's geo tier was extracted (see the
+    // `2026-08-15-geoip-country-restriction` task); `is_geo_deny_reason`'s
+    // bounded-prefix filter above stays as-is (generic string matching, no
+    // GCIR dependency) for the forthcoming `GeoIpLocation` plugin to reuse,
+    // but the GCIR-specific construction this test used no longer compiles.
+    // Coverage will be restored against the new plugin's deny reason.
 }

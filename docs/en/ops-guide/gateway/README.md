@@ -10,6 +10,6 @@ Operational configuration for Gateway resources, including GatewayClass, listene
 | [gateway-class.md](gateway-class.md) | GatewayClass configuration |
 | [http-to-https-redirect.md](http-to-https-redirect.md) | HTTP to HTTPS redirect |
 | [preflight-policy.md](preflight-policy.md) | Preflight request handling policy |
-| [geoip.md](geoip.md) | GeoIP restriction: database lifecycle, HTTP/L4 rules, access log, metrics |
+| [geoip.md](geoip.md) | GeoIP restriction: database lifecycle, the `GeoIpLocation` plugin (HTTP + L4), access log, metrics |
 | [listeners/](listeners/README.md) | Listener configuration (HTTP, HTTPS, TCP, gRPC) |
 | [tls/](tls/README.md) | TLS configuration (termination, EdgionTls, ACME) |

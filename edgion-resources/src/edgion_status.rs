@@ -344,14 +344,6 @@ pub enum EdgionStatus {
 
     /// Outbound peer certificate SANs did not match configured subjectAltNames.
     OutboundTlsSanMismatch = 999_09,
-
-    /// A `RequestRestriction`/`GlobalAccessControl` plugin with a `ClientGeo`/`DirectGeo`
-    /// rule declared plugin-level `failOpen: false`, and the GeoIP database is
-    /// unavailable (not loaded). The whole plugin (`request_restriction` or
-    /// `global_access_control`) short-circuited to rejection regardless of
-    /// `mode`/`defaultAction`. No fixed HTTP status — the rejection status is
-    /// whatever the plugin's own `status` config says.
-    GeoRestrictionFailClosed = 999_18,
 }
 
 impl EdgionStatus {
@@ -454,7 +446,6 @@ mod tests {
             EdgionStatus::OutboundTlsCaMissing => None,
             EdgionStatus::OutboundTlsClientCertInvalid => None,
             EdgionStatus::OutboundTlsSanMismatch => None,
-            EdgionStatus::GeoRestrictionFailClosed => None,
         }
     }
 
@@ -544,7 +535,6 @@ mod tests {
             EdgionStatus::OutboundTlsCaMissing,
             EdgionStatus::OutboundTlsClientCertInvalid,
             EdgionStatus::OutboundTlsSanMismatch,
-            EdgionStatus::GeoRestrictionFailClosed,
         ];
         for &s in all {
             assert_eq!(s.http_status(), expected_http(s), "http_status mismatch for {s:?}");

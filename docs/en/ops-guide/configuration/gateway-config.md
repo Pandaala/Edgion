@@ -142,7 +142,7 @@ The probe port is intentionally **not** added to the gateway Service; kubelet pr
 | `admin_listen` | `String` | `127.0.0.1:12001` | Admin API listen address. Defaults to loopback (`127.0.0.1:12001`) — sensitive endpoints (`/configclient`, `/api/v1/server-info`) are not exposed cluster-wide. Access remotely via `kubectl port-forward pod/<name> 12001:12001`. |
 | `admin_token` | `String` | — | Shared bearer token for the admin API (config-file fallback). Prefer the `EDGION_GATEWAY_ADMIN_TOKEN` env var in Kubernetes. Never serialized out, redacted in logs. See [Gateway admin API authentication](#gateway-admin-api-authentication). |
 | `probe_listen` | `String` | `0.0.0.0:12000` | Liveness/readiness probe listen address. Binds all interfaces so kubelet can reach the pod IP. Serves only `/health` and `/ready`. Not included in the gateway Service. |
-| `geoip` | `GeoIpConfig` | *(empty — no `db_path`)* | GeoIP database + updater settings, used by `ClientGeo`/`DirectGeo` restriction rules and the L4 geo block. **Must be nested under `gateway:`** — see [GeoIP Restriction](../gateway/geoip.md) for the full field reference and required pitfalls. |
+| `geoip` | `GeoIpConfig` | *(empty — no `db_path`)* | GeoIP database + updater settings, used by the `GeoIpLocation` plugin (HTTP `EdgionPlugin` and L4 `EdgionStreamPlugin`, one config shape). **Must be nested under `gateway:`** — see [GeoIP Restriction](../gateway/geoip.md) for the full field reference and required pitfalls. |
 
 ### Gateway admin API authentication
 

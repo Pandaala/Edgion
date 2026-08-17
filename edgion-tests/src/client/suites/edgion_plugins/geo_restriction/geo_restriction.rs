@@ -1,33 +1,41 @@
-// EdgionPlugins GeoRestriction suite — HTTP-layer (RequestRestriction /
-// GlobalAccessControl) coverage for `ClientGeo` / `DirectGeo` predicates.
+// EdgionPlugins GeoRestriction suite — HTTP-layer coverage for the
+// `GeoIpLocation` plugin (`GeoRuleSource::DirectPeerIp`/`RemoteIp` over
+// `GeoRuleKey::{cidr,country,continent,city,subdivision}`).
 //
 // Against edgion-tests/integration/conf/EdgionPlugins/GeoRestriction/: a
-// dedicated Gateway (31950) whose HTTPRoute points at a single RequestRestriction
+// dedicated Gateway (31950) whose HTTPRoute points at a single GeoIpLocation
 // resource ("geo-rr") that test cases hot-swap via ctx.apply_yaml(...) before
 // each request (the same "one flexible resource, re-applied per case" pattern
 // TCPRoute/GlobalConnectionIpRestriction uses for its Selector), plus a
-// second static HTTPRoute/EdgionPlugins pair exercising the shared
-// RestrictionRule geo predicate through GlobalAccessControl too.
+// second static HTTPRoute/EdgionPlugins pair ("geo-chain") that chains a
+// plain `IpRestriction` plugin BEFORE `GeoIpLocation` -- this is the intended
+// post-refactor shape: GeoIpLocation only owns geo, any other restriction the
+// request needs stays in its own plugin on the same chain.
 //
 // The fixture's authored address map (edgion-tests/geoip/README.md):
 //   127.0.0.1 CN Beijing BJ | 127.0.0.5 RU Moscow MOW | 127.0.0.6 US (no city)
-//   127.0.0.7 HK Kowloon KOW | 203.0.113.7 GB London ENG | 198.51.100.4 HK (no city)
+//   127.0.0.7 HK Kowloon KOW (with coordinates) | 127.0.0.2-4 unmapped
+//   203.0.113.7 GB London ENG (with coordinates) | 198.51.100.4 HK (no city)
 //   8.8.8.8 unmapped
 //
-// ClientGeo needs a real client-address source. Two techniques are used,
-// deliberately labeled:
-//   - Client-side SOURCE BINDING (`client_from`): the exemplary, safe-by-
-//     construction technique — the TEST bind()s its own local address before
-//     connecting, so the gateway's peer address (and DirectGeo) is exactly
-//     that bound address; combined with real_ip trusting 127.0.0.0/8, ClientGeo
-//     resolves the same way.
-//   - X-Forwarded-For SPOOFING: an ATTACK PATTERN, not a recommendation.
-//     Trusting 127.0.0.1 as a proxy and forging XFF is exactly the bypass
-//     design §5.2 describes — safe to demonstrate here ONLY because this
-//     harness is closed (no real client can reach this Gateway from the
-//     outside claiming to be a trusted proxy). It exists so ClientGeo (which
-//     reads the XFF-resolved address) and DirectGeo (which never does) can be
-//     shown disagreeing in the same request.
+// ONLY the 127.0.0.x half is usable as a SOURCE-BOUND address: `client_from`
+// calls bind(2), which needs the address to exist locally, and the harness
+// configures loopback aliases 127.0.0.1-.7 only. 203.0.113.7 / 198.51.100.4 /
+// 8.8.8.8 are in the database so they can be spoofed as X-Forwarded-For VALUES
+// (the `RemoteIp` source); source-binding to one fails at connect time and
+// surfaces as a bogus "no successful response" rather than a policy verdict.
+//
+// Every source address below is the client's OWN bound source address
+// (client-side SOURCE BINDING via `client_from`, exactly as
+// TCPRoute/TLSRoute's suites do) -- the exemplary, safe-by-construction
+// technique for exercising `DirectPeerIp`. `RemoteIp` needs a real
+// XFF-resolved client, so the one test that exercises it (`remote_ip_source_
+// resolves_via_xff`) forges `X-Forwarded-For` on top of a source-bound
+// connection -- an ATTACK PATTERN, not a recommendation, safe to demonstrate
+// here ONLY because this harness is closed (no real client can reach this
+// Gateway from the outside claiming to be a trusted proxy); the shared base
+// EdgionGatewayConfig already trusts 127.0.0.0/8 as a proxy (`realIp.
+// trustedIps`).
 //
 // `ctx.apply_yaml` only waits for Controller admission, not for conf_sync
 // propagation to the Gateway, so every assertion below polls via
@@ -42,13 +50,14 @@ use std::time::{Duration, Instant};
 pub struct GeoRestrictionTestSuite;
 
 const RR_HOST: &str = "geo-restriction.example.com";
-const GAC_HOST: &str = "geo-gac.example.com";
+const CHAIN_HOST: &str = "geo-chain.example.com";
+const PARSEONLY_HOST: &str = "geo-parseonly.example.com";
 const RR_NAME: &str = "geo-rr";
 const RR_NS: &str = "edgion-default";
 
 /// A reqwest client whose outbound TCP connection is bound to `src` — the
 /// exemplary, source-bound technique (see module doc). `src` must be one of
-/// the loopback aliases the harness provisions (127.0.0.1/.5/.6/.7).
+/// the loopback aliases the harness provisions.
 fn client_from(src: &str) -> Client {
     let ip: IpAddr = src.parse().expect("valid loopback alias");
     Client::builder()
@@ -118,7 +127,7 @@ async fn expect_status(
     }
 }
 
-fn rr_yaml(mode: &str, status: u16, rule_groups_yaml: &str) -> String {
+fn geo_rr_yaml(config_yaml: &str) -> String {
     format!(
         r#"apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -128,20 +137,15 @@ metadata:
 spec:
   requestPlugins:
     - enable: true
-      type: RequestRestriction
+      type: GeoIpLocation
       config:
-        mode: {mode}
-        ruleGroups:
-{rule_groups_yaml}
-        status: {status}
-        message: "Access denied by geo policy"
-        failOpen: false
+{config_yaml}
 "#
     )
 }
 
-async fn apply_rr(ctx: &TestContext, mode: &str, status: u16, rule_groups_yaml: &str) -> Result<(), String> {
-    ctx.apply_yaml(&rr_yaml(mode, status, rule_groups_yaml)).await
+async fn apply_geo_rr(ctx: &TestContext, config_yaml: &str) -> Result<(), String> {
+    ctx.apply_yaml(&geo_rr_yaml(config_yaml)).await
 }
 
 /// Poll `/configserver/EdgionPlugins` until the Accepted condition matches
@@ -189,28 +193,23 @@ async fn wait_for_accepted(ctx: &TestContext, name: &str, want_status: &str) -> 
 }
 
 impl GeoRestrictionTestSuite {
-    /// `ClientGeo/country` blacklist: XFF 203.0.113.7 (GB) -> rejected.
-    fn client_geo_country_blacklist() -> TestCase {
+    /// A `DirectPeerIp/country` deny group: source-bound 127.0.0.5 (RU)
+    /// matches -> rejected.
+    fn deny_country_direct_peer() -> TestCase {
         TestCase::new(
-            "client_geo_country_blacklist",
-            "ClientGeo country blacklist rejects an XFF-forged GB source",
+            "deny_country_direct_peer",
+            "a DirectPeerIp/country deny group rejects a source-bound RU peer",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if let Err(e) = apply_rr(
-                        &ctx,
-                        "Blacklist",
-                        403,
-                        "          - name: client-country-gb\n            rules:\n              - name: client-country-gb\n                source: ClientGeo\n                key: country\n                values: [\"GB\"]\n",
-                    )
-                    .await
-                    {
+                    let config = "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: block-ru\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"RU\"]\n";
+                    if let Err(e) = apply_geo_rr(&ctx, config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
-                    let client = client_from("127.0.0.1");
-                    match expect_status(&client, &ctx, RR_HOST, Some("203.0.113.7"), 403).await {
+                    let client = client_from("127.0.0.5");
+                    match expect_status(&client, &ctx, RR_HOST, None, 403).await {
                         Ok(()) => {
-                            TestResult::passed_with_message(start.elapsed(), "GB source correctly rejected".to_string())
+                            TestResult::passed_with_message(start.elapsed(), "RU peer correctly rejected".to_string())
                         }
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
@@ -219,24 +218,48 @@ impl GeoRestrictionTestSuite {
         )
     }
 
-    /// `ClientGeo/continent`, `/city`, `/subdivision` each independently
-    /// match against the same XFF (203.0.113.7 -> GB/EU/London/ENG).
-    fn client_geo_other_dimensions_match() -> TestCase {
+    /// Same deny group, a non-matching source (127.0.0.1, CN) passes.
+    fn allow_pass_non_matching_country() -> TestCase {
         TestCase::new(
-            "client_geo_other_dimensions_match",
-            "continent, city, and subdivision each independently match against the same source",
+            "allow_pass_non_matching_country",
+            "a source not covered by the deny group is allowed",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
+                    let config = "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: block-ru\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"RU\"]\n";
+                    if let Err(e) = apply_geo_rr(&ctx, config).await {
+                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
+                    }
                     let client = client_from("127.0.0.1");
-                    for (key, value) in [("continent", "EU"), ("city", "London"), ("subdivision", "ENG")] {
-                        let groups = format!(
-                            "          - name: dim-{key}\n            rules:\n              - name: dim-{key}\n                source: ClientGeo\n                key: {key}\n                values: [\"{value}\"]\n"
+                    match expect_status(&client, &ctx, RR_HOST, None, 200).await {
+                        Ok(()) => {
+                            TestResult::passed_with_message(start.elapsed(), "CN peer correctly allowed".to_string())
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// `country`/`continent`/`city`/`subdivision` each independently match
+    /// against the same source-bound peer (127.0.0.7 -> HK/AS/Kowloon/KOW).
+    fn other_dimensions_match() -> TestCase {
+        TestCase::new(
+            "other_dimensions_match",
+            "continent, city, and subdivision each independently match against the same peer",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = client_from("127.0.0.7");
+                    for (key, value) in [("continent", "AS"), ("city", "Kowloon"), ("subdivision", "KOW")] {
+                        let config = format!(
+                            "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: dim-{key}\n              rules:\n                - source: DirectPeerIp\n                  key: {key}\n                  values: [\"{value}\"]\n"
                         );
-                        if let Err(e) = apply_rr(&ctx, "Blacklist", 403, &groups).await {
+                        if let Err(e) = apply_geo_rr(&ctx, &config).await {
                             return TestResult::failed(start.elapsed(), format!("apply ({key}): {e}"));
                         }
-                        if let Err(e) = expect_status(&client, &ctx, RR_HOST, Some("203.0.113.7"), 403).await {
+                        if let Err(e) = expect_status(&client, &ctx, RR_HOST, None, 403).await {
                             return TestResult::failed(start.elapsed(), format!("dimension '{key}': {e}"));
                         }
                     }
@@ -249,31 +272,33 @@ impl GeoRestrictionTestSuite {
         )
     }
 
-    /// `country`+`city` AND group: both match (GB/London) -> rejected; only
-    /// country matches (HK, no city on that record) -> allowed (the AND must
-    /// not degrade to an OR when one predicate is absent).
+    /// `country`+`city` AND rule (both in one group): both match
+    /// (HK/Kowloon, 127.0.0.7) -> rejected; only country matches (US,
+    /// 127.0.0.6, a country-only record with no city) -> allowed (the AND
+    /// must not degrade to an OR when one predicate is absent).
     fn and_group_must_not_degrade() -> TestCase {
         TestCase::new(
             "and_group_must_not_degrade",
-            "an AND group requires every predicate; a missing dimension must not let a partial match through",
+            "an AND group requires every rule; a missing dimension must not let a partial match through",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let groups = "          - name: gb-london-and\n            rules:\n              - name: country-gb-or-hk\n                source: ClientGeo\n                key: country\n                values: [\"GB\", \"HK\"]\n              - name: city-london\n                source: ClientGeo\n                key: city\n                values: [\"London\"]\n";
-                    if let Err(e) = apply_rr(&ctx, "Blacklist", 403, groups).await {
+                    let config = "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: hk-kowloon-and\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"HK\", \"US\"]\n                - source: DirectPeerIp\n                  key: city\n                  values: [\"Kowloon\"]\n";
+                    if let Err(e) = apply_geo_rr(&ctx, config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
-                    let client = client_from("127.0.0.1");
-                    if let Err(e) = expect_status(&client, &ctx, RR_HOST, Some("203.0.113.7"), 403).await {
-                        return TestResult::failed(start.elapsed(), format!("GB/London: {e}"));
+                    let hk_client = client_from("127.0.0.7");
+                    if let Err(e) = expect_status(&hk_client, &ctx, RR_HOST, None, 403).await {
+                        return TestResult::failed(start.elapsed(), format!("HK/Kowloon: {e}"));
                     }
-                    match expect_status(&client, &ctx, RR_HOST, Some("198.51.100.4"), 200).await {
+                    let us_client = client_from("127.0.0.6");
+                    match expect_status(&us_client, &ctx, RR_HOST, None, 200).await {
                         Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
                             "both-match rejected, country-only (missing city) correctly allowed".to_string(),
                         ),
                         Err(e) => {
-                            TestResult::failed(start.elapsed(), format!("HK/no-city (AND must not degrade): {e}"))
+                            TestResult::failed(start.elapsed(), format!("US/no-city (AND must not degrade): {e}"))
                         }
                     }
                 })
@@ -281,64 +306,36 @@ impl GeoRestrictionTestSuite {
         )
     }
 
-    /// `DirectGeo` resolves: source-bound 127.0.0.1 (CN) matches — the row
-    /// the fixture unlocks (no address spoofing involved at all).
-    fn direct_geo_resolves() -> TestCase {
+    /// `RemoteIp` resolves the XFF-forwarded address independently of
+    /// `DirectPeerIp`: an AND group across both sources (direct=CN AND
+    /// remote=RU) only matches when the XFF actually forges a different
+    /// address than the bound source.
+    fn remote_ip_source_resolves_via_xff() -> TestCase {
         TestCase::new(
-            "direct_geo_resolves",
-            "DirectGeo resolves the real, source-bound peer address (no XFF at all)",
+            "remote_ip_source_resolves_via_xff",
+            "RemoteIp independently resolves the XFF-forwarded address, distinct from DirectPeerIp",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let groups = "          - name: direct-country-cn\n            rules:\n              - name: direct-country-cn\n                source: DirectGeo\n                key: country\n                values: [\"CN\"]\n";
-                    if let Err(e) = apply_rr(&ctx, "Blacklist", 403, groups).await {
-                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
-                    }
-                    let client = client_from("127.0.0.1");
-                    match expect_status(&client, &ctx, RR_HOST, None, 403).await {
-                        Ok(()) => TestResult::passed_with_message(
-                            start.elapsed(),
-                            "DirectGeo correctly resolved CN and rejected".to_string(),
-                        ),
-                        Err(e) => TestResult::failed(start.elapsed(), e),
-                    }
-                })
-            },
-        )
-    }
-
-    /// `DirectGeo` and `ClientGeo` disagree: source-bound 127.0.0.1 (CN) +
-    /// XFF 127.0.0.5 (RU) — each predicate sees its own address. Labeled as
-    /// the deliberately-unsafe-but-contained XFF attack pattern (see module
-    /// doc): trusting 127.0.0.1 as a proxy here is safe ONLY because this
-    /// harness is closed.
-    fn direct_and_client_geo_disagree() -> TestCase {
-        TestCase::new(
-            "direct_and_client_geo_disagree",
-            "DirectGeo and ClientGeo independently resolve their own address, even when they disagree",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let groups = "          - name: direct-cn-and-client-ru\n            rules:\n              - name: direct-country-cn\n                source: DirectGeo\n                key: country\n                values: [\"CN\"]\n              - name: client-country-ru\n                source: ClientGeo\n                key: country\n                values: [\"RU\"]\n";
-                    if let Err(e) = apply_rr(&ctx, "Blacklist", 403, groups).await {
+                    let config = "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: direct-cn-and-remote-ru\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"CN\"]\n                - source: RemoteIp\n                  key: country\n                  values: [\"RU\"]\n";
+                    if let Err(e) = apply_geo_rr(&ctx, config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let client = client_from("127.0.0.1");
                     // XFF forges the RU proxy client address (attack pattern, contained —
-                    // see module doc): direct=CN (bound source), client=RU (forged XFF).
+                    // see module doc): direct=CN (bound source), remote=RU (forged XFF).
                     if let Err(e) = expect_status(&client, &ctx, RR_HOST, Some("127.0.0.5"), 403).await {
-                        return TestResult::failed(start.elapsed(), format!("direct=CN + xff-client=RU: {e}"));
+                        return TestResult::failed(start.elapsed(), format!("direct=CN + xff-remote=RU: {e}"));
                     }
-                    // No XFF: ClientGeo falls back to the same bound address (CN), so the
-                    // ClientGeo=RU half of the AND no longer holds -> allowed. This is the
-                    // exemplary source-bound-only variant (no XFF forged at all).
+                    // No XFF: RemoteIp falls back to the same bound address (CN), so the
+                    // remote=RU half of the AND no longer holds -> allowed.
                     match expect_status(&client, &ctx, RR_HOST, None, 200).await {
                         Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
-                            "each predicate independently resolved its own address".to_string(),
+                            "each source independently resolved its own address".to_string(),
                         ),
                         Err(e) => {
-                            TestResult::failed(start.elapsed(), format!("direct=CN, no xff (client also CN): {e}"))
+                            TestResult::failed(start.elapsed(), format!("direct=CN, no xff (remote also CN): {e}"))
                         }
                     }
                 })
@@ -346,24 +343,30 @@ impl GeoRestrictionTestSuite {
         )
     }
 
-    /// `onMissing: NoMatch` on an unknown address (XFF 8.8.8.8, unmapped in
-    /// the fixture) -> predicate false, request allowed.
-    fn on_missing_no_match_unknown_address() -> TestCase {
+    /// A whitelist-only config (`allowRuleGroups` non-empty): a miss denies
+    /// even under `defaultAction: allow`. 127.0.0.2 is a bindable loopback
+    /// alias that the fixture deliberately leaves out of the database, so it
+    /// resolves `NotFound`, never matches an allow group, and is denied.
+    fn allow_whitelist_miss_denies() -> TestCase {
         TestCase::new(
-            "on_missing_no_match_unknown_address",
-            "an unmapped address with onMissing: NoMatch (default) allows the request",
+            "allow_whitelist_miss_denies",
+            "an allow-configured-and-missed source is denied even though defaultAction is Allow",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let groups = "          - name: country-us-nomatch\n            rules:\n              - name: country-us-nomatch\n                source: ClientGeo\n                key: country\n                values: [\"US\"]\n                onMissing: NoMatch\n";
-                    if let Err(e) = apply_rr(&ctx, "Blacklist", 403, groups).await {
+                    let config = "          defaultAction: allow\n          failOpen: false\n          allowRuleGroups:\n            - name: cn-only\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"CN\"]\n";
+                    if let Err(e) = apply_geo_rr(&ctx, config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
-                    let client = client_from("127.0.0.1");
-                    match expect_status(&client, &ctx, RR_HOST, Some("8.8.8.8"), 200).await {
+                    let cn_client = client_from("127.0.0.1");
+                    if let Err(e) = expect_status(&cn_client, &ctx, RR_HOST, None, 200).await {
+                        return TestResult::failed(start.elapsed(), format!("CN allow hit: {e}"));
+                    }
+                    let unmapped_client = client_from("127.0.0.2");
+                    match expect_status(&unmapped_client, &ctx, RR_HOST, None, 403).await {
                         Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
-                            "unmapped address correctly allowed".to_string(),
+                            "unmapped source correctly denied (allow configured, missed)".to_string(),
                         ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
@@ -372,147 +375,43 @@ impl GeoRestrictionTestSuite {
         )
     }
 
-    /// Dimension absent on the record (XFF 127.0.0.6, US with no city in the
-    /// fixture): `onMissing` applies, NOT `failOpen` — proven by using
-    /// `onMissing: Match` (the opposite of the previous case's `NoMatch`) so
-    /// the request is rejected only if `onMissing` (not a fail-closed path)
-    /// governed the missing dimension.
-    fn on_missing_governs_absent_dimension() -> TestCase {
+    /// A CIDR rule matches by membership, exactly like the shared
+    /// `IpRestriction` matcher — proving `key: cidr` works identically at the
+    /// HTTP layer.
+    fn cidr_rule_matches_by_membership() -> TestCase {
         TestCase::new(
-            "on_missing_governs_absent_dimension",
-            "a found record with an absent dimension is governed by onMissing, not failOpen",
+            "cidr_rule_matches_by_membership",
+            "a key: cidr rule matches by IP membership, independent of geo data",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let groups = "          - name: city-absent-on-missing-match\n            rules:\n              - name: city-absent-on-missing-match\n                source: ClientGeo\n                key: city\n                values: [\"Anything\"]\n                onMissing: Match\n";
-                    if let Err(e) = apply_rr(&ctx, "Blacklist", 403, groups).await {
+                    let config = "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: block-ru-cidr\n              rules:\n                - source: DirectPeerIp\n                  key: cidr\n                  values: [\"127.0.0.5/32\"]\n";
+                    if let Err(e) = apply_geo_rr(&ctx, config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
-                    let client = client_from("127.0.0.1");
-                    match expect_status(&client, &ctx, RR_HOST, Some("127.0.0.6"), 403).await {
+                    let denied_client = client_from("127.0.0.5");
+                    if let Err(e) = expect_status(&denied_client, &ctx, RR_HOST, None, 403).await {
+                        return TestResult::failed(start.elapsed(), format!("in-CIDR: {e}"));
+                    }
+                    let allowed_client = client_from("127.0.0.1");
+                    match expect_status(&allowed_client, &ctx, RR_HOST, None, 200).await {
                         Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
-                            "absent city on a found US record correctly matched via onMissing: Match".to_string(),
+                            "CIDR membership correctly enforced".to_string(),
                         ),
-                        Err(e) => TestResult::failed(start.elapsed(), e),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("out-of-CIDR: {e}")),
                     }
                 })
             },
         )
     }
 
-    /// All-`Skip` whitelist -> `considered == 0` -> every request 403s. Per
-    /// design §5.4, this hazard needs only NotFound + Skip, NOT an
-    /// unavailable database.
-    fn all_skip_whitelist_denies_everything() -> TestCase {
-        TestCase::new(
-            "all_skip_whitelist_denies_everything",
-            "an all-Skip whitelist group is never considered, so every request 403s even with the database loaded",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    // `values` is required even for a Skip-only predicate: the
-                    // shared structural check (`RestrictionRule::field_error`)
-                    // requires at least one of values/regex/secretRef unless
-                    // onMissing is Match, and that check is source-agnostic (it
-                    // runs for geo rules too). The value never actually gets
-                    // compared here — 8.8.8.8 has no country record at all, so
-                    // onMissing: Skip always drops this predicate regardless of
-                    // what candidate values are configured.
-                    let groups = "          - name: all-skip\n            rules:\n              - name: country-skip\n                source: ClientGeo\n                key: country\n                values: [\"ZZ\"]\n                onMissing: Skip\n";
-                    if let Err(e) = apply_rr(&ctx, "Whitelist", 403, groups).await {
-                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
-                    }
-                    let client = client_from("127.0.0.1");
-                    match expect_status(&client, &ctx, RR_HOST, Some("8.8.8.8"), 403).await {
-                        Ok(()) => TestResult::passed_with_message(
-                            start.elapsed(),
-                            "all-Skip whitelist correctly denies (considered == 0, no group ever matches)".to_string(),
-                        ),
-                        Err(e) => TestResult::failed(start.elapsed(), e),
-                    }
-                })
-            },
-        )
-    }
-
-    /// Access log content: `geo.client.country` / `geo.direct.country` are
-    /// present and correct, and `geo.client.coord` is absent (null) by
-    /// default (`logCoordinates: false` in the harness's geoip block).
-    fn access_log_geo_fields() -> TestCase {
-        TestCase::new(
-            "access_log_geo_fields",
-            "a consulted slot reports its country; an unconsulted slot is absent (the log never forces a lookup)",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    // Blacklist on an unrelated value so the request is ALLOWED (200) and
-                    // reliably reaches the access-log write path with both slots resolved.
-                    let groups = "          - name: never-matches\n            rules:\n              - name: never-matches\n                source: ClientGeo\n                key: country\n                values: [\"ZZ\"]\n";
-                    if let Err(e) = apply_rr(&ctx, "Blacklist", 403, groups).await {
-                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
-                    }
-                    let client = client_from("127.0.0.1");
-                    // Wait for conf_sync propagation (a 200 baseline) before firing the
-                    // traced request that actually gets asserted below.
-                    if let Err(e) = expect_status(&client, &ctx, RR_HOST, Some("203.0.113.7"), 200).await {
-                        return TestResult::failed(start.elapsed(), format!("baseline propagation wait: {e}"));
-                    }
-                    let trace = format!("geo-access-log-{}", uuid::Uuid::new_v4());
-                    if let Err(e) = get(&client, &ctx, RR_HOST, Some("203.0.113.7"), Some(&trace)).await {
-                        return TestResult::failed(start.elapsed(), e);
-                    }
-                    let entry = match ctx.access_log_client().get_access_log_with_retry(&trace, 15, 200).await {
-                        Ok(entry) => entry,
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("access log missing: {e}")),
-                    };
-                    let client_country = entry.get_nested_str("geo.client.country");
-                    let direct_country = entry.get_nested_str("geo.direct.country");
-                    if client_country != Some("GB") {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            format!("geo.client.country expected GB, got {client_country:?}"),
-                        );
-                    }
-                    // The rule under test only consults ClientGeo, so nothing ever
-                    // resolved the direct slot — and building the log entry must NOT
-                    // resolve it either. Its absence is the observable proof that the
-                    // access log reads the slots lazily instead of forcing a lookup on
-                    // every request.
-                    if direct_country.is_some() {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            format!(
-                                "geo.direct must be absent when no rule consulted it, got {direct_country:?}"
-                            ),
-                        );
-                    }
-                    // 203.0.113.7 (GB/London) carries coordinates in the fixture, so
-                    // `coord` IS emitted: there is no switch for it any more — presence
-                    // follows the record, and the value renders through the shared
-                    // `masked` serializer under the process-global sensitive mode.
-                    if entry.data["geo"]["client"]["coord"].is_null() {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            "geo.client.coord expected present (the fixture record carries coordinates)"
-                                .to_string(),
-                        );
-                    }
-                    TestResult::passed_with_message(
-                        start.elapsed(),
-                        "geo.client.country=GB, geo.direct.country=CN, coord absent".to_string(),
-                    )
-                })
-            },
-        )
-    }
-
-    /// Ingest rejection: a plugin with a geo rule but no plugin-level
+    /// Ingest rejection: a plugin with a deny rule group but no plugin-level
     /// `failOpen` -> Accepted=False.
     fn ingest_rejection_missing_fail_open() -> TestCase {
         TestCase::new(
             "ingest_rejection_missing_fail_open",
-            "a plugin with a geo rule but no failOpen is rejected at ingest (Accepted=False)",
+            "a plugin with a rule group but no failOpen is rejected at ingest (Accepted=False)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -528,9 +427,9 @@ impl GeoRestrictionTestSuite {
     }
 
     /// Invalid ISO value (`values: ["ZZ"]`): accepted (lenient admission),
-    /// not rejected — `geo_field_error` only validates structure/key/
-    /// failOpen, never ISO-code membership; an unknown code only WARNs at
-    /// gateway compile time.
+    /// not rejected — `check_fields` only validates structure/key/failOpen,
+    /// never ISO-code membership; an unknown code only WARNs at gateway
+    /// compile time.
     fn invalid_iso_value_is_accepted() -> TestCase {
         TestCase::new(
             "invalid_iso_value_is_accepted",
@@ -538,8 +437,8 @@ impl GeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let groups = "          - name: bogus-iso\n            rules:\n              - name: bogus-iso\n                source: ClientGeo\n                key: country\n                values: [\"ZZ\"]\n";
-                    if let Err(e) = apply_rr(&ctx, "Blacklist", 403, groups).await {
+                    let config = "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: bogus-iso\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"ZZ\"]\n";
+                    if let Err(e) = apply_geo_rr(&ctx, config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     match wait_for_accepted(&ctx, RR_NAME, "True").await {
@@ -554,25 +453,180 @@ impl GeoRestrictionTestSuite {
         )
     }
 
-    /// GlobalAccessControl also honors the shared geo predicate: CN is
-    /// allowed (source-bound 127.0.0.1), GB is denied by default_action.
-    fn global_access_control_geo_predicate() -> TestCase {
+    /// Access log content: a rule-mode config consulting only `DirectPeerIp`
+    /// populates `geo.direct.*` and leaves `geo.client` absent — the log
+    /// reads whatever slot(s) the plugin actually resolved, never forcing an
+    /// unconsulted lookup.
+    fn access_log_geo_fields() -> TestCase {
         TestCase::new(
-            "global_access_control_geo_predicate",
-            "GlobalAccessControl's shared RestrictionRule engine also evaluates ClientGeo",
+            "access_log_geo_fields",
+            "a consulted slot reports its country; an unconsulted slot is absent",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    // Deny on an unrelated value so the request is ALLOWED (200) and
+                    // reliably reaches the access-log write path with the direct slot resolved.
+                    let config = "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: never-matches\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"ZZ\"]\n";
+                    if let Err(e) = apply_geo_rr(&ctx, config).await {
+                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
+                    }
+                    let client = client_from("127.0.0.7");
+                    // Wait for conf_sync propagation (a 200 baseline) before firing the
+                    // traced request that actually gets asserted below.
+                    if let Err(e) = expect_status(&client, &ctx, RR_HOST, None, 200).await {
+                        return TestResult::failed(start.elapsed(), format!("baseline propagation wait: {e}"));
+                    }
+                    let trace = format!("geo-access-log-{}", uuid::Uuid::new_v4());
+                    if let Err(e) = get(&client, &ctx, RR_HOST, None, Some(&trace)).await {
+                        return TestResult::failed(start.elapsed(), e);
+                    }
+                    let entry = match ctx.access_log_client().get_access_log_with_retry(&trace, 15, 200).await {
+                        Ok(entry) => entry,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("access log missing: {e}")),
+                    };
+                    let direct_country = entry.get_nested_str("geo.direct.country");
+                    let client_country = entry.get_nested_str("geo.client.country");
+                    if direct_country != Some("HK") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("geo.direct.country expected HK, got {direct_country:?}"),
+                        );
+                    }
+                    // The rule under test only consults DirectPeerIp, so nothing ever
+                    // resolved the remote/client slot — its absence proves the access log
+                    // reads slots lazily instead of forcing a lookup on every request.
+                    if client_country.is_some() {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("geo.client must be absent when no rule consulted it, got {client_country:?}"),
+                        );
+                    }
+                    // 127.0.0.7 (HK/Kowloon) carries coordinates in the fixture, so
+                    // `coord` IS emitted — presence follows the record, rendered through
+                    // the shared `masked` serializer under the process-global sensitive mode.
+                    if entry.data["geo"]["direct"]["coord"].is_null() {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "geo.direct.coord expected present (the fixture record carries coordinates)".to_string(),
+                        );
+                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "geo.direct.country=GB present, geo.client absent".to_string(),
+                    )
+                })
+            },
+        )
+    }
+
+    /// Parse-only mode (`config: {}`): every request passes through
+    /// unconditionally, and BOTH `geo.direct`/`geo.client` are populated in
+    /// the access log — parse-only resolves both slots (its whole purpose),
+    /// unlike rule mode which resolves only what a rule actually consults.
+    /// This is the core new capability this refactor exists to add.
+    fn parse_only_mode_passes_and_populates_access_log() -> TestCase {
+        TestCase::new(
+            "parse_only_mode_passes_and_populates_access_log",
+            "config: {} never denies, and populates both geo.direct and geo.client in the access log",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = client_from("127.0.0.1");
-                    if let Err(e) = expect_status(&client, &ctx, GAC_HOST, None, 200).await {
-                        return TestResult::failed(start.elapsed(), format!("CN via DirectGeo: {e}"));
+                    if let Err(e) = expect_status(&client, &ctx, PARSEONLY_HOST, None, 200).await {
+                        return TestResult::failed(start.elapsed(), format!("baseline propagation wait: {e}"));
                     }
-                    match expect_status(&client, &ctx, GAC_HOST, Some("203.0.113.7"), 403).await {
+                    let trace = format!("geo-parseonly-{}", uuid::Uuid::new_v4());
+                    if let Err(e) = get(&client, &ctx, PARSEONLY_HOST, None, Some(&trace)).await {
+                        return TestResult::failed(start.elapsed(), e);
+                    }
+                    let entry = match ctx.access_log_client().get_access_log_with_retry(&trace, 15, 200).await {
+                        Ok(entry) => entry,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("access log missing: {e}")),
+                    };
+                    let direct_country = entry.get_nested_str("geo.direct.country");
+                    let client_country = entry.get_nested_str("geo.client.country");
+                    if direct_country != Some("CN") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("geo.direct.country expected CN, got {direct_country:?}"),
+                        );
+                    }
+                    if client_country != Some("CN") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "geo.client.country expected CN (parse-only resolves both slots), got {client_country:?}"
+                            ),
+                        );
+                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "parse-only mode passed through and populated both geo slots".to_string(),
+                    )
+                })
+            },
+        )
+    }
+
+    /// Two-plugin chain: `IpRestriction` (non-geo, first in the list) denies
+    /// a source unrelated to geo, before `GeoIpLocation` ever runs.
+    fn chain_ip_deny_precedes_geo() -> TestCase {
+        TestCase::new(
+            "chain_ip_deny_precedes_geo",
+            "IpRestriction denies a matching source before GeoIpLocation is ever reached",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = client_from("127.0.0.6");
+                    match expect_status(&client, &ctx, CHAIN_HOST, None, 403).await {
                         Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
-                            "GlobalAccessControl correctly allowed CN and denied GB via ClientGeo".to_string(),
+                            "IpRestriction correctly denied a non-geo-matching source".to_string(),
                         ),
-                        Err(e) => TestResult::failed(start.elapsed(), format!("GB: {e}")),
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Same chain: a source outside the IP deny list but inside the geo deny
+    /// list (RU) is still denied — by `GeoIpLocation`, independently.
+    fn chain_geo_deny_independent_of_ip() -> TestCase {
+        TestCase::new(
+            "chain_geo_deny_independent_of_ip",
+            "GeoIpLocation denies a source the IpRestriction stage never touched",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = client_from("127.0.0.5");
+                    match expect_status(&client, &ctx, CHAIN_HOST, None, 403).await {
+                        Ok(()) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "GeoIpLocation correctly denied an RU source".to_string(),
+                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Same chain: a source matching neither stage passes both.
+    fn chain_allows_both() -> TestCase {
+        TestCase::new(
+            "chain_allows_both",
+            "a source matching neither the IP nor the geo stage is allowed",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = client_from("127.0.0.1");
+                    match expect_status(&client, &ctx, CHAIN_HOST, None, 200).await {
+                        Ok(()) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "a source matching neither stage was correctly allowed".to_string(),
+                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
             },
@@ -587,18 +641,20 @@ impl TestSuite for GeoRestrictionTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
-            GeoRestrictionTestSuite::client_geo_country_blacklist(),
-            GeoRestrictionTestSuite::client_geo_other_dimensions_match(),
+            GeoRestrictionTestSuite::deny_country_direct_peer(),
+            GeoRestrictionTestSuite::allow_pass_non_matching_country(),
+            GeoRestrictionTestSuite::other_dimensions_match(),
             GeoRestrictionTestSuite::and_group_must_not_degrade(),
-            GeoRestrictionTestSuite::direct_geo_resolves(),
-            GeoRestrictionTestSuite::direct_and_client_geo_disagree(),
-            GeoRestrictionTestSuite::on_missing_no_match_unknown_address(),
-            GeoRestrictionTestSuite::on_missing_governs_absent_dimension(),
-            GeoRestrictionTestSuite::all_skip_whitelist_denies_everything(),
-            GeoRestrictionTestSuite::access_log_geo_fields(),
+            GeoRestrictionTestSuite::remote_ip_source_resolves_via_xff(),
+            GeoRestrictionTestSuite::allow_whitelist_miss_denies(),
+            GeoRestrictionTestSuite::cidr_rule_matches_by_membership(),
             GeoRestrictionTestSuite::ingest_rejection_missing_fail_open(),
             GeoRestrictionTestSuite::invalid_iso_value_is_accepted(),
-            GeoRestrictionTestSuite::global_access_control_geo_predicate(),
+            GeoRestrictionTestSuite::access_log_geo_fields(),
+            GeoRestrictionTestSuite::parse_only_mode_passes_and_populates_access_log(),
+            GeoRestrictionTestSuite::chain_ip_deny_precedes_geo(),
+            GeoRestrictionTestSuite::chain_geo_deny_independent_of_ip(),
+            GeoRestrictionTestSuite::chain_allows_both(),
         ]
     }
 }

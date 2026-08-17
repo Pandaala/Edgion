@@ -69,36 +69,7 @@ pub struct GlobalAccessControlConfig {
     /// trusted L4 LB fronts the gateway and RealIp is correctly configured.
     #[serde(default = "default_ip_source")]
     pub ip_source: IpSource,
-
-    /// Disposition when **no GeoIP database is loaded at all**, for every
-    /// `ClientGeo`/`DirectGeo` rule across every profile/group in this
-    /// plugin. Required (no default) precisely when this plugin contains at
-    /// least one geo rule in any profile; rejected when it contains none.
-    /// Plugin-wide rather than per-profile: it governs the resolved *active*
-    /// profile at request time regardless of which profile that turns out to
-    /// be, since a per-profile fail-open/fail-closed split has no coherent
-    /// meaning for a single lockdown/allow policy. See `RestrictionRule`'s
-    /// module doc and `request_restriction::RequestRestrictionConfig::
-    /// fail_open` for the shared rationale.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fail_open: Option<bool>,
 }
-
-/// `true` when `config` has at least one `ClientGeo`/`DirectGeo` rule in any
-/// group of any profile. Determines whether `fail_open` is required (`true`)
-/// or forbidden (`false`).
-fn has_geo_rule(profiles: &HashMap<String, AllowProfile>) -> bool {
-    profiles
-        .values()
-        .flat_map(|p| &p.rule_groups)
-        .flat_map(|g| &g.rules)
-        .any(RestrictionRule::is_geo)
-}
-
-const FAIL_OPEN_NOT_GEO_ERR: &str =
-    "globalAccessControl: 'failOpen' is only valid when the plugin has at least one ClientGeo/DirectGeo rule";
-const FAIL_OPEN_REQUIRED_ERR: &str = "globalAccessControl: at least one ClientGeo/DirectGeo rule is present; \
-     the plugin must declare an explicit 'failOpen'";
 
 /// A named profile: OR-ed allow groups plus the no-match action.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -177,11 +148,6 @@ impl GlobalAccessControlConfig {
         if self.status < 100 || self.status >= 600 {
             return Some(format!("globalAccessControl: invalid status code: {}", self.status));
         }
-        match (has_geo_rule(&self.profiles), self.fail_open) {
-            (true, None) => return Some(FAIL_OPEN_REQUIRED_ERR.to_string()),
-            (false, Some(_)) => return Some(FAIL_OPEN_NOT_GEO_ERR.to_string()),
-            _ => {}
-        }
         for (pname, profile) in &self.profiles {
             if let Some(err) = profile.check_fields() {
                 return Some(format!("profile '{}': {}", pname, err));
@@ -219,12 +185,10 @@ impl AllowProfile {
 
     // The former `evaluate()` (profile-level match/deny decision) has moved to
     // the gateway: `edgion-gateway/src/plugins/http/global_access_control/
-    // plugin.rs`'s `evaluate_profile`/`group_outcome` are a byte-faithful port
-    // that additionally understands the gateway-only geo tri-state signal
-    // (`ExtractedValues::ForceSkip`/`FailClosed`), which this resources crate
-    // cannot express (`GeoLookup` is gateway-only). Keeping both would have
-    // been two implementations of the same security-control semantics with no
-    // caller left for this one — see Task 10 review.
+    // plugin.rs`'s `evaluate_profile`/`group_outcome` are a byte-faithful
+    // port. Keeping both would have been two implementations of the same
+    // security-control semantics with no caller left for this one — see Task
+    // 10 review.
 }
 
 impl AllowRuleGroup {
@@ -328,7 +292,6 @@ mod tests {
             status: 403,
             message: None,
             ip_source: IpSource::RemoteAddr,
-            fail_open: None,
         };
         cfg.validate_and_init().unwrap();
         cfg
@@ -434,81 +397,5 @@ mod tests {
                 ip_matcher: None,
             });
         assert!(cfg.validate_and_init().is_err());
-    }
-
-    fn geo_rule(key: &str, value: &str) -> RestrictionRule {
-        RestrictionRule {
-            source: RestrictionSource::DirectGeo,
-            key: Some(key.into()),
-            values: Some(vec![value.into()]),
-            ..Default::default()
-        }
-    }
-
-    /// `failOpen` moved from per-rule to plugin-level: a plugin with a geo
-    /// rule anywhere in any profile/group must declare it explicitly.
-    #[test]
-    fn plugin_requires_fail_open_when_it_has_a_geo_rule() {
-        let mut cfg = lockdown();
-        cfg.profiles.get_mut("lockdown").unwrap().rule_groups = vec![AllowRuleGroup {
-            name: Some("geo".into()),
-            ip: None,
-            rules: vec![geo_rule("country", "CN")],
-            ip_matcher: None,
-        }];
-        cfg.fail_open = None;
-        let err = cfg.validate_and_init().unwrap_err();
-        assert!(err.contains("failOpen"), "got: {err}");
-    }
-
-    /// A plugin with no geo rule at all must not be forced to set `failOpen`.
-    #[test]
-    fn plugin_without_geo_rule_does_not_require_fail_open() {
-        let cfg = lockdown(); // header-only rule, no geo — already fail_open: None.
-        assert_eq!(cfg.fail_open, None);
-    }
-
-    /// `failOpen` set without any geo rule in the plugin is rejected.
-    #[test]
-    fn plugin_rejects_fail_open_when_it_has_no_geo_rule() {
-        let mut cfg = lockdown();
-        cfg.fail_open = Some(false);
-        let err = cfg.validate_and_init().unwrap_err();
-        assert!(err.contains("failOpen"), "got: {err}");
-    }
-
-    #[test]
-    fn plugin_with_geo_rule_and_explicit_fail_open_is_valid() {
-        let mut cfg = lockdown();
-        cfg.profiles.get_mut("lockdown").unwrap().rule_groups = vec![AllowRuleGroup {
-            name: Some("geo".into()),
-            ip: None,
-            rules: vec![geo_rule("country", "CN")],
-            ip_matcher: None,
-        }];
-        cfg.fail_open = Some(false);
-        assert!(cfg.validate_and_init().is_ok());
-    }
-
-    /// `check_fields()` (controller ingest) and `validate_and_init()` (gateway
-    /// compile, which now calls `check_fields()` first) must reject the same
-    /// plugin-level `failOpen` misconfiguration with identical text.
-    #[test]
-    fn check_fields_and_validate_agree_on_fail_open_errors() {
-        let mut missing = lockdown();
-        missing.profiles.get_mut("lockdown").unwrap().rule_groups = vec![AllowRuleGroup {
-            name: Some("geo".into()),
-            ip: None,
-            rules: vec![geo_rule("country", "CN")],
-            ip_matcher: None,
-        }];
-        missing.fail_open = None;
-        let mut compiled = missing.clone();
-        assert_eq!(missing.check_fields(), compiled.validate_and_init().err());
-
-        let mut stray = lockdown();
-        stray.fail_open = Some(true);
-        let mut compiled_stray = stray.clone();
-        assert_eq!(stray.check_fields(), compiled_stray.validate_and_init().err());
     }
 }

@@ -1,0 +1,14 @@
+# Parse-only mode (`config: {}`): GeoIpLocation makes no allow/deny decision
+# at all -- it only resolves geo for the request so the access log's `geo`
+# block gets populated. No `failOpen` needed (see 06's ingest-rejection
+# counterpart, which requires it only once a rule group is configured).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: geo-parseonly
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: GeoIpLocation
+      config: {}

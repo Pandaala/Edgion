@@ -506,12 +506,14 @@ tokens. A YAML boolean (`fips_policy: true`) is a hard deserialize error. YAML 1
 ### geoip
 
 Gateway-local (not cluster-synced — the CRD has multiple named instances, but the database mmap
-and updater task are one per process) settings for `ClientGeo`/`DirectGeo` HTTP restriction rules
-and the `GlobalConnectionIpRestriction` L4 `geo` block. Struct: `edgion_gateway::geoip::GeoIpConfig`
-(`edgion-gateway/src/geoip/config.rs`). Full field reference and every operator pitfall (the
-`gateway:`-nesting trap, SIGBUS-on-in-place-write, update-volume sizing (`max_db_bytes` + 2×
-current database size), missing-dimension `onMissing` behavior, `failOpen` semantics,
-`ClientGeo` spoofability, ...): `docs/en/ops-guide/gateway/geoip.md`.
+and updater task are one per process) settings backing the `GeoIpLocation` plugin, registered
+into both `EdgionPlugin` (HTTP) and `EdgionStreamPlugin` (L4 Stage-1 only) with one shared config
+shape (`GeoIpLocationConfig` — `defaultAction`/`failOpen`/`denyRuleGroups`/`allowRuleGroups`, see
+`13-edgion-plugins.md`/`14-edgion-stream-plugins.md`). Struct:
+`edgion_gateway::geoip::GeoIpConfig` (`edgion-gateway/src/geoip/config.rs`). Full field reference
+and every operator pitfall (the `gateway:`-nesting trap, SIGBUS-on-in-place-write, update-volume
+sizing (`max_db_bytes` + 2× current database size), absent-dimension rule-miss behavior,
+`failOpen` semantics, `RemoteIp` spoofability, ...): `docs/en/ops-guide/gateway/geoip.md`.
 
 **Must be nested under `gateway:`.** `GatewayConfig` uses `#[command(flatten)]` for the CLI but
 NOT `#[serde(flatten)]` for YAML, so a top-level `geoip:` key is silently dropped by the outer

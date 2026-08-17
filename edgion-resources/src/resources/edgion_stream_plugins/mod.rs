@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 // Submodules
 pub mod connection_ip_restriction_rules;
 pub mod connection_rate_limit_config;
-pub mod geo_rules;
 pub mod global_connection_ip_restriction;
 pub mod stream_plugins;
 pub mod tls_route_plugins;
@@ -25,7 +24,6 @@ pub use connection_ip_restriction_rules::ConnectionIpRestrictionRules;
 pub use connection_rate_limit_config::{
     ConnectionRateLimitConfig, PerListenerLimit, PerSourceIpLimit, MAX_REDIS_ACCEPT_TIMEOUT_MS,
 };
-pub use geo_rules::GeoRules;
 pub use global_connection_ip_restriction::{GlobalConnectionIpRestrictionConfig, ProfileRules};
 pub use stream_plugins::EdgionStreamPlugin;
 pub use tls_route_plugins::TlsRouteStreamPlugin;

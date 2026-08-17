@@ -216,6 +216,7 @@ spec:
                           - Guardrail
                           - AiGuard
                           - GlobalAccessControl
+                          - GeoIpLocation
                           - Canary
                           - Wasm
                       config:

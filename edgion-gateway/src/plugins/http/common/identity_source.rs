@@ -4,48 +4,16 @@
 //! match values through `extract_rule_values`, so the request-attribute and
 //! identity source semantics cannot drift between the two plugins.
 
-use crate::geoip::{GeoDimension, GeoLookup};
 use crate::plugins::http::common::resolve_claim_path;
 use crate::plugins::runtime::PluginSession;
 use edgion_resources::resources::edgion_plugins::{RestrictionRule, RestrictionSource, SanType};
-
-/// What a rule's source yielded.
-///
-/// `Vec<String>` alone cannot carry the geo database-unavailable signal, and
-/// that signal must reach the plugin rather than being flattened into "no
-/// values" — an absent predicate and an absent security control are different
-/// facts.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExtractedValues {
-    /// Candidate values. Empty means the source value is absent, and the
-    /// caller's `on_missing` applies.
-    Values(Vec<String>),
-    /// Geo database unavailable, the owning plugin declared `failOpen: true`.
-    /// Drop this predicate from the AND regardless of `on_missing`.
-    ForceSkip,
-    /// Geo database unavailable, the owning plugin declared `failOpen: false`.
-    /// The whole plugin must fail closed.
-    FailClosed,
-}
 
 /// Extract the candidate match values for a rule from the live session.
 ///
 /// An empty `Vec` means the source value is absent — the caller's
 /// `RestrictionRule::evaluate_multi` then applies `on_missing`. Scalar sources
-/// yield 0 or 1 element. `ClientGeo`/`DirectGeo` may instead yield
-/// [`ExtractedValues::ForceSkip`] / [`ExtractedValues::FailClosed`] when the
-/// GeoIP database is not loaded — see [`extract_geo`].
-///
-/// `geo_fail_open` is the *owning plugin's* resolved `failOpen` value (moved
-/// there from the rule — see `RequestRestrictionConfig::fail_open` /
-/// `GlobalAccessControlConfig::fail_open`), not anything read off `rule`
-/// itself; every geo rule in the same plugin shares one disposition. Ignored
-/// for non-geo sources.
-pub fn extract_rule_values(
-    session: &dyn PluginSession,
-    rule: &RestrictionRule,
-    geo_fail_open: bool,
-) -> ExtractedValues {
+/// yield 0 or 1 element.
+pub fn extract_rule_values(session: &dyn PluginSession, rule: &RestrictionRule) -> Vec<String> {
     match rule.source {
         RestrictionSource::Header => single(rule.key.as_deref().and_then(|k| session.header_value(k))),
         RestrictionSource::Cookie => single(rule.key.as_deref().and_then(|k| session.get_cookie(k))),
@@ -56,41 +24,8 @@ pub fn extract_rule_values(
         RestrictionSource::Referer => single(session.header_value("Referer")),
         RestrictionSource::MtlsSubject => single(session.client_cert_info().map(|c| c.subject)),
         RestrictionSource::MtlsCn => single(session.client_cert_info().and_then(|c| c.cn)),
-        RestrictionSource::MtlsSan => single_vec(extract_san_values(session, rule.san_type.as_ref())),
-        RestrictionSource::JwtClaim => single_vec(extract_jwt_claim_values(session, rule.key.as_deref())),
-        RestrictionSource::ClientGeo => extract_geo(session.client_geo(), rule, geo_fail_open),
-        RestrictionSource::DirectGeo => extract_geo(session.direct_geo(), rule, geo_fail_open),
-    }
-}
-
-/// Resolve a geo rule's candidate values from a live `GeoLookup`.
-///
-/// `Unavailable` (no database loaded at all) is NOT ordinary missingness — it
-/// means the security control itself is not running, and the owning plugin's
-/// `failOpen` decides whether that drops the predicate (`true`) or fails the
-/// whole plugin closed (`false`). `NotFound` (a database IS loaded but has no
-/// record for this address, or the record lacks the requested dimension) IS
-/// ordinary missingness and routes to `on_missing` like any other absent
-/// source.
-fn extract_geo(lookup: GeoLookup, rule: &RestrictionRule, geo_fail_open: bool) -> ExtractedValues {
-    match lookup {
-        GeoLookup::Unavailable => {
-            if geo_fail_open {
-                ExtractedValues::ForceSkip
-            } else {
-                ExtractedValues::FailClosed
-            }
-        }
-        GeoLookup::NotFound => ExtractedValues::Values(Vec::new()),
-        GeoLookup::Found(info) => {
-            let Some(dim) = rule.key.as_deref().and_then(GeoDimension::parse) else {
-                return ExtractedValues::Values(Vec::new());
-            };
-            match info.dimension(dim) {
-                Some(v) => ExtractedValues::Values(vec![v.to_string()]),
-                None => ExtractedValues::Values(Vec::new()),
-            }
-        }
+        RestrictionSource::MtlsSan => extract_san_values(session, rule.san_type.as_ref()),
+        RestrictionSource::JwtClaim => extract_jwt_claim_values(session, rule.key.as_deref()),
     }
 }
 
@@ -137,17 +72,12 @@ fn json_node_to_candidates(node: &serde_json::Value) -> Vec<String> {
     }
 }
 
-/// Wrap an optional scalar into a 0/1-element `ExtractedValues::Values`.
-fn single(v: Option<String>) -> ExtractedValues {
-    ExtractedValues::Values(match v {
+/// Wrap an optional scalar into a 0/1-element candidate list.
+fn single(v: Option<String>) -> Vec<String> {
+    match v {
         Some(s) => vec![s],
         None => Vec::new(),
-    })
-}
-
-/// Wrap a pre-built candidate list into `ExtractedValues::Values`.
-fn single_vec(values: Vec<String>) -> ExtractedValues {
-    ExtractedValues::Values(values)
+    }
 }
 
 /// SAN candidate values, optionally filtered/normalized by type.
@@ -213,14 +143,8 @@ mod tests {
         }
     }
 
-    /// Unwrap the ordinary `Values` case for non-geo sources, which never
-    /// produce `ForceSkip`/`FailClosed`. `geo_fail_open` is irrelevant here
-    /// (non-geo sources ignore it), so pass a fixed `false`.
     fn values(session: &dyn PluginSession, rule: &RestrictionRule) -> Vec<String> {
-        match extract_rule_values(session, rule, false) {
-            ExtractedValues::Values(v) => v,
-            other => panic!("expected ExtractedValues::Values, got {:?}", other),
-        }
+        extract_rule_values(session, rule)
     }
 
     #[test]
@@ -320,71 +244,5 @@ mod tests {
         let mut dns = rule(RestrictionSource::MtlsSan);
         dns.san_type = Some(SanType::Dns);
         assert_eq!(values(&s, &dns), vec!["alice.example.com".to_string()]);
-    }
-
-    fn geo_rule(source: RestrictionSource, key: &str) -> RestrictionRule {
-        RestrictionRule {
-            source,
-            key: Some(key.to_string()),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn geo_unavailable_fail_open_true_force_skips() {
-        let mut s = MockPluginSession::new();
-        s.expect_client_geo().returning(|| GeoLookup::Unavailable);
-        // `geo_fail_open` is now the owning plugin's resolved value, passed
-        // in by the caller rather than read off the rule.
-        let out = extract_rule_values(&s, &geo_rule(RestrictionSource::ClientGeo, "country"), true);
-        assert_eq!(out, ExtractedValues::ForceSkip);
-    }
-
-    #[test]
-    fn geo_unavailable_fail_open_false_fails_closed() {
-        let mut s = MockPluginSession::new();
-        s.expect_direct_geo().returning(|| GeoLookup::Unavailable);
-        let out = extract_rule_values(&s, &geo_rule(RestrictionSource::DirectGeo, "country"), false);
-        assert_eq!(out, ExtractedValues::FailClosed);
-    }
-
-    #[test]
-    fn geo_not_found_is_ordinary_missingness() {
-        // A database IS loaded but has no record for this address: this must
-        // route to on_missing, not to failOpen, regardless of the plugin's
-        // resolved fail-open value.
-        let mut s = MockPluginSession::new();
-        s.expect_client_geo().returning(|| GeoLookup::NotFound);
-        let out = extract_rule_values(&s, &geo_rule(RestrictionSource::ClientGeo, "country"), false);
-        assert_eq!(out, ExtractedValues::Values(Vec::new()));
-    }
-
-    #[test]
-    fn geo_found_resolves_the_requested_dimension() {
-        use crate::geoip::GeoInfo;
-        use std::sync::Arc;
-        let info = Arc::new(GeoInfo {
-            country_iso: Some("CN".to_string()),
-            continent: Some("AS".to_string()),
-            subdivision: None,
-            city: None,
-            latitude: None,
-            longitude: None,
-        });
-        let mut s = MockPluginSession::new();
-        s.expect_client_geo().returning(move || GeoLookup::Found(info.clone()));
-        let out = extract_rule_values(&s, &geo_rule(RestrictionSource::ClientGeo, "country"), false);
-        assert_eq!(out, ExtractedValues::Values(vec!["CN".to_string()]));
-    }
-
-    #[test]
-    fn geo_found_missing_dimension_is_ordinary_missingness() {
-        use crate::geoip::GeoInfo;
-        use std::sync::Arc;
-        let info = Arc::new(GeoInfo::default());
-        let mut s = MockPluginSession::new();
-        s.expect_client_geo().returning(move || GeoLookup::Found(info.clone()));
-        let out = extract_rule_values(&s, &geo_rule(RestrictionSource::ClientGeo, "city"), false);
-        assert_eq!(out, ExtractedValues::Values(Vec::new()));
     }
 }

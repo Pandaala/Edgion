@@ -1,7 +1,9 @@
 //! Stream plugin runtime for executing stream plugins
 
 use super::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
-use crate::plugins::stream::{ConnectionRateLimitPlugin, GlobalConnectionIpRestrictionPlugin, StreamIpRestriction};
+use crate::plugins::stream::{
+    ConnectionRateLimitPlugin, GeoIpLocationStreamPlugin, GlobalConnectionIpRestrictionPlugin, StreamIpRestriction,
+};
 use edgion_resources::resources::edgion_stream_plugins::{EdgionStreamPlugin, StreamPluginEntry};
 use std::sync::Arc;
 
@@ -94,6 +96,16 @@ impl StreamPluginRuntime {
                     // Stream entries carry no alias, so the scope always uses the index form.
                     &crate::plugins::common::entry_scope(resource_key, None, index),
                 )),
+                EdgionStreamPlugin::GeoIpLocation(cfg) => match GeoIpLocationStreamPlugin::new(cfg) {
+                    Ok(p) => Arc::new(p),
+                    Err(e) => {
+                        // Should not happen if the controller validated before syncing
+                        // (both paths share `GeoIpLocationConfig::check_fields`); log and
+                        // skip rather than panic.
+                        tracing::error!(error = %e, "GeoIpLocation stream plugin skipped: config failed validation");
+                        continue;
+                    }
+                },
             };
 
             plugins.push(plugin);

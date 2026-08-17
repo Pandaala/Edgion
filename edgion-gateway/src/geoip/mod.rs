@@ -55,16 +55,15 @@ fn ensure_swap_directory_ready(db_path: &Path) -> Result<(), String> {
 /// Initialize the provider and, when configured, spawn the updater.
 ///
 /// There is no separate master switch: geo lookups are driven entirely by
-/// whether a `db_path` is configured, and — at the request level — by whether
-/// any plugin or L4 predicate actually queries `ClientGeo`/`DirectGeo`. An
-/// unset `db_path` means no database; an empty `update_url` means no updater
-/// task.
+/// whether a `db_path` is configured, and — at the request level — by whether a
+/// `GeoIpLocation` plugin is actually on the chain. An unset `db_path` means no
+/// database; an empty `update_url` means no updater task.
 ///
 /// Startup never blocks on the network and never exits on a database problem: a
 /// missing file WARNs, an unparseable file ERRORs, and the gateway serves on
 /// with geo lookups reporting `Unavailable`. The operator's `failOpen` setting
-/// (per L4 `geo` block, or per HTTP `RequestRestriction`/`GlobalAccessControl`
-/// plugin) decides what that means for traffic. There is deliberately no
+/// (per `GeoIpLocation` plugin instance, at either layer) decides what that
+/// means for that plugin's own traffic decision. There is deliberately no
 /// readiness gate here.
 pub fn init(cfg: &GeoIpConfig) {
     let provider = GeoIpProvider::global();

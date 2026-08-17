@@ -227,6 +227,7 @@ impl EdgionPluginsHandler {
                 | EdgionPlugin::ExtProc(_)
                 | EdgionPlugin::Guardrail(_)
                 | EdgionPlugin::AiGuard(_)
+                | EdgionPlugin::GeoIpLocation(_)
                 | EdgionPlugin::Wasm(_) => {}
             }
         }
@@ -2489,7 +2490,6 @@ mod tests {
             status: 403,
             message: None,
             ip_source: IpSource::RemoteAddr,
-            fail_open: None,
         };
 
         let mut ep = EdgionPlugins::new("gac-ep", EdgionPluginsSpec::default());
@@ -2641,6 +2641,7 @@ mod tests {
                 | EdgionPlugin::ExtProc(_)
                 | EdgionPlugin::Guardrail(_)
                 | EdgionPlugin::AiGuard(_)
+                | EdgionPlugin::GeoIpLocation(_)
                 | EdgionPlugin::Wasm(_) => false,
             }
         }
@@ -2692,7 +2693,6 @@ mod tests {
             status: 403,
             message: None,
             ip_source: IpSource::RemoteAddr,
-            fail_open: None,
         };
 
         let mut ep = EdgionPlugins::new("origin-lockdown", EdgionPluginsSpec::default());
@@ -2750,7 +2750,6 @@ mod tests {
             status: 403,
             message: None,
             ip_source: IpSource::RemoteAddr,
-            fail_open: None,
         };
 
         let mut ep = EdgionPlugins::new("p", EdgionPluginsSpec::default());
@@ -2888,7 +2887,6 @@ mod tests {
             status: 403,
             message: None,
             ip_source: IpSource::RemoteAddr,
-            fail_open: None,
         };
 
         let mut ep = EdgionPlugins::new("gac-ep", EdgionPluginsSpec::default());
@@ -2974,7 +2972,6 @@ mod tests {
             status: 403,
             message: None,
             ip_source: IpSource::RemoteAddr,
-            fail_open: None,
         };
 
         let mut ep = EdgionPlugins::new("gac-disabled-ep", EdgionPluginsSpec::default());
@@ -3110,7 +3107,6 @@ mod tests {
             status: 403,
             message: None,
             ip_source: IpSource::RemoteAddr,
-            fail_open: None,
         };
 
         let mut ep = EdgionPlugins::new("p", EdgionPluginsSpec::default());

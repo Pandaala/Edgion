@@ -296,6 +296,19 @@ Details, verified consumer lists, and exemptions: `skills/01-architecture/00-com
     dependency plugins follow the auth/non-auth rule (auth = fixed fail-close,
     no knob; non-auth = explicit knob, default close) in
     skills/01-architecture/02-gateway/12-edgion-plugin-dev.md.
+11. Access policy is expressed as **allow/deny lists plus `defaultAction`**.
+    Whitelist behaviour is implied by configuring an allow list (see
+    `IpRestrictionConfig::allow_mode`); anything unmatched falls to
+    `defaultAction`.
+12. Two client IPs, never conflated. **`DirectPeerIp`** is the immediate TCP peer
+    — the previous hop, never rewritten, unforgeable, available at both L4 and
+    L7. **`RemoteIp`** is the client resolved from `X-Forwarded-For` against the
+    trusted-proxy set — L7 only, and forgeable whenever that set is
+    misconfigured, so security rules should prefer `DirectPeerIp` unless the
+    deployment genuinely terminates behind a trusted proxy. These map to Envoy's
+    `direct_remote_ip` / `remote_ip`. Note the access log's field names predate
+    this and read inverted: `client-addr` is the direct peer, `remote-addr` is
+    the resolved client (see `tasks/access-log-ip-field-naming.md`).
 
 ## Git constraints
 

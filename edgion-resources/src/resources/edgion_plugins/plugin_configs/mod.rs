@@ -18,6 +18,8 @@ mod ext_proc;
 mod fault_injection;
 mod form_json_transform;
 mod forward_auth;
+pub mod geo_rule;
+mod geoip_location;
 mod global_access_control;
 mod guardrail;
 mod header_cert_auth;
@@ -88,6 +90,8 @@ pub use fault_injection::{
 };
 pub use form_json_transform::{FormJsonDirection, FormJsonTransformConfig};
 pub use forward_auth::{ForwardAuthConfig, ForwardAuthDecision};
+pub use geo_rule::{GeoDimFacts, GeoRule, GeoRuleContext, GeoRuleGroup, GeoRuleKey, GeoRuleSource};
+pub use geoip_location::{GeoDecision, GeoIpLocationConfig};
 pub use global_access_control::{AllowOutcome, AllowProfile, AllowRuleGroup, GlobalAccessControlConfig};
 pub use guardrail::{
     GuardrailConfig, GUARDRAIL_MAX_CONCURRENT, GUARDRAIL_MAX_OVERLAP_BYTES, GUARDRAIL_MAX_REPLACEMENT_BYTES,

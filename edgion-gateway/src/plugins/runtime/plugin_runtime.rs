@@ -48,6 +48,7 @@ use crate::plugins::http::ext_proc::ExtProc;
 use crate::plugins::http::fault_injection::FaultInjection;
 use crate::plugins::http::form_json_transform::FormJsonTransform;
 use crate::plugins::http::forward_auth::ForwardAuth;
+use crate::plugins::http::geoip_location::GeoIpLocation;
 use crate::plugins::http::global_access_control::GlobalAccessControl;
 use crate::plugins::http::guardrail::Guardrail;
 use crate::plugins::http::header_cert_auth::HeaderCertAuth;
@@ -1356,6 +1357,7 @@ impl PluginRuntime {
             EdgionPlugin::GlobalAccessControl(config) => {
                 CreateResult::Ok(Some(GlobalAccessControl::create(config, namespace)))
             }
+            EdgionPlugin::GeoIpLocation(config) => CreateResult::Ok(Some(GeoIpLocation::create(config))),
             EdgionPlugin::Canary(config) => CreateResult::Ok(Some(Canary::create(config, namespace))),
             EdgionPlugin::JwtAuth(config) => {
                 CreateResult::Ok(Some(Box::new(JwtAuth::new(config, namespace.to_string()))))
@@ -1469,6 +1471,7 @@ impl PluginRuntime {
             | EdgionPlugin::AiGuard(_)
             | EdgionPlugin::RegionRoute(_)
             | EdgionPlugin::GlobalAccessControl(_)
+            | EdgionPlugin::GeoIpLocation(_)
             | EdgionPlugin::Canary(_) => CreateResult::WrongStage,
         }
     }
@@ -1530,6 +1533,7 @@ impl PluginRuntime {
             | EdgionPlugin::GlobalAccessControl(_)
             | EdgionPlugin::Canary(_)
             | EdgionPlugin::AiGuard(_)
+            | EdgionPlugin::GeoIpLocation(_)
             | EdgionPlugin::Wasm(_) => CreateResult::WrongStage,
         }
     }
@@ -1586,6 +1590,7 @@ impl PluginRuntime {
             | EdgionPlugin::RegionRoute(_)
             | EdgionPlugin::GlobalAccessControl(_)
             | EdgionPlugin::Canary(_)
+            | EdgionPlugin::GeoIpLocation(_)
             | EdgionPlugin::Dsl(_) => CreateResult::WrongStage,
         }
     }
@@ -1603,6 +1608,7 @@ impl PluginRuntime {
             EdgionPlugin::Csrf(_) => "Csrf",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
             EdgionPlugin::GlobalAccessControl(_) => "GlobalAccessControl",
+            EdgionPlugin::GeoIpLocation(_) => "GeoIpLocation",
             EdgionPlugin::Canary(_) => "Canary",
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
             EdgionPlugin::JweDecrypt(_) => "JweDecrypt",

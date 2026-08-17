@@ -25,11 +25,15 @@
 #
 # Phase -> assertion summary (see the task brief for the full row list):
 #   1. No database (db_path configured but missing): gateway starts and serves;
-#      edgion_geoip_db_loaded == 0; an HTTP rule with failOpen:false rejects
-#      in BOTH Blacklist and Whitelist mode (the case onMissing structurally
-#      cannot express); failOpen:true passes; an L4 profile with
-#      failOpen:false denies and bumps
-#      edgion_geoip_denied_total{reason="db_unavailable"}; failOpen:true admits.
+#      edgion_geoip_db_loaded == 0; an HTTP GeoIpLocation deny rule with
+#      failOpen:false rejects (fail-closed); failOpen:true passes; an L4
+#      GeoIpLocation deny rule with failOpen:false denies and bumps
+#      edgion_geoip_denied_total{reason="db_unavailable"}; failOpen:true
+#      admits. A CIDR-only rule (`key: cidr`) on BOTH layers is immune to all
+#      of this: it needs no GeoIP database at all, so it must behave
+#      identically whether or not one is loaded (the bug
+#      `GeoIpLocationConfig::source_needs_geo_facts` exists to prevent — see
+#      geoiplocation-plugin-report.md's "Correctness fix" section).
 #   2. Country-tier: country rules work; a city rule's predicate is simply
 #      absent (no "database tier" concept -- onMissing governs, same as any
 #      other missing value) -- proved by the city-rule-inert check itself, not
@@ -85,6 +89,7 @@ GW_TCP_ALLOW_PORT=58608
 TCP_BACKEND_PORT=58609
 UPDATE_SERVER_PORT=58610
 HTTP_BACKEND_PORT=58611
+GW_TCP_CIDR_PORT=58612
 
 # =============================================================================
 # Prerequisites
@@ -561,11 +566,11 @@ endpoints:
       ready: true
 EOF
 
-    # --- L4 GlobalConnectionIpRestriction: one profile per failOpen value ---
-    # `geo: { failOpen }` alone (no allow/denyCountries) is enough to exercise
-    # the Unavailable/db_unavailable branch: that branch is checked in
-    # plugin.rs BEFORE any country list is consulted, so it fires purely from
-    # "no database loaded" regardless of what the lists say.
+    # --- L4 GeoIpLocation: one ESP per failOpen value, plus a CIDR-only ESP -
+    # A bare `denyRuleGroups`/country rule (no CIDR) is enough to exercise the
+    # Unavailable/db_unavailable branch: that branch is checked BEFORE any
+    # rule needing resolved dimensions is consulted, so it fires purely from
+    # "no database loaded" regardless of what the country list says.
     cat > "${CONF_DIR}/edgion-test/EdgionStreamPlugins_edgion-test_geo-tcp-esp-deny.yaml" <<EOF
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
@@ -574,22 +579,16 @@ metadata:
   namespace: edgion-test
 spec:
   plugins:
-    - type: GlobalConnectionIpRestriction
+    - type: GeoIpLocation
       config:
-        enable: true
-        activeProfile: db-unavailable-deny
-        profiles:
-          db-unavailable-deny:
-            defaultAction: allow
-            geo:
-              # denyCountries content is irrelevant to this phase: the
-              # Unavailable/db_unavailable branch in plugin.rs is checked
-              # BEFORE any country list is consulted, so this fires purely
-              # from "no database loaded". A non-empty list is required only
-              # to satisfy geo_rules.rs's "at least one of allowCountries /
-              # denyCountries" validation.
-              denyCountries: ["ZZ"]
-              failOpen: false
+        defaultAction: allow
+        failOpen: false
+        denyRuleGroups:
+          - name: db-unavailable-deny
+            rules:
+              - source: DirectPeerIp
+                key: country
+                values: ["ZZ"]
 EOF
 
     cat > "${CONF_DIR}/edgion-test/EdgionStreamPlugins_edgion-test_geo-tcp-esp-allow.yaml" <<EOF
@@ -600,16 +599,55 @@ metadata:
   namespace: edgion-test
 spec:
   plugins:
-    - type: GlobalConnectionIpRestriction
+    - type: GeoIpLocation
       config:
-        enable: true
-        activeProfile: db-unavailable-allow
-        profiles:
-          db-unavailable-allow:
-            defaultAction: allow
-            geo:
-              denyCountries: ["ZZ"]
-              failOpen: true
+        defaultAction: allow
+        failOpen: true
+        denyRuleGroups:
+          - name: db-unavailable-allow
+            rules:
+              - source: DirectPeerIp
+                key: country
+                values: ["ZZ"]
+EOF
+
+    # CIDR-only ESP: `key: cidr` never needs the GeoIP database, so this must
+    # deny/allow purely by IP membership -- identically across every phase,
+    # including Phase 1 (no database) with failOpen:false. `failOpen` is still
+    # required by validation once a rule group is configured, but must never
+    # actually be consulted for this config.
+    cat > "${CONF_DIR}/edgion-test/EdgionStreamPlugins_edgion-test_geo-tcp-esp-cidr.yaml" <<EOF
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: geo-tcp-esp-cidr
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: GeoIpLocation
+      config:
+        defaultAction: allow
+        failOpen: false
+        denyRuleGroups:
+          - name: cidr-only-deny
+            rules:
+              - source: DirectPeerIp
+                key: cidr
+                values: ["127.0.0.1/32"]
+EOF
+
+    cat > "${CONF_DIR}/edgion-test/Gateway_edgion-test_geo-tcp-cidr-gw.yaml" <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: geo-tcp-cidr-gw
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tcp
+      protocol: TCP
+      port: ${GW_TCP_CIDR_PORT}
 EOF
 
     cat > "${CONF_DIR}/edgion-test/TCPRoute_edgion-test_geo-tcp-deny-route.yaml" <<EOF
@@ -654,6 +692,27 @@ spec:
           weight: 100
 EOF
 
+    cat > "${CONF_DIR}/edgion-test/TCPRoute_edgion-test_geo-tcp-cidr-route.yaml" <<EOF
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: geo-tcp-cidr-route
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "geo-tcp-esp-cidr"
+spec:
+  parentRefs:
+    - name: geo-tcp-cidr-gw
+      namespace: edgion-test
+      sectionName: tcp
+      port: ${GW_TCP_CIDR_PORT}
+  rules:
+    - backendRefs:
+        - name: geo-tcp-backend
+          port: ${TCP_BACKEND_PORT}
+          weight: 100
+EOF
+
     # --- HTTP backend (Service + EndpointSlice -> local http_backend.py) ----
     cat > "${CONF_DIR}/edgion-test/Service_edgion-test_geo-http-backend.yaml" <<EOF
 apiVersion: v1
@@ -690,12 +749,10 @@ endpoints:
       ready: true
 EOF
 
-    # --- HTTP RequestRestriction plugins ------------------------------------
-    # geo-bl403 / geo-wl403: identical ClientGeo/country==CN rule, failOpen
-    # false, opposite `mode`. Phase 1 (no database) must reject through BOTH —
-    # FailClosed short-circuits to rejection BEFORE the mode polarity is even
-    # applied (request_restriction/plugin.rs evaluate_groups), which is the
-    # exact case onMissing structurally cannot express.
+    # --- HTTP GeoIpLocation plugins ------------------------------------------
+    # geo-bl403: DirectPeerIp/country==CN deny rule, failOpen false. Phase 1
+    # (no database) must reject via the fail-closed db-unavailable branch,
+    # checked BEFORE the country list is even consulted.
     cat > "${CONF_DIR}/edgion-default/EdgionPlugins_edgion-default_geo-bl403.yaml" <<EOF
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -705,21 +762,23 @@ metadata:
 spec:
   requestPlugins:
     - enable: true
-      type: RequestRestriction
+      type: GeoIpLocation
       config:
-        mode: Blacklist
-        ruleGroups:
-          - name: cn-blacklist
+        defaultAction: allow
+        failOpen: false
+        denyRuleGroups:
+          - name: cn-deny
             rules:
-              - name: client-country-cn
-                source: ClientGeo
+              - source: DirectPeerIp
                 key: country
                 values: ["CN"]
-        status: 403
-        message: "geoip db-states preflight: blacklist rejection"
-        failOpen: false
 EOF
 
+    # geo-wl403: the whitelist-equivalent shape -- allowRuleGroups instead of
+    # denyRuleGroups. A db-unavailable lookup is fail-closed exactly the same
+    # way (checked before any rule group, deny or allow, is consulted), so
+    # Phase 1 rejects through this route too, proving the fail-closed branch
+    # is mode-independent.
     cat > "${CONF_DIR}/edgion-default/EdgionPlugins_edgion-default_geo-wl403.yaml" <<EOF
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -729,19 +788,16 @@ metadata:
 spec:
   requestPlugins:
     - enable: true
-      type: RequestRestriction
+      type: GeoIpLocation
       config:
-        mode: Whitelist
-        ruleGroups:
-          - name: cn-whitelist
+        defaultAction: deny
+        failOpen: false
+        allowRuleGroups:
+          - name: cn-allow
             rules:
-              - name: client-country-cn
-                source: ClientGeo
+              - source: DirectPeerIp
                 key: country
                 values: ["CN"]
-        status: 403
-        message: "geoip db-states preflight: whitelist rejection"
-        failOpen: false
 EOF
 
     cat > "${CONF_DIR}/edgion-default/EdgionPlugins_edgion-default_geo-passopen.yaml" <<EOF
@@ -753,25 +809,22 @@ metadata:
 spec:
   requestPlugins:
     - enable: true
-      type: RequestRestriction
+      type: GeoIpLocation
       config:
-        mode: Blacklist
-        ruleGroups:
-          - name: cn-blacklist-failopen
+        defaultAction: allow
+        failOpen: true
+        denyRuleGroups:
+          - name: cn-deny-failopen
             rules:
-              - name: client-country-cn-open
-                source: ClientGeo
+              - source: DirectPeerIp
                 key: country
                 values: ["CN"]
-        status: 403
-        failOpen: true
 EOF
 
     # geo-city: key=city, value=Beijing (127.0.0.1's city per
-    # edgion-tests/geoip/README.md's address map). Inert (dimension always
-    # absent -> onMissing's default NoMatch -> never matches) against the
-    # Country fixture, with no separate warning (no "database tier" concept);
-    # live (matches, denies) against the City fixture.
+    # edgion-tests/geoip/README.md's address map). Inert (the dimension is
+    # simply absent, ordinary missingness) against the Country fixture; live
+    # (matches, denies) against the City fixture.
     cat > "${CONF_DIR}/edgion-default/EdgionPlugins_edgion-default_geo-city.yaml" <<EOF
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -781,22 +834,44 @@ metadata:
 spec:
   requestPlugins:
     - enable: true
-      type: RequestRestriction
+      type: GeoIpLocation
       config:
-        mode: Blacklist
-        ruleGroups:
-          - name: city-blacklist
+        defaultAction: allow
+        failOpen: false
+        denyRuleGroups:
+          - name: city-deny
             rules:
-              - name: client-city-beijing
-                source: ClientGeo
+              - source: DirectPeerIp
                 key: city
                 values: ["Beijing"]
-        status: 403
-        message: "geoip db-states preflight: city rule"
-        failOpen: false
 EOF
 
-    for name in geo-bl403 geo-wl403 geo-passopen geo-city; do
+    # geo-cidr: `key: cidr` never needs the GeoIP database -- must deny/allow
+    # purely by IP membership, identically across every phase, including
+    # Phase 1 (no database) with failOpen:false. This is the CIDR-only-
+    # immunity coverage (see this script's header comment).
+    cat > "${CONF_DIR}/edgion-default/EdgionPlugins_edgion-default_geo-cidr.yaml" <<EOF
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: geo-cidr
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: GeoIpLocation
+      config:
+        defaultAction: allow
+        failOpen: false
+        denyRuleGroups:
+          - name: cidr-deny
+            rules:
+              - source: DirectPeerIp
+                key: cidr
+                values: ["127.0.0.1/32"]
+EOF
+
+    for name in geo-bl403 geo-wl403 geo-passopen geo-city geo-cidr; do
         cat > "${CONF_DIR}/edgion-default/HTTPRoute_edgion-default_${name}-route.yaml" <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -902,6 +977,7 @@ EOF
     precheck_port "$GW_HTTP_PORT"       "gateway http"       || return 1
     precheck_port "$GW_TCP_DENY_PORT"   "gateway tcp deny"   || return 1
     precheck_port "$GW_TCP_ALLOW_PORT"  "gateway tcp allow"  || return 1
+    precheck_port "$GW_TCP_CIDR_PORT"   "gateway tcp cidr"   || return 1
 
     echo "=== Starting gateway: ${label} ==="
     EDGION_GATEWAY_ADMIN_TOKEN="$TEST_TOKEN" \
@@ -934,6 +1010,9 @@ EOF
         cat "$GW_LOG"; return 1
     fi
     if ! wait_for_tcp_port 127.0.0.1 "$GW_TCP_ALLOW_PORT" "$GW_PID" "gateway ${label} TCP-allow listener" 60; then
+        cat "$GW_LOG"; return 1
+    fi
+    if ! wait_for_tcp_port 127.0.0.1 "$GW_TCP_CIDR_PORT" "$GW_PID" "gateway ${label} TCP-cidr listener" 60; then
         cat "$GW_LOG"; return 1
     fi
     echo "PASS: gateway ${label} is up and serving"
@@ -985,12 +1064,21 @@ run_phase1() {
 
     check "edgion_geoip_db_loaded == 0" "$(metric_value edgion_geoip_db_loaded)" "0"
 
-    check "Blacklist failOpen:false rejects (db unavailable)" \
+    check "denyRuleGroups + failOpen:false rejects (db unavailable)" \
         "$(http_status -H 'Host: geo-bl403.example.com' "http://127.0.0.1:${GW_HTTP_PORT}/")" "403"
-    check "Whitelist failOpen:false ALSO rejects (db unavailable, mode-independent)" \
+    check "allowRuleGroups + failOpen:false ALSO rejects (db unavailable, mode-independent)" \
         "$(http_status -H 'Host: geo-wl403.example.com' "http://127.0.0.1:${GW_HTTP_PORT}/")" "403"
-    check "failOpen:true drops the predicate and passes (db unavailable)" \
+    check "failOpen:true drops the rule group and passes (db unavailable)" \
         "$(http_status -H 'Host: geo-passopen.example.com' "http://127.0.0.1:${GW_HTTP_PORT}/")" "200"
+
+    # CIDR-only-immunity (HTTP): key: cidr never touches the GeoIP database,
+    # so it must behave identically here (no database at all) as it would
+    # with one loaded -- denying the matching source and admitting everyone
+    # else, never falling into the fail-open/fail-closed branch above.
+    check "key: cidr denies its matching source even with no database loaded" \
+        "$(http_status -H 'Host: geo-cidr.example.com' "http://127.0.0.1:${GW_HTTP_PORT}/")" "403"
+    check "key: cidr admits a non-matching source even with no database loaded" \
+        "$(http_status --interface 127.0.0.5 -H 'Host: geo-cidr.example.com' "http://127.0.0.1:${GW_HTTP_PORT}/")" "200"
 
     local deny_before
     deny_before=$(metric_value edgion_geoip_denied_total 'layer="tcp"' 'reason="db_unavailable"')
@@ -1002,6 +1090,13 @@ run_phase1() {
         "$(( $(printf '%.0f' "$deny_after") > $(printf '%.0f' "$deny_before") ? 1 : 0 ))"
 
     check "L4 failOpen:true admits (db unavailable)" "$(tcp_probe "$GW_TCP_ALLOW_PORT")" "ECHO"
+
+    # CIDR-only-immunity (L4): same proof as the HTTP checks above, at the
+    # stream-plugin layer.
+    check "L4 key: cidr denies its matching source even with no database loaded" \
+        "$(tcp_probe "$GW_TCP_CIDR_PORT" "127.0.0.1")" "CLOSED"
+    check "L4 key: cidr admits a non-matching source even with no database loaded" \
+        "$(tcp_probe "$GW_TCP_CIDR_PORT" "127.0.0.5")" "ECHO"
 
     stop_gateway
 }
@@ -1033,17 +1128,17 @@ run_phase2() {
 
     # City-dimension rule against a Country-tier database. There is no
     # "database tier" concept in the runtime (2026-08-15 review, final fix
-    # wave): a `city` predicate against a database that never carries city
-    # data simply has no value to compare -- ordinary "missing value",
-    # governed by this rule's `onMissing` (defaulted here, i.e. NoMatch)
-    # exactly like a missing header would be. The rule never matches (200),
-    # and there is no separate warning status; prove the real contract
-    # directly from the access log's geo block instead: the lookup succeeded
-    # (status=found, country resolved) but no `city` value was ever recorded,
-    # for this request or any other in this phase, because the Country-tier
-    # fixture never carries one. This 200 (inert) result also doubles as the
-    # positive proof that this phase actually loaded the Country-tier fixture
-    # and not the City-tier one -- there is no admin-endpoint snapshot to read
+    # wave): a `city` rule against a database that never carries city data
+    # simply has no value to compare -- ordinary "missing value" -- and
+    # `GeoRule::matches`'s fixed "absent dimension => no match" (`geo_rule.rs`
+    # has no `onMissing` knob) means the rule never matches (200). There is no
+    # separate warning status; prove the real contract directly from the
+    # access log's geo block instead: the lookup succeeded (status=found,
+    # country resolved) but no `city` value was ever recorded, for this
+    # request or any other in this phase, because the Country-tier fixture
+    # never carries one. This 200 (inert) result also doubles as the positive
+    # proof that this phase actually loaded the Country-tier fixture and not
+    # the City-tier one -- there is no admin-endpoint snapshot to read
     # instead; Phase 3/4 use the same rule's opposite outcome (403, live) as
     # their proof of loading the City-tier fixture.
     check "city rule against Country db is inert (not denied)" \
@@ -1059,7 +1154,7 @@ run_phase2() {
         echo "FAIL: access log recorded a city value against the Country-tier fixture (it should never carry one)"
         FAIL_COUNT=$((FAIL_COUNT + 1))
     else
-        echo "PASS: access log never recorded a city value -- the predicate is correctly absent, onMissing governs"
+        echo "PASS: access log never recorded a city value -- the predicate is correctly absent, no onMissing knob needed"
         PASS_COUNT=$((PASS_COUNT + 1))
     fi
 
@@ -1088,22 +1183,22 @@ run_phase3() {
     check "city rule becomes live against City-tier db (proves City-tier is loaded)" \
         "$(http_status -H 'Host: geo-city.example.com' "http://127.0.0.1:${GW_HTTP_PORT}/")" "403"
 
-    # geo-wl403 is Whitelist + country==CN: with a real database loaded, CN
-    # (127.0.0.1) matches the allow group and passes (200). What we actually
-    # care about here is only the access-log geo block: this route's plugin
-    # queries `ClientGeo`, so the `client` slot is populated regardless of the
-    # decision outcome (entry.rs::from_context reads whatever the plugin
-    # already resolved — no global switch, no forced lookup) — this route is
-    # just a convenient one guaranteed to reach the backend with a loaded
-    # database.
+    # geo-wl403 is the whitelist-shaped allowRuleGroups/country==CN config:
+    # with a real database loaded, CN (127.0.0.1) matches the allow group and
+    # passes (200). What we actually care about here is only the access-log
+    # geo block: this route's plugin queries `DirectPeerIp`, so the `direct`
+    # slot is populated regardless of the decision outcome (entry.rs::
+    # from_context reads whatever the plugin already resolved — no global
+    # switch, no forced lookup) — this route is just a convenient one
+    # guaranteed to reach the backend with a loaded database.
     check "request from a coord-bearing source (127.0.0.1=CN/Beijing) passes" \
         "$(http_status -H 'Host: geo-wl403.example.com' "http://127.0.0.1:${GW_HTTP_PORT}/")" "200"
 
     if wait_for_access_log_contains '"coord":"\*\*\*"'; then
-        echo "PASS: access log has geo.client.coord, masked (\"***\")"
+        echo "PASS: access log has geo.direct.coord, masked (\"***\")"
         PASS_COUNT=$((PASS_COUNT + 1))
     else
-        echo "FAIL: access log missing a masked geo.client.coord field"
+        echo "FAIL: access log missing a masked geo.direct.coord field"
         FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
 

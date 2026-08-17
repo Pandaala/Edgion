@@ -1,15 +1,16 @@
 # GeoIP 地理限制
 
-> **Gateway 本地特性。** GeoIP 配置位于 Gateway 的本地启动配置中（不是 CRD），因为数据库、其内存映射
-> 以及后台更新任务是进程级的单一资源，无法针对每个具名的 `EdgionGatewayConfig` 实例分别配置。
-> 修改任意 `geoip` 字段都需要重启 Pod。
+> **Gateway 本地特性。** GeoIP 数据库配置位于 Gateway 的本地启动配置中（不是 CRD），因为数据库、其内存
+> 映射以及后台更新任务是进程级的单一资源，无法针对每个具名的 `EdgionGatewayConfig` 实例分别配置。
+> 修改任意 `geoip` 字段都需要重启 Pod。判定能力本身是一个普通的 CRD 管理插件 `GeoIpLocation`，
+> 和其他插件一样支持热重载。
 
-GeoIP 允许你按客户端的地理来源限制流量，并在访问日志中补充解析出的国家/大洲/城市信息。它扩展了两个
-已有机制，而不是新增插件：
+GeoIP 允许你按客户端的地理来源限制流量，并在访问日志中补充解析出的国家/大洲/城市信息。两项能力都由
+**一个插件 `GeoIpLocation`** 提供，以完全相同的配置结构注册进两层：
 
-- **HTTP** — 在已有的 `RequestRestriction` 和 `GlobalAccessControl` 插件上新增两个
-  `RestrictionSource` 取值（`ClientGeo`、`DirectGeo`）。
-- **L4（TCP/TLS）** — 在已有的 `GlobalConnectionIpRestriction` Stream 插件上新增可选的 `geo` 块。
+- **HTTP** — `EdgionPlugins.spec.requestPlugins` 中的 `EdgionPlugin::GeoIpLocation`。
+- **L4（第一阶段 / `ConnectionFilter`，覆盖 TCP+TLS）** — `EdgionStreamPlugins.spec.plugins` 中的
+  `EdgionStreamPlugin::GeoIpLocation`。没有第二阶段（`tlsRoutePlugins`）注册。
 
 **设计上不支持的能力**：不内置基线数据库（受限于数据集的再分发条款）、不支持坐标/半径地理围栏
 （MMDB 坐标是城市中心点值，`accuracy_radius` 精度较粗）、不支持 ASN 查询，也不会因数据库不可用而
@@ -110,12 +111,16 @@ SIGBUS **不是** Rust panic——它不会被 `catch_unwind` 捕获，不会执
    删除），会重新引入这条规则本应避免的确切风险——Gateway 在启动时会为自己的更新器显式检查这一点，
    如果交换目录不可用会拒绝启动更新任务，但它无法检查外部写入者的行为。
 
-**更新卷的大小应按数据库的 3 倍规划，而不是 1 倍。** 在一次交换过程中，卷会同时持有：旧文件的
-inode（已从目录中 unlink，但仍被 Gateway 的 mmap 引用，直到最后一个正在处理它的请求结束）、
-新下载的文件，以及——如果上一个周期失败了——一个残留的 `.tmp`。更新器确实会在启动时和每个周期
-开始时清理残留的 `.tmp`，也确实会在流式下载前根据 `max_db_bytes` 做剩余空间预检查，但如果卷本身
-容量不足，这些都无济于事：一个放不下的 `.tmp` 会导致后续每一个周期都以同样的方式永久失败，
-直到卷被扩容或 `.tmp` 被手动删除。
+**更新卷的大小应按 `max_db_bytes` + 当前数据库大小的 2 倍规划，而不是 `max_db_bytes` 的 3 倍。**
+在一次交换过程中，卷会同时持有：旧文件的 inode（已从目录中 unlink，但仍被 Gateway 的 mmap 引用，
+直到最后一个正在处理它的请求结束）、新下载的文件，以及——如果上一个周期失败了——一个残留的
+`.tmp`。剩余空间预检查与此完全对应：需要 `max_db_bytes`（正在流式写入的 `.tmp`，受该上限约束）
+加上数据库**当前磁盘大小**的 2 倍（旧文件被计两次，覆盖 rename 前后的瞬时双持有），在还没有数据库
+时退化为只需要 `max_db_bytes`。按 `max_db_bytes` 的 3 倍规划会在实际数据库小于该上限时（这是
+常见情况）造成超额配置；而按上述公式仍然不足的卷，会在任何请求发出之前就以 `reason="disk"`
+让每个周期失败。更新器确实会在启动时和每个周期开始时清理残留的 `.tmp`，但如果卷本身容量不足，
+这些都无济于事：一个放不下的 `.tmp` 会导致后续每一个周期都以同样的方式永久失败，直到卷被扩容或
+`.tmp` 被手动删除。
 
 ### 更新校验
 
@@ -127,13 +132,25 @@ inode（已从目录中 unlink，但仍被 Gateway 的 mmap 引用，直到最�
 只是恰好解析不出所配置地址、但本身完全合法的数据库。校验失败永远不会执行 rename；半损坏的数据库
 严格来说比继续保留旧数据库更糟。
 
-## HTTP 层规则
+## `GeoIpLocation` 插件
 
-`RequestRestriction` 和 `GlobalAccessControl` 插件上的 `RestrictionSource` 新增了两个取值：
-`ClientGeo` 和 `DirectGeo`。两个插件共享同一套谓词模型（`request_match.rs`），所以地理规则在
-两个插件中行为一致。
+`GeoIpLocation` 两处注册共用一套配置结构，有两种模式，完全取决于是否配置了任何规则分组：
 
 ```yaml
+# 只解析 —— 把地理信息写入访问日志（仅 HTTP）；不做任何判定。
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: geo-log
+  namespace: production
+spec:
+  requestPlugins:
+    - type: GeoIpLocation
+      config: {}
+```
+
+```yaml
+# 规则模式 —— 按地理维度拒绝/放行。
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -141,118 +158,152 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-    - type: RequestRestriction
+    - type: GeoIpLocation
       config:
-        mode: Blacklist
-        ruleGroups:
-          - name: block-ru
+        defaultAction: allow          # allow | deny
+        failOpen: false               # 一旦配置了任何规则分组即为必填
+        denyRuleGroups:
+          - name: block-moscow
             rules:
-              - source: ClientGeo
-                key: country
-                values: ["RU"]
-        failOpen: false
+              - source: DirectPeerIp
+                key: city
+                values: ["Moscow"]
+        allowRuleGroups: []
 ```
 
-- **`source`**：`ClientGeo` 读取解析后的真实客户端地址（经过 `X-Forwarded-For` / PROXY
-  protocol 解析——与配置好的 `RealIp` 插件暴露的地址相同）。`DirectGeo` 读取直接的 TCP 对端地址，
-  不受任何请求头影响。
-- **`key`**：`country` | `continent` | `city` | `subdivision` 之一。每条地理规则都必须提供；
-  缺失或拼写错误会在接入时被判定为 schema 错误并拒绝。
-- **`values`**：对 `country`/`continent`，取值和查询结果都会被规范化为**大写**，并对照静态的
-  ISO 3166-1 alpha-2 / 大洲代码表校验——未识别的代码只会产生 **WARN**，不会被拒绝（宽松接入策略：
-  规则依然按原样生效）。`country`/`continent` 这两个 key 上会直接**拒绝** `caseSensitive`
-  （不区分大小写的匹配路径会折叠为小写，与这里的大写规范化方向相反，允许该开关会悄悄产生一条永远
-  无法匹配的规则）。`city` 和 `subdivision` 是自由文本，保留插件常规的 `caseSensitive` 语义。
-- **地理来源上会拒绝 `regex` 和 `secretRef`**。查询结果始终是一个精确代码——允许 `regex` 能顺利
-  编译通过，却永远不会匹配任何东西，因为没有什么值得用正则去匹配的自由格式字符串。
-- **`failOpen`** 位于*插件配置*上（`RequestRestrictionConfig.failOpen` /
-  `GlobalAccessControlConfig.failOpen`），而不是单条规则上。当插件内任意分组（对
-  `GlobalAccessControl` 而言，任意 profile）中存在至少一条 `ClientGeo`/`DirectGeo` 规则时，它是
-  **必填**、无默认值的；当插件不含任何地理规则时，它会被**拒绝**。它的含义、为何是插件级而非
-  规则级、以及代价见下方 [`failOpen`](#failopen数据库不可用时的处置方式)。
+完全相同的 `config` 块也可以作为 `EdgionStreamPlugins.spec.plugins`（第一阶段 /
+`ConnectionFilter`）条目注册，用于 L4（TCP/TLS）判定，只有一处限制：`source: RemoteIp` 在 L4
+会被拒绝（见下文）。
 
-### 没有 `registered_country` 兜底
-
-当 `country.iso_code` 缺失时，刻意不回退到 `registered_country` 或 `represented_country`。
-卫星 ISP、anycast 地址段、部分匿名化网络，以及某些军事/使馆分配段，都存在已填充的
-`registered_country`（**注册方**）但无法解析出 `country`（**客户端的真实位置**）——如果混用
-两者，会导致同一条 `country` 规则对不同客户端表达出不同的含义。这些客户端会解析为
-`country: None`，进而走到下面的 `onMissing` 分支。如果你的流量中卫星或 anycast 客户端占比较高，
-预期它们中的一部分会按设计永久无法解析，而不是遇到 bug。
-
-`onMissing` 以同样的方式处理两种不同的"缺失"情况：该地址在 MMDB 中完全没有记录，以及记录存在但
-缺少这一具体维度（对 `subdivision`/`city` 来说非常常见——很多携带 city/subdivision 数据的记录
-只填充 `geoname_id` + 名称，没有 `iso_code`，`city.names` 对不常见的地方也经常缺少 `"en"` 键）。
-
-### `city` 只匹配英文名称
-
-`city` 取自 `city.names["en"]`——英文本地化名称，永远不是翻译后的名称。用
-`values: ["北京"]`（或任何非英文拼写）写的城市规则永远不会匹配，因为查询结果始终是英文形式。
-`city` 和 `subdivision` 也**不是全局唯一的**——"Cambridge" 在多个国家都存在，单独的
-`subdivision: ["CA"]` 会同时匹配加利福尼亚州和任何代码为 `CA` 的加拿大省份。请始终在同一个 AND
-分组内将 `city` 或 `subdivision` 与 `country` 配对使用：
+**把地理判定和其他规则组合在一起，是"链式编排"而不是"内嵌"。** `GeoIpLocation` 不携带 IP
+白名单或请求头/正文谓词，`IpRestriction`/`RequestRestriction`/`GlobalAccessControl`/
+`GlobalConnectionIpRestriction` 也不携带地理谓词。"拦截这个国家，除非源 IP 在办公室白名单里"
+这种需求，是通过把 `GeoIpLocation` 和 IP 插件作为同一个插件列表上**独立的、有顺序的条目**来表达
+的：
 
 ```yaml
-ruleGroups:
+spec:
+  requestPlugins:
+    - type: IpRestriction
+      config:
+        allow: ["10.0.0.0/8"]
+    - type: GeoIpLocation
+      config:
+        defaultAction: allow
+        failOpen: false
+        denyRuleGroups:
+          - name: block-ru
+            rules:
+              - source: DirectPeerIp
+                key: country
+                values: ["RU"]
+```
+
+### 规则形状
+
+- **`source`**：`DirectPeerIp` 是直接的 TCP 对端——上一跳，从不被改写，不可伪造，L4 和 L7
+  都可用。`RemoteIp` 是经过 `X-Forwarded-For` 解析、并对照可信代理集合确认后的客户端——**仅限
+  L7**；在 L4 的 `GeoIpLocation` 配置中使用 `RemoteIp` 会被判定为硬性接入错误，因为 L4 没有 HTTP
+  头可供解析转发链。参见[`RemoteIp` 可被伪造](#remoteip-可被伪造directpeerip-不可以)。
+- **`key`**：`cidr` 直接把地址本身与一个或多个 CIDR/裸 IP 做匹配（裸 IP 是其 `/32`/`/128`
+  的简写），完全不需要 GeoIP 数据库——见[纯 CIDR 规则](#纯-cidr-规则永不触碰-failopen)。
+  `country`/`continent`/`subdivision` 是 ISO 代码，编译期归一化为**大写**；未识别的代码只会
+  产生 **WARN**，不会被拒绝（宽松接入策略）。`city` 是自由文本，匹配 `names["en"]`，区分大小写
+  ——见[`city` 只匹配英文名称](#city-只匹配英文名称)。
+- **`values`**：必须**非空**——空列表在入库时即被拒绝。一条没有取值的规则不表达任何判据，
+  若按"匹配一切"解读，会让 deny 组变成全站拒绝、让 allow 组变成敞开的白名单。要去掉一个
+  判据，请删除该条规则。一个记录无法提供的维度会让规则直接**不匹配**——没有单独的
+  `onMissing` 开关可配置；见[缺失维度](#缺失维度只是普通的规则未命中)。
+
+### 未知字段会被拒绝，而不是忽略
+
+`GeoIpLocation` 的每个配置结构体都是严格的：本插件不认识的字段名会导致入库直接失败并指出是哪个
+键，而不是静默忽略这一行。
+
+这是刻意为之，比大多数插件都严。geo 配置是一项安全控制，而它的各种拼写错误全都会**向放行的
+方向**失效：
+
+| 拼错 | 加严之前的后果 |
+|---|---|
+| `denyRuleGroup:`（少了 s） | 整个规则列表消失，配置变空——也就是只解析模式。所有请求全部放行，`failOpen: false` 也不再是必填，而资源状态依然是 `Accepted: True`。 |
+| 规则里的 `valuez:` | `values` 落到空列表，而空列表当时意味着"匹配一切"——在 deny 组里是全站拒绝，在 allow 组里是敞开的白名单。 |
+
+这两种情况从外部都看不出来：资源被接受，流量照常。EdgionPlugins 的 CRD 把插件 `config` 建模为
+`x-kubernetes-preserve-unknown-fields`，API server 会原样转发未知键，因此这里的 schema 严格性是
+唯一能拦住它们的关口。
+
+实际影响是：**空配置 `config: {}` 现在只可能因为有人真的这么写，**而绝不会是某条规则悄悄没解析
+成功。
+
+### 规则分组：组内 AND，组间 OR
+
+```yaml
+denyRuleGroups:
   - name: cn-beijing
     rules:
-      - source: ClientGeo
+      - source: DirectPeerIp
         key: country
         values: ["CN"]
-      - source: ClientGeo
+      - source: DirectPeerIp
         key: city
         values: ["Beijing"]
-failOpen: false
 ```
+
+一个分组内的每条规则都是 AND 关系；`denyRuleGroups`/`allowRuleGroups` 各自内部是 OR
+关系。插件的判定逻辑（`decide()`）：
+
+1. 任意一个 `denyRuleGroups` 分组命中 → **拒绝**。
+2. `allowRuleGroups` 非空且没有分组命中 → **拒绝**（白名单未命中语义）。
+3. 否则 → `defaultAction`。
+
+**请始终在同一个 AND 分组内将 `city` 或 `subdivision` 与 `country` 配对使用。** 两者都不是
+全局唯一的："Cambridge" 在多个国家都存在，单独的 `subdivision: ["CA"]` 会同时匹配加利福尼亚州
+和任何代码为 `CA` 的加拿大省份。
+
+**L4 没有专门的 `city` 限制，但按惯例 city 规则只用于 HTTP 层。** 在连接这一层没有请求属性可供
+组合，因此细粒度的地理规则既难以运维又容易过度拦截；城市级别的判定应该放在 HTTP 层。
 
 ### `failOpen`——数据库不可用时的处置方式
 
-`onMissing` 无法表达"失败即拒绝"：在黑名单模式下，谓词为假意味着*放行*，所以"数据库尚未加载"和
-"在它加载之前全部拦截"这两件事都无法用 `onMissing` 表达。`failOpen` 将这一情况单独拆分为一个
-独立的、必填的、**插件级**短路开关——它位于 `RequestRestrictionConfig`/
-`GlobalAccessControlConfig` 上，而不是单条规则上：
+当 `denyRuleGroups`/`allowRuleGroups` 非空（规则模式）时，`failOpen` 是**必填**的；在只解析模式
+下则会被**拒绝**——控制器接入路径和 Gateway 构造路径运行的是同一套校验，因此两者永远不会产生
+分歧。它**只管这个插件自己的判定**，当 GeoIP 数据库本身不可用（`GeoLookup::Unavailable`）时
+生效，绝不影响链上其它插件——这种隔离性正是把地理能力独立成一个插件、而不是把谓词内嵌进另一个
+插件配置的核心理由。
 
 | 情况 | 由谁决定 |
 |---|---|
-| 完全没有加载数据库（`GeoLookup::Unavailable`） | 插件的 `failOpen` |
-| 数据库已加载，但没有该地址的记录，或记录缺少该维度 | `onMissing` |
+| 完全没有加载数据库（`GeoLookup::Unavailable`） | `failOpen` |
+| 数据库已加载，但没有该地址的记录，或记录缺少该维度 | 普通的规则未命中（缺失的维度不会匹配一条有约束的规则） |
 
-早期版本把 `geoFailOpen` 放在每条规则上，但运行时行为其实一直是插件级的：插件内任意一条规则
-声明 `false`，就会让*整个插件*短路，与 `mode` 或它属于哪个分组无关——因此规则级的取值只能自己
-和自己一致，同一插件内"规则 A 遇库不可用放行、规则 B 拒绝"没有任何连贯的含义。现在字段被移到了
-它实际生效的位置：每个插件一个 `failOpen`，当该插件含有至少一条地理规则（在任意规则分组，或对
-`GlobalAccessControl` 而言在任意 profile 中）时必填，否则被拒绝。
-
-- **`failOpen: false`** —— **插件直接短路到拒绝**，使用其配置的 `status`/`message`，
-  **无视 `mode`（黑名单或白名单），也无视其他任何规则分组。** 这正是为什么它是一个独立的插件级
-  开关，而不是谓词的结果：谓词返回"假"在黑名单模式下意味着*放行*，这与一个不可用的安全控制项
-  理应默认执行的行为正好相反。
-- **`failOpen: true`** —— 每一条地理谓词都会被整体从 AND 分组中移除，效果等同于 `onMissing: Skip`。
-
-无论哪种情况，都会记录一条 `EdgionStatus` 到访问日志——因此"地理策略静默地没有生效"至少在
-逐请求粒度上是可见的，尽管它无法到达 CRD 状态条件——`RequestRestriction`/`GlobalAccessControl`
-在 Gateway 进程内编译，`Accepted` 状态条件只能由 Controller 写入，而 Controller↔Gateway
-的同步协议没有数据面到控制面的通道，无法把一个 Gateway 进程级的运行时事实带回去。
+- **`failOpen: false`** —— **HTTP**：插件拒绝该请求（`403`，JSON 正文）。**L4**：连接被拒绝，
+  且 `edgion_geoip_denied_total{reason="db_unavailable"}` 计数加一。
+- **`failOpen: true`** —— 插件**不表态**：HTTP 会让请求原样通过；L4 会让连接继续交给下一个
+  Stream 插件。
 
 **每种处置方式在冷启动窗口期间具体的代价**（刚发布、`emptyDir` 上还没有数据库的时期，或任何更新器
 一次都没有成功过的时间段）：
 
-- 在含有安全相关规则（例如"拦截这个国家"）的插件上使用 `failOpen: false`，意味着在数据库加载
-  完成前，所有命中该规则分组的请求都会被**拒绝**——你用可用性换取了"该规则从未被静默绕过"的保证。
-- `failOpen: true` 意味着在数据库加载完成前，所有请求都会被**放行**，就像这条地理谓词根本不
-  存在一样——你用执行力换取了这段窗口期的可用性。如果该分组的其余部分全部是带
-  `onMissing: Skip` 的地理谓词，且处于**白名单模式**，请参见下方的"全 Skip 陷阱"——这种特定组合
-  产生的效果与单独理解 `failOpen: true` 时的直觉恰恰相反。
+- 在安全相关规则（例如"拦截这个国家"）上使用 `failOpen: false`，意味着在数据库加载完成前，所有
+  命中该规则分组的请求都会被**拒绝**——你用可用性换取了"该规则从未被静默绕过"的保证。
+- `failOpen: true` 意味着在数据库加载完成前，所有请求都会被**放行**，就像 `GeoIpLocation`
+  根本不在链上一样——你用执行力换取了这段窗口期的可用性。
 
-没有第三种选项，也没有默认值；你必须在每个含有至少一条地理规则的插件上显式写明，也不能在不含
-任何地理规则的插件上写它。
+没有第三种选项，也没有默认值；只要配置了任何规则分组就必须显式写明，而在只解析模式下不能写它。
 
-### `ClientGeo` 可被伪造；`DirectGeo` 不可以
+#### 纯 CIDR 规则永不触碰 `failOpen`
 
-`ClientGeo` 的解析地址**来自 `X-Forwarded-For`**，属于客户端可控输入。只有当部署真正终结在可信
+完全由 `key: cidr` 规则组成的规则集完全不需要 GeoIP 数据库——CIDR 匹配直接比较对端地址，无需
+MMDB 查询。HTTP 和 L4 插件都会按来源（`source`）检测这一点（`source_needs_geo_facts`），当某个
+来源的所有规则都不需要解析出的维度时，直接跳过数据库查询，因此一份纯 IP 允许/拒绝列表永远不会
+触碰 `failOpen`——无论那个不相关的国家数据库是否加载，它都保持正确。
+
+### `RemoteIp` 可被伪造；`DirectPeerIp` 不可以
+
+`RemoteIp` 的解析地址**来自 `X-Forwarded-For`**，属于客户端可控输入。只有当部署真正终结在可信
 代理之后——即配置了 `RealIp` 插件，且其 `trustedIps` 集合确实精确匹配你真实的代理/CDN 出口
 范围，同时连接的 TCP 对端也在该集合内——它才是可信的。如果这些条件不满足，`remote_addr` 就只是
-TCP 对端地址的原样拷贝，`ClientGeo` 会（无害地）退化为与 `DirectGeo` 相同的值。
+TCP 对端地址的原样拷贝，`RemoteIp` 规则会（无害地）退化为与 `DirectPeerIp` 规则读取相同的值。
 
 危险的配置是把 `trustedIps` 配得过于宽泛——极端情况就是一条默认路由：
 
@@ -266,160 +317,127 @@ TCP 对端地址的原样拷贝，`ClientGeo` 会（无害地）退化为与 `Di
 ```
 
 有了这个配置，**任何**客户端都可以发送 `X-Forwarded-For: 1.1.1.1`，被当作来自
-`1.1.1.1` 所在的地理位置，从而完全绕过 `ClientGeo` 黑名单规则。这是一个在实践中很可能发生的
-误配置——某个 CDN 发布的出口范围不完整或经常变化，运维方"为了保险"扩大了 `trustedIps`，却在不知
-不觉中把地理判定的完全控制权交给了每一个客户端。
+`1.1.1.1` 所在的地理位置，从而完全绕过一条来源为 `RemoteIp` 的拒绝规则。这是一个在实践中很可能
+发生的误配置——某个 CDN 发布的出口范围不完整或经常变化，运维方"为了保险"扩大了 `trustedIps`，
+却在不知不觉中把地理判定的完全控制权交给了每一个客户端。
 
-> **关于自动检测的说明。** 与本文档中的其他一些坑不同，目前**没有**任何接入时的校验会将
-> `ClientGeo` 规则与所在监听器的 `RealIp`/`trustedIps` 配置做交叉检查。`ClientGeo` 是否可信
-> 完全需要运维方自行核对同一路由/网关上的 `RealIp` 插件配置来确认。如果你的部署并没有真正终结在
-> 一个可信、范围精确的代理之后，任何关乎安全的规则都应优先使用 `DirectGeo`——它总是读取原始
-> TCP 对端地址，不会受请求头影响。
+> **关于自动检测的说明。** 目前**没有**任何接入时的校验会将 `RemoteIp` 的 `GeoIpLocation` 规则
+> 与所在监听器的 `RealIp`/`trustedIps` 配置做交叉检查。`RemoteIp` 是否可信完全需要运维方自行核对
+> 同一路由/网关上的 `RealIp` 插件配置来确认。如果你的部署并没有真正终结在一个可信、范围精确的
+> 代理之后，任何关乎安全的规则都应优先使用 `DirectPeerIp`——它总是读取原始 TCP 对端地址，不会受
+> 请求头影响。L4 的 `GeoIpLocation` 配置会直接拒绝 `RemoteIp`，所以这个问题只与 HTTP 层有关。
 
-### `GlobalAccessControl` 的 `ipSource` 命名反转
+### 没有 `registered_country` 兜底
 
-如果你在 `GlobalAccessControl` 中同时使用地理规则和它自身的 IP/CIDR 前置条件，需要注意
-`GlobalAccessControl` 的 `ipSource` 枚举与 `ClientGeo`/`DirectGeo` 的命名是**反转**的：
-`ipSource: ClientIp` 解析出的是真实客户端地址（XFF 解析后的地址，与 `ClientGeo` 读取的地址
-*相同*），而 `ipSource: RemoteAddr` 解析出的是原始 TCP 对端地址（与 `DirectGeo` 读取的地址
-*相同*）。将 `ipSource: ClientIp` 与 `DirectGeo` 规则配对（或反过来将 `ipSource: RemoteAddr`
-与 `ClientGeo` 配对），会使同一个 AND 分组从两个不同的地址做决策，且不会有任何提示。当分组的
-`ipSource` 与其地理规则的来源出现这种不一致时，接入时会发出一条 **WARN**
-（`GlobalAccessControl ipSource/geo disagreement`）——所以与上面 `ClientGeo`/`trustedIps` 那个
-坑不同，这种特定组合确实会被自动标记出来。
+当 `country.iso_code` 缺失时，刻意不回退到 `registered_country` 或 `represented_country`。
+卫星 ISP、anycast 地址段、部分匿名化网络，以及某些军事/使馆分配段，都存在已填充的
+`registered_country`（**注册方**）但无法解析出 `country`（**客户端的真实位置**）——如果混用
+两者，会导致同一条 `country` 规则对不同客户端表达出不同的含义。这些客户端会解析为
+`country: None`，一条有约束的 `country` 规则对它们永远不会命中。如果你的流量中卫星或 anycast
+客户端占比较高，预期它们中的一部分会按设计永久无法解析，而不是遇到 bug。
 
-### 不存在"数据库分级"这个概念——缺失的维度只是普通的"无值"
+其他形式的缺失也是同样处理：该地址在 MMDB 中完全没有记录，以及记录存在但缺少这一具体维度（对
+`subdivision`/`city` 来说非常常见——很多携带 city/subdivision 数据的记录只填充 `geoname_id` +
+名称，没有 `iso_code`，`city.names` 对不常见的地方也经常缺少 `"en"` 键），二者都会直接让一条
+有约束的规则不匹配。
 
-该特性早期草案曾把 MaxMind 的产品线划分为"City 级"与"Country 级"，并在一条 `city`/
-`subdivision` 规则针对看起来像"Country 级"的数据库编译时发出警告。这一检查已被移除：
-`database_type` 只是一段自由文本（`GeoLite2-City`、`GeoIP2-Enterprise`，或某个供应商自己的
-OEM 名称……），并没有可靠的办法把任意字符串归类为"有 city 数据"还是"没有"——一个确实携带
-city/subdivision 粒度、但其 `database_type` 字符串不包含可识别关键字的数据库，会触发一条
-**错误**的警告，告诉运维方一条实际生效的规则是失效的，这比完全不警告更糟。
+### `city` 只匹配英文名称
 
-更诚实的模型是：无论由哪个产品构建，解析出的记录都是统一的。当记录携带该数据时
-`city`/`subdivision` 是 `Some(...)`，不携带时是 `None`——原因可能是以下三种之一（数据库
-从不携带该维度、这一条具体记录缺少该维度、或该地址根本没有解析出记录），这三者是无法区分
-的。它们都只是普通的"值缺失"，和一个缺失的请求头或 Cookie 一样，由 `onMissing` 治理：
+`city` 取自 `city.names["en"]`——英文本地化名称，永远不是翻译后的名称。用
+`values: ["北京"]`（或任何非英文拼写）写的城市规则永远不会匹配，因为查询结果始终是英文形式。
+`city` 和 `subdivision` 也**不是全局唯一的**——"Cambridge" 在多个国家都存在，单独的
+`subdivision: ["CA"]` 会同时匹配加利福尼亚州和任何代码为 `CA` 的加拿大省份。请始终在同一个 AND
+分组内将 `city` 或 `subdivision` 与 `country` 配对使用（见上方规则分组示例）。
 
-- `onMissing: NoMatch`（默认）——一个 `country` + `city` 的 AND 分组，如果 `city` 永远
-  解析不出值，整个分组会静默地永远不匹配。在黑名单模式下，该限制会对所有客户端**实际失效**，
-  且没有任何明显的错误提示。
-- `onMissing: Skip`——同一个分组会静默地收窄为仅按国家判定。
-- `onMissing: Match`——同一个分组仅凭国家谓词就会匹配所有客户端，因为缺失的 `city` 值会被
-  当作命中。
+### 缺失维度只是普通的规则未命中
 
-这里没有任何接入时或 Gateway 日志级别的信号，因为 Gateway 侧根本没有可校验的东西：一条
-`city`/`subdivision` 规则是否最终能解析出值，完全取决于运维方加载了什么数据库，而这在每一次
+无论由哪个产品构建，解析出的记录都是统一的。当记录携带该数据时 `city`/`subdivision` 是
+`Some(...)`，不携带时是 `None`——原因可能是以下三种之一（数据库从不携带该维度、这一条具体记录
+缺少该维度、或该地址根本没有解析出记录），这三者是无法区分的。它们都只是普通的"这条有约束的规则
+不匹配"——没有像其他插件那样单独的缺失处理开关（`onMissing`）；上面[规则形状](#规则形状)一节里
+"`values` 必须非空 / 维度缺失即不匹配"的规则已经覆盖了这一切。
+
+**不存在"数据库分级"这个概念。** 该特性早期草案曾把 MaxMind 的产品线划分为"City 级"与
+"Country 级"，并在一条 `city`/`subdivision` 规则针对看起来像"Country 级"的数据库编译时发出
+警告。这一检查已被移除：`database_type` 只是一段自由文本（`GeoLite2-City`、
+`GeoIP2-Enterprise`，或某个供应商自己的 OEM 名称……），并没有可靠的办法把任意字符串归类为"有
+city 数据"还是"没有"——一个确实携带 city/subdivision 粒度、但其 `database_type` 字符串不包含
+可识别关键字的数据库，会触发一条**错误**的警告，告诉运维方一条实际生效的规则是失效的，这比完全
+不警告更糟。这里没有任何接入时或 Gateway 日志级别的信号，因为 Gateway 侧根本没有可校验的东西：
+一条 `city`/`subdivision` 规则是否最终能解析出值，完全取决于运维方加载了什么数据库，而这在每一次
 更新周期都可能发生变化。请查看访问日志中的 `geo` 块，确认当前加载的数据库实际能解析出哪些字段，
-并对照你的数据提供商文档，为每一条 `city`/`subdivision` 规则显式选择 `onMissing`，而不要依赖
-默认值。
+并据此调整你的规则分组。
 
-**全 Skip 白名单拒绝风暴。** 在 `mode: Whitelist` 下，一个**完全**由带 `onMissing: Skip` 的
-地理谓词组成的规则分组，在数据库尚未加载完成时评估，会使该分组的 `considered == 0`——匹配器会
-将其视为"没有分组匹配"，于是**所有请求都会被拒绝**，返回 403 且没有明显的诊断信息
-（该分组技术上确实有规则，只是全部被跳过了）。注意 `failOpen: false` 会**先于**这种情况
-触发短路，并以一个可记录的原因拒绝——这是更好、更易诊断的结果。恰恰是 `failOpen: true`
-与一个全地理谓词的白名单分组中每条规则都是 `onMissing: Skip` 的组合，才会在冷启动窗口期间
-产生这种静默的 403 风暴。
+## L4（TCP/TLS）注册
 
-## L4（TCP/TLS）地理限制
+`GeoIpLocation` 作为 `EdgionStreamPlugins.spec.plugins` 条目注册——**仅限**第一阶段
+（`ConnectionFilter`，TLS 握手之前）。它没有被加入 `tlsRoutePlugins`（第二阶段），该阶段目前
+仍然只允许 `IpRestriction`。
 
-`GlobalConnectionIpRestriction` 每个 profile 新增了一个可选的 `geo` 块——一个显式的、需要主动
-选择加入的嵌套结构（而不是两个隐式为空的列表），这样"该 profile 是否使用地理限制"就没有歧义：
+L4 的配置结构与 HTTP 完全相同，但有两条特定于本层的准入规则：
+
+| 规则 | 原因 |
+|---|---|
+| 拒绝 `source: RemoteIp` | L4 没有 `X-Forwarded-For` 可用于解析真实客户端。请使用 `DirectPeerIp`。 |
+| **拒绝只解析模式（没有任何规则分组）** | L4 没有访问日志，`StreamContext` 也不携带任何日志出口，解析出来的地理信息无处可去——这个插件将确定无疑地什么也不做。L4 条目必须至少携带一个 `denyRuleGroups`/`allowRuleGroups` 分组。 |
+
+第二条正是"只观察不拦截"属于 **HTTP 层能力**的原因：在 L7，只解析条目会填充访问日志的 `geo`
+块，这是一项实实在在的产出；而在 L4，同样的配置会变成一项静默不运行的安全控制，因此在准入时
+直接拒绝，而不是当作一个有文档记载的空操作接受下来。
 
 ```yaml
-profiles:
-  main:
-    defaultAction: Deny
-    allow:
-      - name: office
-        cidrs: ["10.0.0.0/8"]
-    geo:
-      allowCountries: ["CN", "HK"]
-      denyCountries: ["RU"]
-      failOpen: false        # 必填 —— 无默认值
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: geo-block
+  namespace: production
+spec:
+  plugins:
+    - type: GeoIpLocation
+      config:
+        defaultAction: allow
+        failOpen: false
+        denyRuleGroups:
+          - name: block-ru
+            rules:
+              - source: DirectPeerIp
+                key: country
+                values: ["RU"]
 ```
 
-`allowCountries` / `denyCountries` 至少要有一个非空；空的 `geo` 块会被拒绝。`failOpen` 没有
-默认值，原因与 HTTP 侧插件级的 `failOpen` 相同——运维方需要显式声明处置方式。**没有 `geo` 块的
-profile 行为与今天完全一致**——这是一个严格的扩展，不会改变已有 profile 的行为。
+`source: RemoteIp` 在 L4 配置中是硬性接入错误——在控制器接入和 Gateway 构造两条路径上会被
+一致地拒绝（两者调用的是同一个共享校验函数），因为 L4 没有 `X-Forwarded-For` 可用来解析真实
+客户端。
 
-L4 层**只支持国家匹配**——不支持大洲、城市或省级细分。在连接这一层没有请求属性可供组合，因此
-细粒度的地理规则既难以运维又容易过度拦截；城市级别的判定应该放在 HTTP 层。只包含 `geo` 块、没有
-任何 IP `allow`/`deny` 条目的 profile 是合法配置——一个纯地理准入 profile。
+### 永远是传输层对端——地理判定没有 PROXY protocol 的顾虑
 
-### 评估顺序
+由于 `GeoIpLocation` 的 L4 注册仅在第一阶段生效，它看到的永远是原始传输层对端：PROXY protocol
+的解析严格发生在 `accept()` **之后**，所以第一阶段的连接过滤器永远看不到 PROXY 解析后的客户端。
+这比 `GlobalConnectionIpRestriction` 自身的 IP 规则要简单——那些规则会在全部三个 Stream 阶段
+运行，因此在第一阶段看到的是负载均衡器的地址，而在第二/三阶段看到的是 PROXY 解析后的客户端地址；
+`GeoIpLocation` 的 `DirectPeerIp` 来源没有这种歧义需要说明，因为它只会在这一个阶段运行。
 
-地理限制是在已有的 IP 拒绝/放行判定**之后**评估的第二阶段，而不是合并进 IP 匹配器本身：
+### 无就绪门控：运维方自行承担冷启动窗口
 
-| # | 条件 | 结果 |
-|---|---|---|
-| 1 | IP 命中拒绝 | **拒绝**（终止） |
-| 2 | IP 命中放行 | **放行**（终止——完全豁免地理判定） |
-| 3a | 未加载数据库（`Unavailable`） | `failOpen: true` → 不表态，进入第 4 步；`false` → **拒绝** |
-| 3b | 命中 `denyCountries` | **拒绝** |
-| 3c | 配置了 `allowCountries` | 命中 → **放行**（终止）；未命中 → **拒绝**（终止） |
-| 3d | 只配置了 `denyCountries`，未命中 | 不表态，进入第 4 步 |
-| 4 | `defaultAction`，但**仅当 profile 不处于白名单模式时** | 白名单模式下：**`DenyByWhitelistMiss`**；否则：`defaultAction` |
-
-其中两行是关键，也很容易搞反：
-
-- **IP 白名单命中（第 2 行）会让客户端完全豁免地理判定。** 当同时配置了 `allow` 列表和 `geo`
-  块时，已知良好的 IP 来源永远不会被拿去做国家检查——这个豁免正是将地理限制合并进这个插件（而不是
-  另建一个插件）所带来的实际表达能力。
-- **地理判定"不表态"永远不会在白名单模式下让 `defaultAction` 复活（第 4 行）。** 由于
-  `defaultAction` 默认为 `Allow`，如果地理"不表态"的结果在白名单 profile 中落到了这一步，那么
-  在一个正常工作的 IP 白名单上加一条 `denyCountries: ["RU"]`——本意是想拦截*更多*流量——反而会
-  静默地**放行白名单之外的所有地址**，因为白名单未命中的分支根本没有机会被走到。实现专门针对这一
-  情况做了保护；一个白名单 profile 加上 `denyCountries`，依然会像加地理限制之前一样，拒绝
-  不在白名单内的地址。
-- **`allowCountries` 命中是终止性的（第 3c 行）**——它永远不会落到 `defaultAction`。在一个
-  `defaultAction: Deny` 的 profile（这个插件的安全不变式要求的保守基线）中，如果让
-  `allowCountries` 命中继续往下走，会导致 `allowCountries` 谁都放不进来。
-
-### PROXY protocol 与第一阶段地理判定看到的地址
-
-`GlobalConnectionIpRestriction` 在一次连接的生命周期中最多会在三个位置运行，它对"客户端 IP"的
-理解——以及由此产生的地理判定——因阶段而异：
-
-| 阶段 | 地址来源 | 是否经过 PROXY protocol 解析 |
-|---|---|---|
-| 第一阶段（`ConnectionFilter`，在 `accept()` 时） | 原始传输层对端 | **否** |
-| TCPRoute | 解析后的客户端地址 | 是 |
-| TLSRoute | 解析后的客户端地址 | 是 |
-
-PROXY protocol 的解析严格发生在 `accept()` **之后**，所以第一阶段的连接过滤器无法看到
-PROXY 声明的客户端地址——它看到的是负载均衡器自己的地址。在启用了 PROXY protocol 的监听器上，
-第一阶段的 IP 和地理规则因此会匹配负载均衡器的 IP，而 TCPRoute/TLSRoute 阶段会匹配真实客户端的
-地址。**这是该插件既有的、被接受的特性**——它的 IP allow/deny 规则今天就已经是这样的行为——
-地理判定刻意继承了同样的语义，而不是用特殊逻辑来区分对待；保持一个 profile 内 IP 和地理两部分
-行为一致，比针对某个机制单独开特例更有价值。这个插件没有 `ipSource` 选项可以绕开这个限制。
+一次刚发布、还没有数据库的部署（`emptyDir` 上很典型）**不会**扣住就绪探针。`failOpen` 就是用来
+声明应该发生什么的：`true` 接受一段地理策略未生效的窗口期，`false` 接受一段流量被拒绝的窗口期。
+首次加载前的退避（见下文）会把这段窗口限制在几秒钟以内，而不是完整的 `retry_interval_sec`；
+`edgion_geoip_db_loaded` 是用来告警"这个状态是否还在持续"的指标。
 
 ### L4 地理拒绝永远不会被记录日志，也不携带客户端地址
 
 一次 L4 地理拒绝**在任何阶段都不会产生日志条目**，也**不会在任何地方记录客户端地址**。唯一的信号
-是计数器 `edgion_geoip_denied_total{layer,reason}`（见[指标](#指标)）。这是刻意为之的设计，
-不是第一阶段限制导致的将就：pingora 会在其 accept 循环内直接丢弃第一阶段拒绝的连接，所以那里确实
-无法产生日志条目——但*同样*的不记录规则被统一应用到了 TCPRoute 和 TLSRoute 阶段，即使这两个阶段
-技术上是可以记录日志的。在这三个阶段保持一致的行为，被认为比逐阶段的细节更有价值，而且在连接洪泛
-攻击下，逐连接的拒绝日志本身也是一个放大向量。HTTP 层的地理拒绝不受此规则影响——它们保留正常的
-`EdgionStatus` 条目和访问日志记录，因为那里本来就存在逐请求的日志。
-
-### 无就绪门控：运维方自行承担冷启动窗口
-
-一次刚发布、还没有数据库的部署（`emptyDir` 上很典型）**不会**扣住就绪探针。`failOpen`（每个 L4
-`geo` 块，以及每个 HTTP `RequestRestriction`/`GlobalAccessControl` 插件）就是用来声明应该发生
-什么的：`true` 接受一段地理策略
-未生效的窗口期，`false` 接受一段流量被拒绝的窗口期。首次加载前的退避（见下文）会把这段窗口限制在
-几秒钟以内，而不是完整的 `retry_interval_sec`；`edgion_geoip_db_loaded` 是用来告警"这个状态是否
-还在持续"的指标。
+是计数器 `edgion_geoip_denied_total{layer,reason}`（见[指标](#指标)）。这是刻意为之的设计：
+pingora 会在其 accept 循环内直接丢弃第一阶段拒绝的连接，所以那里确实无法产生日志条目，而且在连接
+洪泛攻击下，逐连接的拒绝日志本身也是一个放大向量——统一的、仅计数的信号比逐连接细节更有价值。
+HTTP 层的地理拒绝不受此规则影响——它们保留正常的 `EdgionStatus` 条目和访问日志记录，因为那里本来
+就存在逐请求的日志。
 
 ## 访问日志
 
-没有全局开关：地理能力完全由插件驱动，访问日志只会报告本次请求中确实被某个插件或 L4 谓词查询过
-的槽位。当一条路由至少配置了一条 `ClientGeo` 和/或 `DirectGeo` 谓词时，命中的请求的访问日志条目
-会新增一个 `geo` 对象，其中只包含被查询过的槽位：
+没有全局开关：地理能力完全由插件驱动，访问日志只会报告本次请求中 HTTP `GeoIpLocation` 插件确实
+查询过的槽位。在一条路由的 `requestPlugins` 里加入 `GeoIpLocation` 条目——无论是只解析模式还是
+规则模式——都会让命中的请求的访问日志条目新增一个 `geo` 对象，其中只包含被查询过的槽位：
 
 ```json
 "geo": {
@@ -428,11 +446,11 @@ PROXY 声明的客户端地址——它看到的是负载均衡器自己的地�
 }
 ```
 
-每个槽位（`client` = `ClientGeo`，`direct` = `DirectGeo`）都是一个独立的、逐请求的 `OnceLock`。
-访问日志只读取某个插件在本次请求中已经解析过的槽位——它本身从不触发查询。因此完全没有地理规则的
-路由不会产生任何 MMDB 查询；只配置了 `ClientGeo` 规则的路由只会报告 `geo.client`，不会出现
-`geo.direct`。如果希望每条日志都同时包含两个槽位，配置一条会读取每个槽位的谓词即可（用
-`onMissing: Skip` 的规则就足够，既能触发读取又不改变放行结果）。
+每个槽位（`client` = `RemoteIp` 侧解析结果，`direct` = `DirectPeerIp` 侧解析结果）都是一个
+独立的、逐请求的 `OnceLock`。访问日志只读取插件在本次请求中已经解析过的槽位——它本身从不触发
+查询。因此完全没有 `GeoIpLocation` 条目的路由不会产生任何 MMDB 查询。只解析模式（`config: {}`）
+永远会同时解析两个槽位——这正是它存在的全部意义；规则模式只会解析已配置规则实际用到的来源/维度
+（例如，一份纯 CIDR 规则集，对它覆盖的来源根本不需要解析出任何维度）。
 
 ### 坐标
 
@@ -452,7 +470,7 @@ PROXY 声明的客户端地址——它看到的是负载均衡器自己的地�
 | `edgion_geoip_db_build_epoch_seconds` | Gauge | 无 | 已加载数据库的构建时间戳。对陈旧程度告警。 |
 | `edgion_geoip_update_failed_total` | Counter | `reason`（`fetch` \| `encoding` \| `size_cap` \| `stall` \| `validation` \| `rename` \| `disk` \| `deadline`） | 按分类统计的后台**更新周期**失败。`disk` 表示磁盘空间预检查拒绝启动（还没有发出任何请求）；`deadline` 表示整个周期超过了 `download_deadline_sec`（即使在持续取得进展），区别于 `stall`（在 `stall_timeout_sec` 内没有任何进展）——两者对应相反的修复方式。 |
 | `edgion_geoip_lookup_panic_total` | Counter | 无 | 一次逐请求的 MMDB 查询发生 panic（已捕获）并退化为 `NotFound`。与上面的 `edgion_geoip_update_failed_total` 不同：这是查询路径上的逐请求事件，不是更新周期失败。 |
-| `edgion_geoip_denied_total` | Counter | `layer`（`stage1` \| `tcp` \| `tls`）、`reason`（`deny_country` \| `allow_miss` \| `db_unavailable`） | 被地理规则拒绝的 L4 连接。永远不携带客户端地址；HTTP 拒绝刻意不计入此处——它们已经出现在访问日志中。 |
+| `edgion_geoip_denied_total` | Counter | `layer`（`stage1` \| `tcp` \| `tls`）、`reason`（`deny_country` \| `allow_miss` \| `db_unavailable`） | 被 `GeoIpLocation` 拒绝的 L4 连接。在当前的接入方式下 `layer` 永远是 `stage1`，因为那是该插件唯一的 L4 注册点；另外两个标签取值是为了未来兼容而保留的。永远不携带客户端地址；HTTP 拒绝刻意不计入此处——它们已经出现在访问日志中。 |
 
 ## 多副本更新行为、抖动与 `.meta` 校验器
 
@@ -485,20 +503,19 @@ PROXY 声明的客户端地址——它看到的是负载均衡器自己的地�
 | 配置加载失败，报错提到某个 `geoip` 子字段是未知字段 | `geoip` 块内部的 camelCase 拼写错误（例如 `dbPath`） | 使用 snake_case——`db_path`、`update_url` 等 |
 | 全新部署之后 `edgion_geoip_db_loaded` 一直是 `0` | 首次启动时的正常状态——没有内置数据库，且更新器尚未完成第一个周期 | 等待首次成功周期，或检查 `edgion_geoip_update_failed_total{reason}` 是否卡在某个失败原因上 |
 | Gateway 进程在没有 panic 日志的情况下崩溃，且发生在某个数据库文件刚被外部修改之后不久 | 有东西原地写入了 `db_path`，而不是用重命名做替换——SIGBUS | 停止任何原地写入的行为；只有内置更新器，或同文件系统上"临时文件+重命名"的写入方式被支持 |
-| 更新周期持续以类似 `ENOSPC` 的错误失败 | 更新卷容量不足以完成一次交换（需要旧 inode + 新文件 + 可能的 `.tmp`） | 将卷扩容到数据库大小的 3 倍 |
-| 黑名单模式下，`country` + `city` 规则分组永远不匹配任何内容 | 已加载数据库的记录不携带 city 数据，撞上了该规则的 `onMissing: NoMatch`——见[不存在"数据库分级"这个概念](#不存在数据库分级这个概念缺失的维度只是普通的无值) | 查看访问日志的 `geo` 块并对照供应商文档；显式设置 `onMissing`，或去掉 `city`/`subdivision` 谓词 |
-| 冷启动期间，一个只包含地理规则的白名单模式 profile 上，所有请求都被 403 拒绝 | 全 Skip 白名单风险：分组中每条规则都是 `onMissing: Skip`，加上插件级 `failOpen: true`，且评估发生在数据库尚未加载完成之前 | 改用 `failOpen: false` 以获得可诊断的拒绝，或确保分组中至少存在一条非地理谓词 |
+| 更新周期以 `reason="disk"`（或类似 `ENOSPC`）持续失败 | 更新卷容量不足以完成一次交换（需要 `max_db_bytes` 的 `.tmp`，加上当前数据库大小 2 倍的旧 inode/rename 双持有开销） | 按上面的公式扩容卷，而不是扩到 `max_db_bytes` 的 3 倍 |
+| 一个 `country` + `city` 规则分组永远不匹配任何内容 | 已加载数据库的记录不携带这条规则所需的 city 数据——见[不存在"数据库分级"这个概念](#缺失维度只是普通的规则未命中) | 查看访问日志的 `geo` 块并对照供应商文档，确认已加载的数据库实际能解析出哪些字段；如果 `city`/`subdivision` 规则在结构上永远不可能匹配，就去掉它 |
 | 带翻译语言取值的 `city` 规则永远不匹配 | `city` 只会与 `names["en"]` 比较 | 使用英文城市名 |
-| 黑名单模式的 `ClientGeo` 规则被任意客户端轻易绕过 | `RealIp` 的 `trustedIps` 配得过宽（例如 `0.0.0.0/0`）——`ClientGeo` 退化为攻击者可控输入 | 将 `trustedIps` 收窄到你真实的代理出口范围，或改用 `DirectGeo` |
-| `GlobalAccessControl` 的一个分组在 IP 前置条件和地理规则之间判定不一致 | `ipSource: ClientIp` 与 `DirectGeo` 配对（或反过来）——GAC 的 `ipSource` 命名相对于 `RequestInfo` 是反转的 | 将 `ipSource: ClientIp` 与 `ClientGeo` 配对，`ipSource: RemoteAddr` 与 `DirectGeo` 配对——Gateway 也会对这一具体的不匹配发出接入 WARN |
+| 黑名单模式下、来源为 `RemoteIp` 的规则被任意客户端轻易绕过 | `RealIp` 的 `trustedIps` 配得过宽（例如 `0.0.0.0/0`）——`RemoteIp` 退化为攻击者可控输入 | 将 `trustedIps` 收窄到你真实的代理出口范围，或改用 `DirectPeerIp` |
+| L4 配置在接入/编译时被拒绝，报错提到 `RemoteIp` | L4 的 `GeoIpLocation` 配置中出现 `source: RemoteIp` 是硬性接入错误 | 改用 `source: DirectPeerIp`——L4 没有 `X-Forwarded-For` 可用来解析真实客户端 |
 | 发生了一次 L4 地理拒绝，但任何地方都找不到对应的日志行 | 符合预期——L4 地理拒绝按设计永远不会在任何阶段被记录日志 | 使用 `edgion_geoip_denied_total{layer,reason}` 作为唯一信号 |
-| 一个带 IP 白名单和 `denyCountries` 的白名单模式 L4 profile，似乎放行了不该放行的流量 | 检查被放行的客户端是否命中了 IP `allow` 列表——IP 放行命中是终止性的，会完全豁免地理判定（评估顺序的第 2 行） | 这是设计行为；如果豁免范围过宽，收窄 `allow` 的 CIDR |
+| "拦截这个国家，除非在办公室白名单里"这类规则表现不符合预期 | 检查 `IpRestriction`/其他准入插件相对 `GeoIpLocation` 在插件列表中的顺序——组合方式是按链上顺序生效，而不是靠单一合并插件 | 调整插件列表条目的顺序；没有可配置的跨插件豁免语义 |
 
 ## 相关文档
 
 - [Gateway 配置](../configuration/gateway-config.md) —— 完整的 `GatewayConfig`
   schema 参考，包括 `geoip`
-- [Real IP](../../user-guide/edgion-plugins/real-ip.md) —— 决定 `ClientGeo` 是否可信的
+- [Real IP](../../user-guide/edgion-plugins/real-ip.md) —— 决定 `RemoteIp` 是否可信的
   `trustedIps` 配置
-- [指标](../observability/metrics-inventory.md) —— 完整的指标清单，包括四个
+- [指标](../observability/metrics-inventory.md) —— 完整的指标清单，包括五个
   `edgion_geoip_*` 系列

@@ -1,7 +1,13 @@
-# GlobalConnectionIpRestriction with one inline profile per design §6.3 row.
+# L4 GeoIpLocation coverage. Unlike the pre-refactor GlobalConnectionIpRestriction
+# `geo` block, GeoIpLocation is its own stream plugin (`EdgionStreamPlugin::
+# GeoIpLocation`) with no per-profile/Selector envelope — its config is flat
+# (`denyRuleGroups`/`allowRuleGroups`/`defaultAction`/`failOpen`), so test
+# cases hot-swap this WHOLE resource via ctx.apply_yaml(...) before each
+# probe (same "one flexible resource, re-applied per case" pattern the HTTP
+# GeoRestriction suite uses for its "geo-rr" EdgionPlugins resource) rather
+# than switching a Selector-driven `activeProfile`.
 #
-# The active profile is hot-swapped via the tcp-geo-selector Selector
-# (activeProfileRef below). This same ESP is referenced from BOTH:
+# This same ESP is referenced from BOTH:
 #   - the tcp-geo-route TCPRoute (edgion.io/edgion-stream-plugins annotation
 #     on the ROUTE) -> Stage-2 "tcp" layer, post route-match
 #     (see edgion-gateway/src/routes/tcp/edgion_tcp.rs::check_stream_plugins)
@@ -14,23 +20,8 @@
 # per-listener: both listeners of one Gateway would get the same Stage-1
 # filter, and there would be no way to isolate the "only stage1" case.
 #
-# Profiles, mapped to design §6.3 rows:
-#   row1_ip_deny_terminal — row 1: IP deny wins over geo (terminal)
-#   row2_ip_allow_exempts — row 2: IP allow exempts a geo deny (terminal)
-#   row3b_and_3d          — row 3b (deny hit) / row 3d (no opinion, falls
-#                            through to the Allow default) share one profile
-#   row3c_terminal        — row 3c: allowCountries + defaultAction=Deny is
-#                            terminal in both directions
-#   row4_regression       — row 4: the "inert Allow default" regression this
-#                            whole design exists to prevent. `allow` is
-#                            present (whitelist mode) so `defaultAction:
-#                            allow` is inert; a non-hit source that is also
-#                            not geo-denied must still be denied
-#                            (DenyByWhitelistMiss must survive the geo stage).
-#   row4prime_default_deny — row 4': deny-only geo with no hit, plain
-#                            defaultAction=deny falls through untouched.
-#   no_geo_baseline        — no geo block at all: byte-for-byte legacy
-#                            GlobalConnectionIpRestriction behavior.
+# This file's content is only the starting state loaded by prepare /
+# --no-prepare reruns; every test case overwrites it before its own probes.
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
@@ -38,59 +29,13 @@ metadata:
   namespace: edgion-test
 spec:
   plugins:
-    - type: GlobalConnectionIpRestriction
+    - type: GeoIpLocation
       config:
-        enable: true
-        activeProfile: row1_ip_deny_terminal
-        profiles:
-          row1_ip_deny_terminal:
-            defaultAction: allow
-            deny:
-              - name: deny-ru-source
-                cidrs:
-                  - "127.0.0.5/32"
-            geo:
-              allowCountries: ["RU"]
-              failOpen: false
-          row2_ip_allow_exempts:
-            defaultAction: allow
-            allow:
-              - name: allow-ru-source
-                cidrs:
-                  - "127.0.0.5/32"
-            geo:
-              denyCountries: ["RU"]
-              failOpen: false
-          row3b_and_3d:
-            defaultAction: allow
-            geo:
-              denyCountries: ["RU"]
-              failOpen: false
-          row3c_terminal:
-            defaultAction: deny
-            geo:
-              allowCountries: ["HK"]
-              failOpen: false
-          row4_regression:
-            defaultAction: allow
-            allow:
-              - name: unrelated-allow
-                cidrs:
-                  - "127.0.0.9/32"
-            geo:
-              denyCountries: ["RU"]
-              failOpen: true
-          row4prime_default_deny:
-            defaultAction: deny
-            geo:
-              denyCountries: ["RU"]
-              failOpen: false
-          no_geo_baseline:
-            defaultAction: deny
-            allow:
-              - name: loopback
-                cidrs:
-                  - "127.0.0.0/8"
-        activeProfileRef:
-          namespace: edgion-test
-          name: tcp-geo-selector
+        defaultAction: allow
+        failOpen: false
+        denyRuleGroups:
+          - name: block-ru
+            rules:
+              - source: DirectPeerIp
+                key: country
+                values: ["RU"]

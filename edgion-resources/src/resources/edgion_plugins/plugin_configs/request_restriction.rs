@@ -104,49 +104,7 @@ pub struct RequestRestrictionConfig {
     /// Custom rejection message.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-
-    /// Disposition when **no GeoIP database is loaded at all**, for every
-    /// `ClientGeo`/`DirectGeo` rule across every group in this plugin.
-    /// Required (no default — the operator must state the intent explicitly
-    /// and own the consequence) precisely when this plugin contains at least
-    /// one geo rule; rejected when it contains none.
-    ///
-    /// Plugin-level rather than per-rule: the library-unavailable disposition
-    /// is a single fail-open-or-closed decision for the whole plugin (a
-    /// `false` rule short-circuits the whole plugin to rejection regardless
-    /// of `mode` or any other rule/group — see `RequestRestriction::
-    /// has_fail_closed_geo_rule` in the gateway), so a per-rule value could
-    /// only ever agree with itself across every geo rule in the plugin.
-    ///
-    /// This is deliberately separate from a rule's `onMissing`, which cannot
-    /// express fail-closed: in blacklist mode a false predicate means
-    /// *allow*, so "the database is not loaded" and "block everything until
-    /// it is" cannot both be said with `onMissing`.
-    ///
-    /// - `false` — the plugin short-circuits to rejection, regardless of `mode`.
-    /// - `true`  — every geo predicate is dropped from its AND group, like `Skip`.
-    ///
-    /// `onMissing` still governs the *other* case: a database is loaded but
-    /// has no record for this address, or the record lacks the requested
-    /// dimension.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fail_open: Option<bool>,
 }
-
-/// `true` when `config` has at least one `ClientGeo`/`DirectGeo` rule in any
-/// group. Determines whether `fail_open` is required (`true`) or forbidden
-/// (`false`).
-fn has_geo_rule(rule_groups: &[RuleGroup]) -> bool {
-    rule_groups.iter().flat_map(|g| &g.rules).any(RestrictionRule::is_geo)
-}
-
-/// `'failOpen' is only valid when the plugin has at least one ClientGeo /
-/// DirectGeo rule` — shared text so the "forbidden" branch of the plugin's
-/// `failOpen` check reads identically wherever it fires.
-const FAIL_OPEN_NOT_GEO_ERR: &str =
-    "'failOpen' is only valid when the plugin has at least one ClientGeo/DirectGeo rule";
-const FAIL_OPEN_REQUIRED_ERR: &str =
-    "at least one ClientGeo/DirectGeo rule is present; the plugin must declare an explicit 'failOpen'";
 
 /// A group of predicates combined with AND.
 ///
@@ -174,7 +132,6 @@ impl Default for RequestRestrictionConfig {
             rule_groups: Vec::new(),
             status: default_status(),
             message: None,
-            fail_open: None,
         }
     }
 }
@@ -196,11 +153,6 @@ impl RequestRestrictionConfig {
         }
         if self.status < 100 || self.status >= 600 {
             return Some(format!("Invalid status code: {}", self.status));
-        }
-        match (has_geo_rule(&self.rule_groups), self.fail_open) {
-            (true, None) => return Some(FAIL_OPEN_REQUIRED_ERR.to_string()),
-            (false, Some(_)) => return Some(FAIL_OPEN_NOT_GEO_ERR.to_string()),
-            _ => {}
         }
         for (gi, group) in self.rule_groups.iter().enumerate() {
             let group_name = group.name.clone().unwrap_or_else(|| format!("group[{}]", gi));
@@ -375,119 +327,5 @@ mod tests {
         };
         let err = config.validate().unwrap_err();
         assert!(err.contains("cannot be empty"));
-    }
-
-    fn geo_rule() -> RestrictionRule {
-        RestrictionRule {
-            source: RestrictionSource::ClientGeo,
-            key: Some("country".to_string()),
-            values: Some(vec!["CN".to_string()]),
-            ..Default::default()
-        }
-    }
-
-    /// `failOpen` moved from per-rule to plugin-level: a plugin with a geo
-    /// rule anywhere in any group must declare it explicitly.
-    #[test]
-    fn plugin_requires_fail_open_when_it_has_a_geo_rule() {
-        let mut config = RequestRestrictionConfig {
-            rule_groups: vec![RuleGroup {
-                name: None,
-                rules: vec![geo_rule()],
-            }],
-            fail_open: None,
-            ..Default::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(err.contains("failOpen"), "got: {err}");
-    }
-
-    /// A plugin with no geo rule at all must not be forced to set `failOpen`
-    /// — this is the "not every plugin pays for the geo knob" requirement.
-    #[test]
-    fn plugin_without_geo_rule_does_not_require_fail_open() {
-        let mut config = RequestRestrictionConfig {
-            rule_groups: vec![RuleGroup {
-                name: None,
-                rules: vec![RestrictionRule {
-                    source: RestrictionSource::Header,
-                    key: Some("X".to_string()),
-                    values: Some(vec!["v".to_string()]),
-                    ..Default::default()
-                }],
-            }],
-            fail_open: None,
-            ..Default::default()
-        };
-        assert!(config.validate().is_ok());
-    }
-
-    /// `failOpen` set without any geo rule in the plugin is rejected — the
-    /// field is meaningless (and would be silently misleading) otherwise.
-    #[test]
-    fn plugin_rejects_fail_open_when_it_has_no_geo_rule() {
-        let mut config = RequestRestrictionConfig {
-            rule_groups: vec![RuleGroup {
-                name: None,
-                rules: vec![RestrictionRule {
-                    source: RestrictionSource::Header,
-                    key: Some("X".to_string()),
-                    values: Some(vec!["v".to_string()]),
-                    ..Default::default()
-                }],
-            }],
-            fail_open: Some(false),
-            ..Default::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(err.contains("failOpen"), "got: {err}");
-    }
-
-    #[test]
-    fn plugin_with_geo_rule_and_explicit_fail_open_is_valid() {
-        let mut config = RequestRestrictionConfig {
-            rule_groups: vec![RuleGroup {
-                name: None,
-                rules: vec![geo_rule()],
-            }],
-            fail_open: Some(false),
-            ..Default::default()
-        };
-        assert!(config.validate().is_ok());
-    }
-
-    /// `check_fields()` (controller ingest) and `validate()` (gateway
-    /// compile, which calls `check_fields()` first) must reject the same
-    /// plugin-level `failOpen` misconfiguration with identical text — the
-    /// same ingest/gateway parity invariant the per-rule geo checks already
-    /// guarantee.
-    #[test]
-    fn check_fields_and_validate_agree_on_fail_open_errors() {
-        let missing = RequestRestrictionConfig {
-            rule_groups: vec![RuleGroup {
-                name: None,
-                rules: vec![geo_rule()],
-            }],
-            fail_open: None,
-            ..Default::default()
-        };
-        let mut compiled = missing.clone();
-        assert_eq!(missing.check_fields(), compiled.validate().err());
-
-        let stray = RequestRestrictionConfig {
-            rule_groups: vec![RuleGroup {
-                name: None,
-                rules: vec![RestrictionRule {
-                    source: RestrictionSource::Header,
-                    key: Some("X".to_string()),
-                    values: Some(vec!["v".to_string()]),
-                    ..Default::default()
-                }],
-            }],
-            fail_open: Some(true),
-            ..Default::default()
-        };
-        let mut compiled_stray = stray.clone();
-        assert_eq!(stray.check_fields(), compiled_stray.validate().err());
     }
 }

@@ -1,12 +1,13 @@
 // TLSRoute GeoRestriction suite: one geo-deny case, enough to prove
-// layer="tls" is wired and counted (design §6.3/§6.6).
+// layer="tls" is wired and counted, plus a chain-order check.
 //
 // Against edgion-tests/integration/conf/TLSRoute/GeoRestriction/: a single
 // TLS listener (tls-geo-gw:31953) whose TLSRoute carries the
 // edgion.io/edgion-stream-plugins annotation directly, pointing at an ESP
-// that only has the Stage-1 `plugins` shape (GlobalConnectionIpRestriction
-// with a geo-only profile denying RU). Per
-// edgion-gateway/src/routes/tls/mod.rs::check_tls_route_plugins, an empty
+// that has the Stage-1 `plugins` shape: `GlobalConnectionIpRestriction`
+// (denying an unrelated CIDR, first) THEN `GeoIpLocation` (denying RU,
+// second) — the `GeoIpLocation` plugin owns geo exclusively post-refactor.
+// Per edgion-gateway/src/routes/tls/mod.rs::check_tls_route_plugins, an empty
 // Stage-2 tls_route_plugin_runtime falls back to running the Stage-1 runtime
 // with `.with_layer("tls")`.
 //

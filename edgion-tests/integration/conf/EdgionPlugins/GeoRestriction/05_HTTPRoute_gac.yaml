@@ -1,14 +1,14 @@
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: geo-gac-route
+  name: geo-chain-route
   namespace: edgion-default
 spec:
   parentRefs:
     - name: geo-restriction-gw
       namespace: edgion-test
   hostnames:
-    - "geo-gac.example.com"
+    - "geo-chain.example.com"
   rules:
     - matches:
         - path:
@@ -19,7 +19,7 @@ spec:
           extensionRef:
             group: edgion.io
             kind: EdgionPlugins
-            name: geo-gac
+            name: geo-chain
       backendRefs:
         - name: test-http
           namespace: edgion-test

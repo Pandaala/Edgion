@@ -234,6 +234,7 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
                         | EdgionPlugin::TraceContext(_)
                         | EdgionPlugin::GlobalAccessControl(_)
                         | EdgionPlugin::Canary(_)
+                        | EdgionPlugin::GeoIpLocation(_)
                         | EdgionPlugin::Wasm(_) => {}
                     }
                 }

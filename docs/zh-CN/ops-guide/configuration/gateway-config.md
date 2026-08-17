@@ -140,7 +140,7 @@ Gateway 采用**三端口模型**：
 | `server_addrs` | `Array<String>` | **必填** | Controller conf_sync gRPC 地址列表，如 `["http://127.0.0.1:12151"]`。单地址与旧版单地址行为完全一致；多地址启用 etcd 模式 HA，Gateway 会在列表中轮转寻找 leader 并在故障时切换。CLI 的 `--server-addr` 可重复传递 |
 | `admin_listen` | `String` | `127.0.0.1:12001` | Admin API 监听地址，默认绑 loopback（`127.0.0.1:12001`）——敏感端点（`/configclient`、`/api/v1/server-info`）不对集群暴露。远程访问请使用 `kubectl port-forward pod/<name> 12001:12001`。 |
 | `probe_listen` | `String` | `0.0.0.0:12000` | 存活/就绪探针监听地址，绑定所有接口以便 kubelet 通过 Pod IP 访问。仅提供 `/health` 和 `/ready`，不加入 gateway Service。 |
-| `geoip` | `GeoIpConfig` | *(空——未设置 `db_path`)* | GeoIP 数据库与更新器配置，供 `ClientGeo`/`DirectGeo` 限制规则和 L4 地理块使用。**必须嵌套在 `gateway:` 下**——完整字段参考及必读的坑见 [GeoIP 地理限制](../gateway/geoip.md)。 |
+| `geoip` | `GeoIpConfig` | *(空——未设置 `db_path`)* | GeoIP 数据库与更新器配置，供 `GeoIpLocation` 插件使用（HTTP `EdgionPlugin` 和 L4 `EdgionStreamPlugin` 共用同一套配置结构）。**必须嵌套在 `gateway:` 下**——完整字段参考及必读的坑见 [GeoIP 地理限制](../gateway/geoip.md)。 |
 
 ### conf_sync_security
 

@@ -1039,14 +1039,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.request_info.client_cert_info.clone()
     }
 
-    fn client_geo(&self) -> crate::geoip::GeoLookup {
-        self.ctx.client_geo().clone()
-    }
-
-    fn direct_geo(&self) -> crate::geoip::GeoLookup {
-        self.ctx.direct_geo().clone()
-    }
-
     fn downstream_is_tls(&self) -> Option<bool> {
         // Same source as the session-persistence cookie `Secure` decision:
         // the downstream digest carries an ssl_digest only for a connection

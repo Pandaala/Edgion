@@ -67,6 +67,7 @@ impl EdgionStreamPluginsHandler {
                 }
                 EdgionStreamPlugin::IpRestriction(_) => None,
                 EdgionStreamPlugin::ConnectionRateLimit(_) => None,
+                EdgionStreamPlugin::GeoIpLocation(_) => None,
             })
     }
 
@@ -109,6 +110,7 @@ impl EdgionStreamPluginsHandler {
                     }
                 }
                 EdgionStreamPlugin::ConnectionRateLimit(_) => {}
+                EdgionStreamPlugin::GeoIpLocation(_) => {}
             }
         }
 
@@ -154,6 +156,7 @@ impl EdgionStreamPluginsHandler {
                     }
                 }
                 EdgionStreamPlugin::ConnectionRateLimit(_) => {}
+                EdgionStreamPlugin::GeoIpLocation(_) => {}
             }
         }
 
@@ -233,6 +236,19 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
                     errors.push(format!(
                         "plugins[{idx}] (GlobalConnectionIpRestriction): config invalid: {e}"
                     ));
+                }
+            }
+            // GeoIpLocation: stateless field validation, layer-parameterized
+            // (`is_stream: true`). This does NOT go through the generic
+            // `PluginValidation::validation_error()` trait (that fixed
+            // signature has no layer flag) — it calls the exact same
+            // `GeoIpLocationConfig::check_fields(true)` the gateway's
+            // `GeoIpLocation` stream-plugin constructor calls via
+            // `validate_and_init(true)`, so the two paths cannot drift. See
+            // `GeoIpLocationConfig`'s module doc.
+            if let EdgionStreamPlugin::GeoIpLocation(cfg) = &entry.plugin {
+                if let Some(e) = cfg.check_fields(true) {
+                    errors.push(format!("plugins[{idx}] (GeoIpLocation): {e}"));
                 }
             }
         }
@@ -461,6 +477,7 @@ fn resolve_ip_list_refs(esp: &EdgionStreamPlugins, ctx: &HandlerContext) -> Vec<
                 }
             }
             EdgionStreamPlugin::ConnectionRateLimit(_) => {}
+            EdgionStreamPlugin::GeoIpLocation(_) => {}
         }
     }
 
