@@ -1,0 +1,26 @@
+# Baseline RequestRestriction config for the geo suite. Individual test cases
+# hot-swap this resource's content via ctx.apply_yaml(...) before each request
+# (same "one flexible resource, re-applied per case" pattern the L4 GCIR
+# suites use for their Selector). This file's content is only the starting
+# state loaded by prepare / --no-prepare reruns.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: geo-rr
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Blacklist
+        ruleGroups:
+          - name: client-country-gb
+            rules:
+              - name: client-country-gb
+                source: ClientGeo
+                key: country
+                values: ["GB"]
+        status: 403
+        message: "Access denied by geo policy"
+        failOpen: false

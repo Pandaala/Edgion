@@ -6,6 +6,7 @@ pub mod duration;
 pub mod edgion_status;
 pub mod err;
 pub mod filters;
+pub mod geoip_codes;
 pub mod gwapi_types;
 pub mod listener_key;
 pub mod matcher;

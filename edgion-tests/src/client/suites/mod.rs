@@ -46,13 +46,13 @@ pub use grpc_route::{
 };
 
 pub use tcp_route::{
-    GcirEnforcementTestSuite, TcpEspReloadAllowTestSuite, TcpEspReloadDenyTestSuite, TcpIdleTimeoutTestSuite,
-    TcpKeepaliveSmokeTestSuite, TcpStreamPluginsTestSuite, TcpTestSuite,
+    GcirEnforcementTestSuite, TcpEspReloadAllowTestSuite, TcpEspReloadDenyTestSuite, TcpGeoRestrictionTestSuite,
+    TcpIdleTimeoutTestSuite, TcpKeepaliveSmokeTestSuite, TcpStreamPluginsTestSuite, TcpTestSuite,
 };
 
 pub use tls_route::{
-    TlsBothAbsentParentRefTestSuite, TlsMultiSniTestSuite, TlsPassthroughTestSuite, TlsProxyProtocolTestSuite,
-    TlsRouteTestSuite, TlsStreamPluginsTestSuite, TlsUnknownKindBackendTestSuite,
+    TlsBothAbsentParentRefTestSuite, TlsGeoRestrictionTestSuite, TlsMultiSniTestSuite, TlsPassthroughTestSuite,
+    TlsProxyProtocolTestSuite, TlsRouteTestSuite, TlsStreamPluginsTestSuite, TlsUnknownKindBackendTestSuite,
 };
 
 pub use udp_route::{UdpStreamPluginsTestSuite, UdpTestSuite};
@@ -87,17 +87,18 @@ pub use edgion_plugins::{
     EdgionConfigDataFlapInitialTestSuite, EdgionConfigDataFlapInvalidTestSuite, EdgionConfigDataFlapValidTestSuite,
     EdgionConfigDataManagedTestSuite, EdgionConfigDataStatusTestSuite, ExtProcTestSuite, FaultInjectionTestSuite,
     FormJsonTransformDynamicFormTestSuite, FormJsonTransformDynamicJsonTestSuite, ForwardAuthTestSuite,
-    GlobalAccessControlTestSuite, GlobalConnectionIpRestrictionTestSuite, GlobalPluginsSnapshotTestSuite,
-    GuardrailTestSuite, HeaderCertAuthTestSuite, HmacAuthTestSuite, IpRestrictionPartialGoodPluginTestSuite,
-    IpRestrictionPluginTestSuite, IpRestrictionRefsPluginTestSuite, JsonSchemaValidationDynamicInvalidTestSuite,
-    JsonSchemaValidationDynamicV1TestSuite, JsonSchemaValidationDynamicV2TestSuite, JsonSchemaValidationTestSuite,
-    JweDecryptTestSuite, JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite, LdapAuthTlsTestSuite,
-    MatchedRouteMetaTestSuite, OpenidConnectTestSuite, PathNormalizationForwardViewTestSuite,
-    PathNormalizationPreserveParamTestSuite, PathNormalizationTestSuite, PluginConditionTestSuite, PluginLogsTestSuite,
-    PluginValidationStatusTestSuite, ProxyRewriteTestSuite, RateLimitDynamicInitialTestSuite,
-    RateLimitDynamicUpdateTestSuite, RateLimitRedisTestSuite, RateLimitTestSuite, RealIpPluginTestSuite,
-    RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite, ResolvedRefsTestSuite,
-    ResponseRewriteTestSuite, TraceContextPluginTestSuite, WasmPluginTestSuite, WebhookKeyGetTestSuite,
+    GeoRestrictionTestSuite, GlobalAccessControlTestSuite, GlobalConnectionIpRestrictionTestSuite,
+    GlobalPluginsSnapshotTestSuite, GuardrailTestSuite, HeaderCertAuthTestSuite, HmacAuthTestSuite,
+    IpRestrictionPartialGoodPluginTestSuite, IpRestrictionPluginTestSuite, IpRestrictionRefsPluginTestSuite,
+    JsonSchemaValidationDynamicInvalidTestSuite, JsonSchemaValidationDynamicV1TestSuite,
+    JsonSchemaValidationDynamicV2TestSuite, JsonSchemaValidationTestSuite, JweDecryptTestSuite, JwtAuthTestSuite,
+    KeyAuthTestSuite, LdapAuthTestSuite, LdapAuthTlsTestSuite, MatchedRouteMetaTestSuite, OpenidConnectTestSuite,
+    PathNormalizationForwardViewTestSuite, PathNormalizationPreserveParamTestSuite, PathNormalizationTestSuite,
+    PluginConditionTestSuite, PluginLogsTestSuite, PluginValidationStatusTestSuite, ProxyRewriteTestSuite,
+    RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitRedisTestSuite, RateLimitTestSuite,
+    RealIpPluginTestSuite, RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite,
+    ResolvedRefsTestSuite, ResponseRewriteTestSuite, TraceContextPluginTestSuite, WasmPluginTestSuite,
+    WebhookKeyGetTestSuite,
 };
 
 // LinkSys tests

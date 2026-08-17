@@ -141,6 +141,21 @@ pub mod names {
     // `CB_REJECTIONS_TOTAL`) — those trip on backend health; this one trips on a
     // per-endpoint in-flight-count cap, independent of health. Labelled `service` only.
     pub const CB_SHED_TOTAL: &str = "edgion_gateway_circuit_breaker_shed_total";
+
+    // GeoIP country restriction metrics.
+    pub const GEOIP_DB_LOADED: &str = "edgion_geoip_db_loaded";
+    pub const GEOIP_DB_BUILD_EPOCH: &str = "edgion_geoip_db_build_epoch_seconds";
+    pub const GEOIP_UPDATE_FAILED: &str = "edgion_geoip_update_failed_total";
+    pub const GEOIP_DENIED: &str = "edgion_geoip_denied_total";
+    /// Distinct from `GEOIP_UPDATE_FAILED`: that metric is about the
+    /// background updater task, never on the per-request hot path (see the
+    /// comment on the GeoIP metrics block below). A lookup panic happens
+    /// inside `GeoIpProvider::lookup`, which every geo-consuming request
+    /// calls — recording it under the updater's counter would be both
+    /// mislabeled (its name and reason set are about update *cycles*, not
+    /// per-request lookups) and would put a per-request event under a
+    /// nominally-cold metric.
+    pub const GEOIP_LOOKUP_PANIC: &str = "edgion_geoip_lookup_panic_total";
 }
 
 /// Global metrics singleton
@@ -882,6 +897,57 @@ pub fn record_cb_shed(service_key: &str) {
     counter!(names::CB_SHED_TOTAL, "service" => service_key.to_string()).increment(1);
 }
 
+// ============================================================
+// GeoIP country restriction metrics
+// ============================================================
+//
+// `set_geoip_db_loaded`, `set_geoip_db_build_epoch`, `record_geoip_update_failed`,
+// and `record_geoip_denied` are not on the per-request hot path (the first two
+// are process-lifecycle state, the latter two fire from the background updater
+// and from an L4 connection-filter deny path respectively), so all four follow
+// the cold free-function `gauge!`/`counter!` pattern (like `record_lb_panic_mode`
+// / `record_link_sys_health` above): the series is absent from `/metrics` until
+// the first call. `record_geoip_lookup_panic`, below, is the one exception in
+// this block — it fires from `GeoIpProvider::lookup`, which every geo-consuming
+// request calls; it uses the same cold-registration pattern anyway since a
+// panic inside the MMDB reader is expected to be exceedingly rare in practice.
+
+/// Set to 1 when a database is loaded, 0 otherwise.
+/// Alert on `edgion_geoip_db_loaded == 0` while geo rules are configured: that
+/// is the dangerous silent failure — the control is not running.
+pub fn set_geoip_db_loaded(loaded: bool) {
+    gauge!(names::GEOIP_DB_LOADED).set(if loaded { 1.0 } else { 0.0 });
+}
+
+/// The loaded database's build timestamp. Alert on staleness.
+pub fn set_geoip_db_build_epoch(epoch: u64) {
+    gauge!(names::GEOIP_DB_BUILD_EPOCH).set(epoch as f64);
+}
+
+/// `reason` is a bounded enum, never free text:
+/// fetch | encoding | size_cap | stall | validation | rename | disk | deadline.
+/// This is strictly about the background *update cycle*; a per-request MMDB
+/// lookup panic is a distinct, per-request event recorded by
+/// `record_geoip_lookup_panic` instead, not folded in here.
+pub fn record_geoip_update_failed(reason: &'static str) {
+    counter!(names::GEOIP_UPDATE_FAILED, "reason" => reason).increment(1);
+}
+
+/// A per-request MMDB lookup inside `GeoIpProvider::lookup` panicked (caught
+/// via `catch_unwind`) and degraded to `GeoLookup::NotFound`. Label-free: this
+/// is a data-integrity signal about the loaded database, not something to
+/// slice by request attributes.
+pub fn record_geoip_lookup_panic() {
+    counter!(names::GEOIP_LOOKUP_PANIC).increment(1);
+}
+
+/// L4 geo denials, which are never logged (see the design's §6.6).
+/// `layer` is stage1 | tcp | tls; `reason` is deny_country | allow_miss | db_unavailable.
+/// Neither label carries a client address.
+pub fn record_geoip_denied(layer: &'static str, reason: &'static str) {
+    counter!(names::GEOIP_DENIED, "layer" => layer, "reason" => reason).increment(1);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1011,6 +1077,38 @@ mod tests {
         // route_namespace / backend_namespace must NOT appear under default cfg
         assert!(!labels.iter().any(|(k, _)| *k == "route_namespace"));
         assert!(!labels.iter().any(|(k, _)| *k == "backend_namespace"));
+    }
+
+    #[test]
+    fn geoip_metric_names_are_declared() {
+        assert_eq!(names::GEOIP_DB_LOADED, "edgion_geoip_db_loaded");
+        assert_eq!(names::GEOIP_DB_BUILD_EPOCH, "edgion_geoip_db_build_epoch_seconds");
+        assert_eq!(names::GEOIP_UPDATE_FAILED, "edgion_geoip_update_failed_total");
+        assert_eq!(names::GEOIP_DENIED, "edgion_geoip_denied_total");
+        assert_eq!(names::GEOIP_LOOKUP_PANIC, "edgion_geoip_lookup_panic_total");
+    }
+
+    /// Regression test: a lookup panic must land on its own dedicated metric,
+    /// never on `edgion_geoip_update_failed_total` — that counter's `reason`
+    /// label set is about the background update cycle, and folding a
+    /// per-request lookup panic into it would mislabel a per-request event as
+    /// an updater-cycle failure.
+    #[test]
+    fn geoip_lookup_panic_uses_its_own_metric_not_update_failed() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            record_geoip_lookup_panic();
+            let rendered = handle.render();
+            assert!(
+                rendered.contains("edgion_geoip_lookup_panic_total"),
+                "lookup panic must render under its own metric, got:\n{rendered}"
+            );
+            assert!(
+                !rendered.contains("edgion_geoip_update_failed_total"),
+                "lookup panic must NOT touch edgion_geoip_update_failed_total, got:\n{rendered}"
+            );
+        });
     }
 
     #[test]

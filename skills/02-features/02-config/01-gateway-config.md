@@ -223,6 +223,7 @@ behavior and are configured per Gateway process; there is no
 | `wasm_oci_cache_max_bytes` | `u64` | `536870912` (512MiB) | Total-size budget for the OCI disk cache, enforced on every write with LRU eviction. **`0` removes the cap (uncapped).** |
 | `wasm_oci_pull_timeout_secs` | `u64` | `60` | Per-request timeout for OCI pull requests (manifest, token, and blob alike). Istio-agent `WASM_HTTP_REQUEST_TIMEOUT` parity. |
 | `wasm_oci_pull_attempts` | `u32` | `3` | Total attempts (including the first) for each OCI pull request; transport errors and `5xx` retry, `4xx` never does. Istio-agent `WASM_HTTP_REQUEST_MAX_RETRIES` parity. |
+| `geoip` | `GeoIpConfig` | *(empty)* | GeoIP database + background updater. **Sub-block of `gateway:`, snake_case, `deny_unknown_fields`.** See [`### geoip`](#geoip) below. |
 
 ### conf_sync_security
 
@@ -501,6 +502,45 @@ tokens. A YAML boolean (`fips_policy: true`) is a hard deserialize error. YAML 1
 `fips_policy: "off"`; `auto` needs no quoting.
 
 **Resolution order, highest first: env → CLI → config file → `auto`.**
+
+### geoip
+
+Gateway-local (not cluster-synced — the CRD has multiple named instances, but the database mmap
+and updater task are one per process) settings for `ClientGeo`/`DirectGeo` HTTP restriction rules
+and the `GlobalConnectionIpRestriction` L4 `geo` block. Struct: `edgion_gateway::geoip::GeoIpConfig`
+(`edgion-gateway/src/geoip/config.rs`). Full field reference and every operator pitfall (the
+`gateway:`-nesting trap, SIGBUS-on-in-place-write, update-volume sizing (`max_db_bytes` + 2×
+current database size), missing-dimension `onMissing` behavior, `failOpen` semantics,
+`ClientGeo` spoofability, ...): `docs/en/ops-guide/gateway/geoip.md`.
+
+**Must be nested under `gateway:`.** `GatewayConfig` uses `#[command(flatten)]` for the CLI but
+NOT `#[serde(flatten)]` for YAML, so a top-level `geoip:` key is silently dropped by the outer
+struct — no error, `GeoIpConfig` left at its empty defaults. `GeoIpConfig`'s own
+`deny_unknown_fields` only catches a typo *inside* the block (e.g. `dbPath`), not this
+one-level-up mistake.
+
+There is no master-switch field: an unset `db_path` means no database (geo lookups report
+`Unavailable`), and there is no admin endpoint to introspect the loaded state — use
+`edgion_geoip_db_loaded` / `edgion_geoip_db_build_epoch_seconds` (metrics) and the access log's
+`geo` block (per-request lookup outcome) instead.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `db_path` | `PathBuf?` | none | Local MMDB path. May not exist at first start (no bundled image database) — normal, not a failure. |
+| `update_url` | `String?` | none | Update source; empty/absent never spawns the updater. Redacted in logs. |
+| `update_auth_header_env` | `String?` | none | Env var name whose value is sent verbatim as `Authorization`. |
+| `update_interval_sec` | `u64` | `86400` | Steady-state cycle interval, after the first successful load. |
+| `retry_interval_sec` | `u64` | `600` | Steady-state retry backoff; not used before the first success (short escalating backoff instead, capped at 30s). |
+| `connect_timeout_sec` | `u64` | `10` | Connect timeout. |
+| `download_deadline_sec` | `u64` | `600` | Whole-cycle deadline. `reqwest` client-level `total_timeout` stays unset on purpose. |
+| `stall_timeout_sec` | `u64` | `60` | No-progress abort. |
+| `max_db_bytes` | `u64` | `268435456` | Hard cap enforced while streaming. |
+
+**Never write `db_path` in place** (`kubectl cp`, initContainer overwrite, truncate+rewrite) —
+the gateway holds it memory-mapped, so an external in-place write causes SIGBUS (not a Rust
+panic, not caught by `catch_unwind`, kills the process mid-request). Only the built-in updater,
+or an external writer using temp-file-on-same-filesystem + `rename(2)`, are supported. Size the
+update volume for **3×** the database (old inode + new file + possible stale `.tmp`).
 
 - **Env** (`EDGION_FIPS_POLICY`): accepts only `auto`/`on`/`off` (case-insensitive, trimmed).
   Unset or whitespace-only falls through to CLI/file. Any other token — including the old

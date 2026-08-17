@@ -283,6 +283,20 @@ pub trait PluginSession: Send + Sync {
         None
     }
 
+    /// GeoIP lookup for the real client address (`remote_addr`, post-XFF).
+    /// See `EdgionHttpContext::client_geo` for resolution/caching semantics.
+    /// Default (used by mock/test session implementors) reports the database
+    /// as unloaded, matching the fail-safe reading of "no lookup ran".
+    fn client_geo(&self) -> crate::geoip::GeoLookup {
+        crate::geoip::GeoLookup::Unavailable
+    }
+
+    /// GeoIP lookup for the direct TCP peer address (`client_addr`,
+    /// unspoofable). See `EdgionHttpContext::direct_geo`.
+    fn direct_geo(&self) -> crate::geoip::GeoLookup {
+        crate::geoip::GeoLookup::Unavailable
+    }
+
     /// Whether the downstream connection terminated TLS on this gateway.
     ///
     /// Read from the real connection state, not from a request header. `None`

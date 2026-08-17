@@ -1,5 +1,5 @@
 {
-  "current_max": 31949,
+  "current_max": 31953,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -331,6 +331,16 @@
     },
     "EdgionBackend/CredentialExhaustion": {
       "http": 31948
+    },
+    "EdgionPlugins/GeoRestriction": {
+      "http": 31950
+    },
+    "TCPRoute/GeoRestriction": {
+      "tcp": 31951,
+      "tcp_bare": 31952
+    },
+    "TLSRoute/GeoRestriction": {
+      "tls": 31953
     }
   }
 }

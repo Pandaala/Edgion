@@ -6,21 +6,25 @@
 //! match => the profile's `default_action`. Profiles are hot-swappable via an
 //! `activeProfileRef` Selector (resolved by the gateway; fail-to-base to `active_profile`).
 //!
-//! Logic-vs-data split mirrors `request_restriction`: this layer is session-free. The
-//! gateway extracts source values and passes them in via the `evaluate` accessor closure.
+//! Logic-vs-data split mirrors `request_restriction`: this layer is session-free.
+//! Config parsing/compilation (`validate_and_init`/`check_fields`) lives here; the
+//! actual match/deny decision (formerly `AllowProfile::evaluate`/
+//! `AllowRuleGroup::matches`) has moved to the gateway
+//! (`edgion-gateway/src/plugins/http/global_access_control/plugin.rs`'s
+//! `evaluate_profile`/`group_outcome`), which is the only caller and needs to
+//! understand the gateway-only geo tri-state signal this crate cannot express.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::IpAddr;
 
 use super::ip_restriction::DefaultAction;
 use super::ip_restriction::IpSource;
 use super::request_match::{OnMissing, RestrictionRule};
-use crate::matcher::ip_cidr_helpers::{build_grouped_matcher, evaluate_ip_access, validate_groups_structure};
+use crate::matcher::ip_cidr_helpers::{build_grouped_matcher, validate_groups_structure};
 use crate::matcher::ip_radix_tree::IpRadixMatcher;
 use crate::resources::edgion_config_data::{EdgionConfigDataRef, IpGroup};
-use crate::resources::edgion_plugins::{AccessDecision, PluginValidation};
+use crate::resources::edgion_plugins::PluginValidation;
 
 fn default_status() -> u16 {
     403
@@ -65,7 +69,36 @@ pub struct GlobalAccessControlConfig {
     /// trusted L4 LB fronts the gateway and RealIp is correctly configured.
     #[serde(default = "default_ip_source")]
     pub ip_source: IpSource,
+
+    /// Disposition when **no GeoIP database is loaded at all**, for every
+    /// `ClientGeo`/`DirectGeo` rule across every profile/group in this
+    /// plugin. Required (no default) precisely when this plugin contains at
+    /// least one geo rule in any profile; rejected when it contains none.
+    /// Plugin-wide rather than per-profile: it governs the resolved *active*
+    /// profile at request time regardless of which profile that turns out to
+    /// be, since a per-profile fail-open/fail-closed split has no coherent
+    /// meaning for a single lockdown/allow policy. See `RestrictionRule`'s
+    /// module doc and `request_restriction::RequestRestrictionConfig::
+    /// fail_open` for the shared rationale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fail_open: Option<bool>,
 }
+
+/// `true` when `config` has at least one `ClientGeo`/`DirectGeo` rule in any
+/// group of any profile. Determines whether `fail_open` is required (`true`)
+/// or forbidden (`false`).
+fn has_geo_rule(profiles: &HashMap<String, AllowProfile>) -> bool {
+    profiles
+        .values()
+        .flat_map(|p| &p.rule_groups)
+        .flat_map(|g| &g.rules)
+        .any(RestrictionRule::is_geo)
+}
+
+const FAIL_OPEN_NOT_GEO_ERR: &str =
+    "globalAccessControl: 'failOpen' is only valid when the plugin has at least one ClientGeo/DirectGeo rule";
+const FAIL_OPEN_REQUIRED_ERR: &str = "globalAccessControl: at least one ClientGeo/DirectGeo rule is present; \
+     the plugin must declare an explicit 'failOpen'";
 
 /// A named profile: OR-ed allow groups plus the no-match action.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -112,18 +145,15 @@ pub enum AllowOutcome {
 
 impl GlobalAccessControlConfig {
     /// Validate and compile every profile's IP matchers and rule matchers.
+    ///
+    /// Delegates the field-only checks to `check_fields()` first (rather than
+    /// duplicating them) so the gateway's compile path and the controller's
+    /// ingest path (`check_fields()`/`PluginValidation::validation_error`)
+    /// are provably byte-identical on every rejection — including the new
+    /// plugin-level `failOpen` check.
     pub fn validate_and_init(&mut self) -> Result<(), String> {
-        if self.profiles.is_empty() {
-            return Err("globalAccessControl: at least one profile is required".to_string());
-        }
-        if !self.profiles.contains_key(&self.active_profile) {
-            return Err(format!(
-                "globalAccessControl: activeProfile '{}' not found in profiles",
-                self.active_profile
-            ));
-        }
-        if self.status < 100 || self.status >= 600 {
-            return Err(format!("globalAccessControl: invalid status code: {}", self.status));
+        if let Some(err) = self.check_fields() {
+            return Err(err);
         }
         for (pname, profile) in self.profiles.iter_mut() {
             profile
@@ -146,6 +176,11 @@ impl GlobalAccessControlConfig {
         }
         if self.status < 100 || self.status >= 600 {
             return Some(format!("globalAccessControl: invalid status code: {}", self.status));
+        }
+        match (has_geo_rule(&self.profiles), self.fail_open) {
+            (true, None) => return Some(FAIL_OPEN_REQUIRED_ERR.to_string()),
+            (false, Some(_)) => return Some(FAIL_OPEN_NOT_GEO_ERR.to_string()),
+            _ => {}
         }
         for (pname, profile) in &self.profiles {
             if let Some(err) = profile.check_fields() {
@@ -182,21 +217,14 @@ impl AllowProfile {
         None
     }
 
-    /// Evaluate the profile. `ip` is the client IP (None when undeterminable).
-    /// `get_value(rule)` returns the extracted source value for a rule.
-    pub fn evaluate(&self, ip: Option<&IpAddr>, get_value: &dyn Fn(&RestrictionRule) -> Vec<String>) -> AllowOutcome {
-        for group in &self.rule_groups {
-            if group.matches(ip, get_value) {
-                return AllowOutcome::Allowed {
-                    group: group.name.clone(),
-                };
-            }
-        }
-        match self.default_action {
-            DefaultAction::Allow => AllowOutcome::Allowed { group: None },
-            DefaultAction::Deny => AllowOutcome::Denied,
-        }
-    }
+    // The former `evaluate()` (profile-level match/deny decision) has moved to
+    // the gateway: `edgion-gateway/src/plugins/http/global_access_control/
+    // plugin.rs`'s `evaluate_profile`/`group_outcome` are a byte-faithful port
+    // that additionally understands the gateway-only geo tri-state signal
+    // (`ExtractedValues::ForceSkip`/`FailClosed`), which this resources crate
+    // cannot express (`GeoLookup` is gateway-only). Keeping both would have
+    // been two implementations of the same security-control semantics with no
+    // caller left for this one — see Task 10 review.
 }
 
 impl AllowRuleGroup {
@@ -245,33 +273,9 @@ impl AllowRuleGroup {
         None
     }
 
-    /// True iff the IP precondition holds (or absent) AND every non-skipped rule holds.
-    fn matches(&self, ip: Option<&IpAddr>, get_value: &dyn Fn(&RestrictionRule) -> Vec<String>) -> bool {
-        // Counts as evidence so an IP-only group matches on IP alone.
-        let mut considered = false;
-        if let Some(matcher) = &self.ip_matcher {
-            // IP constraint present but client IP unknown => cannot verify => fail closed.
-            let Some(ip) = ip else {
-                return false;
-            };
-            let in_set = matches!(
-                evaluate_ip_access(None, Some(matcher), &DefaultAction::Deny, ip),
-                AccessDecision::AllowByGroup(_)
-            );
-            if !in_set {
-                return false;
-            }
-            considered = true;
-        }
-        for rule in &self.rules {
-            match rule.evaluate_multi(&get_value(rule)) {
-                Some(true) => considered = true,
-                Some(false) => return false,
-                None => {} // Skip: dropped from the AND
-            }
-        }
-        considered
-    }
+    // The former `matches()` (IP precondition AND rule evaluation for one
+    // group) has moved to the gateway alongside `AllowProfile::evaluate` —
+    // see the note there.
 }
 
 impl PluginValidation for GlobalAccessControlConfig {
@@ -285,7 +289,6 @@ mod tests {
     use super::*;
     use crate::resources::edgion_config_data::IpGroup;
     use crate::resources::edgion_plugins::plugin_configs::{RestrictionRule, RestrictionSource};
-    use std::net::IpAddr;
 
     fn ipg(name: &str, cidrs: &[&str]) -> IpGroup {
         IpGroup {
@@ -325,22 +328,10 @@ mod tests {
             status: 403,
             message: None,
             ip_source: IpSource::RemoteAddr,
+            fail_open: None,
         };
         cfg.validate_and_init().unwrap();
         cfg
-    }
-
-    // value accessor: only the matching header present
-    fn acc<'a>(header: Option<(&'a str, &'a str)>) -> impl Fn(&RestrictionRule) -> Vec<String> + 'a {
-        move |rule: &RestrictionRule| {
-            let Some(want) = rule.key.as_deref() else {
-                return Vec::new();
-            };
-            match header {
-                Some((k, v)) if k == want => vec![v.to_string()],
-                _ => Vec::new(),
-            }
-        }
     }
 
     fn secret_rule(key: &str, on_missing: OnMissing) -> RestrictionRule {
@@ -397,65 +388,21 @@ mod tests {
         assert!(cfg.validate_and_init().is_ok());
     }
 
-    #[test]
-    fn allow_when_ip_and_header_both_match() {
-        let cfg = lockdown();
-        let p = cfg.resolve_profile(Some("lockdown")).unwrap();
-        let ip: IpAddr = "173.245.48.5".parse().unwrap();
-        let out = p.evaluate(Some(&ip), &acc(Some(("X-CF-Secret", "tok"))));
-        assert!(matches!(out, AllowOutcome::Allowed { .. }));
-    }
-
-    #[test]
-    fn deny_when_ip_matches_but_header_missing() {
-        let cfg = lockdown();
-        let p = cfg.resolve_profile(Some("lockdown")).unwrap();
-        let ip: IpAddr = "173.245.48.5".parse().unwrap();
-        let out = p.evaluate(Some(&ip), &acc(None));
-        assert!(matches!(out, AllowOutcome::Denied));
-    }
-
-    #[test]
-    fn deny_when_header_matches_but_ip_outside() {
-        let cfg = lockdown();
-        let p = cfg.resolve_profile(Some("lockdown")).unwrap();
-        let ip: IpAddr = "8.8.8.8".parse().unwrap();
-        let out = p.evaluate(Some(&ip), &acc(Some(("X-CF-Secret", "tok"))));
-        assert!(matches!(out, AllowOutcome::Denied));
-    }
-
-    #[test]
-    fn second_group_or_matches() {
-        let mut cfg = lockdown();
-        cfg.profiles
-            .get_mut("lockdown")
-            .unwrap()
-            .rule_groups
-            .push(AllowRuleGroup {
-                name: Some("cloudfront".into()),
-                ip: Some(vec![ipg("cfront", &["120.52.22.96/27"])]),
-                rules: vec![header_rule("X-Origin-Verify", "v2")],
-                ip_matcher: None,
-            });
-        cfg.validate_and_init().unwrap();
-        let p = cfg.resolve_profile(Some("lockdown")).unwrap();
-        let ip: IpAddr = "120.52.22.100".parse().unwrap();
-        let out = p.evaluate(Some(&ip), &acc(Some(("X-Origin-Verify", "v2"))));
-        assert!(matches!(out, AllowOutcome::Allowed { .. }));
-    }
-
-    #[test]
-    fn base_profile_default_allow_passes_everything() {
-        let p = AllowProfile {
-            default_action: DefaultAction::Allow,
-            rule_groups: vec![],
-        };
-        let ip: IpAddr = "8.8.8.8".parse().unwrap();
-        assert!(matches!(
-            p.evaluate(Some(&ip), &acc(None)),
-            AllowOutcome::Allowed { .. }
-        ));
-    }
+    // The former evaluate()-based tests here (`allow_when_ip_and_header_both_match`,
+    // `deny_when_ip_matches_but_header_missing`, `deny_when_header_matches_but_ip_outside`,
+    // `second_group_or_matches`, `base_profile_default_allow_passes_everything`,
+    // `header_only_group_matches_without_client_ip`,
+    // `ip_constrained_group_denies_when_client_ip_unknown`) exercised
+    // `AllowProfile::evaluate`/`AllowRuleGroup::matches`, which have been deleted
+    // (no callers left — the gateway ported the logic; see the module doc). Their
+    // coverage now lives in
+    // `edgion-gateway/src/plugins/http/global_access_control/plugin.rs`'s test
+    // module: `allow_when_cidr_and_secret_match`, `deny_when_cidr_matches_but_secret_absent`,
+    // `deny_when_secret_matches_but_ip_outside_cidr` already existed there;
+    // `second_group_or_matches`, `base_profile_default_allow_passes_everything`,
+    // `header_only_group_matches_without_client_ip`, and
+    // `ip_constrained_group_denies_when_client_ip_unknown` were ported as part of
+    // this deletion (Task 10 review).
 
     #[test]
     fn resolve_profile_falls_back_to_active_on_unknown() {
@@ -489,28 +436,79 @@ mod tests {
         assert!(cfg.validate_and_init().is_err());
     }
 
+    fn geo_rule(key: &str, value: &str) -> RestrictionRule {
+        RestrictionRule {
+            source: RestrictionSource::DirectGeo,
+            key: Some(key.into()),
+            values: Some(vec![value.into()]),
+            ..Default::default()
+        }
+    }
+
+    /// `failOpen` moved from per-rule to plugin-level: a plugin with a geo
+    /// rule anywhere in any profile/group must declare it explicitly.
     #[test]
-    fn header_only_group_matches_without_client_ip() {
-        // A group with no IP constraint must be evaluable when the client IP is unknown.
+    fn plugin_requires_fail_open_when_it_has_a_geo_rule() {
         let mut cfg = lockdown();
         cfg.profiles.get_mut("lockdown").unwrap().rule_groups = vec![AllowRuleGroup {
-            name: Some("header-only".into()),
+            name: Some("geo".into()),
             ip: None,
-            rules: vec![header_rule("X-CF-Secret", "tok")],
+            rules: vec![geo_rule("country", "CN")],
             ip_matcher: None,
         }];
-        cfg.validate_and_init().unwrap();
-        let p = cfg.resolve_profile(Some("lockdown")).unwrap();
-        let out = p.evaluate(None, &acc(Some(("X-CF-Secret", "tok"))));
-        assert!(matches!(out, AllowOutcome::Allowed { .. }));
+        cfg.fail_open = None;
+        let err = cfg.validate_and_init().unwrap_err();
+        assert!(err.contains("failOpen"), "got: {err}");
+    }
+
+    /// A plugin with no geo rule at all must not be forced to set `failOpen`.
+    #[test]
+    fn plugin_without_geo_rule_does_not_require_fail_open() {
+        let cfg = lockdown(); // header-only rule, no geo — already fail_open: None.
+        assert_eq!(cfg.fail_open, None);
+    }
+
+    /// `failOpen` set without any geo rule in the plugin is rejected.
+    #[test]
+    fn plugin_rejects_fail_open_when_it_has_no_geo_rule() {
+        let mut cfg = lockdown();
+        cfg.fail_open = Some(false);
+        let err = cfg.validate_and_init().unwrap_err();
+        assert!(err.contains("failOpen"), "got: {err}");
     }
 
     #[test]
-    fn ip_constrained_group_denies_when_client_ip_unknown() {
-        // An IP-constrained group must fail closed when the client IP cannot be determined.
-        let cfg = lockdown(); // single cloudflare group with an ip matcher
-        let p = cfg.resolve_profile(Some("lockdown")).unwrap();
-        let out = p.evaluate(None, &acc(Some(("X-CF-Secret", "tok"))));
-        assert!(matches!(out, AllowOutcome::Denied));
+    fn plugin_with_geo_rule_and_explicit_fail_open_is_valid() {
+        let mut cfg = lockdown();
+        cfg.profiles.get_mut("lockdown").unwrap().rule_groups = vec![AllowRuleGroup {
+            name: Some("geo".into()),
+            ip: None,
+            rules: vec![geo_rule("country", "CN")],
+            ip_matcher: None,
+        }];
+        cfg.fail_open = Some(false);
+        assert!(cfg.validate_and_init().is_ok());
+    }
+
+    /// `check_fields()` (controller ingest) and `validate_and_init()` (gateway
+    /// compile, which now calls `check_fields()` first) must reject the same
+    /// plugin-level `failOpen` misconfiguration with identical text.
+    #[test]
+    fn check_fields_and_validate_agree_on_fail_open_errors() {
+        let mut missing = lockdown();
+        missing.profiles.get_mut("lockdown").unwrap().rule_groups = vec![AllowRuleGroup {
+            name: Some("geo".into()),
+            ip: None,
+            rules: vec![geo_rule("country", "CN")],
+            ip_matcher: None,
+        }];
+        missing.fail_open = None;
+        let mut compiled = missing.clone();
+        assert_eq!(missing.check_fields(), compiled.validate_and_init().err());
+
+        let mut stray = lockdown();
+        stray.fail_open = Some(true);
+        let mut compiled_stray = stray.clone();
+        assert_eq!(stray.check_fields(), compiled_stray.validate_and_init().err());
     }
 }

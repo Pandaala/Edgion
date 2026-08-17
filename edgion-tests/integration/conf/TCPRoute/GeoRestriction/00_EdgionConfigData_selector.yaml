@@ -1,0 +1,17 @@
+# Selector EdgionConfigData for the L4 GeoRestriction suite.
+#
+# The complete GlobalConnectionIpRestriction plugin config (all §6.3 profiles)
+# lives inline in 01_EdgionStreamPlugins_tcp_geo.yaml; this Selector only
+# chooses which of those git-owned profiles is active. Tests hot-switch the
+# active profile by re-applying this Selector with a different `active`
+# value (same pattern as TCPRoute/GlobalConnectionIpRestriction).
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: tcp-geo-selector
+  namespace: edgion-test
+spec:
+  data:
+    type: Selector
+    config:
+      active: row1_ip_deny_terminal

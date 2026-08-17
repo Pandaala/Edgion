@@ -122,6 +122,7 @@ pub mod cli;
 pub mod conf_sync;
 pub mod config;
 pub mod ctx;
+pub mod geoip;
 pub mod lb;
 pub mod link_sys;
 pub mod observe;

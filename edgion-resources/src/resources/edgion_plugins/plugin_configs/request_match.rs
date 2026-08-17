@@ -111,6 +111,16 @@ pub enum RestrictionSource {
     MtlsSan,
     /// Structured claim of a verified JWT; `key` is a dot-nested claim path.
     JwtClaim,
+    /// Geographic attribute of the **real client** address (post XFF / Proxy
+    /// Protocol). `key` selects the dimension: country | continent | city |
+    /// subdivision.
+    ///
+    /// This address is client-controlled unless `spec.real_ip` is configured
+    /// with a correct trusted-proxy set. Prefer `DirectGeo` for security rules
+    /// where the deployment does not genuinely terminate behind a trusted proxy.
+    ClientGeo,
+    /// Geographic attribute of the **direct peer** address. Unspoofable.
+    DirectGeo,
 }
 
 /// SAN type filter for `MtlsSan`. When set, matching is scoped to SAN entries of
@@ -143,6 +153,45 @@ fn default_case_sensitive() -> bool {
     true
 }
 
+/// Stateless geo-rule field checks, shared by `compile()` (which also performs
+/// deferred normalization/warnings after this returns `None`) and
+/// `field_error()` (the controller's ingest-time mirror, which must not
+/// mutate `self`). Both call sites must see byte-identical error text for the
+/// same input — this is the single source of truth for that text.
+///
+/// The `failOpen` disposition itself is no longer a per-rule field — it lives
+/// on the owning plugin config (`RequestRestrictionConfig`/
+/// `GlobalAccessControlConfig`) and is validated there (see
+/// `has_geo_rule`/the plugin-level `failOpen` check in each). This helper
+/// only checks fields that remain per-rule, and never mutates. `compile()` is
+/// responsible for the uppercase normalization of `country`/`continent`
+/// values, which happens only after this returns `None`.
+fn geo_field_error(rule: &RestrictionRule) -> Option<String> {
+    if rule.regex.is_some() {
+        return Some("geo rules do not support 'regex' (the lookup result is an exact code)".to_string());
+    }
+    if rule.secret_ref.is_some() {
+        return Some("geo rules do not support 'secretRef'".to_string());
+    }
+    let Some(key) = rule.key.as_deref() else {
+        return Some("geo rules require 'key' (country | continent | city | subdivision)".to_string());
+    };
+    match key {
+        "country" | "continent" => {
+            if !rule.case_sensitive {
+                // matches_value's insensitive path folds to ASCII lowercase,
+                // the opposite of compile()'s uppercase normalization.
+                return Some(format!("'caseSensitive' is not supported on geo key '{key}'"));
+            }
+            None
+        }
+        "city" | "subdivision" => None,
+        other => Some(format!(
+            "geo rule 'key' must be country | continent | city | subdivision, got '{other}'"
+        )),
+    }
+}
+
 impl Default for RestrictionRule {
     fn default() -> Self {
         Self {
@@ -173,6 +222,66 @@ impl RestrictionRule {
     /// normalized.
     pub fn compile(&mut self) -> Result<(), String> {
         let rule_name = self.name.as_deref().unwrap_or("<unnamed>");
+
+        let is_geo = matches!(self.source, RestrictionSource::ClientGeo | RestrictionSource::DirectGeo);
+
+        if is_geo {
+            if let Some(err) = geo_field_error(self) {
+                return Err(err);
+            }
+            // geo_field_error already confirmed `key` is present and is one of
+            // the four known dimensions.
+            let key = self.key.as_deref().expect("geo_field_error validated 'key' is present");
+            match key {
+                "country" | "continent" => {
+                    // Normalization/warning side effects are compile()-only —
+                    // field_error() is stateless and must not perform them.
+                    if let Some(values) = self.values.as_mut() {
+                        for v in values.iter_mut() {
+                            *v = v.to_ascii_uppercase();
+                        }
+                        for v in values.iter() {
+                            let ok = if key == "country" {
+                                crate::geoip_codes::is_valid_country(v)
+                            } else {
+                                crate::geoip_codes::is_valid_continent(v)
+                            };
+                            if !ok {
+                                tracing::warn!(
+                                    "request_restriction rule '{}': '{}' is not a known {} code",
+                                    rule_name,
+                                    v,
+                                    key
+                                );
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    // "city" | "subdivision" — geo_field_error already rejected
+                    // any other key.
+                    //
+                    // Informational only (lenient admission): whether the
+                    // gateway's loaded database actually carries city /
+                    // subdivision data is a runtime fact this ingest-side
+                    // compile step cannot know, and there is no data-plane ->
+                    // control-plane channel back to this validation. There is
+                    // also no separate "tier" enforcement on the gateway side:
+                    // if the loaded database lacks this dimension, the
+                    // predicate simply resolves to no value for every request,
+                    // governed by this rule's own `onMissing` exactly like any
+                    // other absent source — check the access log's `geo` block
+                    // for what the loaded database actually resolves.
+                    tracing::info!(
+                        "request_restriction rule '{}': key '{}' requires city/subdivision granularity in the \
+                         loaded GeoIP database; if the loaded database does not carry that dimension this \
+                         predicate resolves to no value on every request (governed by onMissing)",
+                        rule_name,
+                        key
+                    );
+                }
+            }
+        }
 
         if self.source == RestrictionSource::Path {
             let path_cfg = crate::path_normalization::get_path_normalization_config();
@@ -291,6 +400,13 @@ impl RestrictionRule {
         }
     }
 
+    /// `true` for `ClientGeo`/`DirectGeo` — the two sources whose
+    /// database-unavailable disposition is governed by the owning plugin's
+    /// `failOpen` field rather than by anything on this rule.
+    pub fn is_geo(&self) -> bool {
+        matches!(self.source, RestrictionSource::ClientGeo | RestrictionSource::DirectGeo)
+    }
+
     /// Get rule display name.
     pub fn display_name(&self) -> String {
         self.name
@@ -301,6 +417,24 @@ impl RestrictionRule {
     /// Stateless per-rule field validation. `None` = valid.
     pub fn field_error(&self) -> Option<String> {
         let rule_name = self.display_name();
+
+        // Mirrors `compile()`'s geo checks byte-for-byte (via the shared
+        // `geo_field_error` helper) so the controller's ingest-time
+        // validation rejects exactly what the gateway's `compile()` would
+        // later reject — a geo rule that passes ingest must not then
+        // fail-close the whole plugin at gateway construction with no
+        // operator-visible signal. Stateless: unlike `compile()`, this never
+        // mutates `self` (e.g. the country/continent uppercase normalization
+        // stays compile()-only). The `failOpen` disposition itself is
+        // validated at the plugin-config level, not here — see the module
+        // doc on `geo_field_error`.
+        let is_geo = matches!(self.source, RestrictionSource::ClientGeo | RestrictionSource::DirectGeo);
+        if is_geo {
+            if let Some(err) = geo_field_error(self) {
+                return Some(err);
+            }
+        }
+
         match self.source {
             RestrictionSource::Header | RestrictionSource::Cookie | RestrictionSource::Query => {
                 if self.key.as_ref().is_none_or(|k| k.is_empty()) {
@@ -324,7 +458,9 @@ impl RestrictionRule {
             | RestrictionSource::Referer
             | RestrictionSource::MtlsSubject
             | RestrictionSource::MtlsCn
-            | RestrictionSource::MtlsSan => {}
+            | RestrictionSource::MtlsSan
+            | RestrictionSource::ClientGeo
+            | RestrictionSource::DirectGeo => {}
         }
         if self.san_type.is_some() && self.source != RestrictionSource::MtlsSan {
             return Some(format!(
@@ -648,5 +784,185 @@ mod tests {
             ..Default::default()
         };
         assert!(r.field_error().is_some());
+    }
+
+    fn geo_rule(key: &str, values: &[&str]) -> RestrictionRule {
+        RestrictionRule {
+            source: RestrictionSource::ClientGeo,
+            key: Some(key.to_string()),
+            values: Some(values.iter().map(|s| s.to_string()).collect()),
+            ..Default::default()
+        }
+    }
+
+    // The old per-rule `geoFailOpen` presence/rejection checks
+    // (`geo_rule_requires_an_explicit_fail_open`,
+    // `geo_fail_open_is_rejected_on_non_geo_sources`, and their
+    // `field_error_mirrors_compile` counterparts) moved with the field
+    // itself to the plugin-config level: see
+    // `request_restriction::tests::plugin_requires_fail_open_when_it_has_a_geo_rule`
+    // / `plugin_rejects_fail_open_when_it_has_no_geo_rule` and the
+    // equivalent tests in `global_access_control`.
+
+    #[test]
+    fn geo_rule_rejects_an_unknown_key() {
+        let mut r = geo_rule("region", &["CN"]);
+        assert!(r.compile().unwrap_err().contains("key"));
+    }
+
+    #[test]
+    fn geo_rule_requires_a_key() {
+        let mut r = RestrictionRule {
+            source: RestrictionSource::DirectGeo,
+            key: None,
+            values: Some(vec!["CN".into()]),
+            ..Default::default()
+        };
+        assert!(r.compile().unwrap_err().contains("key"));
+    }
+
+    /// A regex on a country rule compiles cleanly and then silently never
+    /// matches, because the lookup result is an uppercase ISO code.
+    #[test]
+    fn geo_rule_rejects_regex() {
+        let mut r = RestrictionRule {
+            source: RestrictionSource::ClientGeo,
+            key: Some("country".into()),
+            values: None,
+            regex: Some(vec!["^(cn|hk)$".into()]),
+            ..Default::default()
+        };
+        assert!(r.compile().unwrap_err().contains("regex"));
+    }
+
+    /// `secret_ref` on a geo rule is a distinct, independently-reachable
+    /// security check from the `regex` one above (finding 8 of the
+    /// 2026-08-15 GeoIP review: the previous single test only ever set
+    /// `regex`, so `geo_field_error`'s `secret_ref` branch — which runs
+    /// AFTER the `regex` check and is therefore only reached when `regex` is
+    /// absent — was never actually exercised). This matters because
+    /// `secret_ref` populates `resolved_secret_values`, which `matches_value`
+    /// then compares byte-for-byte against a geo lookup's exact ISO code —
+    /// an always-false predicate that, in Whitelist mode, denies every
+    /// request. Set only `secret_ref` (no `regex`) so this test can only pass
+    /// by reaching that second branch.
+    #[test]
+    fn geo_rule_rejects_secret_ref() {
+        use crate::resources::gateway::SecretObjectReference;
+
+        let mut r = RestrictionRule {
+            source: RestrictionSource::ClientGeo,
+            key: Some("country".into()),
+            values: None,
+            regex: None,
+            secret_ref: Some(SecretObjectReference {
+                name: "geo-secret".into(),
+                namespace: None,
+                group: None,
+                kind: None,
+            }),
+            ..Default::default()
+        };
+        assert!(r.compile().unwrap_err().contains("secretRef"));
+    }
+
+    #[test]
+    fn country_values_are_uppercased_at_compile_time() {
+        let mut r = geo_rule("country", &["cn", "hk"]);
+        r.compile().unwrap();
+        assert_eq!(r.values.as_ref().unwrap(), &vec!["CN".to_string(), "HK".to_string()]);
+    }
+
+    #[test]
+    fn case_sensitive_is_rejected_on_country_and_continent() {
+        let mut r = geo_rule("country", &["CN"]);
+        r.case_sensitive = false;
+        assert!(r.compile().unwrap_err().contains("caseSensitive"));
+    }
+
+    /// Invalid codes WARN but do not reject — the lenient-admission policy.
+    #[test]
+    fn invalid_country_code_compiles() {
+        let mut r = geo_rule("country", &["ZZ"]);
+        assert!(r.compile().is_ok());
+    }
+
+    #[test]
+    fn city_keeps_free_text_and_case_sensitivity() {
+        let mut r = geo_rule("city", &["Beijing"]);
+        r.case_sensitive = false;
+        assert!(r.compile().is_ok());
+        assert_eq!(r.values.as_ref().unwrap(), &vec!["Beijing".to_string()]);
+    }
+
+    /// `field_error()` is the controller's ingest-time mirror of `compile()`;
+    /// a config that ingest admits must not then be rejected by the gateway
+    /// with no operator-visible signal. These assert byte-identical error
+    /// text between the two paths for every geo error branch — the exact
+    /// invariant that regressed when `field_error()`'s geo arm was a no-op.
+    mod field_error_mirrors_compile {
+        use super::*;
+
+        /// Assert both `compile()` and `field_error()` reject `rule`, with
+        /// identical error text.
+        fn assert_parity(rule: &RestrictionRule) {
+            let mut compiled = rule.clone();
+            let compile_err = compiled.compile().expect_err("compile() must reject this rule");
+            let field_err = rule.field_error().expect("field_error() must also reject this rule");
+            assert_eq!(
+                field_err, compile_err,
+                "field_error() and compile() must report identical text"
+            );
+        }
+
+        #[test]
+        fn unknown_key() {
+            assert_parity(&geo_rule("region", &["CN"]));
+        }
+
+        #[test]
+        fn missing_key() {
+            assert_parity(&RestrictionRule {
+                source: RestrictionSource::DirectGeo,
+                key: None,
+                values: Some(vec!["CN".into()]),
+                ..Default::default()
+            });
+        }
+
+        #[test]
+        fn regex_present() {
+            assert_parity(&RestrictionRule {
+                source: RestrictionSource::ClientGeo,
+                key: Some("country".into()),
+                values: None,
+                regex: Some(vec!["^(cn|hk)$".into()]),
+                ..Default::default()
+            });
+        }
+
+        #[test]
+        fn secret_ref_present() {
+            use crate::resources::gateway::SecretObjectReference;
+            assert_parity(&RestrictionRule {
+                source: RestrictionSource::ClientGeo,
+                key: Some("country".into()),
+                values: None,
+                secret_ref: Some(SecretObjectReference {
+                    name: "geo-secret".into(),
+                    group: None,
+                    kind: None,
+                    namespace: None,
+                }),
+                ..Default::default()
+            });
+        }
+
+        #[test]
+        fn case_sensitive_false_on_country_or_continent() {
+            let mut r = geo_rule("country", &["CN"]);
+            r.case_sensitive = false;
+            assert_parity(&r);
+        }
     }
 }

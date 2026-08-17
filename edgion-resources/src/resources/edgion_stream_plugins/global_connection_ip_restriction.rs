@@ -16,6 +16,7 @@ use crate::matcher::ip_cidr_helpers::{build_grouped_matcher_partial, evaluate_ip
 use crate::matcher::ip_radix_tree::IpRadixMatcher;
 use crate::resources::edgion_config_data::{EdgionConfigDataRef, IpGroup};
 use crate::resources::edgion_plugins::{AccessDecision, DefaultAction};
+use crate::resources::edgion_stream_plugins::geo_rules::GeoRules;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -70,6 +71,10 @@ pub struct ProfileRules {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deny_refs: Option<Vec<EdgionConfigDataRef>>,
 
+    /// Optional L4 geo (country) rules. Country matching only — see `geo_rules` module docs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geo: Option<GeoRules>,
+
     // Runtime-only, not serialized
     #[serde(skip)]
     #[schemars(skip)]
@@ -112,8 +117,17 @@ impl ProfileRules {
             || self.allow_refs.as_ref().is_some_and(|v| !v.is_empty());
         let has_deny =
             self.deny.as_ref().is_some_and(|v| !v.is_empty()) || self.deny_refs.as_ref().is_some_and(|v| !v.is_empty());
-        if !has_allow && !has_deny {
-            return Err("at least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string());
+        // A geo-only profile ("block RU at L4, no IP rules") is a legitimate
+        // configuration: `evaluate_ip_access_multi` already tolerates zero
+        // matchers on both sides (empty loops, `allow_mode == false`, falls
+        // through to `AccessDecision::Default`), and the geo stage in
+        // `GlobalConnectionIpRestrictionPlugin::on_connection` runs
+        // unconditionally against whatever `AccessDecision` results. Only a
+        // profile with none of allow/deny/allowRefs/denyRefs/geo is a genuine
+        // no-op and stays rejected.
+        let has_geo = self.geo.is_some();
+        if !has_allow && !has_deny && !has_geo {
+            return Err("at least one of 'allow'/'deny'/'allowRefs'/'denyRefs' or 'geo' must be non-empty".to_string());
         }
 
         // Intentionally stricter than HTTP/L4 IpRestriction: a present-but-empty
@@ -141,6 +155,9 @@ impl ProfileRules {
         }
         if let Some(refs) = &self.deny_refs {
             validate_refs_structure(refs)?;
+        }
+        if let Some(geo) = &mut self.geo {
+            geo.compile()?;
         }
         Ok(())
     }
@@ -207,6 +224,7 @@ mod tests {
                 default_action: DefaultAction::Deny,
                 allow_refs: None,
                 deny_refs: None,
+                geo: None,
                 allow_matcher: None,
                 deny_matcher: None,
             },
@@ -236,6 +254,7 @@ mod tests {
             default_action: DefaultAction::Allow,
             allow_refs: None,
             deny_refs: None,
+            geo: None,
             allow_matcher: None,
             deny_matcher: None,
         }
@@ -289,6 +308,42 @@ mod tests {
         assert!(err.contains("at least one of") && err.contains("allow"), "{}", err);
     }
 
+    /// A profile with no IP rules but a non-empty `geo` block is a legitimate
+    /// L4 configuration ("block RU, no IP rules") and must be accepted, not
+    /// rejected as a no-op.
+    #[test]
+    fn validate_geo_only_profile_is_accepted() {
+        let mut p = empty_profile();
+        p.geo = Some(crate::resources::edgion_stream_plugins::geo_rules::GeoRules {
+            allow_countries: vec![],
+            deny_countries: vec!["RU".to_string()],
+            fail_open: false,
+        });
+        let mut d = GlobalConnectionIpRestrictionConfig {
+            enable: true,
+            active_profile: "p1".to_string(),
+            profiles: HashMap::from([("p1".to_string(), p)]),
+            description: None,
+            active_profile_ref: None,
+        };
+        d.validate_and_init().expect("geo-only profile must be accepted");
+    }
+
+    /// A profile with neither IP rules nor a `geo` block is still a genuine
+    /// no-op and stays rejected.
+    #[test]
+    fn validate_profile_with_neither_ip_nor_geo_is_rejected() {
+        let mut d = GlobalConnectionIpRestrictionConfig {
+            enable: true,
+            active_profile: "p1".to_string(),
+            profiles: HashMap::from([("p1".to_string(), empty_profile())]),
+            description: None,
+            active_profile_ref: None,
+        };
+        let err = d.validate_and_init().unwrap_err();
+        assert!(err.contains("at least one of") && err.contains("geo"), "{}", err);
+    }
+
     #[test]
     fn validate_duplicate_group_names_is_partial_good() {
         // Partial-good: a duplicate group name is keep-first (the later occurrence is
@@ -302,6 +357,7 @@ mod tests {
             default_action: DefaultAction::Deny,
             allow_refs: None,
             deny_refs: None,
+            geo: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -334,6 +390,7 @@ mod tests {
             default_action: DefaultAction::Deny,
             allow_refs: None,
             deny_refs: None,
+            geo: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -357,6 +414,7 @@ mod tests {
             default_action: DefaultAction::Deny,
             allow_refs: None,
             deny_refs: None,
+            geo: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -384,6 +442,7 @@ mod tests {
             default_action: DefaultAction::Deny,
             allow_refs: None,
             deny_refs: None,
+            geo: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -435,6 +494,7 @@ mod tests {
             default_action: DefaultAction::Allow, // irrelevant when allow is present
             allow_refs: None,
             deny_refs: None,
+            geo: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -463,6 +523,7 @@ mod tests {
             default_action: DefaultAction::Allow,
             allow_refs: None,
             deny_refs: None,
+            geo: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -497,6 +558,7 @@ mod tests {
             default_action: DefaultAction::Allow,
             allow_refs: None,
             deny_refs: None,
+            geo: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -524,6 +586,7 @@ mod tests {
             default_action: DefaultAction::Deny,
             allow_refs: None,
             deny_refs: None,
+            geo: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -561,6 +624,7 @@ mod tests {
             default_action: DefaultAction::Deny,
             allow_refs: None,
             deny_refs: None,
+            geo: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -589,6 +653,7 @@ mod tests {
                 ..Default::default()
             }]),
             deny_refs: None,
+            geo: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -608,6 +673,7 @@ mod tests {
                 namespace: None,
                 ..Default::default()
             }]),
+            geo: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -630,6 +696,7 @@ mod tests {
             default_action: DefaultAction::Allow,
             allow_refs: None,
             deny_refs: None,
+            geo: None,
             allow_matcher: None,
             deny_matcher: None,
         };

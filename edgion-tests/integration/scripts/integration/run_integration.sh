@@ -193,7 +193,7 @@ check_docker_environment_ready() {
 # packets to 127.0.0.2 / 127.0.0.3 are silently dropped (test_server bound to
 # 0.0.0.0 still won't see them). Aliases also do not survive reboots, so we
 # detect missing ones every run.
-REQUIRED_LO_ALIASES=("127.0.0.2" "127.0.0.3" "127.0.0.4")
+REQUIRED_LO_ALIASES=("127.0.0.2" "127.0.0.3" "127.0.0.4" "127.0.0.5" "127.0.0.6" "127.0.0.7")
 
 ensure_loopback_aliases() {
     local missing_output missing=() ip
@@ -208,8 +208,11 @@ ensure_loopback_aliases() {
     log_error "lo0 is missing required aliases on macOS: ${missing[*]}"
     echo ""
     echo "  HTTPRoute/Backend/LB* tests use 127.0.0.2 / 127.0.0.3 / 127.0.0.4 as"
-    echo "  distinct LB endpoints. macOS does not auto-route 127/8 to lo0 like"
-    echo "  Linux, so without these aliases connections silently time out."
+    echo "  distinct LB endpoints; 127.0.0.5 / 127.0.0.6 / 127.0.0.7 are the GeoIP"
+    echo "  synthetic source addresses (RU / US / HK in the test fixture) used by"
+    echo "  the EdgionPlugins|TCPRoute|TLSRoute GeoRestriction suites. macOS does"
+    echo "  not auto-route 127/8 to lo0 like Linux, so without these aliases"
+    echo "  connections silently time out."
     echo ""
     echo "  Run once now (aliases reset on reboot):"
     for ip in "${missing[@]}"; do
@@ -1057,6 +1060,7 @@ run_all_tests() {
                     run_test "TCPRoute_StreamPlugins" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i StreamPlugins" || test_failed=true
                     run_test "TCPRoute_GlobalConnectionIpRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i GlobalConnectionIpRestriction" || test_failed=true
                     run_test "TCPRoute_IdleTimeout" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i IdleTimeout" || test_failed=true
+                    run_test "TCPRoute_GeoRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i GeoRestriction" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "TCPRoute_${item_safe}" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i ${G_ITEM}" || test_failed=true
@@ -1070,6 +1074,7 @@ run_all_tests() {
                     run_test "TLSRoute_MultiSNI" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i MultiSNI" || test_failed=true
                     run_test "TLSRoute_BothAbsentParentRef" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i BothAbsentParentRef" || test_failed=true
                     run_test "TLSRoute_Passthrough" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i Passthrough" || test_failed=true
+                    run_test "TLSRoute_GeoRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i GeoRestriction" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "TLSRoute_${item_safe}" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i ${G_ITEM}" || test_failed=true
@@ -1170,6 +1175,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_DynamicExternalUpstream" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
                     run_test "EdgionPlugins_RegionRoute" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RegionRoute" || test_failed=true
                     run_test "EdgionPlugins_GlobalConnectionIpRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GlobalConnectionIpRestriction" || test_failed=true
+                    run_test "EdgionPlugins_GeoRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GeoRestriction" || test_failed=true
                     run_test "EdgionPlugins_EdgionConfigDataStatus" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i EdgionConfigDataStatus" || test_failed=true
                     run_test "EdgionPlugins_ResolvedRefs" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ResolvedRefs" || test_failed=true
                     run_test "EdgionPlugins_WebhookKeyGet" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
@@ -1346,7 +1352,8 @@ run_all_tests() {
         run_test "TCPRoute_StreamPlugins" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i StreamPlugins" || test_failed=true
         run_test "TCPRoute_IdleTimeout" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i IdleTimeout" || test_failed=true
         run_test "TCPRoute_GlobalConnectionIpRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i GlobalConnectionIpRestriction" || test_failed=true
-        
+        run_test "TCPRoute_GeoRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i GeoRestriction" || test_failed=true
+
         # TLSRoute Tests
         run_test "TLSRoute_Basic" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i Basic" || test_failed=true
         run_test "TLSRoute_ProxyProtocol" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i ProxyProtocol" || test_failed=true
@@ -1355,6 +1362,7 @@ run_all_tests() {
         run_test "TLSRoute_BothAbsentParentRef" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i BothAbsentParentRef" || test_failed=true
         run_test "TLSRoute_Passthrough" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i Passthrough" || test_failed=true
         run_test "TLSRoute_UnknownKindBackend" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i UnknownKindBackend" || test_failed=true
+        run_test "TLSRoute_GeoRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i GeoRestriction" || test_failed=true
 
         # UDPRoute Tests
         run_test "UDPRoute_Basic" "${EDGION_TEST_CLIENT_BIN} -g -r UDPRoute -i Basic" || test_failed=true
@@ -1404,6 +1412,7 @@ run_all_tests() {
         run_test "EdgionPlugins_RequestMirror" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RequestMirror" || test_failed=true
         run_test "EdgionPlugins_ResponseRewrite" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
         run_test "EdgionPlugins_RequestRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
+        run_test "EdgionPlugins_GeoRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GeoRestriction" || test_failed=true
         run_test "EdgionPlugins_GlobalAccessControl" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GlobalAccessControl" || test_failed=true
         run_test "EdgionPlugins_Canary" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i Canary" || test_failed=true
         run_test "EdgionPlugins_IpRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i IpRestriction" || test_failed=true
@@ -1586,7 +1595,7 @@ main() {
                 # must be present or the suite either cannot connect or falls
                 # through to an unrelated GRPCRoute.
                 base_suites="${base_suites},GRPCRoute/Basic"
-                suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/DebugAccessLog,EdgionPlugins/Csrf,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RateLimitRedis,EdgionPlugins/RealIp,EdgionPlugins/RequestMirror,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/GlobalAccessControl,EdgionPlugins/Canary,EdgionPlugins/IpRestriction,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/ExtProc,EdgionPlugins/AiGuard,EdgionPlugins/A2aGateway,EdgionPlugins/Guardrail,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/EdgionConfigDataStatus,EdgionPlugins/ResolvedRefs,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Cors,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/DslBody,EdgionPlugins/BodyPlugins,EdgionPlugins/JsonSchemaValidation,EdgionPlugins/AllEndpointStatus,EdgionPlugins/Wasm,EdgionPlugins/TraceContext,EdgionPlugins/AccessLogExtern,EdgionPlugins/MatchedRouteMeta,EdgionPlugins/IpRestrictionRefs,EdgionPlugins/PluginValidationStatus,EdgionPlugins/GlobalPluginsSnapshot,EdgionPlugins/EdgionConfigDataManaged,EdgionPlugins/PathNormalization/PreserveParam"
+                suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/DebugAccessLog,EdgionPlugins/Csrf,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RateLimitRedis,EdgionPlugins/RealIp,EdgionPlugins/RequestMirror,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/GlobalAccessControl,EdgionPlugins/Canary,EdgionPlugins/IpRestriction,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/ExtProc,EdgionPlugins/AiGuard,EdgionPlugins/A2aGateway,EdgionPlugins/Guardrail,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/EdgionConfigDataStatus,EdgionPlugins/ResolvedRefs,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Cors,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/DslBody,EdgionPlugins/BodyPlugins,EdgionPlugins/JsonSchemaValidation,EdgionPlugins/AllEndpointStatus,EdgionPlugins/Wasm,EdgionPlugins/TraceContext,EdgionPlugins/AccessLogExtern,EdgionPlugins/MatchedRouteMeta,EdgionPlugins/IpRestrictionRefs,EdgionPlugins/PluginValidationStatus,EdgionPlugins/GlobalPluginsSnapshot,EdgionPlugins/EdgionConfigDataManaged,EdgionPlugins/PathNormalization/PreserveParam,EdgionPlugins/GeoRestriction"
                 if $FULL_TEST; then
                     suites="${suites},EdgionPlugins/LdapAuth,EdgionPlugins/LdapAuthTls"
                 fi
@@ -1886,7 +1895,36 @@ main() {
         log_success "FIPS TLS policy passed"
     fi
 
-    # Step 1.9: Controller plugin policy (allowlist/denylist) end-to-end
+    # Step 1.9: GeoIP database-state matrix (standalone, boots its own minimal
+    # Controller + Gateway on isolated 586xx ports, restarted once per phase
+    # against the same Controller). Only runs in the default full sweep (no
+    # -r / -i targeting). Isolated on purpose: geoip is process-global and
+    # restart-only (edgion-gateway/src/geoip/config.rs), so "no database",
+    # "Country-tier database", "City-tier database", and "updater hot-swap"
+    # are four mutually exclusive configurations of one gateway process and
+    # cannot coexist with the shared City-tier gateway the main sweep uses.
+    # Verifies: startup never blocks/exits on a missing/absent database;
+    # failOpen:false rejects in both Blacklist and Whitelist mode when the
+    # database is unavailable; failOpen:true passes; an L4 profile with
+    # failOpen:false denies and bumps edgion_geoip_denied_total{reason="db_unavailable"}
+    # while failOpen:true admits; Country-tier country rules work and a city
+    # rule's predicate is simply absent (no "database tier" concept; onMissing
+    # governs); City-tier coordinate emission
+    # emits a masked geo.client.coord in the access log; and the updater
+    # hot-swap end to end (download -> validate -> rename -> re-mmap -> ArcSwap)
+    # turns a previously-inert city rule live (the behavioral proof the swap
+    # actually happened — there is no admin-endpoint snapshot), writes
+    # <db_path>.meta, and leaves no <db_path>.tmp.
+    if [ -z "$G_RESOURCE" ]; then
+        log_section "GeoIP database-state matrix"
+        if ! "${SCRIPT_DIR}/test_geoip_db_states.sh"; then
+            log_error "FAIL: GeoIP database-state matrix"
+            exit 1
+        fi
+        log_success "GeoIP database-state matrix passed"
+    fi
+
+    # Step 1.10: Controller plugin policy (allowlist/denylist) end-to-end
     # (standalone, boots its own minimal test_server + file_system Controller +
     # Gateway on isolated 583xx ports and restarts ONLY the Controller between
     # phases). Only runs in the default full sweep (no -r / -i targeting).
@@ -1965,7 +2003,18 @@ main() {
         else
             unset EDGION_TEST_ENABLE_GENAI_METRICS
         fi
-        
+
+        # geoip is gated on the selected resource, not enabled unconditionally: with it
+        # on, 127.0.0.1 resolves for every request, so a `geo` object appears in every
+        # access-log line of a full sweep. Existing assertions are substring/key-lookup
+        # based and should tolerate the additive field, but gating keeps a regression
+        # cheap to bisect (flip this first if the full sweep goes red after a geoip change).
+        if [ -z "$G_RESOURCE" ] || [ "$G_RESOURCE" = "EdgionPlugins" ] || [ "$G_RESOURCE" = "TCPRoute" ] || [ "$G_RESOURCE" = "TLSRoute" ]; then
+            export EDGION_TEST_ENABLE_GEOIP=1
+        else
+            unset EDGION_TEST_ENABLE_GEOIP
+        fi
+
         # Build start command
         local start_cmd="${UTILS_DIR}/start_all_with_conf.sh"
         if [ -n "$suites" ]; then

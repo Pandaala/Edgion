@@ -1535,6 +1535,37 @@ pub struct EdgionHttpContext {
     /// client disconnect, cancellation). `None` when no cap applies or admission
     /// was not attempted (bypass paths, no policy).
     pub cb_permit: Option<crate::backends::circuit_breaker::CbPermit>,
+
+    /// Geo for the direct peer address (`request_info.client_addr`).
+    ///
+    /// `OnceLock` rather than `RefCell`: `extract_rule_values` and other geo
+    /// consumers take `&self`, and this context must stay `Send + Sync`
+    /// (Pingora requires the per-request CTX type to be `Send + Sync`; see the
+    /// `cached_query_cell` comment above for the same reasoning). Set-once is
+    /// exactly the semantics needed — a resolved lookup, including a
+    /// `NotFound`, is never re-queried.
+    pub direct_geo: std::sync::OnceLock<crate::geoip::GeoLookup>,
+
+    /// Geo for the real client address (`request_info.remote_addr`).
+    ///
+    /// Filled lazily by its first consumer, never eagerly at request entry:
+    /// the `real_ip` plugin can overwrite `remote_addr` after the
+    /// listener-level extractor runs, and an eager fill would cache the
+    /// pre-plugin address.
+    pub client_geo: std::sync::OnceLock<crate::geoip::GeoLookup>,
+}
+
+/// Parse a `RequestInfo` address field as an `IpAddr`, tolerating either a
+/// bare IP or a `SocketAddr` (`ip:port`). Mirrors
+/// `real_ip_extractor::extract_ip_from_socket_addr`'s try-`SocketAddr`-then-
+/// `IpAddr` fallback, but returns `None` on failure instead of defaulting to
+/// `0.0.0.0` — an unparseable geo input must become `GeoLookup::NotFound`,
+/// never a lookup against a bogus address.
+fn parse_ip_str(addr: &str) -> Option<std::net::IpAddr> {
+    addr.parse::<std::net::SocketAddr>()
+        .map(|sa| sa.ip())
+        .or_else(|_| addr.parse::<std::net::IpAddr>())
+        .ok()
 }
 
 impl Default for EdgionHttpContext {
@@ -1716,6 +1747,8 @@ impl EdgionHttpContext {
             response_denial: None,
             response_stream_kind: ResponseStreamKind::None,
             cb_permit: None,
+            direct_geo: std::sync::OnceLock::new(),
+            client_geo: std::sync::OnceLock::new(),
         }
     }
 
@@ -1746,6 +1779,63 @@ impl EdgionHttpContext {
     pub fn cached_query(&self, raw_query: Option<&str>) -> &HashMap<String, String> {
         self.cached_query_cell
             .get_or_init(|| raw_query.map(uri_utils::parse_query_string).unwrap_or_default())
+    }
+
+    /// Geo for the real client address (`request_info.remote_addr`). Resolves
+    /// on first call, then caches. Never queries eagerly — the `real_ip`
+    /// plugin can rewrite `remote_addr` after the listener-level extractor
+    /// runs, so filling this at request entry would cache the wrong address.
+    pub fn client_geo(&self) -> &crate::geoip::GeoLookup {
+        self.client_geo.get_or_init(|| {
+            self.resolve_geo(
+                &self.request_info.remote_addr,
+                &self.direct_geo,
+                &self.request_info.client_addr,
+            )
+        })
+    }
+
+    /// Geo for the direct peer address (`request_info.client_addr`). Resolves
+    /// on first call, then caches.
+    pub fn direct_geo(&self) -> &crate::geoip::GeoLookup {
+        self.direct_geo.get_or_init(|| {
+            self.resolve_geo(
+                &self.request_info.client_addr,
+                &self.client_geo,
+                &self.request_info.remote_addr,
+            )
+        })
+    }
+
+    /// Resolve `addr`, reusing `other_slot` when the two addresses normalize
+    /// equal. Most requests have no `X-Forwarded-For`, so `client_addr` and
+    /// `remote_addr` are usually the same host — and comparing the raw
+    /// strings would miss that, because `::ffff:203.0.113.5` and
+    /// `203.0.113.5` are the same host spelled two ways. Mirrors
+    /// `real_ip_extractor`'s handling of `client_addr`: try `SocketAddr`
+    /// first (a peer address may carry a port), then fall back to a bare
+    /// `IpAddr`. An address that fails to parse yields `NotFound`, not a
+    /// panic.
+    fn resolve_geo(
+        &self,
+        addr: &str,
+        other_slot: &std::sync::OnceLock<crate::geoip::GeoLookup>,
+        other_addr: &str,
+    ) -> crate::geoip::GeoLookup {
+        use crate::geoip::info::normalize_addr;
+        use crate::geoip::{GeoIpProvider, GeoLookup};
+
+        let Some(ip) = parse_ip_str(addr) else {
+            return GeoLookup::NotFound;
+        };
+        let ip = normalize_addr(ip);
+
+        if let Some(cached) = other_slot.get() {
+            if parse_ip_str(other_addr).map(normalize_addr) == Some(ip) {
+                return cached.clone();
+            }
+        }
+        GeoIpProvider::global().lookup(ip)
     }
 
     /// Resolve the route-level `request_timeout`, preferring HTTP `route_unit`
@@ -2553,6 +2643,56 @@ mod cached_query_tests {
         // Subsequent call with Some(...) must NOT replace the cached empty map.
         let map2 = ctx.cached_query(Some("a=1"));
         assert!(map2.is_empty(), "OnceLock already initialized to empty");
+    }
+}
+
+#[cfg(test)]
+mod geo_context_tests {
+    use super::*;
+    use crate::geoip::{GeoIpProvider, GeoLookup, GEO_TEST_LOCK};
+
+    #[test]
+    fn geo_slots_start_unresolved_and_resolve_once() {
+        // Serialize against the process-wide GeoIpProvider singleton: other
+        // modules' tests in this same test binary load the fixture database
+        // into it, so without the lock + clear this test would flake
+        // depending on run order.
+        let _g = GEO_TEST_LOCK.lock();
+        GeoIpProvider::global().clear();
+
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.client_addr = "203.0.113.7".to_string();
+        ctx.request_info.remote_addr = "203.0.113.7".to_string();
+
+        // No database loaded in this test process.
+        assert_eq!(*ctx.client_geo(), GeoLookup::Unavailable);
+        // Second call returns the cached value, not a second lookup.
+        assert_eq!(*ctx.client_geo(), GeoLookup::Unavailable);
+    }
+
+    #[test]
+    fn equal_addresses_share_one_lookup() {
+        let _g = GEO_TEST_LOCK.lock();
+        GeoIpProvider::global().clear();
+
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.client_addr = "::ffff:203.0.113.7".to_string();
+        ctx.request_info.remote_addr = "203.0.113.7".to_string();
+        // The mapped and plain forms normalize equal, so the second slot must
+        // reuse the first result rather than resolving independently.
+        let a = ctx.direct_geo().clone();
+        let b = ctx.client_geo().clone();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn unparseable_address_reports_not_found_not_panic() {
+        let _g = GEO_TEST_LOCK.lock();
+        GeoIpProvider::global().clear();
+
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.remote_addr = "not-an-ip".to_string();
+        assert_eq!(*ctx.client_geo(), GeoLookup::NotFound);
     }
 }
 

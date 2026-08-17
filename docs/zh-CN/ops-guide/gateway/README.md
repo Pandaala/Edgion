@@ -10,5 +10,6 @@ Gateway 资源的运维配置，包括 GatewayClass、监听器、TLS、重定�
 | [gateway-class.md](gateway-class.md) | GatewayClass 配置 |
 | [http-to-https-redirect.md](http-to-https-redirect.md) | HTTP 到 HTTPS 重定向 |
 | [preflight-policy.md](preflight-policy.md) | Preflight 请求处理策略 |
+| [geoip.md](geoip.md) | GeoIP 地理限制：数据库生命周期、HTTP/L4 规则、访问日志、指标 |
 | [listeners/](listeners/README.md) | 监听器配置（HTTP、HTTPS、TCP、gRPC） |
 | [tls/](tls/README.md) | TLS 配置（终结、EdgionTls、ACME） |

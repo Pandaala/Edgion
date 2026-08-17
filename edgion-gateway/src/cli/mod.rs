@@ -519,6 +519,24 @@ impl EdgionGatewayCli {
             &config.all_endpoint_status,
         );
 
+        // 6b. Initialize the GeoIP provider and, when configured, spawn the
+        // background updater. Never blocks on the network and never fails
+        // startup — see `crate::geoip::init` for the fail-open rationale.
+        //
+        // `crate::geoip::init` runs synchronously here, on the plain OS thread
+        // between two `runtime.block_on` calls — NOT inside the Tokio runtime
+        // context. When `update_url` is set, `GeoIpUpdater::spawn` calls
+        // `tokio::spawn`, which unconditionally panics ("there is no reactor
+        // running") without an entered runtime. `runtime.enter()` only sets
+        // the thread-local pointing at this runtime for the duration the guard
+        // is held; it does not block, and the runtime's own worker threads
+        // (already running once `Runtime::new()` returns) keep driving the
+        // spawned updater task for the rest of the process's life after the
+        // guard drops at the end of this scope.
+        let _geoip_runtime_guard = runtime.enter();
+        crate::geoip::init(&config.gateway.geoip);
+        drop(_geoip_runtime_guard);
+
         tracing::info!(
             component = "startup",
             allocator = crate::allocator_name(),

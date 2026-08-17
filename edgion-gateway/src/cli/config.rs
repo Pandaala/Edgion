@@ -162,7 +162,14 @@ pub struct EdgionGatewayConfig {
 }
 
 /// Gateway configuration
-#[derive(Clone, Serialize, Deserialize, Args)]
+///
+/// `Debug` is derived: `admin_token` is a `RedactedString` (see
+/// `crate::util::redacted`), whose own `Debug` always prints `[redacted]`, so
+/// every other field stays visible by default and a future field needs no
+/// opt-in to show up in diagnostics — see the hazard note on
+/// `crate::geoip::GeoIpConfig`, whose hand-written `Debug` impl was the
+/// original instance of the pattern this inverts.
+#[derive(Debug, Clone, Serialize, Deserialize, Args)]
 pub struct GatewayConfig {
     /// Controller conf_sync gRPC addresses (repeatable). One address is exactly
     /// the previous single-address behavior; multiple addresses enable etcd-mode
@@ -186,10 +193,10 @@ pub struct GatewayConfig {
     /// flag, so it never lands in process args / `ps`). In Kubernetes, prefer
     /// the `EDGION_GATEWAY_ADMIN_TOKEN` env var injected from a Secret; this
     /// field is the fallback for a Secret-mounted config file. Never serialized
-    /// out, and redacted in `Debug` (see the manual impl below).
+    /// out, and redacted in `Debug` (`RedactedString` — see the struct doc).
     #[arg(skip)]
     #[serde(default, skip_serializing)]
-    pub admin_token: Option<String>,
+    pub admin_token: Option<crate::util::RedactedString>,
 
     /// Require the FIPS-validated crypto module at startup. Default false.
     /// When true and the module is absent (a non-FIPS build), the gateway logs
@@ -198,6 +205,11 @@ pub struct GatewayConfig {
     #[arg(long = "require-fips")]
     #[serde(default)]
     pub require_fips: bool,
+
+    /// GeoIP database and updater settings. Process-wide and restart-only.
+    #[arg(skip)]
+    #[serde(default)]
+    pub geoip: crate::geoip::GeoIpConfig,
 
     /// How to select the FIPS-approved TLS policy (approved cipher list +
     /// curves) on downstream listeners. `auto` (the default) follows the host
@@ -304,6 +316,7 @@ impl Default for GatewayConfig {
             probe_listen: None,
             admin_token: None,
             require_fips: false,
+            geoip: crate::geoip::GeoIpConfig::default(),
             fips_policy: None,
             outbound_egress_block_private: false,
             outbound_egress_dns_cache_ttl_ms: default_outbound_egress_dns_cache_ttl_ms(),
@@ -314,33 +327,6 @@ impl Default for GatewayConfig {
             wasm_oci_pull_timeout_secs: default_wasm_oci_pull_timeout_secs(),
             wasm_oci_pull_attempts: default_wasm_oci_pull_attempts(),
         }
-    }
-}
-
-impl std::fmt::Debug for GatewayConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GatewayConfig")
-            .field("server_addrs", &self.server_addrs)
-            .field("admin_listen", &self.admin_listen)
-            .field("probe_listen", &self.probe_listen)
-            .field("admin_token", &self.admin_token.as_ref().map(|_| "[redacted]"))
-            .field("require_fips", &self.require_fips)
-            .field("fips_policy", &self.fips_policy)
-            .field("outbound_egress_block_private", &self.outbound_egress_block_private)
-            .field(
-                "outbound_egress_dns_cache_ttl_ms",
-                &self.outbound_egress_dns_cache_ttl_ms,
-            )
-            .field("wasm_oci_cache_dir", &self.wasm_oci_cache_dir)
-            .field("wasm_oci_cache_ttl_secs", &self.wasm_oci_cache_ttl_secs)
-            .field(
-                "wasm_oci_cache_purge_interval_secs",
-                &self.wasm_oci_cache_purge_interval_secs,
-            )
-            .field("wasm_oci_cache_max_bytes", &self.wasm_oci_cache_max_bytes)
-            .field("wasm_oci_pull_timeout_secs", &self.wasm_oci_pull_timeout_secs)
-            .field("wasm_oci_pull_attempts", &self.wasm_oci_pull_attempts)
-            .finish()
     }
 }
 
@@ -840,6 +826,10 @@ pub fn get_access_log_options() -> &'static edgion_resources::observe::AccessLog
 }
 
 // ============================================
+// GeoIP Log Options Global Configuration
+// ============================================
+
+// ============================================
 // LRU Cache Global Configuration
 // ============================================
 
@@ -1292,7 +1282,7 @@ genai_tokens:
     fn admin_token_is_not_serialized() {
         let cfg = EdgionGatewayConfig {
             gateway: GatewayConfig {
-                admin_token: Some("must-not-leak".to_string()),
+                admin_token: Some("must-not-leak".into()),
                 ..Default::default()
             },
             ..Default::default()
@@ -1307,12 +1297,27 @@ genai_tokens:
     #[test]
     fn admin_token_is_redacted_in_debug() {
         let cfg = GatewayConfig {
-            admin_token: Some("must-not-leak".to_string()),
+            admin_token: Some("must-not-leak".into()),
             ..Default::default()
         };
         let dbg = format!("{:?}", cfg);
         assert!(!dbg.contains("must-not-leak"), "admin_token must be redacted in Debug");
         assert!(dbg.contains("[redacted]"));
+    }
+
+    /// `GatewayConfig` derives `Debug` (see the struct doc): this is now a
+    /// smoke test that every field, including a nested config struct like
+    /// `geoip`, actually reaches the derived output — not a guard against a
+    /// hand-maintained `.field(...)` list going stale, which no longer exists
+    /// for this struct.
+    #[test]
+    fn debug_output_includes_geoip() {
+        let cfg = GatewayConfig::default();
+        let dbg = format!("{:?}", cfg);
+        assert!(
+            dbg.contains("geoip"),
+            "GatewayConfig Debug output must include the geoip field"
+        );
     }
 
     #[test]

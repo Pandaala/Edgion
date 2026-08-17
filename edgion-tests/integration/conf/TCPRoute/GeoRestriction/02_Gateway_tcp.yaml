@@ -1,0 +1,16 @@
+# Gateway for the "tcp" layer (Stage-2, post route-match) half of the
+# TCPRoute GeoRestriction suite. Deliberately carries NO
+# edgion.io/edgion-stream-plugins annotation of its own — the stream-plugins
+# reference lives on the TCPRoute (03_TCPRoute.yaml) instead, so a connection
+# here is evaluated only at Stage-2 ("tcp" layer), never at Stage-1.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tcp-geo-gw
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tcp
+      protocol: TCP
+      port: 31951

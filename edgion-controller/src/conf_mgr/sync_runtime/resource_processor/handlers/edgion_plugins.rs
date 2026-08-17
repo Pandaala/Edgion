@@ -2489,6 +2489,7 @@ mod tests {
             status: 403,
             message: None,
             ip_source: IpSource::RemoteAddr,
+            fail_open: None,
         };
 
         let mut ep = EdgionPlugins::new("gac-ep", EdgionPluginsSpec::default());
@@ -2691,6 +2692,7 @@ mod tests {
             status: 403,
             message: None,
             ip_source: IpSource::RemoteAddr,
+            fail_open: None,
         };
 
         let mut ep = EdgionPlugins::new("origin-lockdown", EdgionPluginsSpec::default());
@@ -2748,6 +2750,7 @@ mod tests {
             status: 403,
             message: None,
             ip_source: IpSource::RemoteAddr,
+            fail_open: None,
         };
 
         let mut ep = EdgionPlugins::new("p", EdgionPluginsSpec::default());
@@ -2885,6 +2888,7 @@ mod tests {
             status: 403,
             message: None,
             ip_source: IpSource::RemoteAddr,
+            fail_open: None,
         };
 
         let mut ep = EdgionPlugins::new("gac-ep", EdgionPluginsSpec::default());
@@ -2970,6 +2974,7 @@ mod tests {
             status: 403,
             message: None,
             ip_source: IpSource::RemoteAddr,
+            fail_open: None,
         };
 
         let mut ep = EdgionPlugins::new("gac-disabled-ep", EdgionPluginsSpec::default());
@@ -3105,6 +3110,7 @@ mod tests {
             status: 403,
             message: None,
             ip_source: IpSource::RemoteAddr,
+            fail_open: None,
         };
 
         let mut ep = EdgionPlugins::new("p", EdgionPluginsSpec::default());

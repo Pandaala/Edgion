@@ -18,13 +18,23 @@
 //! A selector can only switch among the git-owned `profiles`; it can never disable filtering
 //! or inject rules. Every non-switch outcome falls back to `active_profile` (fail-to-base),
 //! so the base MUST be authored as the conservative/safe value (e.g. `defaultAction: Deny`).
+//!
+//! # Geo (country) second stage and PROXY protocol
+//! Each profile may carry an optional `geo` block (`GeoRules`) evaluated after the IP
+//! stage. `StreamContext.client_ip` is the raw transport peer at stage-1 (PROXY protocol
+//! parsing happens in `handshake()`, strictly after `accept()`) and the resolved client
+//! at the TCP/TLS stages. This is a pre-existing property — the stage-1 **IP** rules
+//! already match the transport peer today, not the PROXY-declared client — and geo
+//! deliberately inherits it rather than diverging. An operator enabling PROXY protocol
+//! owns the consequence.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::observe::metrics::record_conn_ip_restriction_event;
+use crate::geoip::{GeoIpProvider, GeoLookup};
+use crate::observe::metrics::{record_conn_ip_restriction_event, record_geoip_denied};
 use crate::plugins::runtime::edgion_config_data::{
     get_global_edgion_config_data_store, resolve_ip_list_matchers, resolve_ip_list_ref_keys,
 };
@@ -33,6 +43,7 @@ use crate::plugins::stream::stream_plugin_trait::{
 };
 use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 use edgion_resources::resources::edgion_config_data::ConfigEntry;
+use edgion_resources::resources::edgion_plugins::AccessDecision;
 use edgion_resources::resources::edgion_stream_plugins::GlobalConnectionIpRestrictionConfig;
 
 const PLUGIN_NAME: &str = "GlobalConnectionIpRestriction";
@@ -160,10 +171,76 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
         let allow_arcs = resolve_ip_list_matchers(allow_keys);
         let deny_refs: Vec<&IpRadixMatcher> = deny_arcs.iter().map(|a| a.as_ref()).collect();
         let allow_refs: Vec<&IpRadixMatcher> = allow_arcs.iter().map(|a| a.as_ref()).collect();
-        access_decision_to_stream_result(
-            profile.check_ip_with_refs(&ctx.client_ip, &deny_refs, &allow_refs),
-            || record_conn_ip_restriction_event("denied"),
-        )
+        let ip_decision = profile.check_ip_with_refs(&ctx.client_ip, &deny_refs, &allow_refs);
+
+        let Some(geo) = profile.geo.as_ref() else {
+            // No geo block: today's behavior, byte for byte.
+            return access_decision_to_stream_result(ip_decision, || record_conn_ip_restriction_event("denied"));
+        };
+
+        match &ip_decision {
+            // Row 1 and row 2 are terminal and bypass geo entirely.
+            AccessDecision::DenyByGroup(_) => {
+                return access_decision_to_stream_result(ip_decision, || record_conn_ip_restriction_event("denied"))
+            }
+            AccessDecision::AllowByGroup(_) => return StreamPluginResult::Allow,
+            // Rows 3 and 4: the IP stage had no verdict of its own.
+            AccessDecision::DenyByWhitelistMiss | AccessDecision::Default(_) => {}
+        }
+
+        let layer = ctx.layer;
+        let lookup = GeoIpProvider::global().lookup(ctx.client_ip);
+
+        // Row 3a. `Unavailable` (total outage) and `NotFound` (address absent
+        // from a loaded database) are deliberately NOT the same path: a
+        // fail-open outage must return immediately with the original IP
+        // decision (skip 3b/3c entirely, go straight to row 4), never fall
+        // through into the allow-mode-miss handling below — that handling is
+        // correct only for a resolved-but-unlisted country (`NotFound`), and
+        // conflating the two would silently defeat `failOpen: true` whenever
+        // `allowCountries` is configured (an outage would deny instead of
+        // deferring to `ip_decision`).
+        let country = match &lookup {
+            GeoLookup::Unavailable => {
+                if !geo.fail_open {
+                    record_geoip_denied(layer, "db_unavailable");
+                    return StreamPluginResult::Deny("geo:deny:db-unavailable".to_string());
+                }
+                return access_decision_to_stream_result(ip_decision, || record_conn_ip_restriction_event("denied"));
+            }
+            GeoLookup::NotFound => None,
+            GeoLookup::Found(info) => info.country_iso.clone(),
+        };
+
+        if let Some(c) = country.as_deref() {
+            // Row 3b.
+            if geo.denies_country(c) {
+                record_geoip_denied(layer, "deny_country");
+                return StreamPluginResult::Deny("geo:deny:country".to_string());
+            }
+            // Row 3c — terminal in BOTH directions.
+            if !geo.allow_countries.is_empty() {
+                return if geo.allows_country(c) {
+                    StreamPluginResult::Allow
+                } else {
+                    record_geoip_denied(layer, "allow_miss");
+                    StreamPluginResult::Deny("geo:deny:allow-miss".to_string())
+                };
+            }
+        } else if !geo.allow_countries.is_empty() {
+            // An allowlist is configured but we have no country to check it
+            // against: an allow-mode miss, not a fall-through.
+            record_geoip_denied(layer, "allow_miss");
+            return StreamPluginResult::Deny("geo:deny:allow-miss".to_string());
+        }
+
+        // Row 3d: geo has no opinion. Rows 4 / 4' — hand the ORIGINAL IP
+        // decision back untouched.
+        //
+        // This is load-bearing: `DenyByWhitelistMiss` must stay a denial. Geo
+        // must never let a whitelist-mode miss reach `default_action`, whose
+        // default value is Allow.
+        access_decision_to_stream_result(ip_decision, || record_conn_ip_restriction_event("denied"))
     }
 }
 
@@ -195,9 +272,72 @@ mod tests {
             default_action,
             allow_refs: None,
             deny_refs: None,
+            geo: None,
             allow_matcher: None,
             deny_matcher: None,
         }
+    }
+
+    /// Extend `profile` with a geo block (pass `None` for today's shape).
+    fn profile_with_geo(
+        default_action: DefaultAction,
+        allow_cidr: Option<&str>,
+        deny_cidr: Option<&str>,
+        geo: Option<edgion_resources::resources::edgion_stream_plugins::GeoRules>,
+    ) -> ProfileRules {
+        let mut p = profile(default_action, allow_cidr, deny_cidr);
+        p.geo = geo;
+        p
+    }
+
+    fn geo(
+        allow: &[&str],
+        deny: &[&str],
+        fail_open: bool,
+    ) -> edgion_resources::resources::edgion_stream_plugins::GeoRules {
+        let mut g = edgion_resources::resources::edgion_stream_plugins::GeoRules {
+            allow_countries: allow.iter().map(|s| s.to_string()).collect(),
+            deny_countries: deny.iter().map(|s| s.to_string()).collect(),
+            fail_open,
+        };
+        g.compile().unwrap();
+        g
+    }
+
+    fn plugin_with(profile: ProfileRules) -> GlobalConnectionIpRestrictionPlugin {
+        let mut profiles = HashMap::new();
+        profiles.insert("main".to_string(), profile);
+        let config = GlobalConnectionIpRestrictionConfig {
+            enable: true,
+            active_profile: "main".to_string(),
+            profiles,
+            description: None,
+            active_profile_ref: None,
+        };
+        GlobalConnectionIpRestrictionPlugin::new(&config, "default").expect("valid config")
+    }
+
+    /// Synchronous on purpose: the geo tests below hold `GEO_TEST_LOCK` across
+    /// this call to serialize access to the process-global `GeoIpProvider`
+    /// singleton for the test's full body. A `parking_lot::MutexGuard` must
+    /// never live across a real `.await` suspension point (workspace lint
+    /// `await_holding_lock`), so this drives `on_connection`'s future to
+    /// completion with a plain synchronous poll loop instead of `#[tokio::test]`
+    /// + `.await` — `on_connection` itself never actually suspends.
+    fn decide(profile: ProfileRules, client: &str) -> StreamPluginResult {
+        let plugin = plugin_with(profile);
+        let ctx = StreamContext::new(client.parse().unwrap(), 8443);
+        futures::executor::block_on(plugin.on_connection(&ctx))
+    }
+
+    fn is_allow(r: &StreamPluginResult) -> bool {
+        matches!(r, StreamPluginResult::Allow)
+    }
+
+    fn load_fixture() {
+        let path =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../edgion-tests/geoip/edgion-test-city.mmdb");
+        crate::geoip::GeoIpProvider::global().load_from(&path).unwrap();
     }
 
     /// Build a single-profile config (no selector ref).
@@ -483,5 +623,147 @@ mod tests {
         ));
         let ctx_ok = StreamContext::new("8.8.8.8".parse().unwrap(), 8080);
         assert!(matches!(plugin.on_connection(&ctx_ok).await, StreamPluginResult::Allow));
+    }
+
+    // ---- Task 14: geo second stage ----
+    //
+    // The addresses below come from the fixture map: `203.0.113.7` resolves to
+    // GB, `127.0.0.5` to RU, `127.0.0.6` to US, `127.0.0.7` to HK, `127.0.0.1`
+    // to CN. `GeoIpProvider::global()` is a process-global singleton, so every
+    // test here takes `GEO_TEST_LOCK` before touching it and holds it for the
+    // whole test body (including the `decide()` call) to serialize against
+    // every other test that touches the same singleton. These are plain
+    // `#[test]` functions (not `#[tokio::test]`) specifically so that guard
+    // never spans a real `.await` suspension point — see `decide`'s doc comment.
+
+    /// A profile with no geo block must behave EXACTLY as it does today.
+    #[test]
+    fn no_geo_block_preserves_existing_behavior() {
+        let _g = crate::geoip::GEO_TEST_LOCK.lock();
+        let p = profile_with_geo(DefaultAction::Allow, Some("10.0.0.0/8"), None, None);
+        // Whitelist mode: an out-of-allowlist address is denied, and the inert
+        // `Allow` default is never consulted.
+        assert!(!is_allow(&decide(p, "203.0.113.5")));
+    }
+
+    /// Row 1: IP deny wins over everything, including an allowed country.
+    #[test]
+    fn ip_deny_hit_rejects_before_geo() {
+        let _g = crate::geoip::GEO_TEST_LOCK.lock();
+        load_fixture();
+        let p = profile_with_geo(
+            DefaultAction::Allow,
+            None,
+            Some("203.0.113.0/24"),
+            Some(geo(&["GB"], &[], false)),
+        );
+        assert!(!is_allow(&decide(p, "203.0.113.7")));
+    }
+
+    /// Row 2: an IP allowlist hit exempts the connection from a country blacklist.
+    /// This exemption is the expressive value of merging geo into this plugin.
+    #[test]
+    fn ip_allow_hit_exempts_a_geo_deny() {
+        let _g = crate::geoip::GEO_TEST_LOCK.lock();
+        load_fixture();
+        let p = profile_with_geo(
+            DefaultAction::Deny,
+            Some("203.0.113.0/24"),
+            None,
+            Some(geo(&[], &["GB"], false)),
+        );
+        assert!(is_allow(&decide(p, "203.0.113.7")));
+    }
+
+    /// Row 4 — THE REGRESSION THIS TASK EXISTS TO PREVENT.
+    ///
+    /// `DefaultAction::default()` is `Allow`, so nearly every whitelist profile
+    /// carries an inert `Allow`. If a geo no-opinion fell through to it, an
+    /// operator adding `denyCountries` to a working IP whitelist — intending to
+    /// block MORE — would instead admit every address outside their allowlist.
+    #[test]
+    fn whitelist_miss_still_denies_when_geo_has_no_opinion() {
+        let _g = crate::geoip::GEO_TEST_LOCK.lock();
+        load_fixture();
+        let p = profile_with_geo(
+            DefaultAction::Allow, // the inert default
+            Some("10.0.0.0/8"),   // whitelist mode
+            None,
+            Some(geo(&[], &["RU"], true)), // deny-only: no opinion on GB
+        );
+        // 203.0.113.7 resolves to GB, is not in 10/8, and is not RU.
+        assert!(
+            !is_allow(&decide(p, "203.0.113.7")),
+            "a geo no-opinion must not resurrect default_action in whitelist mode"
+        );
+    }
+
+    /// Row 3c: an `allowCountries` hit must be terminal. If it fell through to
+    /// `default_action`, then in any `defaultAction: Deny` profile — the
+    /// conservative baseline this plugin mandates — `allowCountries` would admit
+    /// nobody.
+    #[test]
+    fn allow_countries_hit_admits_under_default_deny() {
+        let _g = crate::geoip::GEO_TEST_LOCK.lock();
+        load_fixture();
+        let p = profile_with_geo(DefaultAction::Deny, None, None, Some(geo(&["GB"], &[], false)));
+        assert!(is_allow(&decide(p, "203.0.113.7")));
+    }
+
+    #[test]
+    fn allow_countries_miss_denies() {
+        let _g = crate::geoip::GEO_TEST_LOCK.lock();
+        load_fixture();
+        let p = profile_with_geo(DefaultAction::Allow, None, None, Some(geo(&["CN"], &[], false)));
+        assert!(!is_allow(&decide(p, "203.0.113.7")));
+    }
+
+    #[test]
+    fn deny_countries_hit_denies() {
+        let _g = crate::geoip::GEO_TEST_LOCK.lock();
+        load_fixture();
+        let p = profile_with_geo(DefaultAction::Allow, None, None, Some(geo(&[], &["GB"], false)));
+        assert!(!is_allow(&decide(p, "203.0.113.7")));
+    }
+
+    /// Row 3a, fail-closed: no database at all denies.
+    #[test]
+    fn db_unavailable_denies_when_fail_open_is_false() {
+        let _g = crate::geoip::GEO_TEST_LOCK.lock();
+        crate::geoip::GeoIpProvider::global().clear();
+        let p = profile_with_geo(DefaultAction::Allow, None, None, Some(geo(&[], &["RU"], false)));
+        assert!(!is_allow(&decide(p, "203.0.113.7")));
+    }
+
+    /// Row 3a, fail-open: no database behaves as if the geo block were absent.
+    #[test]
+    fn db_unavailable_falls_through_when_fail_open_is_true() {
+        let _g = crate::geoip::GEO_TEST_LOCK.lock();
+        crate::geoip::GeoIpProvider::global().clear();
+        let p = profile_with_geo(DefaultAction::Allow, None, None, Some(geo(&[], &["RU"], true)));
+        assert!(is_allow(&decide(p, "203.0.113.7")));
+    }
+
+    /// Regression test for the reviewer-caught CRITICAL: `Unavailable` +
+    /// `failOpen: true` must skip 3b/3c entirely and defer to the original
+    /// `ip_decision`, even when `allowCountries` is configured. Before the
+    /// fix, `Unavailable` mapped `country` to `None` and fell through into
+    /// the SAME branch that handles a resolved-but-unlisted country
+    /// (`NotFound`), which unconditionally denies whenever an allowlist is
+    /// configured — silently defeating `failOpen: true` for exactly this
+    /// configuration (an `allowCountries`-only profile with the implicit
+    /// `defaultAction: Allow`). No `db_unavailable_*` test above catches this:
+    /// they are all deny-only geo blocks, so `allow_countries` is empty and
+    /// the buggy branch is never entered.
+    #[test]
+    fn db_unavailable_with_allow_countries_and_fail_open_still_allows() {
+        let _g = crate::geoip::GEO_TEST_LOCK.lock();
+        crate::geoip::GeoIpProvider::global().clear();
+        let p = profile_with_geo(DefaultAction::Allow, None, None, Some(geo(&["GB"], &[], true)));
+        assert!(
+            is_allow(&decide(p, "203.0.113.7")),
+            "failOpen: true must defer to the original ip_decision (Default(Allow)) \
+             on a total outage, even with allowCountries configured"
+        );
     }
 }

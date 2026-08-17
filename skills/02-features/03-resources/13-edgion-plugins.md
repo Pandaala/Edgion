@@ -52,9 +52,9 @@ spec:
 | `Cors` | CORS cross-origin resource sharing |
 | `Csrf` | CSRF protection |
 | `IpRestriction` | IP allow/deny list (CIDR supported). Inline `allow`/`deny` groups are **partial-good**: a bad CIDR entry is skipped (not fatal); the plugin loads with the valid entries. Bad entries surface as a `PartiallyInvalid` status condition (reason `RuleInvalid`); `Accepted` stays `True`. A skipped inline deny entry also increments `edgion_ip_deny_entries_skipped_total{scope="http"}`. |
-| `RequestRestriction` | Request restrictions (header/body rules) |
+| `RequestRestriction` | Request restrictions (header/body/geo rules). `RestrictionSource::ClientGeo`/`DirectGeo` add country/continent/city/subdivision matching, backed by the gateway's process-wide GeoIP provider — see `docs/en/ops-guide/gateway/geoip.md`. |
 | `RequestBodyBuffer` | Explicitly populate the shared request-body cache for later-stage consumers |
-| `GlobalAccessControl` | L7 allow-list with IP/CIDR and composite request match groups |
+| `GlobalAccessControl` | L7 allow-list with IP/CIDR and composite request match groups; shares `RestrictionSource` with `RequestRestriction`, so it also gets `ClientGeo`/`DirectGeo` — note its `IpSource` naming is inverted relative to `RequestInfo` (see the GeoIP guide). |
 
 ### Traffic Control
 

@@ -737,6 +737,7 @@ mod global_access_control_variant_tests {
             status: 403,
             message: None,
             ip_source: crate::resources::edgion_plugins::plugin_configs::IpSource::RemoteAddr,
+            fail_open: None,
         };
         let p = EdgionPlugin::GlobalAccessControl(cfg);
         assert!(p.validation_error().unwrap().contains("activeProfile"));

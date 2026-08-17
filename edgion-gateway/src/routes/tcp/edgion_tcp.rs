@@ -346,7 +346,7 @@ pub(crate) async fn check_stream_plugins(
         return StreamPluginCheck::Allow;
     }
 
-    let stream_ctx = StreamContext::new(client_ip, listener_port);
+    let stream_ctx = StreamContext::new(client_ip, listener_port).with_layer("tcp");
     match runtime.run(&stream_ctx).await {
         StreamPluginResult::Allow => StreamPluginCheck::Allow,
         StreamPluginResult::Deny(_) => StreamPluginCheck::Deny("stream plugin policy denied"),

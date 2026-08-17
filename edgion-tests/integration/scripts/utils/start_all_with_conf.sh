@@ -1032,6 +1032,30 @@ main() {
         printf '\nmetrics:\n  genai_tokens:\n    enabled: true\n' >> "${GATEWAY_CONFIG}"
         log_info "Enabled GenAI token metrics in the integration workdir config"
     fi
+    if [ "${EDGION_TEST_ENABLE_GEOIP:-0}" = "1" ]; then
+        if grep -Eq '^  geoip:' "${GATEWAY_CONFIG}"; then
+            log_error "Integration geoip override requires a Gateway config without an existing geoip section"
+            exit 1
+        fi
+        if ! grep -Eq '^gateway:$' "${GATEWAY_CONFIG}"; then
+            log_error "Integration geoip override requires a top-level 'gateway:' key to nest under"
+            exit 1
+        fi
+        # `geoip` is a field of `GatewayConfig` with no `#[serde(flatten)]`, so it
+        # MUST nest under the existing top-level `gateway:` key — appending a
+        # second top-level `geoip:` key is silently ignored (`#[serde(default)]`
+        # on the `gateway` field just defaults the whole nested struct, and a
+        # gateway process never even calls `set_geoip_db_loaded`).
+        # db_path must be absolute: a relative path resolves against --work-dir.
+        # update_url is left unset so no updater spawns in the shared topology.
+        geoip_block=$(printf '  geoip:\n    db_path: %s' \
+            "${PROJECT_ROOT}/edgion-tests/geoip/edgion-test-city.mmdb")
+        GEOIP_BLOCK="${geoip_block}" awk '
+            { print }
+            /^gateway:$/ && !done { print ENVIRON["GEOIP_BLOCK"]; done=1 }
+        ' "${GATEWAY_CONFIG}" > "${GATEWAY_CONFIG}.tmp" && mv "${GATEWAY_CONFIG}.tmp" "${GATEWAY_CONFIG}"
+        log_info "Enabled GeoIP (City-tier test fixture) in the integration workdir config"
+    fi
     if [ "${EDGION_CONF_SYNC_PLAINTEXT:-0}" = "1" ]; then
         conf_sync_replace_with_skip_tls "${CONTROLLER_CONFIG}" "${GATEWAY_CONFIG}"
         CONF_SYNC_SCHEME="http"

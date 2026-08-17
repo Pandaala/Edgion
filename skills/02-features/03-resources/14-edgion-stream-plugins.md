@@ -84,7 +84,7 @@ On `UDPRoute` the binding runs only the Stage-1 ConnectionFilter (`spec.plugins`
 | Type | Stage | Description |
 |------|-------|-------------|
 | `IpRestriction` | Stage 1 + Stage 2 | IP allow/deny list (CIDR supported); rules may be inline (`allowlist`/`denylist`) or referenced from a central `IpList` EdgionConfigData via `allowRefs`/`denyRefs` (merged into the same pools; a missing/disabled referenced IpList causes allowRef to fail closed). Inline `allow`/`deny` groups are **partial-good**: a bad CIDR entry is skipped (not fatal); the plugin loads with valid entries. Bad entries surface as `PartiallyInvalid` status (reason `RuleInvalid`; `Accepted` stays `True`). A skipped inline deny entry increments `edgion_ip_deny_entries_skipped_total{scope="stream_l4"|"tls_route"}`. |
-| `GlobalConnectionIpRestriction` | Stage 1 only | EdgionConfigData-referenced IP restriction. The plugin config holds `overrideRef`; referenced profiles carry the rule sets. |
+| `GlobalConnectionIpRestriction` | Stage 1 only | EdgionConfigData-referenced IP restriction. The plugin config holds `overrideRef`; referenced profiles carry the rule sets. Each profile may also carry an optional `geo` block (country-only allow/deny, `failOpen` required) evaluated after the IP deny/allow decision — see `docs/en/ops-guide/gateway/geoip.md`. |
 | `ConnectionRateLimit` | Stage 1 only | Limits new connections before TLS/application processing using the current connection-rate configuration. |
 
 Entries are flattened as `enable + type + config`; the older nested

@@ -1,0 +1,29 @@
+# GlobalAccessControl exercising the shared RestrictionRule geo predicate too
+# (RestrictionRule is deliberately shared between RequestRestriction and
+# GlobalAccessControl — see plugin_configs/request_match.rs's module doc).
+# default_action: Deny; only ClientGeo country == CN is let through.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: geo-gac
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: GlobalAccessControl
+      config:
+        enable: true
+        activeProfile: cn-only
+        profiles:
+          cn-only:
+            defaultAction: deny
+            ruleGroups:
+              - name: allow-cn
+                rules:
+                  - name: client-country-cn
+                    source: ClientGeo
+                    key: country
+                    values: ["CN"]
+        status: 403
+        message: "Access denied by geo GlobalAccessControl policy"
+        failOpen: false

@@ -1364,6 +1364,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::TcpIdleTimeoutTestSuite));
         }
+        "TCPRoute/GeoRestriction" => {
+            if !gateway {
+                eprintln!("Error: TCPRoute/GeoRestriction tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TcpGeoRestrictionTestSuite));
+        }
         "TCPRoute/KeepaliveSmoke" => {
             if !gateway {
                 eprintln!("Error: TCPRoute/KeepaliveSmoke tests require --gateway flag");
@@ -1399,6 +1406,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::TlsMultiSniTestSuite));
+        }
+        "TLSRoute/GeoRestriction" => {
+            if !gateway {
+                eprintln!("Error: TLSRoute/GeoRestriction tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TlsGeoRestrictionTestSuite));
         }
         "TLSRoute/BothAbsentParentRef" => {
             if !gateway {
@@ -1831,6 +1845,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::GlobalConnectionIpRestrictionTestSuite));
+        }
+        "EdgionPlugins/GeoRestriction" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/GeoRestriction tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GeoRestrictionTestSuite));
         }
         "EdgionPlugins/EdgionConfigDataStatus" => {
             if !gateway {

@@ -284,3 +284,13 @@ conf_sync_security:
 #       cert: certs/grpc/new-ca/client.crt
 #       key: certs/grpc/new-ca/client.key
 #       ca: certs/grpc/new-ca/ca.crt
+
+# --- GeoIP (process-global, restart-only; see edgion-gateway/src/geoip/) ---
+# `geoip` is a field of `GatewayConfig` (no `#[serde(flatten)]`), so it MUST
+# nest under the `gateway:` key above, like `server_addrs`/`admin_listen` do
+# — a top-level `geoip:` key is silently ignored (`#[serde(default)]` on the
+# `gateway` field just defaults the whole nested struct).
+# gateway:
+#   geoip:
+#     db_path: /var/lib/edgion/GeoLite2-City.mmdb   # absolute, or resolved against work_dir
+#     update_url: https://example.com/GeoLite2-City.mmdb   # optional periodic hot-swap source

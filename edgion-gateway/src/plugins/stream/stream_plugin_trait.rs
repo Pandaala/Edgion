@@ -51,16 +51,37 @@ pub struct StreamContext {
     pub listener_port: u16,
     /// Optional: remote address string (for logging)
     pub remote_addr: Option<String>,
+    /// Construction-site label for the `layer` metric dimension: `"stage1"` |
+    /// `"tcp"` | `"tls"`. Defaults to `"stage1"` so the 20+ existing `new()`
+    /// call sites (mostly tests) do not need updating; the three production
+    /// call sites that are not stage1 set it explicitly via `with_layer`.
+    pub layer: &'static str,
 }
 
 impl StreamContext {
-    /// Create a new stream context
+    /// Create a new stream context.
+    ///
+    /// `layer` defaults to `"stage1"`, which is correct ONLY for the
+    /// connection-filter stage. **Any new production call site that runs after
+    /// the PROXY-protocol handshake — a TCP, TLS, or future route stage — MUST
+    /// chain `.with_layer(...)`.** Forgetting to is silent: the context still
+    /// builds, and `edgion_geoip_denied_total` simply attributes that stage's
+    /// denials to `stage1`. Since L4 geo denials are never logged, that metric is
+    /// the only record of them, so a wrong label is a wrong answer with nothing
+    /// to cross-check it against.
     pub fn new(client_ip: IpAddr, listener_port: u16) -> Self {
         Self {
             client_ip,
             listener_port,
             remote_addr: None,
+            layer: "stage1",
         }
+    }
+
+    /// Override the `layer` label used for the `edgion_geoip_denied_total` metric.
+    pub fn with_layer(mut self, layer: &'static str) -> Self {
+        self.layer = layer;
+        self
     }
 }
 

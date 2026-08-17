@@ -1,0 +1,30 @@
+# Ingest-rejection case: a plugin with a geo rule but no plugin-level
+# `failOpen` is structurally invalid
+# (request_restriction.rs::RequestRestrictionConfig::check_fields) ->
+# Accepted=False/Invalid. `failOpen` moved from per-rule to plugin-level (see
+# 05-medium-unify-geo-fail-open-to-plugin-level.md) — it used to live on the
+# rule itself, now it lives one level up, on `spec.requestPlugins[].config`.
+# Never referenced by a route; applied and polled directly via the
+# configserver API, same pattern as
+# suites/edgion_plugins/global_connection_ip_restriction and
+# suites/edgion_plugins/plugin_validation_status.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: geo-rr-invalid
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Blacklist
+        ruleGroups:
+          - name: missing-fail-open
+            rules:
+              - name: missing-fail-open
+                source: ClientGeo
+                key: country
+                values: ["CN"]
+        status: 403
+        # failOpen intentionally omitted -> rejected at ingest.
