@@ -32,7 +32,7 @@ pub use tls_route_plugins::TlsRouteStreamPlugin;
 pub use crate::resources::edgion_plugins::DefaultAction;
 
 /// EdgionStreamPlugins defines reusable plugin configurations for stream protocols
-#[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
+#[derive(CustomResource, Serialize, Debug, Clone, JsonSchema)]
 #[kube(
     group = "edgion.io",
     version = "v1",
@@ -51,6 +51,61 @@ pub struct EdgionStreamPluginsSpec {
     /// Stage 2 (TlsRoute) plugin configurations — post-handshake, post-route-match
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_route_plugins: Option<Vec<TlsRoutePluginEntry>>,
+
+    /// Unrecognized key paths found in the submitted document. Populated only on
+    /// the Kubernetes watcher ingest path (see `schema_check::strict_ingest_enabled`);
+    /// never serialized, never in the CRD schema.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub unknown_fields: Vec<String>,
+}
+
+/// Deserialize-only mirror of [`EdgionStreamPluginsSpec`]; see
+/// `EdgionPluginsSpecShadow` in `resources::edgion_plugins` for why this
+/// exists.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EdgionStreamPluginsSpecShadow {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    plugins: Option<Vec<StreamPluginEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tls_route_plugins: Option<Vec<TlsRoutePluginEntry>>,
+}
+
+impl From<EdgionStreamPluginsSpecShadow> for EdgionStreamPluginsSpec {
+    fn from(shadow: EdgionStreamPluginsSpecShadow) -> Self {
+        EdgionStreamPluginsSpec {
+            plugins: shadow.plugins,
+            tls_route_plugins: shadow.tls_route_plugins,
+            unknown_fields: Vec::new(),
+        }
+    }
+}
+
+/// Schema used by the unknown-key walk, built once.
+///
+/// `pub` for the same reason as `edgion_plugins_spec_schema`: Phase 2b's
+/// FileSystem/etcd loader seam and Admin API write handlers need it outside
+/// the Kubernetes-only `strict_ingest_enabled` gate.
+pub fn edgion_stream_plugins_spec_schema() -> &'static schemars::Schema {
+    static SCHEMA: std::sync::OnceLock<schemars::Schema> = std::sync::OnceLock::new();
+    SCHEMA.get_or_init(|| schemars::schema_for!(EdgionStreamPluginsSpec))
+}
+
+impl<'de> Deserialize<'de> for EdgionStreamPluginsSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // See `EdgionPluginsSpec::deserialize` for the fast-path/gate rationale.
+        if !crate::schema_check::strict_ingest_enabled() {
+            return Ok(EdgionStreamPluginsSpecShadow::deserialize(d)?.into());
+        }
+        let value = serde_json::Value::deserialize(d)?;
+        let unknown = crate::schema_check::unknown_key_paths(&value, edgion_stream_plugins_spec_schema());
+        let mut spec: EdgionStreamPluginsSpec = EdgionStreamPluginsSpecShadow::deserialize(value)
+            .map_err(serde::de::Error::custom)?
+            .into();
+        spec.unknown_fields = unknown;
+        Ok(spec)
+    }
 }
 
 /// Stream plugin entry with enable switch

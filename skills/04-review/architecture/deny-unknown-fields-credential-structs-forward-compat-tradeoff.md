@@ -109,6 +109,11 @@ Re-open (as a `tasks/todo/` feature, not a review fix) only if:
 
 - `tasks/review-envoy/resource-05-link-sys-deny-unknown-fields-breaks-forward-compat.md` (closed 2026-06-14, ⚠️ accepted-tradeoff)
 - `skills/04-review/architecture/unknown-plugin-variant-strict-enum.md` (`resource-01`, the sibling plugin-enum forward-compat tradeoff)
+- `skills/04-review/architecture/serde-ignored-blind-spots-schema-walk-instead.md` — the
+  complementary detector for the opposite case: an operator-facing, `x-kubernetes-preserve-unknown-fields`
+  subtree (plugin `config`) where `deny_unknown_fields` cannot be used at all (it forbids
+  `#[serde(flatten)]`) and a hard reject is not the wanted policy anyway; that detector
+  warns instead of rejecting and does not touch the credential-injection boundary described here.
 - `skills/04-review/architecture/gateway-no-local-config-snapshot.md` (the Envoy-comparison rolling-upgrade baseline)
 - `skills/04-review/deserialization/SKILL.md` ("use `deny_unknown_fields` on internal structs that should be stable and closed; omit on user-facing extension points")
 - `edgion-resources/src/resources/common/secret_slot.rs:18` + tests `:46-50`; `link_sys/redis.rs:54` + tests `:257-269`

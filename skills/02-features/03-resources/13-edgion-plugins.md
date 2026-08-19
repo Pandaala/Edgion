@@ -197,3 +197,34 @@ A restricted entry is stamped, not force-disabled, and is reported via a
 [validation.plugin_policy](../02-config/00-controller-config.md#validationplugin_policy)
 for the config schema and `docs/en/ops-guide/plugin-policy.md` for the
 operator guide.
+
+## Unknown config keys (`UnknownConfigFields` condition)
+
+Because a plugin's `config` block is `x-kubernetes-preserve-unknown-fields` in the CRD, the
+Kubernetes API server does not prune a mistyped key (e.g. `denys:` instead of `deny:`), and
+serde silently drops it during deserialization — the resource keeps running with that key
+simply ignored, which for a security plugin is a fail-open, not a no-op. The Controller
+detects this at ingest and reports it:
+
+```yaml
+status:
+  conditions:
+    - type: UnknownConfigFields
+      status: "True"
+      reason: UnknownFieldsDetected
+      message: "requestPlugins[0].config.denys"
+```
+
+- `Accepted` is **not** touched — it keeps meaning "resource valid and synced". The config
+  still syncs to the Gateway exactly as it would without this check; the mistyped key is
+  still ignored, unchanged from today's behavior.
+- The condition does **not** feed `edgion_controller_resource_abnormal` — an operator typo
+  is not resource ill-health.
+- The Controller also emits a WARN log line with the full path list.
+- To clear the condition, fix the key and re-apply; the next apply removes the condition
+  (upsert-on-hit, remove-on-fix — it is never left wedged at a stale `True`).
+
+Full operator guidance — including the fleet-wide `GET /api/v1/diagnostics/unknown-fields`
+endpoint and the `POST /api/v1/validate/{kind}` endpoint for building your own blocking
+gate — is in `docs/en/ops-guide/plugin-config-unknown-fields.md` and
+[Admin API — diagnostics/validate](../../01-architecture/01-controller/02-admin-api.md).

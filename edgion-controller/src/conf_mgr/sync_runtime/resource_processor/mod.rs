@@ -34,6 +34,7 @@ pub mod secret_utils;
 pub mod service_ref;
 pub mod status_diff;
 pub mod status_utils;
+pub(crate) mod unknown_fields_stamp;
 
 pub use context::HandlerContext;
 pub use credential::{ResolveError, SecretMaterialResolver};

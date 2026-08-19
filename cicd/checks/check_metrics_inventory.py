@@ -21,6 +21,7 @@ SCANNED = [
     "edgion-common/src/observe/cardinality_guard.rs",
     "edgion-common/src/conf_sync/cert_expiry_watch.rs",
     "edgion-controller/src/observe/status_metrics.rs",
+    "edgion-controller/src/observe/unknown_fields_registry.rs",
     "edgion-controller/src/conf_mgr/sync_runtime/metrics.rs",
 ]
 

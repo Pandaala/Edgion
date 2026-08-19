@@ -369,6 +369,13 @@ pub struct ApiResponse<T> {
     pub data: Option<T>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Non-fatal advisories about the request (e.g. unrecognized config keys
+    /// the schema does not know about — see
+    /// `tasks/todo/plugin-config-unknown-field-detection`). Empty on every
+    /// existing call site, so it never appears in the serialized payload
+    /// (`skip_serializing_if`) and existing consumers see an unchanged shape.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 impl<T> ApiResponse<T> {
@@ -377,6 +384,20 @@ impl<T> ApiResponse<T> {
             success: true,
             data: Some(data),
             error: None,
+            warnings: Vec::new(),
+        }
+    }
+
+    /// Same as [`Self::ok_body`], but attaches non-fatal warnings for the
+    /// caller to surface. The write itself already succeeded — this never
+    /// changes `success` or the status code (warn-not-reject policy, see
+    /// `02-implementation.md` §10).
+    pub fn ok_body_with_warnings(data: T, warnings: Vec<String>) -> Self {
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+            warnings,
         }
     }
 
@@ -385,6 +406,7 @@ impl<T> ApiResponse<T> {
             success: false,
             data: None,
             error: Some(message),
+            warnings: Vec::new(),
         }
     }
 }
@@ -417,6 +439,38 @@ impl<T> ListResponse<T> {
             continue_token,
             error: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod api_response_warnings_tests {
+    use super::ApiResponse;
+
+    #[test]
+    fn empty_warnings_are_absent_from_serialized_payload() {
+        let body = ApiResponse::ok_body("HTTPRoute created".to_string());
+        let serialized = serde_json::to_value(&body).expect("ApiResponse must serialize");
+        assert!(
+            serialized.get("warnings").is_none(),
+            "an empty warnings list must not appear in the JSON at all, matching every pre-existing ok_body call site"
+        );
+    }
+
+    #[test]
+    fn non_empty_warnings_are_present_and_ordered() {
+        let body = ApiResponse::ok_body_with_warnings(
+            "EdgionPlugins created".to_string(),
+            vec!["requestPlugins[0].config.denys".to_string()],
+        );
+        let serialized = serde_json::to_value(&body).expect("ApiResponse must serialize");
+        assert_eq!(serialized["warnings"][0], "requestPlugins[0].config.denys");
+    }
+
+    #[test]
+    fn err_body_never_carries_warnings() {
+        let body: ApiResponse<()> = ApiResponse::err_body("bad request".to_string());
+        let serialized = serde_json::to_value(&body).expect("ApiResponse must serialize");
+        assert!(serialized.get("warnings").is_none());
     }
 }
 

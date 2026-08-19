@@ -69,7 +69,7 @@ pub use plugin_validation::PluginValidation;
 pub use validate::{applicable_stages_by_name, StageSet, HTTP_PLUGIN_STAGE_EXCEPTIONS};
 
 /// EdgionPlugins defines reusable plugin configurations
-#[derive(CustomResource, Serialize, Deserialize, Debug, Default, Clone, JsonSchema)]
+#[derive(CustomResource, Serialize, Debug, Default, Clone, JsonSchema)]
 #[kube(
     group = "edgion.io",
     version = "v1",
@@ -107,6 +107,80 @@ pub struct EdgionPluginsSpec {
     /// entries an auditor needs — and would race `CtxSet` for `from: ctx`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_log_extern: Option<Vec<AccessLogExternField>>,
+
+    /// Unrecognized key paths found in the submitted document. Populated only on
+    /// the Kubernetes watcher ingest path (see `schema_check::strict_ingest_enabled`);
+    /// never serialized, never in the CRD schema.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub unknown_fields: Vec<String>,
+}
+
+/// Deserialize-only mirror of [`EdgionPluginsSpec`], carrying every field
+/// except `unknown_fields` (which is derived by the walk, never present in
+/// the wire document). See `tasks/todo/plugin-config-unknown-field-detection/02-implementation.md`
+/// §4 for why this shadow exists: it lets `EdgionPluginsSpec` keep a derived
+/// `Serialize`/`JsonSchema` while `Deserialize` is hand-written to run the
+/// schema walk before the input is consumed.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EdgionPluginsSpecShadow {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request_plugins: Option<Vec<RequestFilterEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    upstream_response_filter_plugins: Option<Vec<UpstreamResponseFilterEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    upstream_response_body_filter_plugins: Option<Vec<UpstreamResponseBodyFilterEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    upstream_response_plugins: Option<Vec<UpstreamResponseEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    access_log_extern: Option<Vec<AccessLogExternField>>,
+}
+
+impl From<EdgionPluginsSpecShadow> for EdgionPluginsSpec {
+    fn from(shadow: EdgionPluginsSpecShadow) -> Self {
+        EdgionPluginsSpec {
+            request_plugins: shadow.request_plugins,
+            upstream_response_filter_plugins: shadow.upstream_response_filter_plugins,
+            upstream_response_body_filter_plugins: shadow.upstream_response_body_filter_plugins,
+            upstream_response_plugins: shadow.upstream_response_plugins,
+            access_log_extern: shadow.access_log_extern,
+            unknown_fields: Vec::new(),
+        }
+    }
+}
+
+/// Schema used by the unknown-key walk, built once (`schema_for!` is not
+/// cheap and this runs on every Kubernetes-mode ingest).
+///
+/// `pub` (not module-private): the FileSystem/etcd loader seam
+/// (`edgion-controller/src/conf_mgr/conf_center/common.rs`) and the Admin API
+/// write handlers (`edgion-controller/src/api/common.rs`) run the same walk
+/// against this schema outside the Kubernetes-only `strict_ingest_enabled`
+/// gate — see Phase 2b in
+/// `tasks/todo/plugin-config-unknown-field-detection/02-implementation.md` §5 / R-11.
+pub fn edgion_plugins_spec_schema() -> &'static schemars::Schema {
+    static SCHEMA: std::sync::OnceLock<schemars::Schema> = std::sync::OnceLock::new();
+    SCHEMA.get_or_init(|| schemars::schema_for!(EdgionPluginsSpec))
+}
+
+impl<'de> Deserialize<'de> for EdgionPluginsSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // Fast path: non-Kubernetes ingest (FileSystem/etcd loaders, the
+        // gateway's conf_sync consumer, tests) pays neither the `Value`
+        // round-trip nor the walk. See `schema_check::strict_ingest_enabled`
+        // for why this is gated to Kubernetes specifically.
+        if !crate::schema_check::strict_ingest_enabled() {
+            return Ok(EdgionPluginsSpecShadow::deserialize(d)?.into());
+        }
+        let value = serde_json::Value::deserialize(d)?;
+        let unknown = crate::schema_check::unknown_key_paths(&value, edgion_plugins_spec_schema());
+        let mut spec: EdgionPluginsSpec = EdgionPluginsSpecShadow::deserialize(value)
+            .map_err(serde::de::Error::custom)?
+            .into();
+        spec.unknown_fields = unknown;
+        Ok(spec)
+    }
 }
 
 /// Status of EdgionPlugins

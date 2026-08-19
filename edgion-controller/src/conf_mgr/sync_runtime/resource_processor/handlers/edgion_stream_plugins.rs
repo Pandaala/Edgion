@@ -190,6 +190,24 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
         // validation errors (Accepted keeps meaning "valid and synced").
         let _ = super::super::plugin_policy_stamp::stamp_stream_entries(esp);
 
+        // Unknown-field diagnostic: `spec.unknown_fields` was already
+        // populated at ingest (Phase 2 hook/loader/Admin-API seams), so this
+        // is a pure read — no re-walk here. Warn once on the apply path; the
+        // status-side UnknownConfigFields condition is stamped in
+        // update_status, mirroring PluginPolicyRestricted. Advisory only:
+        // this never touches `Accepted` or blocks the resource from syncing.
+        if !esp.spec.unknown_fields.is_empty() {
+            tracing::warn!(
+                component = "conf_mgr",
+                event = "unknown_config_fields_detected",
+                kind = "EdgionStreamPlugins",
+                namespace = %esp.metadata.namespace.as_deref().unwrap_or("default"),
+                name = %esp.metadata.name.as_deref().unwrap_or(""),
+                paths = ?esp.spec.unknown_fields,
+                "EdgionStreamPlugins document has keys the schema does not recognize; they are ignored, config still syncs unchanged"
+            );
+        }
+
         let mut errors = Vec::new();
 
         // Both stages validate disabled entries with `is_enabled()` skipped, mirroring the
@@ -391,6 +409,11 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
         update_condition(&mut status.conditions, resolved_refs);
         update_condition(&mut status.conditions, partially_invalid);
         super::super::plugin_policy_stamp::apply_policy_condition(&mut status.conditions, &policy_hits, generation);
+        super::super::unknown_fields_stamp::apply_unknown_fields_condition(
+            &mut status.conditions,
+            &esp.spec.unknown_fields,
+            generation,
+        );
     }
 }
 
@@ -1220,6 +1243,7 @@ spec:
         let spec = EdgionStreamPluginsSpec {
             plugins: None,
             tls_route_plugins: None,
+            unknown_fields: Vec::new(),
         };
         let mut esp = EdgionStreamPlugins::new("policy-restricted-esp", spec);
         esp.metadata.namespace = Some("default".to_string());
@@ -1241,6 +1265,73 @@ spec:
             .conditions
             .iter()
             .all(|c| c.type_ != condition_types::PLUGIN_POLICY_RESTRICTED));
+    }
+
+    // ── UnknownConfigFields condition (Phase 4) ─────────────────────────────
+
+    #[test]
+    fn update_status_sets_unknown_config_fields_condition_with_exact_paths() {
+        use crate::conf_mgr::sync_runtime::resource_processor::status_utils::condition_types;
+        use edgion_resources::resources::edgion_stream_plugins::EdgionStreamPluginsSpec;
+
+        let spec = EdgionStreamPluginsSpec {
+            plugins: None,
+            tls_route_plugins: None,
+            unknown_fields: vec!["plugins[0].config.denys".to_string()],
+        };
+        let mut esp = EdgionStreamPlugins::new("typo-esp", spec);
+        esp.metadata.namespace = Some("default".to_string());
+
+        let handler = EdgionStreamPluginsHandler::new();
+        handler.update_status(&mut esp, &make_ctx(), &[]);
+
+        let status = esp.status.unwrap();
+        let cond = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == condition_types::UNKNOWN_CONFIG_FIELDS)
+            .expect("UnknownConfigFields condition must be present");
+        assert_eq!(cond.status, "True");
+        assert_eq!(cond.message, "plugins[0].config.denys");
+
+        // Accepted must stay True and untouched by this advisory condition.
+        let accepted = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == condition_types::ACCEPTED)
+            .expect("Accepted condition must be present");
+        assert_eq!(accepted.status, "True");
+    }
+
+    #[test]
+    fn update_status_removes_unknown_config_fields_condition_when_fixed() {
+        // Simulates the operator fixing the typo on the next generation:
+        // update_status must REMOVE the stale condition (the wedge trap the
+        // stamp module's doc comment warns about).
+        use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
+            condition_reasons, condition_true, condition_types,
+        };
+
+        let mut esp = clean_esp();
+        esp.spec.unknown_fields = Vec::new(); // fixed
+        esp.status = Some(EdgionStreamPluginsStatus {
+            conditions: vec![condition_true(
+                condition_types::UNKNOWN_CONFIG_FIELDS,
+                condition_reasons::UNKNOWN_FIELDS_DETECTED,
+                "stale",
+                Some(1),
+            )],
+        });
+
+        let handler = EdgionStreamPluginsHandler::new();
+        handler.update_status(&mut esp, &make_ctx(), &[]);
+
+        assert!(esp
+            .status
+            .unwrap()
+            .conditions
+            .iter()
+            .all(|c| c.type_ != condition_types::UNKNOWN_CONFIG_FIELDS));
     }
 
     // ── Inline entry-error collection tests ──────────────────────────────────

@@ -32,6 +32,14 @@ pub mod condition_types {
     /// policy (Edgion-specific, not a Gateway API condition). True = hits
     /// exist; the condition is removed entirely when there are no hits.
     pub const PLUGIN_POLICY_RESTRICTED: &str = "PluginPolicyRestricted";
+    /// The operator-authored document carries one or more keys the schema
+    /// does not recognize (Edgion-specific, not a Gateway API condition).
+    /// True = findings exist; the condition is removed entirely when there
+    /// are none. Advisory only: the typo'd key is ignored exactly as it was
+    /// before this check existed, `Accepted` is untouched, and the config
+    /// still syncs to the data plane unchanged — see
+    /// `tasks/todo/plugin-config-unknown-field-detection/05-issues.md` R-1/R-12.
+    pub const UNKNOWN_CONFIG_FIELDS: &str = "UnknownConfigFields";
 }
 
 /// Standard Gateway API condition reasons
@@ -138,6 +146,9 @@ pub mod condition_reasons {
 
     /// Reason for PluginPolicyRestricted=True.
     pub const RESTRICTED_BY_POLICY: &str = "RestrictedByPolicy";
+
+    /// Reason for UnknownConfigFields=True.
+    pub const UNKNOWN_FIELDS_DETECTED: &str = "UnknownFieldsDetected";
 }
 
 // ============================================================================

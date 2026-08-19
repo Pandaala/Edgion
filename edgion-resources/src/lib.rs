@@ -17,6 +17,7 @@ pub mod rate_limit_config;
 pub mod redact;
 pub mod resources;
 pub mod schema;
+pub mod schema_check;
 pub mod sensitive;
 pub mod uri_utils;
 pub mod work_dir;

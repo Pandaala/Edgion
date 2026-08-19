@@ -15,6 +15,7 @@ mod public_paths;
 mod region_route_handlers;
 mod resource_locks;
 mod types;
+mod validate_handlers;
 mod wipe_handlers;
 
 pub use types::{ApiResponse, ListResponse};
@@ -637,6 +638,15 @@ pub fn create_admin_router(
             "/api/v1/diagnostics/conf-conflicts",
             get(diagnostics_handlers::conf_conflicts),
         )
+        .route(
+            "/api/v1/diagnostics/unknown-fields",
+            get(diagnostics_handlers::unknown_fields),
+        )
+        // Read-only validation verdict on a submitted (not-yet-applied) document
+        // (`tasks/todo/plugin-config-unknown-field-detection/02-implementation.md`
+        // §11): the building block for an operator's own blocking gate, since the
+        // controller itself only ever warns.
+        .route("/api/v1/validate/{kind}", post(validate_handlers::validate_kind))
         // ConfigServer endpoints (for edgion-cli --target server)
         .route("/configserver/{kind}/list", get(configserver_handlers::list_resources))
         .route("/configserver/{kind}", get(configserver_handlers::get_resource))

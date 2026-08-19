@@ -112,30 +112,113 @@ where
 {
     let kind = K::resource_kind();
 
-    if kind != ResourceKind::BackendTLSPolicy && kind != ResourceKind::TLSRoute {
-        serde_yaml::from_str::<K>(content)
+    let mut parsed = if kind != ResourceKind::BackendTLSPolicy && kind != ResourceKind::TLSRoute {
+        serde_yaml::from_str::<K>(content)?
     } else {
         match extract_api_version(content).as_deref() {
             Some("gateway.networking.k8s.io/v1alpha3") if kind == ResourceKind::BackendTLSPolicy => {
                 let legacy: BackendTLSPolicyAlpha3 = serde_yaml::from_str(content)?;
                 let canonical: BackendTLSPolicy = legacy.into();
                 let normalized = serde_yaml::to_string(&canonical)?;
-                serde_yaml::from_str::<K>(&normalized)
+                serde_yaml::from_str::<K>(&normalized)?
             }
             Some("gateway.networking.k8s.io/v1alpha3") if kind == ResourceKind::TLSRoute => {
                 let legacy: TLSRouteAlpha3 = serde_yaml::from_str(content)?;
                 let canonical: TLSRoute = legacy.into();
                 let normalized = serde_yaml::to_string(&canonical)?;
-                serde_yaml::from_str::<K>(&normalized)
+                serde_yaml::from_str::<K>(&normalized)?
             }
-            _ => serde_yaml::from_str::<K>(content),
+            _ => serde_yaml::from_str::<K>(content)?,
         }
+    };
+
+    // FileSystem/etcd unknown-field diagnostic (Phase 2b of
+    // tasks/todo/plugin-config-unknown-field-detection): the Kubernetes watcher
+    // gets this via the hand-written `Deserialize` impls on `EdgionPluginsSpec` /
+    // `EdgionStreamPluginsSpec`, gated by `strict_ingest_enabled`. That gate means
+    // "Kubernetes ingress" specifically (see its doc comment), so it is NOT
+    // consulted here — FileSystem/etcd content is checked unconditionally.
+    if matches!(kind, ResourceKind::EdgionPlugins | ResourceKind::EdgionStreamPlugins) {
+        populate_unknown_fields_non_fatal(kind, content, &mut parsed);
     }
+
+    Ok(parsed)
 }
 
 fn extract_api_version(content: &str) -> Option<String> {
     let value: serde_yaml::Value = serde_yaml::from_str(content).ok()?;
     value.get("apiVersion")?.as_str().map(ToString::to_string)
+}
+
+/// Populate `spec.unknown_fields` on an already-parsed `EdgionPlugins` /
+/// `EdgionStreamPlugins` object, for the FileSystem/etcd loader seam.
+///
+/// Non-fatal by design (`05-issues.md` R-2): unlike the Kubernetes hook, this
+/// runs on YAML content that may contain shapes `serde_json::Value` cannot
+/// represent (a non-string map key, `!!binary`, a YAML tag). This diagnostic
+/// must never turn an otherwise-loadable document into a load failure, so any
+/// parse/convert error here just skips the check and the caller's typed
+/// parse (already completed above) is returned unchanged.
+///
+/// `K` is generic over every resource kind `parse_resource_content` serves,
+/// so `Any::downcast_mut` is the minimal way to reach the concrete
+/// `EdgionPlugins`/`EdgionStreamPlugins` spec field without adding a trait
+/// method to every resource type for a diagnostic only two kinds need. The
+/// `K: 'static` bound `parse_resource_content` already carries makes this
+/// sound.
+fn populate_unknown_fields_non_fatal<K: 'static>(kind: ResourceKind, content: &str, parsed: &mut K) {
+    let yaml_value: serde_yaml::Value = match serde_yaml::from_str(content) {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::debug!(
+                component = "conf_center",
+                event = "unknown_fields_yaml_parse_skip",
+                kind = ?kind,
+                error = %err,
+                "skipping unknown-field check: content did not re-parse as YAML"
+            );
+            return;
+        }
+    };
+    let json_value: Value = match serde_json::to_value(&yaml_value) {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::warn!(
+                component = "conf_center",
+                event = "unknown_fields_json_convert_skip",
+                kind = ?kind,
+                error = %err,
+                "skipping unknown-field check: YAML document does not convert to JSON"
+            );
+            return;
+        }
+    };
+    let Some(spec_value) = json_value.get("spec") else {
+        return;
+    };
+
+    match kind {
+        ResourceKind::EdgionPlugins => {
+            if let Some(plugins) = (parsed as &mut dyn std::any::Any).downcast_mut::<edgion_resources::EdgionPlugins>()
+            {
+                plugins.spec.unknown_fields = edgion_resources::schema_check::unknown_key_paths(
+                    spec_value,
+                    edgion_resources::edgion_plugins_spec_schema(),
+                );
+            }
+        }
+        ResourceKind::EdgionStreamPlugins => {
+            if let Some(plugins) =
+                (parsed as &mut dyn std::any::Any).downcast_mut::<edgion_resources::EdgionStreamPlugins>()
+            {
+                plugins.spec.unknown_fields = edgion_resources::schema_check::unknown_key_paths(
+                    spec_value,
+                    edgion_resources::edgion_stream_plugins_spec_schema(),
+                );
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Merge an operator update with the server-owned portions of the current resource.
@@ -487,5 +570,145 @@ spec:
         let merged = merge_operator_update_yaml(current, requested).expect("non-Kubernetes merge must succeed");
         let merged: Value = serde_yaml::from_str(&merged).expect("merged resource must remain valid YAML");
         assert_eq!(merged["metadata"]["generation"], 7);
+    }
+}
+
+/// Tests for the FileSystem/etcd unknown-field diagnostic seam in
+/// `parse_resource_content` (Phase 2b of
+/// `tasks/todo/plugin-config-unknown-field-detection`). Unlike the
+/// Kubernetes hand-written `Deserialize` impls, this path is NOT gated by
+/// `strict_ingest_enabled` — see the comment at its call site above — so
+/// these tests do not need to touch that process-global flag.
+#[cfg(test)]
+mod unknown_fields_seam_tests {
+    use super::parse_resource_content;
+    use edgion_resources::prelude_resources::{EdgionPlugins, EdgionStreamPlugins, HTTPRoute};
+
+    const TYPO_PLUGINS: &str = r#"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: typo-plugins
+  namespace: default
+spec:
+  requestPlugins:
+    - type: IpRestriction
+      config:
+        defaultAction: allow
+        denys: []
+"#;
+
+    const CLEAN_PLUGINS: &str = r#"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: clean-plugins
+  namespace: default
+spec:
+  requestPlugins:
+    - type: IpRestriction
+      config:
+        defaultAction: allow
+        deny: []
+"#;
+
+    const TYPO_STREAM_PLUGINS: &str = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: typo-stream-plugins
+  namespace: default
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        defaultAction: allow
+        denys: []
+"#;
+
+    #[test]
+    fn edgion_plugins_typo_populates_unknown_fields_with_exact_path() {
+        let parsed: EdgionPlugins = parse_resource_content(TYPO_PLUGINS).expect("well-formed aside from the typo");
+        assert_eq!(
+            parsed.spec.unknown_fields,
+            vec!["requestPlugins[0].config.denys".to_string()]
+        );
+    }
+
+    #[test]
+    fn edgion_plugins_clean_document_yields_no_findings() {
+        let parsed: EdgionPlugins = parse_resource_content(CLEAN_PLUGINS).expect("clean document must parse");
+        assert!(parsed.spec.unknown_fields.is_empty());
+    }
+
+    #[test]
+    fn edgion_stream_plugins_typo_populates_unknown_fields_with_exact_path() {
+        let parsed: EdgionStreamPlugins =
+            parse_resource_content(TYPO_STREAM_PLUGINS).expect("well-formed aside from the typo");
+        assert_eq!(parsed.spec.unknown_fields, vec!["plugins[0].config.denys".to_string()]);
+    }
+
+    #[test]
+    fn edgion_stream_plugins_clean_document_yields_no_findings() {
+        let clean = TYPO_STREAM_PLUGINS.replace("denys", "deny");
+        let parsed: EdgionStreamPlugins = parse_resource_content(&clean).expect("clean document must parse");
+        assert!(parsed.spec.unknown_fields.is_empty());
+    }
+
+    /// R-2's non-fatal guarantee: a document that re-parses as a `serde_yaml::Value`
+    /// but cannot convert to `serde_json::Value` (a non-string mapping key, which
+    /// JSON has no representation for) must still load successfully via the normal
+    /// typed parse — the diagnostic just skips itself instead of failing the load.
+    /// R-2's non-fatal guarantee, tested directly against the seam helper
+    /// rather than through `parse_resource_content`'s full round trip: a
+    /// document with a mapping key that is itself a YAML sequence (`? [a, b]`)
+    /// parses fine into `serde_yaml::Value` (YAML permits non-scalar keys),
+    /// but JSON has no representation for a non-string object key, so
+    /// `serde_json::to_value` fails on it — the exact failure shape R-2 exists
+    /// to guard against.
+    ///
+    /// This cannot be exercised through `parse_resource_content`'s normal
+    /// entry point: a struct field's key deserializer requires a string
+    /// identifier regardless of whether the field is recognized, so any
+    /// document with a non-scalar top-level key fails the typed parse itself
+    /// (`serde_yaml::from_str::<K>`) before this seam ever runs — i.e. the
+    /// class of document that breaks the JSON round-trip is already rejected
+    /// upstream, and the seam's non-fatal skip is defense-in-depth for that
+    /// gap rather than something reachable end-to-end today. Calling the
+    /// helper directly with an already-parsed clean object isolates exactly
+    /// the behavior R-2 asks for: the check skips itself and leaves the
+    /// object's `unknown_fields` untouched.
+    #[test]
+    fn json_conversion_failure_is_skipped_and_leaves_object_untouched() {
+        let mut parsed: EdgionPlugins = parse_resource_content(CLEAN_PLUGINS).expect("clean document must parse");
+        let unconvertible_content = "? [a, b]\n: nested-key-seq\n";
+
+        super::populate_unknown_fields_non_fatal(
+            edgion_resources::ResourceKind::EdgionPlugins,
+            unconvertible_content,
+            &mut parsed,
+        );
+
+        assert!(
+            parsed.spec.unknown_fields.is_empty(),
+            "a YAML->JSON conversion failure must be skipped, not surfaced as spurious findings"
+        );
+    }
+
+    /// A non-plugin kind goes through `parse_resource_content` completely
+    /// unchanged — no findings machinery is invoked for it.
+    #[test]
+    fn non_plugin_kind_is_unaffected() {
+        let content = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r1
+  namespace: default
+spec:
+  hostnames: [example.com]
+"#;
+        let parsed: HTTPRoute = parse_resource_content(content).expect("HTTPRoute must still parse normally");
+        assert_eq!(parsed.metadata.name.as_deref(), Some("r1"));
     }
 }

@@ -67,7 +67,8 @@ where
         let raw_store: std::sync::Arc<dyn crate::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore<K>> =
             fs_raw_store.clone();
         processor.set_raw_store(raw_store.clone());
-        crate::observe::status_metrics::register_status_renderer::<K>(kind, raw_store);
+        crate::observe::status_metrics::register_status_renderer::<K>(kind, raw_store.clone());
+        crate::observe::unknown_fields_registry::register_unknown_fields_source::<K>(kind, raw_store);
         Self {
             kind,
             processor,

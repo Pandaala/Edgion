@@ -923,6 +923,105 @@ verify_metrics_labels() {
 }
 
 # =============================================================================
+# Verify no resource in the fleet carries an unknown (typo'd) config key.
+#
+# Backed by `GET /api/v1/diagnostics/unknown-fields`
+# (tasks/todo/plugin-config-unknown-field-detection). This is a proof of
+# ABSENCE: if any plugin's config key was dropped by a schema mismatch, every
+# later assertion about that plugin is suspect, so a caller of this function
+# is expected to hard-fail the run rather than continue on a false-green
+# suite. See `test_unknown_config_fields.sh` for the matching proof of
+# PRESENCE (a dedicated scenario that deliberately trips this check).
+#
+# Returns 0 when the endpoint is reachable and total == 0, or when the
+# endpoint could not be reached (infra noise, logged explicitly so the two
+# cases are never conflated -- see verify_metrics_labels above for the same
+# precedent). Returns 1 when total > 0, after printing every
+# "kind/namespace/name -> paths" line so the operator can act without
+# digging further.
+# =============================================================================
+verify_no_unknown_config_fields() {
+    local controller_url="${1:-http://127.0.0.1:12101}"
+    ensure_ctrl_admin_token || true
+    if [ -z "$CTRL_ADMIN_TOKEN" ]; then
+        log_warn "Unknown-config-fields check skipped -- controller admin token unavailable (infra, not a finding)"
+        return 0
+    fi
+
+    # Separate "could not reach the controller at all" (infra noise -- skip) from
+    # "the controller answered, but not with 200" (a 401/403/404/500 means the
+    # route, its authz classification, or the middleware chain regressed). The
+    # earlier `curl -sf` form collapsed both into an empty body and passed, which
+    # would have made this guard permanently, silently green after such a
+    # regression -- defeating the only thing it exists to do.
+    local response http_code body
+    response=$(curl -s -m 10 -w $'\n%{http_code}' -H "Authorization: Bearer ${CTRL_ADMIN_TOKEN}" \
+        "${controller_url}/api/v1/diagnostics/unknown-fields" 2>/dev/null)
+    local curl_rc=$?
+    if [ $curl_rc -ne 0 ]; then
+        log_warn "Unknown-config-fields check skipped -- diagnostics endpoint unreachable (curl rc=${curl_rc}): ${controller_url} (infra, not a finding)"
+        return 0
+    fi
+    http_code=$(echo "$response" | tail -1)
+    body=$(echo "$response" | sed '$d')
+    if [ "$http_code" != "200" ]; then
+        log_error "Diagnostics endpoint answered HTTP ${http_code} (expected 200): ${controller_url}/api/v1/diagnostics/unknown-fields"
+        log_error "  The controller is up, so this is a route/authz/middleware regression, not infrastructure noise."
+        return 1
+    fi
+    if [ -z "$body" ]; then
+        log_error "Diagnostics endpoint returned HTTP 200 with an empty body -- treating as a regression, not infra noise"
+        return 1
+    fi
+
+    local report
+    report=$(echo "$body" | python3 -c '
+import json, sys
+try:
+    doc = json.load(sys.stdin)
+except Exception:
+    print("PARSE_ERROR")
+    sys.exit(0)
+data = doc.get("data") if isinstance(doc, dict) else None
+if not isinstance(data, dict):
+    print("PARSE_ERROR")
+    sys.exit(0)
+total = data.get("total", 0)
+print(f"TOTAL={total}")
+for item in data.get("items", []):
+    kind = item.get("kind", "?")
+    ns = item.get("namespace", "")
+    name = item.get("name", "?")
+    paths = ", ".join(item.get("paths", []))
+    print(f"{kind}/{ns}/{name} -> {paths}")
+' 2>/dev/null)
+
+    if [ -z "$report" ] || [ "$report" = "PARSE_ERROR" ]; then
+        # A 200 response whose body is not the documented shape means the
+        # endpoint's contract changed. Failing here is the point: silently
+        # skipping would hide exactly the regression this guard must catch.
+        log_error "Diagnostics endpoint returned HTTP 200 but an unparseable/unexpected body -- contract regression"
+        return 1
+    fi
+
+    local total_line total
+    total_line=$(echo "$report" | head -1)
+    total=${total_line#TOTAL=}
+
+    if [ "${total:-0}" -gt 0 ] 2>/dev/null; then
+        log_error "Unknown config fields detected on ${total} resource(s):"
+        echo "$report" | tail -n +2 | while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            log_error "  $line"
+        done
+        return 1
+    fi
+
+    log_success "Unknown-config-fields check passed (total: 0)"
+    return 0
+}
+
+# =============================================================================
 # Trigger reload via Admin API
 # =============================================================================
 trigger_reload() {
@@ -1945,6 +2044,29 @@ main() {
         log_success "Controller plugin policy passed"
     fi
 
+    # Step 1.11: Unknown config fields -- presence proof (standalone, boots its
+    # own minimal file_system Controller, no gateway, no K8s, on isolated
+    # 586xx ports). Only runs in the default full sweep (no -r / -i
+    # targeting). The suite guard (verify_no_unknown_config_fields above)
+    # proves ABSENCE across the shared sweep; this proves PRESENCE end to
+    # end: an EdgionPlugins fixture with `config.denys` (typo for `deny`) is
+    # reported with the exact path while the resource stays Accepted: True
+    # (warn-not-reject); a ForwardAuth `successStatusCodes` fixture is
+    # reported (the `#[serde(flatten)]` case `deny_unknown_fields` cannot
+    # catch structurally); an EdgionStreamPlugins typo is reported too;
+    # corrected YAML drains the diagnostics endpoint to zero AND removes the
+    # `UnknownConfigFields` status condition (not just upsert); deletion
+    # leaves no ghost entry; and `POST /api/v1/validate/{kind}` reports a
+    # typo without persisting anything.
+    if [ -z "$G_RESOURCE" ]; then
+        log_section "Unknown config fields"
+        if ! "${SCRIPT_DIR}/test_unknown_config_fields.sh"; then
+            log_error "FAIL: Unknown config fields"
+            exit 1
+        fi
+        log_success "Unknown config fields passed"
+    fi
+
     # Inbound PROXY protocol (standalone, boots its own stack on isolated 584xx
     # ports; the chain suite uses 585xx). Isolated on purpose: a listener with
     # `edgion.io/accept-proxy-protocol` rejects every connection that does not
@@ -2065,6 +2187,22 @@ main() {
 
     # Enforce shared-Gateway principle: exactly one edgion-gateway process.
     if ! check_single_gateway_process; then
+        exit 1
+    fi
+
+    # =============================================================================
+    # Fail-fast gate: no unknown config fields before any suite runs
+    # =============================================================================
+    # If a plugin's config key was dropped by a schema mismatch during config
+    # load, every later assertion about that plugin is suspect -- a GREEN run
+    # from here is the dangerous outcome, not a safe one. Fail here, in
+    # seconds, rather than after a 20-minute suite that passed for the wrong
+    # reason. See verify_no_unknown_config_fields above and
+    # `tasks/todo/plugin-config-unknown-field-detection/02-implementation.md`
+    # §9.4.
+    log_section "Pre-flight Check: No Unknown Config Fields"
+    if ! verify_no_unknown_config_fields "http://127.0.0.1:12101"; then
+        log_error "Unknown config fields present after initial config load -- aborting before Round 1"
         exit 1
     fi
 
@@ -2227,6 +2365,21 @@ main() {
     log_section "Final Step: Metrics Label Whitelist"
     if ! verify_metrics_labels "http://127.0.0.1:12190/metrics" "controller"; then
         log_error "Metrics label validation FAILED"
+        test_failed=true
+    fi
+
+    # =============================================================================
+    # Final Step: No Unknown Config Fields
+    # =============================================================================
+    # A second pass, distinct from the pre-flight gate above: dynamic/hot-reload
+    # scenarios and --with-reload Round 2 apply more resources mid-run, and only
+    # a second pass sees those. The registry is cumulative within a run, so this
+    # re-reports anything the pre-flight gate already found -- acceptable, and it
+    # keeps the two call sites independent (`02-implementation.md` §9.4).
+    log_section "Final Step: No Unknown Config Fields"
+    if ! verify_no_unknown_config_fields "http://127.0.0.1:12101"; then
+        log_error "Unknown config fields validation FAILED"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
         test_failed=true
     fi
 

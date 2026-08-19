@@ -18,6 +18,22 @@ duplicate Kubernetes admission inside the Controller. The canonical structural
 schema rule remains
 [Resource schema and transport contract](../../01-architecture/05-resources/00-schema-transport-contract.md).
 
+## Not the whole story anymore for plugin resources
+
+This entry describes `EdgionBackend`'s admission-time behavior only. It is no longer a
+complete account of "what happens to an unrecognized key" project-wide: `EdgionPlugins` and
+`EdgionStreamPlugins` now carry active ingest-side unknown-key DETECTION
+(`edgion-resources::schema_check`, see
+`tasks/todo/plugin-config-unknown-field-detection/`), which exists precisely because their
+`config` sub-schema is `x-kubernetes-preserve-unknown-fields` — the one case this entry's
+mode-specific pruning/rejection story does not cover at all, since the API server never
+prunes that subtree in any mode. That detector warns (a status condition plus a log line)
+rather than rejecting, and is a separate mechanism from both structural-CRD pruning and
+`deny_unknown_fields`. See `skills/04-review/architecture/serde-ignored-blind-spots-schema-walk-instead.md`
+and `skills/04-review/deserialization/SKILL.md` for the detector; this file's own
+mode-specific pruning/rejection description still holds for `EdgionBackend` and any other
+fully-structural CRD.
+
 ## Coverage
 
 The canonical feature reference and the English and Chinese operator pages all

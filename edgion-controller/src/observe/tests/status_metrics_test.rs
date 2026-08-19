@@ -44,6 +44,20 @@ mod classify_tests {
         }];
         assert!(classify(&conds).is_none());
     }
+
+    /// R-10 pin: `UnknownConfigFields=True` must NOT be classified into
+    /// either the err or warn list, so a resource carrying only this
+    /// condition produces no `edgion_controller_resource_abnormal` series.
+    /// An operator typo is not resource ill-health, and the config still
+    /// syncs unchanged — see `05-issues.md` R-10.
+    #[test]
+    fn unknown_config_fields_true_produces_no_series() {
+        let conds = vec![c("UnknownConfigFields", "True")];
+        assert!(
+            classify(&conds).is_none(),
+            "UnknownConfigFields must never be classified into the abnormal gauge"
+        );
+    }
 }
 
 mod scan_conditions_tests {

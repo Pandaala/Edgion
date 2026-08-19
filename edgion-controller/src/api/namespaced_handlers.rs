@@ -12,7 +12,8 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use super::common::{
-    expected_resource_version, map_writer_error, parse_kind, parse_resource_and_update_version, validate_resource,
+    expected_resource_version, map_writer_error, parse_kind, parse_resource_and_update_version, unknown_field_warnings,
+    validate_resource,
 };
 use super::types::*;
 
@@ -130,6 +131,11 @@ pub async fn create_namespaced(
     // Parse, validate, and persist using create_one (fails if exists)
     // In K8s mode: skip validation (K8s API Server validates) and don't update version
     // In non-K8s mode: validate and update resource version
+    //
+    // Populated only by the EdgionPlugins/EdgionStreamPlugins arms below
+    // (`unknown_field_warnings`); every other kind leaves this empty, so
+    // `ApiResponse::warnings` stays absent from the response (see `types.rs`).
+    let mut warnings: Vec<String> = Vec::new();
     match kind {
         edgion_resources::ResourceKind::HTTPRoute => {
             let route: HTTPRoute = parse_resource_and_update_version(&content, !is_k8s)?;
@@ -206,6 +212,18 @@ pub async fn create_namespaced(
         edgion_resources::ResourceKind::EdgionPlugins => {
             let plugins: EdgionPlugins = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
+            warnings = unknown_field_warnings(kind, &content);
+            if !warnings.is_empty() {
+                tracing::warn!(
+                    component = "unified_api",
+                    event = "unknown_config_fields",
+                    kind = %kind_str,
+                    namespace = %ns,
+                    name = %name,
+                    paths = ?warnings,
+                    "Resource contains keys not recognized by the schema"
+                );
+            }
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .create_one(kind.as_str(), Some(&ns), &name, json_content)
@@ -278,6 +296,18 @@ pub async fn create_namespaced(
         edgion_resources::ResourceKind::EdgionStreamPlugins => {
             let plugins: EdgionStreamPlugins = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
+            warnings = unknown_field_warnings(kind, &content);
+            if !warnings.is_empty() {
+                tracing::warn!(
+                    component = "unified_api",
+                    event = "unknown_config_fields",
+                    kind = %kind_str,
+                    namespace = %ns,
+                    name = %name,
+                    paths = ?warnings,
+                    "Resource contains keys not recognized by the schema"
+                );
+            }
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .create_one(kind.as_str(), Some(&ns), &name, json_content)
@@ -333,7 +363,10 @@ pub async fn create_namespaced(
     Ok((
         StatusCode::CREATED,
         headers,
-        Json(ApiResponse::ok_body(format!("{} created", kind_str))),
+        Json(ApiResponse::ok_body_with_warnings(
+            format!("{} created", kind_str),
+            warnings,
+        )),
     ))
 }
 
@@ -373,6 +406,11 @@ pub async fn update_namespaced(
     // Parse, validate, and persist using update_one (fails if not exists)
     // In K8s mode: skip validation (K8s API Server validates) and don't update version
     // In non-K8s mode: validate and update resource version
+    //
+    // Populated only by the EdgionPlugins/EdgionStreamPlugins arms below
+    // (`unknown_field_warnings`); every other kind leaves this empty, so
+    // `ApiResponse::warnings` stays absent from the response (see `types.rs`).
+    let mut warnings: Vec<String> = Vec::new();
     match kind {
         edgion_resources::ResourceKind::HTTPRoute => {
             let route: HTTPRoute = parse_resource_and_update_version(&content, !is_k8s)?;
@@ -497,6 +535,18 @@ pub async fn update_namespaced(
         edgion_resources::ResourceKind::EdgionPlugins => {
             let plugins: EdgionPlugins = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
+            warnings = unknown_field_warnings(kind, &content);
+            if !warnings.is_empty() {
+                tracing::warn!(
+                    component = "unified_api",
+                    event = "unknown_config_fields",
+                    kind = %kind_str,
+                    namespace = %ns,
+                    name = %name,
+                    paths = ?warnings,
+                    "Resource contains keys not recognized by the schema"
+                );
+            }
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .update_one_if_version(
@@ -623,6 +673,18 @@ pub async fn update_namespaced(
         edgion_resources::ResourceKind::EdgionStreamPlugins => {
             let plugins: EdgionStreamPlugins = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
+            warnings = unknown_field_warnings(kind, &content);
+            if !warnings.is_empty() {
+                tracing::warn!(
+                    component = "unified_api",
+                    event = "unknown_config_fields",
+                    kind = %kind_str,
+                    namespace = %ns,
+                    name = %name,
+                    paths = ?warnings,
+                    "Resource contains keys not recognized by the schema"
+                );
+            }
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .update_one_if_version(
@@ -693,7 +755,10 @@ pub async fn update_namespaced(
         "Resource updated successfully"
     );
 
-    Ok(Json(ApiResponse::ok_body(format!("{} updated", kind_str))))
+    Ok(Json(ApiResponse::ok_body_with_warnings(
+        format!("{} updated", kind_str),
+        warnings,
+    )))
 }
 
 /// Delete a namespace-scoped resource.
@@ -759,7 +824,7 @@ mod update_identity_tests {
     /// Build a minimal FileSystem-backed AdminState (non-K8s mode, the mode in
     /// which the URL-vs-body name desync is observable). The returned TempDir
     /// must be kept alive for the storage path to stay valid.
-    async fn make_fs_state() -> (Arc<AdminState>, tempfile::TempDir) {
+    pub(super) async fn make_fs_state() -> (Arc<AdminState>, tempfile::TempDir) {
         let tmp_data = tempfile::tempdir().expect("tempdir for conf data");
         let fs_config = FileSystemConfig::new(tmp_data.path().to_path_buf());
         let conf_mgr = Arc::new(
@@ -913,5 +978,101 @@ mod update_identity_tests {
         .await;
         let (status, _headers, _body) = result.expect("create should succeed on matching identity");
         assert_eq!(status, StatusCode::CREATED);
+    }
+}
+
+/// Tests for item 2/3 of
+/// `tasks/todo/plugin-config-unknown-field-detection`: the Admin API write
+/// path warns (never rejects) on an unrecognized config key, and surfaces the
+/// finding through `ApiResponse::warnings`.
+#[cfg(test)]
+mod unknown_field_warning_tests {
+    use super::update_identity_tests::make_fs_state;
+    use super::*;
+
+    /// `config.denys` is a typo for `config.deny` on `IpRestrictionConfig`.
+    fn plugins_body_with_typo(name: &str, namespace: &str) -> Bytes {
+        Bytes::from(format!(
+            r#"{{"apiVersion":"edgion.io/v1","kind":"EdgionPlugins","metadata":{{"name":"{name}","namespace":"{namespace}"}},"spec":{{"requestPlugins":[{{"type":"IpRestriction","config":{{"defaultAction":"allow","denys":[]}}}}]}}}}"#
+        ))
+    }
+
+    fn plugins_body_clean(name: &str, namespace: &str) -> Bytes {
+        Bytes::from(format!(
+            r#"{{"apiVersion":"edgion.io/v1","kind":"EdgionPlugins","metadata":{{"name":"{name}","namespace":"{namespace}"}},"spec":{{"requestPlugins":[{{"type":"IpRestriction","config":{{"defaultAction":"allow","deny":[]}}}}]}}}}"#
+        ))
+    }
+
+    #[tokio::test]
+    async fn create_with_typo_is_not_rejected_and_carries_warning() {
+        let (state, _tmp) = make_fs_state().await;
+        let result = create_namespaced(
+            State(state),
+            Path(("EdgionPlugins".to_string(), "default".to_string())),
+            plugins_body_with_typo("auth-chain", "default"),
+        )
+        .await;
+
+        let (status, _headers, body) = result.expect("a typo'd key must warn, never reject the write");
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "warn-not-reject: the write must still succeed"
+        );
+        assert_eq!(body.0.warnings, vec!["requestPlugins[0].config.denys".to_string()]);
+
+        let serialized = serde_json::to_value(&body.0).expect("ApiResponse must serialize");
+        assert_eq!(
+            serialized["warnings"][0], "requestPlugins[0].config.denys",
+            "the finding must also be visible in the serialized payload"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_with_clean_document_has_no_warnings_key_in_serialized_payload() {
+        let (state, _tmp) = make_fs_state().await;
+        let result = create_namespaced(
+            State(state),
+            Path(("EdgionPlugins".to_string(), "default".to_string())),
+            plugins_body_clean("clean-chain", "default"),
+        )
+        .await;
+
+        let (status, _headers, body) = result.expect("a clean document must create successfully");
+        assert_eq!(status, StatusCode::CREATED);
+        assert!(body.0.warnings.is_empty());
+
+        let serialized = serde_json::to_value(&body.0).expect("ApiResponse must serialize");
+        assert!(
+            serialized.get("warnings").is_none(),
+            "empty warnings must be entirely absent from the JSON payload, not an empty array"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_with_typo_is_not_rejected_and_carries_warning() {
+        let (state, _tmp) = make_fs_state().await;
+        let _ = create_namespaced(
+            State(Arc::clone(&state)),
+            Path(("EdgionPlugins".to_string(), "default".to_string())),
+            plugins_body_clean("auth-chain", "default"),
+        )
+        .await
+        .expect("seed create must succeed");
+
+        let result = update_namespaced(
+            State(state),
+            Path((
+                "EdgionPlugins".to_string(),
+                "default".to_string(),
+                "auth-chain".to_string(),
+            )),
+            HeaderMap::new(),
+            plugins_body_with_typo("auth-chain", "default"),
+        )
+        .await;
+
+        let body = result.expect("a typo'd key must warn, never reject the update");
+        assert_eq!(body.0.warnings, vec!["requestPlugins[0].config.denys".to_string()]);
     }
 }

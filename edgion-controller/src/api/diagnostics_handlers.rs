@@ -8,10 +8,22 @@
 //! * `GET /api/v1/diagnostics/conf-conflicts` — reports `(kind, key)` collisions
 //!   from the FileSystem backend's recursive scan.
 //!
-//! Both are live-reads against `ConfCenter`; no background tasks or snapshots.
+//! * `GET /api/v1/diagnostics/unknown-fields` — fleet-wide list of
+//!   `EdgionPlugins` / `EdgionStreamPlugins` resources whose submitted
+//!   document contained a key the schema does not recognize. See
+//!   `tasks/todo/plugin-config-unknown-field-detection/02-implementation.md`
+//!   §9.2. Backed by `observe::unknown_fields_registry`, not
+//!   `center_list_resources`, because the finding lives in a
+//!   `#[serde(skip)]` field invisible through the re-serialized listing path
+//!   (`05-issues.md` R-3).
+//!
+//! All three are live-reads (`nested_ext_ref_usage` / `conf-conflicts`
+//! against `ConfCenter`, `unknown-fields` against the typed `RawStore`
+//! registry); no background tasks or snapshots.
 
 use crate::api::types::AdminState;
 use crate::api::ApiResponse;
+use crate::observe::unknown_fields_registry::{collect_unknown_fields, UnknownFieldsEntry};
 use axum::{extract::State, http::StatusCode, response::Json};
 use edgion_resources::ResourceKind;
 use serde::Serialize;
@@ -20,6 +32,12 @@ use std::sync::Arc;
 /// Cap the number of example resources returned, to keep the payload small
 /// even on clusters with a large fleet of legacy nested configurations.
 const MAX_EXAMPLES: usize = 20;
+
+/// Cap the number of unknown-fields findings returned per call, mirroring
+/// `MAX_EXAMPLES`'s role for `nested_ext_ref_usage`. `total` always reports
+/// the pre-cap count and `truncated` is set honestly rather than silently
+/// dropping entries — see `02-implementation.md` §9.2.
+const MAX_UNKNOWN_FIELDS_ITEMS: usize = 100;
 
 #[derive(Serialize)]
 pub struct NestedExtRefUsageStats {
@@ -152,6 +170,50 @@ pub async fn conf_conflicts(State(state): State<Arc<AdminState>>) -> Json<ApiRes
         None => Vec::new(),
     };
     Json(ApiResponse::ok_body(ConfConflictsResponse { conflicts }))
+}
+
+#[derive(Serialize)]
+pub struct UnknownFieldsItem {
+    pub kind: &'static str,
+    pub namespace: String,
+    pub name: String,
+    pub paths: Vec<String>,
+}
+
+impl From<UnknownFieldsEntry> for UnknownFieldsItem {
+    fn from(e: UnknownFieldsEntry) -> Self {
+        Self {
+            kind: e.kind,
+            namespace: e.namespace,
+            name: e.name,
+            paths: e.paths,
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct UnknownFieldsResponse {
+    /// Findings across all resources, BEFORE the `MAX_UNKNOWN_FIELDS_ITEMS`
+    /// cap is applied.
+    pub total: usize,
+    pub truncated: bool,
+    pub items: Vec<UnknownFieldsItem>,
+}
+
+/// `GET /api/v1/diagnostics/unknown-fields`.
+///
+/// Fleet-wide answer to "did anything applied to this controller contain a
+/// key the schema does not recognize?", covering both `EdgionPlugins` and
+/// `EdgionStreamPlugins`. Never rejects anything itself (warn-not-reject,
+/// `02-implementation.md` §10) — this is the query surface an operator's own
+/// blocking gate (CI, a ValidatingAdmissionWebhook) is meant to be built on.
+pub async fn unknown_fields(State(_state): State<Arc<AdminState>>) -> Json<ApiResponse<UnknownFieldsResponse>> {
+    let (total, truncated, items) = collect_unknown_fields(MAX_UNKNOWN_FIELDS_ITEMS);
+    Json(ApiResponse::ok_body(UnknownFieldsResponse {
+        total,
+        truncated,
+        items: items.into_iter().map(UnknownFieldsItem::from).collect(),
+    }))
 }
 
 #[cfg(test)]

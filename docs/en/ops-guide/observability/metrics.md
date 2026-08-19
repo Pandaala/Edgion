@@ -154,6 +154,28 @@ The Controller exposes control-plane metrics under the `edgion_controller_*` pre
 
 The `edgion_controller_resource_abnormal` snapshot is rebuilt on a timer and capped (default 1000 entries) to bound cardinality. Use it to alert on resources stuck in a bad state, e.g. `edgion_controller_resource_abnormal{err!=""}`.
 
+### Unknown config field alert
+
+`edgion_controller_unknown_config_fields` is a live (not timer-based) scan appended at the
+same `/metrics` seam, rendered fresh on every scrape from `EdgionPlugins`/`EdgionStreamPlugins`
+`spec.unknown_fields`. One series per resource that currently has at least one finding; a
+healthy fleet emits nothing. Unlike `resource_abnormal`, this gauge is populated in FileSystem
+and etcd conf_center mode too, not Kubernetes-mode only — see
+[Unknown Config Field Detection](../plugin-config-unknown-fields.md) for why.
+
+The `warn` label carries a JSON array of finding paths — never separate per-path labels — so
+cardinality never grows with the number of typos on one resource; it is capped at 20 entries
+per resource (a visible `(+M more)` marker covers the rest) and the whole snapshot is capped at
+1000 series. This metric is purely advisory, exactly like the condition/log/endpoint surfaces
+it complements: it never blocks a sync.
+
+```promql
+edgion_controller_unknown_config_fields{warn!=""}
+```
+
+Alert on a sustained non-empty result if you want CI/dashboards to catch config typos that the
+Controller itself deliberately does not reject.
+
 ### Leader-job death alert
 
 `edgion_controller_leader_job_alive` has one series per leader-job worker that has ever started **on this
@@ -316,6 +338,14 @@ histogram_quantile(0.99, sum(rate(edgion_gateway_request_duration_ms_bucket[5m])
 ### Q4: How do I detect resources stuck in a bad state?
 
 **A**: Scrape the Controller `/metrics` and alert on `edgion_controller_resource_abnormal{err!=""}`. Each series identifies one resource by `kind` / `namespace` / `name`, with the failing conditions in the `err` / `warn` labels.
+
+### Q4b: How do I detect config typos in `EdgionPlugins`/`EdgionStreamPlugins` that were silently ignored?
+
+**A**: Alert on `edgion_controller_unknown_config_fields{warn!=""}` — one series per resource
+with at least one unrecognized key, with the finding paths in the `warn` label. See
+[Unknown Config Field Detection](../plugin-config-unknown-fields.md); this stays advisory (the
+Controller never rejects the resource because of it), so use the metric to drive your own alert
+or dashboard, not a blocking gate.
 
 ### Q5: A Gateway is serving traffic fine, but my config changes are not taking effect on it. Why?
 

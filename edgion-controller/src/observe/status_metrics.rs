@@ -142,6 +142,16 @@ pub(crate) fn classify(conditions: &[Condition]) -> Option<(Vec<ConditionRef>, V
     let mut err_list = Vec::new();
     let mut warn_list = Vec::new();
     for c in conditions {
+        // NOTE: `UnknownConfigFields` (tasks/todo/plugin-config-unknown-field-detection)
+        // is deliberately ABSENT from this match, in both severities. It
+        // reports an operator typo in a document that still syncs to the
+        // data plane unchanged — not resource ill-health — so it must not
+        // move the `edgion_controller_resource_abnormal` gauge the way
+        // `PluginPolicyRestricted` does. The `_ => {}` arm below already
+        // ignores it correctly; do not "complete" this match by adding an
+        // arm for it. See `05-issues.md` R-10, and
+        // `status_metrics_test.rs::classify_tests::unknown_config_fields_true_produces_no_series`
+        // for the pin.
         match (c.type_.as_str(), c.status.as_str()) {
             ("Accepted", "False")
             | ("ResolvedRefs", "False")
@@ -356,7 +366,12 @@ fn serialize_conditions_for_label(entry: &Entry, conditions: &[ConditionRef], bu
 }
 
 /// Escape `\` and `"` per Prometheus text-format conventions.
-fn append_escaped(out: &mut String, s: &str) {
+///
+/// `pub(crate)` so `observe::unknown_fields_registry`'s metric renderer can
+/// reuse the exact same escaping rather than re-implementing it — a raw `"`
+/// or `\` inside a finding path would otherwise corrupt the exposition
+/// format.
+pub(crate) fn append_escaped(out: &mut String, s: &str) {
     for c in s.chars() {
         match c {
             '\\' => out.push_str("\\\\"),
@@ -519,6 +534,19 @@ pub(crate) async fn metrics_handler() -> Response {
             text.push('\n');
         }
         text.push_str(&cond_block);
+    }
+
+    // `edgion_controller_unknown_config_fields` — separate data source
+    // (live `unknown_fields_registry` scan of `spec.unknown_fields`, not
+    // the status-condition snapshot above), appended at the same seam.
+    // See `unknown_fields_registry::render_unknown_config_fields_metric`
+    // for why it deliberately does NOT reuse `classify()`.
+    let unknown_fields_block = crate::observe::unknown_fields_registry::render_unknown_config_fields_metric();
+    if !unknown_fields_block.is_empty() {
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&unknown_fields_block);
     }
 
     (

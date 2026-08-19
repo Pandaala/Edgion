@@ -82,6 +82,15 @@ pub fn classify(method: &Method, matched_path: Option<&str>, kind_param: Option<
         return Some((Verb::Diagnostics, NON_RESOURCE_KIND.into()));
     }
 
+    // `POST /api/v1/validate/{kind}` is a read-only inspection query (schema +
+    // unknown-field verdict on a submitted-but-not-persisted document), not a
+    // mutation on any stored resource — classified alongside `Diagnostics`
+    // rather than `Create`, and NON_RESOURCE_KIND rather than the `{kind}`
+    // param, since it does not read or write per-kind stored state.
+    if m == Method::POST && template == "/api/v1/validate/{kind}" {
+        return Some((Verb::Diagnostics, NON_RESOURCE_KIND.into()));
+    }
+
     // Resource routes carrying a {kind} param.
     // axum's MatchedPath retains the `{param}` braces, so these template strings match verbatim.
     let kind = normalize_kind(kind_param?);
@@ -227,6 +236,18 @@ mod tests {
         let (v2, k2) = classify("GET", Some("/api/v1/diagnostics/conf-conflicts"), None).unwrap();
         assert_eq!(v2, Verb::Diagnostics);
         assert_eq!(k2, NON_RESOURCE_KIND);
+    }
+
+    #[test]
+    fn validate_route_is_diagnostics_nonresource() {
+        let (v, k) = classify("POST", Some("/api/v1/validate/{kind}"), Some("EdgionPlugins")).unwrap();
+        assert_eq!(v, Verb::Diagnostics);
+        assert_eq!(k, NON_RESOURCE_KIND);
+    }
+
+    #[test]
+    fn validate_route_wrong_method_denies() {
+        assert!(classify("GET", Some("/api/v1/validate/{kind}"), Some("EdgionPlugins")).is_none());
     }
 
     #[test]

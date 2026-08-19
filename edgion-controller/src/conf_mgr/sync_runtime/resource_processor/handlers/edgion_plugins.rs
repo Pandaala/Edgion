@@ -254,6 +254,25 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         // validation errors (Accepted keeps meaning "valid and synced").
         let _ = super::super::plugin_policy_stamp::stamp_http_entries(ep);
 
+        // Unknown-field diagnostic: `spec.unknown_fields` was already
+        // populated at ingest (Phase 2 hook/loader/Admin-API seams), so this
+        // is a pure read — no re-walk here. Warn once on the apply path; the
+        // status-side UnknownConfigFields condition is stamped in
+        // update_status (which has no preparse-local state, per the same
+        // pattern as PluginPolicyRestricted). Advisory only: this never
+        // touches `Accepted` or blocks the resource from syncing.
+        if !ep.spec.unknown_fields.is_empty() {
+            tracing::warn!(
+                component = "conf_mgr",
+                event = "unknown_config_fields_detected",
+                kind = "EdgionPlugins",
+                namespace = %ep.metadata.namespace.as_deref().unwrap_or("default"),
+                name = %ep.metadata.name.as_deref().unwrap_or(""),
+                paths = ?ep.spec.unknown_fields,
+                "EdgionPlugins document has keys the schema does not recognize; they are ignored, config still syncs unchanged"
+            );
+        }
+
         let mut errors = ep.validate_plugins();
         // Phase 1 guard: reject outbound TLS subjectAltNames/hostname on plugins
         // where SAN pinning enforcement is not yet implemented.
@@ -436,6 +455,11 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         update_condition(&mut status.conditions, resolved_refs);
         update_condition(&mut status.conditions, partially_invalid);
         super::super::plugin_policy_stamp::apply_policy_condition(&mut status.conditions, &policy_hits, generation);
+        super::super::unknown_fields_stamp::apply_unknown_fields_condition(
+            &mut status.conditions,
+            &ep.spec.unknown_fields,
+            generation,
+        );
     }
 }
 
@@ -3749,5 +3773,79 @@ mod tests {
             .conditions
             .iter()
             .all(|c| c.type_ != condition_types::PLUGIN_POLICY_RESTRICTED));
+    }
+
+    // ── UnknownConfigFields condition (Phase 4) ─────────────────────────────
+
+    #[test]
+    fn update_status_sets_unknown_config_fields_condition_with_exact_paths() {
+        use crate::conf_mgr::sync_runtime::resource_processor::status_utils::condition_types;
+
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+
+        let spec = EdgionPluginsSpec {
+            unknown_fields: vec!["config.denys".to_string(), "requestPlugins[0].config.typo".to_string()],
+            ..EdgionPluginsSpec::default()
+        };
+        let mut ep = EdgionPlugins::new("typo-ep", spec);
+        ep.metadata.namespace = Some("default".to_string());
+
+        let handler = EdgionPluginsHandler;
+        handler.update_status(&mut ep, &ctx, &[]);
+
+        let status = ep.status.unwrap();
+        let cond = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == condition_types::UNKNOWN_CONFIG_FIELDS)
+            .expect("UnknownConfigFields condition must be present");
+        assert_eq!(cond.status, "True");
+        assert_eq!(cond.message, "config.denys, requestPlugins[0].config.typo");
+
+        // Accepted must stay True and untouched by this advisory condition
+        // (validation_errors is empty here).
+        let accepted = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == condition_types::ACCEPTED)
+            .expect("Accepted condition must be present");
+        assert_eq!(accepted.status, "True");
+    }
+
+    #[test]
+    fn update_status_removes_unknown_config_fields_condition_when_fixed() {
+        // Simulates the operator fixing the typo on the next generation:
+        // update_status must REMOVE the stale condition, not leave it
+        // upserted (the wedge trap the stamp module's doc comment warns
+        // about).
+        use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
+            condition_reasons, condition_true, condition_types,
+        };
+        use edgion_resources::resources::edgion_plugins::EdgionPluginsStatus;
+
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+
+        // spec.unknown_fields is empty (fixed), but a live condition is
+        // still on the resource from a previous generation.
+        let mut ep = EdgionPlugins::new("fixed-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.status = Some(EdgionPluginsStatus {
+            conditions: vec![condition_true(
+                condition_types::UNKNOWN_CONFIG_FIELDS,
+                condition_reasons::UNKNOWN_FIELDS_DETECTED,
+                "stale",
+                Some(1),
+            )],
+        });
+
+        let handler = EdgionPluginsHandler;
+        handler.update_status(&mut ep, &ctx, &[]);
+
+        assert!(ep
+            .status
+            .unwrap()
+            .conditions
+            .iter()
+            .all(|c| c.type_ != condition_types::UNKNOWN_CONFIG_FIELDS));
     }
 }

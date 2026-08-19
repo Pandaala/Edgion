@@ -169,6 +169,36 @@ where
     })
 }
 
+/// Report unknown keys in `content`'s `spec`, for the Admin API write path
+/// (item 2 of `tasks/todo/plugin-config-unknown-field-detection/02-implementation.md`
+/// §11 / R-11). This is the fourth ingress that hook covers: the raw body is
+/// right here at the handler, so no `Value` round-trip hook or gate is
+/// needed — unlike the Kubernetes watcher, this always runs.
+///
+/// Only `EdgionPlugins`/`EdgionStreamPlugins` have a schema to check against;
+/// every other kind returns an empty list immediately.
+///
+/// Best-effort: the caller already parsed this exact `content` into the
+/// typed resource one line earlier (via `parse_resource_and_update_version`),
+/// so re-parsing it here as `Value` should never fail in practice — but if it
+/// does, this returns an empty list rather than failing the write, matching
+/// the non-fatal contract the FS/etcd loader seam uses (R-2). The write must
+/// never be blocked by this diagnostic (§10 — warn, never reject).
+pub fn unknown_field_warnings(kind: ResourceKind, content: &str) -> Vec<String> {
+    let schema = match kind {
+        ResourceKind::EdgionPlugins => edgion_resources::edgion_plugins_spec_schema(),
+        ResourceKind::EdgionStreamPlugins => edgion_resources::edgion_stream_plugins_spec_schema(),
+        _ => return Vec::new(),
+    };
+    let Ok(document) = parse_resource::<serde_json::Value>(content) else {
+        return Vec::new();
+    };
+    let Some(spec) = document.get("spec") else {
+        return Vec::new();
+    };
+    edgion_resources::schema_check::unknown_key_paths(spec, schema)
+}
+
 /// Parse ResourceKind from string (case-insensitive)
 pub fn parse_kind(kind_str: &str) -> Result<ResourceKind, String> {
     ResourceKind::from_kind_name(kind_str).ok_or_else(|| format!("Unknown resource kind: {}", kind_str))

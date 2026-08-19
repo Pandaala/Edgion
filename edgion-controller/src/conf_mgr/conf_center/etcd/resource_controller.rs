@@ -60,7 +60,8 @@ where
         let fs_raw_store = Arc::new(LocalRawStore::new());
         let raw_store: Arc<dyn RawStore<K>> = fs_raw_store.clone();
         processor.set_raw_store(raw_store.clone());
-        crate::observe::status_metrics::register_status_renderer::<K>(kind, raw_store);
+        crate::observe::status_metrics::register_status_renderer::<K>(kind, raw_store.clone());
+        crate::observe::unknown_fields_registry::register_unknown_fields_source::<K>(kind, raw_store);
         Self {
             kind,
             processor,

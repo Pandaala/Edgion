@@ -125,3 +125,16 @@ configured status is ignored) and a Bypass skips the plugin. See
 [validation.plugin_policy](../02-config/00-controller-config.md#validationplugin_policy)
 for the config schema and `docs/en/ops-guide/plugin-policy.md` for the
 operator guide.
+
+## Unknown config keys (`UnknownConfigFields` condition)
+
+Same mechanism and same condition as `EdgionPlugins` (13-edgion-plugins.md) — `spec.plugins` /
+`spec.tlsRoutePlugins` entry `config` blocks are `x-kubernetes-preserve-unknown-fields`, so a
+mistyped key (e.g. a `GeoIpLocation` config typo) is pruned by nothing and silently dropped
+by serde. The Controller reports it via a dedicated `UnknownConfigFields` condition
+(`status: "True"`, `reason: UnknownFieldsDetected`, message = the full path list) plus a WARN
+log line; `Accepted` and the abnormal-resource metric are untouched, and the condition is
+removed on the next apply once the key is fixed. See `13-edgion-plugins.md` for the full
+behavior description and `docs/en/ops-guide/plugin-config-unknown-fields.md` for the operator
+guide (fleet-wide `GET /api/v1/diagnostics/unknown-fields`, and
+`POST /api/v1/validate/{kind}` for a blocking gate of your own).
