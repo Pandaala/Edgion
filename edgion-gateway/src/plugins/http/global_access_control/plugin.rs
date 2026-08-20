@@ -153,11 +153,11 @@ impl GlobalAccessControl {
         }
     }
 
-    /// Extract the client IP per the configured source. RemoteAddr = TCP peer (un-forgeable).
-    fn get_client_ip(&self, session: &dyn PluginSession) -> Option<IpAddr> {
+    /// Extract the address selected by the configured canonical IP source.
+    fn get_source_ip(&self, session: &dyn PluginSession) -> Option<IpAddr> {
         let ip_str = match self.config.ip_source {
-            IpSource::ClientIp => session.remote_addr(),
-            IpSource::RemoteAddr => session.client_addr(),
+            IpSource::RemoteIp => session.remote_ip(),
+            IpSource::DirectPeerIp => session.direct_peer_ip(),
         };
         if ip_str.is_empty() {
             return None;
@@ -191,11 +191,11 @@ impl RequestFilter for GlobalAccessControl {
             return PluginRunningResult::GoodNext;
         };
 
-        let client_ip = self.get_client_ip(session);
+        let source_ip = self.get_source_ip(session);
 
         let outcome = {
             let s: &dyn PluginSession = session;
-            evaluate_profile(profile, client_ip.as_ref(), s)
+            evaluate_profile(profile, source_ip.as_ref(), s)
         };
 
         match outcome {
@@ -281,7 +281,7 @@ mod tests {
             active_profile_ref,
             status: 403,
             message: None,
-            ip_source: edgion_resources::resources::edgion_plugins::IpSource::RemoteAddr,
+            ip_source: edgion_resources::resources::edgion_plugins::IpSource::DirectPeerIp,
         }
     }
 
@@ -289,7 +289,7 @@ mod tests {
     async fn allow_when_cidr_and_secret_match() {
         let plugin = GlobalAccessControl::create(&lockdown_config(None), "edgion-system");
         let mut s = MockPluginSession::new();
-        s.expect_client_addr().return_const("173.245.48.5".to_string());
+        s.expect_direct_peer_ip().return_const("173.245.48.5".to_string());
         s.expect_header_value().returning(|name| {
             if name == "X-CF-Secret" {
                 Some("tok".to_string())
@@ -307,7 +307,7 @@ mod tests {
     async fn deny_when_cidr_matches_but_secret_absent() {
         let plugin = GlobalAccessControl::create(&lockdown_config(None), "edgion-system");
         let mut s = MockPluginSession::new();
-        s.expect_client_addr().return_const("173.245.48.5".to_string());
+        s.expect_direct_peer_ip().return_const("173.245.48.5".to_string());
         s.expect_header_value().returning(|_| None);
         s.expect_write_response_header().returning(|_, _| Ok(()));
         s.expect_write_response_body().returning(|_, _| Ok(()));
@@ -322,7 +322,7 @@ mod tests {
     async fn deny_when_secret_matches_but_ip_outside_cidr() {
         let plugin = GlobalAccessControl::create(&lockdown_config(None), "edgion-system");
         let mut s = MockPluginSession::new();
-        s.expect_client_addr().return_const("8.8.8.8".to_string());
+        s.expect_direct_peer_ip().return_const("8.8.8.8".to_string());
         s.expect_header_value().returning(|name| {
             if name == "X-CF-Secret" {
                 Some("tok".to_string())
@@ -376,7 +376,7 @@ mod tests {
         let plugin = GlobalAccessControl::create(&cfg, "edgion-system");
         let mut s = MockPluginSession::new();
         // lockdown base: IP outside + no header -> deny.
-        s.expect_client_addr().return_const("8.8.8.8".to_string());
+        s.expect_direct_peer_ip().return_const("8.8.8.8".to_string());
         s.expect_header_value().returning(|_| None);
         s.expect_write_response_header().returning(|_, _| Ok(()));
         s.expect_write_response_body().returning(|_, _| Ok(()));
@@ -430,7 +430,7 @@ mod tests {
         let plugin = GlobalAccessControl::create(&cfg, ns);
         let mut s = MockPluginSession::new();
         // With denied ref → active_profile_ref_key is None → base "lockdown" used → deny.
-        s.expect_client_addr().return_const("8.8.8.8".to_string());
+        s.expect_direct_peer_ip().return_const("8.8.8.8".to_string());
         s.expect_header_value().returning(|_| None);
         s.expect_write_response_header().returning(|_, _| Ok(()));
         s.expect_write_response_body().returning(|_, _| Ok(()));
@@ -474,7 +474,7 @@ mod tests {
             });
         let plugin = GlobalAccessControl::create(&cfg, "edgion-system");
         let mut s = MockPluginSession::new();
-        s.expect_client_addr().return_const("120.52.22.100".to_string());
+        s.expect_direct_peer_ip().return_const("120.52.22.100".to_string());
         s.expect_header_value().returning(|name| {
             if name == "X-Origin-Verify" {
                 Some("v2".to_string())
@@ -496,7 +496,7 @@ mod tests {
         cfg.active_profile = "normal".into();
         let plugin = GlobalAccessControl::create(&cfg, "edgion-system");
         let mut s = MockPluginSession::new();
-        s.expect_client_addr().return_const("8.8.8.8".to_string());
+        s.expect_direct_peer_ip().return_const("8.8.8.8".to_string());
         s.expect_header_value().returning(|_| None);
         let mut log = PluginLog::new("GlobalAccessControl");
         let r = plugin.run_request(&mut s, &mut log).await;
@@ -505,9 +505,9 @@ mod tests {
     }
 
     /// A group with no IP constraint must be evaluable when the client IP is
-    /// unknown (unparseable/empty `client_addr`).
+    /// unknown (unparseable/empty `DirectPeerIp`).
     #[tokio::test]
-    async fn header_only_group_matches_without_client_ip() {
+    async fn header_only_group_matches_without_source_ip() {
         let mut cfg = lockdown_config(None);
         cfg.profiles.get_mut("lockdown").unwrap().rule_groups = vec![AllowRuleGroup {
             name: Some("header-only".into()),
@@ -517,7 +517,7 @@ mod tests {
         }];
         let plugin = GlobalAccessControl::create(&cfg, "edgion-system");
         let mut s = MockPluginSession::new();
-        s.expect_client_addr().return_const(String::new()); // unparseable -> client IP unknown
+        s.expect_direct_peer_ip().return_const(String::new()); // unparseable -> direct peer unknown
         s.expect_header_value().returning(|name| {
             if name == "X-CF-Secret" {
                 Some("tok".to_string())
@@ -534,11 +534,11 @@ mod tests {
     /// An IP-constrained group must fail closed when the client IP cannot be
     /// determined, even though the credential header matches.
     #[tokio::test]
-    async fn ip_constrained_group_denies_when_client_ip_unknown() {
+    async fn ip_constrained_group_denies_when_source_ip_unknown() {
         let cfg = lockdown_config(None); // single cloudflare group with an ip matcher
         let plugin = GlobalAccessControl::create(&cfg, "edgion-system");
         let mut s = MockPluginSession::new();
-        s.expect_client_addr().return_const(String::new());
+        s.expect_direct_peer_ip().return_const(String::new());
         s.expect_header_value().returning(|name| {
             if name == "X-CF-Secret" {
                 Some("tok".to_string())

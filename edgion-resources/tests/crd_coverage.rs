@@ -170,6 +170,37 @@ fn gateway_config_spec_has_no_uncovered_fields() {
 }
 
 #[test]
+fn plugin_key_get_enum_uses_remote_ip_names() {
+    let spec = crd_section("edgion_plugins_crd.yaml", "spec");
+    let values = spec["properties"]["requestPlugins"]["items"]["properties"]["conditions"]["properties"]["skip"]
+        ["items"]["properties"]["key"]["properties"]["type"]["enum"]
+        .as_array()
+        .unwrap_or_else(|| panic!("EdgionPlugins KeyGet enum is missing from the committed CRD"));
+    let values: Vec<&str> = values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .unwrap_or_else(|| panic!("KeyGet enum value is not a string: {value:?}"))
+        })
+        .collect();
+    assert_eq!(
+        values,
+        vec![
+            "remoteIp",
+            "header",
+            "cookie",
+            "query",
+            "path",
+            "method",
+            "ctx",
+            "remoteIpAndPath",
+            "webhook"
+        ]
+    );
+}
+
+#[test]
 fn tls_spec_has_no_uncovered_fields() {
     let expected = serde_json::to_value(schema_for!(edgion_resources::EdgionTlsSpec)).unwrap();
     let actual = crd_section("edgion_tls_crd.yaml", "spec");

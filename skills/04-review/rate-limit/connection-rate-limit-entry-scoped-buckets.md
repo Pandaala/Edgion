@@ -11,7 +11,7 @@ closed: 2026-08-03
 ## Conclusion
 
 The stream `ConnectionRateLimit` plugin identified its counters by listener port alone:
-Redis keys were `{keyPrefix}conn:{algo}:0:lst:{port}` / `…:ip:{port}:{client_ip}` with `keyPrefix`
+Redis keys were `{keyPrefix}conn:{algo}:0:lst:{port}` / `…:ip:{port}:{remote_ip}` with `keyPrefix`
 defaulting to `edgion:crl:` for every instance, and the Stage-1 local token bucket lived in a
 process-global `HashMap<u16, Arc<LocalRateGate>>` keyed by port. Two `ConnectionRateLimit` entries
 active on one port therefore shared both. Both are now namespaced by the owning entry's identity

@@ -31,7 +31,7 @@ impl<'a> From<&'a str> for LogArg<'a> {
 /// Plain arguments need no annotation — only wrap sensitive ones.
 ///
 /// ```ignore
-/// log.push_fmt("user {} from {}", la!["admin", sensitive(&client_ip)]);
+/// log.push_fmt("user {} from {}", la!["admin", sensitive(&remote_ip)]);
 /// ```
 #[inline]
 pub fn sensitive(s: &str) -> LogArg<'_> {
@@ -331,7 +331,7 @@ impl PluginLog {
     ///
     /// ```ignore
     /// log.push_fmt("key {} set", la![rule.name.as_str()]);
-    /// log.push_fmt("user {} from {}", la!["admin", sensitive(&client_ip)]);
+    /// log.push_fmt("user {} from {}", la!["admin", sensitive(&remote_ip)]);
     /// ```
     pub fn push_fmt(&mut self, fmt: &str, args: &[LogArg<'_>]) -> bool {
         // 128-byte inline scratch matches the tier-1 LogBuffer budget, so a

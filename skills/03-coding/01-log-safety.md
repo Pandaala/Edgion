@@ -20,7 +20,7 @@
 | Category | Risk | Handling |
 |------|------|---------|
 | `client_cert_info` | subject / SAN may contain PII | Already wired into the `access_log_sensitive` global switch via `serialize_with = "masked::serialize"` |
-| `client_addr` / `remote_addr` / `path` / `x_forwarded_for` / `sni` | Real user IP / request path | Same as above; uniformly masked when `mode=replace` or `mode=wrap` is enabled |
+| `direct_peer_ip` / `remote_ip` / `path` / `x_forwarded_for` / `sni` | Physical/resolved client IP / request path | Same as above; uniformly masked when `mode=replace` or `mode=wrap` is enabled |
 | Plugin log dynamic parameters | May contain username / IP / token | Use `push_fmt` + `sensitive(...)` to mark explicitly; DSL `log_warn` / `log_error` automatically go through `push_sensitive` |
 
 ### Code examples

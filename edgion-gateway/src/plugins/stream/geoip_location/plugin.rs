@@ -9,7 +9,7 @@
 //! `StreamContext`'s doc — L4 geo denials are never logged, only metered), so
 //! **parse-only mode at L4 is a true no-op**: no GeoIP lookup is even
 //! attempted, since nothing would consume the result. Rule mode performs
-//! exactly one lookup (`ctx.client_ip`, the direct peer — L4 has no other
+//! exactly one lookup (`ctx.direct_peer_ip`, the physical direct peer;
 //! address) and reports every deny via `edgion_geoip_denied_total{layer,reason}`,
 //! since that metric is the only record a geo-denied L4 connection leaves.
 
@@ -67,7 +67,7 @@ impl StreamPlugin for GeoIpLocationStreamPlugin {
         // (and the Unavailable fail-open/close branch below) entirely when no
         // configured rule actually needs resolved dimensions.
         let needs_facts = self.config.source_needs_geo_facts(GeoRuleSource::DirectPeerIp);
-        let lookup = needs_facts.then(|| GeoIpProvider::global().lookup(ctx.client_ip));
+        let lookup = needs_facts.then(|| GeoIpProvider::global().lookup(ctx.direct_peer_ip));
         let (facts, unavailable) = match &lookup {
             None => (GeoDimFacts::default(), false),
             Some(GeoLookup::Unavailable) => (GeoDimFacts::default(), true),
@@ -86,8 +86,8 @@ impl StreamPlugin for GeoIpLocationStreamPlugin {
         }
 
         let rule_ctx = GeoRuleContext {
-            direct_ip: Some(ctx.client_ip),
-            direct: facts,
+            direct_peer_ip: Some(ctx.direct_peer_ip),
+            direct_peer: facts,
             remote_ip: None,
             remote: GeoDimFacts::default(),
         };

@@ -13,7 +13,7 @@ When a review reports "RealIp should change `maxTrustedHops` to required / set a
 
 ## Background Threat (M12)
 
-In `recursive=true` mode, the `X-Forwarded-For` list is traversed right-to-left until the first non-trusted IP is encountered. If `trusted_ips` is configured too broadly (e.g., `10.0.0.0/8`) and an attacker can initiate requests from an IP within that range, they can construct a "trusted-IP prefix" of arbitrary length to push the malicious IP to the leftmost position, causing `client_ip` to be spoofed.
+In `recursive=true` mode, the `X-Forwarded-For` list is traversed right-to-left until the first non-trusted IP is encountered. If `trusted_ips` is configured too broadly (e.g., `10.0.0.0/8`) and an attacker can initiate requests from an IP within that range, they can construct a "trusted-IP prefix" of arbitrary length to push the malicious IP to the leftmost position, causing `RemoteIp` to be spoofed.
 
 `maxTrustedHops: Some(N)` stops at the Nth trusted hop during recursive traversal and returns the IP at the current position — closing off this "infinitely extending trusted prefix" path.
 

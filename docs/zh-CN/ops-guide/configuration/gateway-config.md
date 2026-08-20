@@ -263,7 +263,7 @@ Gateway 采用**三端口模型**：
 | `wrap_prefix` | `String` | `"<E>"` | `mode=wrap` 时附加在敏感值前的前缀 |
 | `wrap_suffix` | `String` | `"</E>"` | `mode=wrap` 时附加在敏感值后的后缀 |
 
-**三种模式的行为差异**（以 `client_addr=1.2.3.4` 为例）：
+**三种模式的行为差异**（以 `direct_peer_ip=1.2.3.4` 为例）：
 
 | 模式 | 输出 | 用途 |
 |------|------|------|
@@ -273,7 +273,7 @@ Gateway 采用**三端口模型**：
 
 **生效范围**——比内置字段列表本身更大，不要假设它只覆盖内置字段：
 
-- **access log**：`client_addr`、`remote_addr`、`path`、`x_forwarded_for`、`sni`、`request_uri`、客户端证书的 `subject`/`sans`/`cn`
+- **access log**：`direct_peer_ip`、`remote_ip`、`path`、`x_forwarded_for`、`sni`、`request_uri`、客户端证书的 `subject`/`sans`/`cn`
 - **`AccessLogExtern` 声明的 `ext` 字段**（`EdgionPlugins.spec.accessLogExtern`）遵循同一个开关：`routeLabel`/`routeAnnotation` 来源永远明文，其余来源除非在 `EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys` 中列入白名单，否则按此 `mode` 渲染（白名单未命中仍会输出该字段，只是被脱敏，而非丢弃）。详见 [Access Log](../observability/access-log.md#扩展日志accesslogextern)。
 - **plugin log**：13 个插件中 46 处通过 `sensitive(...)` 标注的参数（real_ip 的 IP、basic/key/ldap/jwt/hmac 的用户名、direct_endpoint 的地址、region_route 的 key/region/host、proxy_rewrite 的 method 等）；DSL 脚本里 `log_warn(value)` / `log_error(value)` 的用户参数
 - **ssl.log**：mTLS 白名单校验失败时错误信息里的客户端证书字段
@@ -337,7 +337,19 @@ access_log_sensitive:
   wrap_suffix: "</sens>"
 ```
 
-输出示例：`"client-addr": "<sens>1.2.3.4</sens>"`，下游可通过正则识别 `<sens>...</sens>` 区间做二次处理。
+输出示例：`"direct_peer_ip": "<sens>1.2.3.4</sens>"`，下游可通过正则识别 `<sens>...</sens>` 区间做二次处理。
+
+### 上游 RemoteIp Header
+
+`EdgionGatewayConfig.spec.forwardedHeaders.remoteIpHeader` 控制 Gateway 在
+HTTP 上游请求中传递最终 `RemoteIp` 的 Header 名称。默认值为 `X-Real-IP`，与
+现有行为及 Nginx 的常用约定一致，也可以配置为 `X-Edgion-Remote-IP` 等自定义
+名称。名称会经过校验，不能使用 hop-by-hop Header、`Host`、`Content-Length`、
+`X-Forwarded-For` 或其他保留传输 Header。所有 request 插件执行完毕后，Gateway
+会用规范化的最终值覆盖同名入站 Header。
+
+该输出配置与 `spec.realIp.realIpHeader` 相互独立：前者负责向上游传播已解析的
+客户端身份，后者负责从可信代理提供的下游 Header 中建立 `RemoteIp`。
 
 ### 启用 mTLS 连接 Controller
 

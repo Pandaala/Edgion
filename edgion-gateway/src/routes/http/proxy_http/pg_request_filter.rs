@@ -245,9 +245,6 @@ pub async fn request_filter(
         }
     }
 
-    set_x_real_ip(session, ctx);
-    append_x_forwarded_for(session, ctx);
-
     // Request-stage plugins have run, but this is NOT the exit point for
     // `in_request_body_stage`: two more request-plugin stages still run after
     // this function returns -- the backendRef-scoped chain in
@@ -302,21 +299,26 @@ async fn build_request_metadata(
         }
     }
 
-    // Extract client_addr and client_port (TCP connection address).
-    // as_inet() avoids the to_string() -> parse() round trip; UDS downstream
-    // is not a real scenario for the HTTP gateway, so falling back to empty
-    // string for non-inet addresses is acceptable.
-    let inet = session.client_addr().and_then(|a| a.as_inet());
-    ctx.request_info.client_addr = inet.map(|s| s.ip().to_string()).unwrap_or_default();
-    ctx.request_info.client_port = inet.map(|s| s.port()).unwrap_or(0);
+    // Preserve both transport identities. Pingora's `peer_addr()` may contain
+    // the accepted PROXY-protocol source, while `raw_peer_addr()` always names
+    // the physical previous hop.
+    let raw = session
+        .as_downstream()
+        .digest()
+        .and_then(|d| d.socket_digest.as_ref())
+        .and_then(|d| d.raw_peer_addr());
+    let addrs = crate::util::resolve_transport_client_addrs(session.client_addr(), raw, "");
+    ctx.request_info.downstream_peer_ip = addrs.remote_ip;
+    ctx.request_info.downstream_peer_port = addrs.remote_port;
+    ctx.request_info.direct_peer_ip = addrs.direct_peer_ip;
+    ctx.request_info.direct_peer_port = addrs.direct_peer_port;
 
-    // Extract remote_addr (real client IP, considering trusted proxies).
-    // extract_real_ip accepts a bare IP string as well as "ip:port".
-    ctx.request_info.remote_addr = if let Some(extractor) = &edgion_http.real_ip_extractor {
-        extractor.extract_real_ip(&ctx.request_info.client_addr, req_header)
+    let resolved = if let Some(extractor) = &edgion_http.real_ip_extractor {
+        extractor.extract_real_ip(&ctx.request_info.downstream_peer_ip, req_header)
     } else {
-        ctx.request_info.client_addr.clone()
+        ctx.request_info.downstream_peer_ip.clone()
     };
+    ctx.request_info.remote_ip = crate::ctx::canonicalize_ip_str(&resolved).unwrap_or(resolved);
 
     // Generate x_trace_id before any early-return guards so 400/4xx access-log
     // entries carry a trace id that can be correlated with tls.log.
@@ -586,36 +588,6 @@ fn apply_path_normalization_entry(
     ctx.request_info.normalized_current_path = normalize_path(raw_path, cfg).unwrap_or_else(|| raw_path.to_string());
 
     None
-}
-
-/// Append client IP to X-Forwarded-For header (inline for performance)
-///
-/// This function always appends the client IP to maintain the proxy chain,
-/// regardless of trusted proxy configuration.
-#[inline]
-fn append_x_forwarded_for(session: &mut Session, ctx: &EdgionHttpContext) {
-    // client_addr is already IP only (without port)
-    let client_ip = &ctx.request_info.client_addr;
-
-    let req_header_mut = session.req_header_mut();
-    if let Some(ref existing_xff) = ctx.request_info.x_forwarded_for {
-        let mut new_xff = String::with_capacity(existing_xff.len() + 2 + client_ip.len());
-        new_xff.push_str(existing_xff);
-        new_xff.push_str(", ");
-        new_xff.push_str(client_ip);
-        let _ = req_header_mut.insert_header("X-Forwarded-For", &new_xff);
-    } else {
-        let _ = req_header_mut.insert_header("X-Forwarded-For", client_ip);
-    }
-}
-
-/// Set X-Real-IP header with extracted remote_addr (inline for performance)
-///
-/// This header contains the real client IP address after trusted proxy extraction.
-#[inline]
-fn set_x_real_ip(session: &mut Session, ctx: &EdgionHttpContext) {
-    let req_header_mut = session.req_header_mut();
-    let _ = req_header_mut.insert_header("X-Real-IP", &ctx.request_info.remote_addr);
 }
 
 #[cfg(test)]

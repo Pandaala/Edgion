@@ -129,7 +129,8 @@ mod tests {
 
     fn make_ctx() -> TlsRouteContext {
         TlsRouteContext {
-            client_ip: "127.0.0.1".parse::<IpAddr>().unwrap(),
+            direct_peer_ip: "127.0.0.1".parse::<IpAddr>().unwrap(),
+            remote_ip: "127.0.0.1".parse::<IpAddr>().unwrap(),
             listener_port: 443,
             sni: "test.example.com".to_string(),
             tls_id: Some("abcd1234".to_string()),

@@ -52,7 +52,7 @@ filters:
 | `deny` | Array | 无 | 黑名单。IP 地址或 CIDR 列表。示例：`["203.0.113.50"]` |
 | `allowRefs` | Array | 无 | 引用中心化 `IpList` EdgionConfigData，其 CIDR 合并进白名单。每项 `{name, namespace?}`，`namespace` 缺省取资源所在 namespace；缺失/禁用时 fail-closed（全拒），以 `ResolvedRefs=False` 暴露。 |
 | `denyRefs` | Array | 无 | 同 `allowRefs`，合并进黑名单；缺失/禁用时少拦，以 `ResolvedRefs=False` 暴露。 |
-| `ipSource` | String | `"clientIp"` | IP 来源。`clientIp`：从代理头提取真实 IP；`remoteAddr`：使用 TCP 连接地址 |
+| `ipSource` | String | `"RemoteIp"` | IP 来源。`RemoteIp`：使用解析后的客户端身份；`DirectPeerIp`：使用物理传输对端地址 |
 | `status` | Integer | `403` | 拒绝时返回的 HTTP 状态码 |
 | `message` | String | 无 | 拒绝时返回的自定义消息 |
 | `defaultAction` | String | `"allow"` | 默认动作。当 IP 不匹配任何规则时的行为。`allow` 或 `deny` |
@@ -288,7 +288,7 @@ spec:
 
 ## IP 来源选择
 
-### `ipSource: clientIp`（默认，推荐）
+### `ipSource: RemoteIp`（默认，推荐）
 
 从代理头（`X-Forwarded-For` 或 `X-Real-IP`）提取真实客户端 IP。
 
@@ -311,12 +311,12 @@ Edgion 提取: X-Forwarded-For: 203.0.113.50
 filters:
   - type: IpRestriction
     config:
-      ipSource: "clientIp"  # 默认值
+      ipSource: "RemoteIp"  # 默认值
       allow:
         - "203.0.113.0/24"
 ```
 
-### `ipSource: remoteAddr`
+### `ipSource: DirectPeerIp`
 
 使用 TCP 连接的对端地址（直连 IP）。
 
@@ -337,7 +337,7 @@ Edgion 获取: TCP peer address: 10.0.0.50
 filters:
   - type: IpRestriction
     config:
-      ipSource: "remoteAddr"
+      ipSource: "DirectPeerIp"
       allow:
         - "10.0.0.0/8"  # 只允许内网负载均衡器
 ```
@@ -501,7 +501,7 @@ filters:
 **原因**：
 - CIDR 范围配置错误
 - IP 来源配置错误（`ipSource`）
-- 有 CDN/负载均衡器但使用了 `remoteAddr`
+- 有 CDN/负载均衡器但使用了 `DirectPeerIp`，而策略实际需要解析后的客户端
 
 **解决方案**：
 ```bash
@@ -509,9 +509,9 @@ filters:
 # 检查 X-Forwarded-For 头
 
 # 调整配置
-ipSource: "clientIp"  # 如果有代理
+ipSource: "RemoteIp"  # 如果有代理
 # 或
-ipSource: "remoteAddr"  # 如果直连
+ipSource: "DirectPeerIp"  # 如果直连
 ```
 
 ### 问题 2：无法获取真实 IP
@@ -520,8 +520,8 @@ ipSource: "remoteAddr"  # 如果直连
 
 **解决方案**：
 ```yaml
-# 临时：使用 remoteAddr 并允许负载均衡器 IP
-ipSource: "remoteAddr"
+# 临时：使用 DirectPeerIp 并允许负载均衡器 IP
+ipSource: "DirectPeerIp"
 allow:
   - "10.0.0.50"  # 负载均衡器 IP
 
@@ -630,7 +630,7 @@ spec:
     # IP 白名单
     - type: IpRestriction
       config:
-        ipSource: "clientIp"
+        ipSource: "RemoteIp"
         allow:
           - name: internal
             cidrs:
@@ -663,7 +663,7 @@ spec:
     # IP 黑名单
     - type: IpRestriction
       config:
-        ipSource: "clientIp"
+        ipSource: "RemoteIp"
         deny:
           - name: abuse
             cidrs:

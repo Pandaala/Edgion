@@ -178,7 +178,7 @@ mod tests {
         let mut session = MockPluginSession::new();
         session.expect_key_get().return_const(Some("user-1".to_string()));
         let mut plugin_log = PluginLog::new("RateLimit");
-        let keys = vec![KeyGet::ClientIp];
+        let keys = vec![KeyGet::RemoteIp];
 
         let out = resolve_rate_limit_key(&mut session, &keys, None, &OnMissingKey::Deny, &mut plugin_log).await;
 
@@ -190,7 +190,7 @@ mod tests {
         let mut session = MockPluginSession::new();
         session.expect_key_get().return_const(None);
         let mut plugin_log = PluginLog::new("RateLimit");
-        let keys = vec![KeyGet::ClientIp];
+        let keys = vec![KeyGet::RemoteIp];
 
         let out = resolve_rate_limit_key(&mut session, &keys, Some("dflt"), &OnMissingKey::Deny, &mut plugin_log).await;
 
@@ -203,7 +203,7 @@ mod tests {
         let mut session = MockPluginSession::new();
         session.expect_key_get().return_const(None);
         let mut plugin_log = PluginLog::new("RateLimit");
-        let keys = vec![KeyGet::ClientIp];
+        let keys = vec![KeyGet::RemoteIp];
 
         let out = resolve_rate_limit_key(&mut session, &keys, None, &OnMissingKey::Allow, &mut plugin_log).await;
 
@@ -216,7 +216,7 @@ mod tests {
         let mut session = MockPluginSession::new();
         session.expect_key_get().return_const(None);
         let mut plugin_log = PluginLog::new("RateLimit");
-        let keys = vec![KeyGet::ClientIp];
+        let keys = vec![KeyGet::RemoteIp];
 
         let out = resolve_rate_limit_key(&mut session, &keys, None, &OnMissingKey::Deny, &mut plugin_log).await;
 

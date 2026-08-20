@@ -68,17 +68,17 @@ Both were found while reviewing the composition fix and share its root question 
 this request belong to?":
 
 - **Empty `key` list was fail-open.** `#[serde(default)]` on `key` yielded `Vec::default()` (the
-  `Default` impl's `vec![ClientIp]` never runs on deserialization), so a config that omits `key`
+  `Default` impl's `vec![RemoteIp]` never runs on deserialization), so a config that omits `key`
   resolved no key, fell through to `onMissingKey` and — with its `Allow` default — silently
   disabled the limiter. `key` now uses `#[serde(default = "default_key_sources")]` on both
   `RateLimitConfig` and `RateLimitRedisConfig` so an omitted list matches the documented
-  `[{type: clientIp}]`, and `resolve_rate_limit_key` treats an explicitly empty list as "one global
+  `[{type: remoteIp}]`, and `resolve_rate_limit_key` treats an explicitly empty list as "one global
   bucket" (`keys.is_empty()` composes to `""`) rather than as a key miss. Nothing configured cannot
   be "missing", so `onMissingKey` / `defaultKey` no longer apply to it.
 - **Cross-plugin bucket namespace.** Every `RateLimitRedis` instance defaults to the same
   `keyPrefix` (`edgion:rl:`) and `policy_idx`, so bucket identity came down to the composed key
   alone. Two unrelated EdgionPlugins resources therefore indexed the same buckets — merging quotas
-  outright when their key sources matched (two default `key: [clientIp]` plugins share one set of
+  outright when their key sources matched (two default `key: [remoteIp]` plugins share one set of
   per-IP buckets cluster-wide), and letting a client that controls one plugin's source craft a value
   matching another plugin's composed key when they did not. The Redis key now carries the owning
   entry's identity, `<namespace>/<name>/<alias or #index>`, built by `plugins::common::entry_scope`
@@ -111,7 +111,7 @@ this request belong to?":
   synced resource so every Gateway instance computes the same value.
 - Namespace the Redis key by a digest of the `key` source list instead of by resource identity —
   implemented and then replaced: it leaves two unrelated resources on the default
-  `key: [clientIp]` sharing one bucket set, which is the more likely accident.
+  `key: [remoteIp]` sharing one bucket set, which is the more likely accident.
 - Use the resource key without the entry discriminator — one resource may declare several
   `RateLimitRedis` entries; `alias` (validated `^[a-zA-Z0-9._-]{1,32}$`) or `#<index>` separates
   them, and `#` cannot appear in an alias so the two forms never collide. Alias uniqueness within a
@@ -132,7 +132,7 @@ this request belong to?":
 Re-open this decision only if:
 
 - A new `KeyGet` variant is added whose value is composed from multiple sub-values internally with
-  a recoverable boundary. `ClientIpAndPath` is the existing case and is not affected: it joins
+  a recoverable boundary. `RemoteIpAndPath` is the existing case and is not affected: it joins
   `<ip>:<path>` and every reachable path either starts with `/` or is exactly `*`
   (asterisk-form `OPTIONS`), neither of which an IP literal can contain or be a prefix collision
   with, so the boundary survives even though the path is client-controlled.

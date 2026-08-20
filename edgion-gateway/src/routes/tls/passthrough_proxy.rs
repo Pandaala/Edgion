@@ -62,18 +62,19 @@ pub struct EdgionTlsPassthroughProxy {
 #[async_trait]
 impl ServerApp for EdgionTlsPassthroughProxy {
     async fn process_new(self: &Arc<Self>, mut downstream: Stream, shutdown: &ShutdownWatch) -> Option<Stream> {
-        let (client_addr, client_port) = downstream
-            .get_socket_digest()
-            .and_then(|d| d.peer_addr().cloned())
-            .and_then(|addr| addr.as_inet().map(|inet| (inet.ip().to_string(), inet.port())))
-            .unwrap_or_else(|| ("unknown".to_string(), 0));
-
-        let transport_peer = downstream
-            .get_socket_digest()
-            .and_then(|d| d.raw_peer_addr().cloned())
-            .and_then(|addr| addr.as_inet().map(|inet| inet.ip().to_string()))
-            .unwrap_or_else(|| "unknown".to_string());
-        let mut ctx = TlsContext::new(self.listener_port, client_addr, client_port, transport_peer);
+        let digest = downstream.get_socket_digest();
+        let addrs = crate::util::resolve_transport_client_addrs(
+            digest.as_deref().and_then(|d| d.peer_addr()),
+            digest.as_deref().and_then(|d| d.raw_peer_addr()),
+            "unknown",
+        );
+        let mut ctx = TlsContext::new(
+            self.listener_port,
+            addrs.direct_peer_ip,
+            addrs.direct_peer_port,
+            addrs.remote_ip,
+            addrs.remote_port,
+        );
 
         if *shutdown.borrow() {
             ctx.err_log = Some("shutdown".to_string());
@@ -350,12 +351,12 @@ impl EdgionTlsPassthroughProxy {
 
         // 5. Send Proxy Protocol v2 if configured
         if let Some(2) = unit.proxy_protocol_version {
-            if let Ok(src_ip) = ctx.client_addr.parse::<IpAddr>() {
+            if let Ok(src_ip) = ctx.remote_ip.parse::<IpAddr>() {
                 // Use the already-bracketed upstream_addr_str (SocketAddr Display) for the PP2
                 // destination. Re-deriving it from the bare-IP info.addr would drop the IPv6
                 // brackets and fail to parse, silently advertising 0.0.0.0:0 — see proxy.rs,
                 // which feeds the bracketed string straight into the PP2 builder.
-                let src_addr = std::net::SocketAddr::new(src_ip, ctx.client_port);
+                let src_addr = std::net::SocketAddr::new(src_ip, ctx.remote_port);
                 let dst_addr: std::net::SocketAddr = upstream_addr_str.parse().unwrap_or_else(|_| {
                     std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
                 });
@@ -457,13 +458,16 @@ impl EdgionTlsPassthroughProxy {
         );
         log_tls(ctx).await;
 
+        let direct_peer_ip = edgion_resources::sensitive::apply_sensitive(&ctx.direct_peer_ip, str::to_owned);
+        let remote_ip = edgion_resources::sensitive::apply_sensitive(&ctx.remote_ip, str::to_owned);
         let log_entry = serde_json::json!({
             "ts": ctx.ts,
             "mode": "passthrough",
             "listener_port": ctx.listener_port,
-            "client_addr": &ctx.client_addr,
-            "transport_peer": &ctx.transport_peer,
-            "client_port": ctx.client_port,
+            "direct_peer_ip": direct_peer_ip,
+            "direct_peer_port": ctx.direct_peer_port,
+            "remote_ip": remote_ip,
+            "remote_port": ctx.remote_port,
             "sni": &ctx.sni,
             "end_time": ctx.end_time,
             "upstream_info": &ctx.upstream_info,

@@ -50,7 +50,7 @@ The most complex phase, responsible for request parsing and route matching:
 
 1. **Metadata extraction** (`build_request_metadata`):
    - Protocol detection: WebSocket (Upgrade header), gRPC-Web/gRPC (Content-Type header).
-   - Address extraction: `client_addr` (direct TCP IP), `remote_addr` (real client IP after RealIpExtractor processing).
+   - Address extraction: `direct_peer_ip` (`DirectPeerIp`, physical transport peer), `remote_ip` (`RemoteIp`, resolved client identity after the applicable PROXY/RealIp processing).
    - Hostname normalization: URI host → Host header → :authority header, all stripped of port, trailing dot removed, lowercased.
    - TLS metadata: extract `tls_id`, `sni`, and `client_cert_info` from `SslDigestExtension`.
    - Security checks: SNI-Host consistency check, Listener hostname isolation, X-Forwarded-For length limit.
@@ -233,7 +233,7 @@ Typical uses: IP allow/deny lists, geolocation filtering, connection rate limiti
 |-------|------|-------------|
 | `start_time` | `Instant` | Request start time |
 | `gateway_info` | `GatewayInfo` | Matched Gateway metadata |
-| `request_info` | `RequestInfo` | Request metadata: client_addr, remote_addr, hostname, path, status, x_trace_id, sni, tls_id, listener_port, discover_protocol |
+| `request_info` | `RequestInfo` | Request metadata: direct_peer_ip, remote_ip, hostname, path, status, x_trace_id, sni, tls_id, listener_port, discover_protocol |
 | `edgion_status` | `Vec<EdgionStatus>` | Error code collection |
 | `route_unit` | `Option<Arc<HttpRouteRuleUnit>>` | Matched HTTP route rule |
 | `grpc_route_unit` | `Option<Arc<GrpcRouteRuleUnit>>` | Matched gRPC route rule |

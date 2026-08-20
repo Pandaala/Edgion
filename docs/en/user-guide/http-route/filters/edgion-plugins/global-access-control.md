@@ -21,7 +21,7 @@ Unlike `IpRestriction` (IP-only, no profiles) or `RequestRestriction` (request a
 
 ```
 For each rule group (OR across groups):
-    group matches ⟺ (no ip configured OR client_ip ∈ CIDR)
+    group matches ⟺ (no ip configured OR remote_ip ∈ CIDR)
                    AND all rules evaluate to true
 
 If any group matches → ALLOW (return GoodNext)
@@ -56,7 +56,7 @@ All three layers execute in order; any layer can terminate the request.
 | `activeProfileRef` | EdgionConfigDataRef | none | Reference to a `Selector` `EdgionConfigData` that overrides which profile is active. Overrides `activeProfile` at runtime. On any error, falls back to `activeProfile` and logs `selector miss: base`. |
 | `status` | Integer | `403` | HTTP status code returned on denial. |
 | `message` | String | none | Optional response body on denial. |
-| `ipSource` | Enum | `RemoteAddr` | IP source for CIDR matching. `RemoteAddr` = TCP peer (un-forgeable). `ClientIp` = RealIp/XFF-derived (see Security notes). |
+| `ipSource` | Enum | `DirectPeerIp` | IP source for CIDR matching. `DirectPeerIp` = physical transport peer. `RemoteIp` = PROXY/RealIp/XFF-resolved client (see Security notes). |
 
 ### AllowProfile
 
@@ -219,7 +219,7 @@ spec:
         activeProfile: lockdown          # baseline; overridden by activeProfileRef at runtime
         status: 403
         message: "forbidden: origin accepts CDN traffic only"
-        # ipSource defaults to RemoteAddr (TCP peer, un-forgeable) — do not change for CDN lockdown
+        # ipSource defaults to DirectPeerIp (physical peer) — do not change for CDN lockdown
         activeProfileRef:
           name: origin-lockdown-selector
           namespace: edgion-system
@@ -361,7 +361,7 @@ flowchart TD
     A["GlobalAccessControl plugin invoked"] --> B{"enable?"}
     B -->|false| Z1["log: disabled:pass → GoodNext"]
     B -->|true| C["Resolve active profile via activeProfileRef\n(fallback: activeProfile)"]
-    C --> D["Get client IP via ipSource\n(default: RemoteAddr = TCP peer)"]
+    C --> D["Get client IP via ipSource\n(default: DirectPeerIp = physical peer)"]
     D --> E["For each rule group (OR)"]
     E --> F{"client IP ∈ group.ip CIDRs\n(or ip not configured)?"}
     F -->|No| G["group does not match → next group"]
@@ -377,15 +377,15 @@ flowchart TD
 
 ## Security and operational notes
 
-### 1. IP source: RemoteAddr vs ClientIp
+### 1. IP source: DirectPeerIp vs RemoteIp
 
-`ipSource` defaults to `RemoteAddr`, which reads the **TCP peer address** — the actual network-layer source, which cannot be forged by the client. This is the correct choice for CDN lockdown, because a CDN will always connect from its own IP range.
+`ipSource` defaults to `DirectPeerIp`, which reads the **physical transport peer address** — the actual network-layer source, which cannot be forged by the client. This is the correct choice for CDN lockdown, because a CDN will always connect from its own IP range.
 
-**Only set `ipSource: ClientIp`** when:
+**Only set `ipSource: RemoteIp`** when:
 - Edgion's Gateway sits behind a **trusted L4 load balancer** (not the CDN itself), AND
 - The `RealIp` plugin is correctly configured on the same route to extract the real client IP from a trusted XFF or `X-Real-IP` header.
 
-If you set `ClientIp` without a trusted L4 LB + proper RealIp configuration, an attacker can forge an XFF header that bypasses your CIDR check entirely.
+If you set `RemoteIp` without a trusted L4 LB + proper RealIp configuration, an attacker can forge an XFF header that bypasses your CIDR check entirely.
 
 ### 2. Fail-open on initialization error
 
@@ -476,4 +476,4 @@ If you run into problems:
 
 - [IpRestriction](./ip-restriction.md) — IP-only allowlist/denylist (no profiles, no secret headers)
 - [RequestRestriction](./request-restriction.md) — Request-attribute filtering (no CIDR, no profiles)
-- [RealIp](./real-ip.md) — Client real IP extraction (required when using `ipSource: ClientIp`)
+- [RealIp](./real-ip.md) — Client identity resolution (required when using `ipSource: RemoteIp`)

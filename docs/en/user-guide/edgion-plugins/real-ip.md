@@ -113,11 +113,11 @@ Right-to-left traversal:
   10.0.0.99 → trusted → skip
   1.2.3.4   → NOT trusted → return
 
-Result: gateway thinks client_ip = 1.2.3.4 (attacker-forged)
+Result: gateway resolves `RemoteIp = 1.2.3.4` (attacker-forged)
 ```
 
 The attacker can then:
-- Bypass IP allowlists (`ip_restriction` plugin) that key on `client_ip`
+- Bypass IP allowlists (`ip_restriction` plugin) that key on `RemoteIp`
 - Attribute rate-limit counters to arbitrary other users
 - Pollute audit logs with forged source IPs
 
@@ -184,8 +184,8 @@ Edgion follows the Nginx style by default (unlimited, backward-compatible) while
 ### Algorithm Flow
 
 ```text
-1. Check if client_addr is in trustedIps
-   ├─ No → Use client_addr as real IP directly
+1. Check if downstream_peer_ip is in trustedIps
+   ├─ No → Keep downstream_peer_ip as RemoteIp
    └─ Yes → Continue to step 2
 
 2. Extract IP list from realIpHeader
@@ -197,7 +197,7 @@ Edgion follows the Nginx style by default (unlimited, backward-compatible) while
    ├─ 198.51.100.2 → In trustedIps ✓ Continue
    └─ 203.0.113.1 → Not in trustedIps ✗ This is the real IP!
 
-4. Update ctx.request_info.remote_addr (via set_remote_addr method)
+4. Update ctx.request_info.remote_ip (via set_remote_ip method)
 ```
 
 ### Example Scenarios
@@ -211,7 +211,7 @@ CDN (198.51.100.2, trusted)
     ↓ X-Forwarded-For: 203.0.113.1
 Load Balancer (192.168.1.1, trusted)
     ↓ X-Forwarded-For: 203.0.113.1, 198.51.100.2
-Edgion Gateway (client_addr: 192.168.1.1)
+Edgion Gateway (downstream_peer_ip: 192.168.1.1)
 ```
 
 **Configuration:**
@@ -227,7 +227,7 @@ realIpHeader: "X-Forwarded-For"
 recursive: true
 ```
 
-**Result:** `remote_addr = 203.0.113.1`
+**Result:** `remote_ip = 203.0.113.1`
 
 #### Scenario 2: Cloudflare CDN
 
@@ -333,21 +333,21 @@ spec:
 
 1. **Security**: Only trust proxy IPs you control; do not trust overly broad CIDR ranges
 2. **Performance**: IP matching uses a Radix Tree with minimal performance overhead
-3. **Order**: This plugin should execute before other plugins that use `remote_addr` (such as rate limiting, IP restriction)
+3. **Order**: This plugin should execute before other plugins that use `remote_ip` (such as rate limiting, IP restriction)
 4. **Global config**: If both global `realIp` and plugin-level `RealIp` are configured, the plugin configuration overrides the global one
-5. **Real-time updates**: The plugin directly modifies `ctx.request_info.remote_addr`; subsequent plugins and access logs will use the updated value
+5. **Real-time updates**: The plugin directly modifies `ctx.request_info.remote_ip`; subsequent plugins and access logs will use the updated value
 
 ## FAQ
 
-### Q: Why distinguish between client_addr and remote_addr?
+### Q: Why distinguish between DirectPeerIp and RemoteIp?
 
 A: 
-- `client_addr`: The direct source IP of the TCP connection (usually the load balancer)
-- `remote_addr`: The extracted real client IP (used for business logic)
+- `DirectPeerIp`: The physical source IP of the transport connection (usually the load balancer)
+- `RemoteIp`: The client identity resolved from a trusted PROXY/RealIp boundary (used for business logic)
 
 ### Q: How can I verify the configuration is working?
 
-A: Check the `remote_addr` field in request logs, or check the `X-Real-IP` Header in the backend service.
+A: Check the `remote_ip` field in request logs, or check the configured RemoteIp header in the backend service (default: `X-Real-IP`).
 
 ### Q: Can I trust multiple CDNs simultaneously?
 

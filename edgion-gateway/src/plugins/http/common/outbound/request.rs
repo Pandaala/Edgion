@@ -553,8 +553,8 @@ fn resolve_var(
         TemplateVarType::RequestPath => Some(session.get_request_path().to_string()),
         TemplateVarType::RequestUri => Some(session.get_request_uri()),
         TemplateVarType::Method => Some(session.get_method().to_string()),
-        TemplateVarType::ClientIp => {
-            let addr = session.remote_addr();
+        TemplateVarType::RemoteIp => {
+            let addr = session.remote_ip();
             if addr.is_empty() {
                 None
             } else {

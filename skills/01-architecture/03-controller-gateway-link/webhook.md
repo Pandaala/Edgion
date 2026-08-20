@@ -120,7 +120,7 @@ Webhook templates reuse the ctx-set engine (`CompiledTemplate` in `edgion-resour
 | `${path}` / `${uri}` | current (possibly rewritten) path / URI |
 | `${requestPath}` / `${requestUri}` | frozen entry-time path / URI |
 | `${method}` | current HTTP method |
-| `${clientIp}` | real client IP |
+| `${remoteIp}` | resolved client IP |
 | `${secretRef:ns/name:key}` | Secret value resolved by the controller at config-apply time; shipped inline in `resolved_secrets`; substituted at call time. Admin `/configclient` renders as `"[redacted]"`. Both `ns` and `key` are required. |
 
 **`origin` vs `template` for the same field:** `origin: [{name: X}]` copies `X` from the **frozen entry-time snapshot** (immune to earlier-plugin rewrites). `custom: [{name: X, template: "${header:X}"}]` reads the **current view**. Use `origin` for the unmodified client value; use a `${header:X}` template for the post-transformation value.

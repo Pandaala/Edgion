@@ -21,7 +21,7 @@
 
 ```
 遍历每个规则组（组间 OR）：
-    组命中 ⟺ (未配置 ip 条件 OR client_ip ∈ CIDR)
+    组命中 ⟺ (未配置 ip 条件 OR remote_ip ∈ CIDR)
              AND 所有 rules 求值为 true
 
 任一组命中 → 放行（GoodNext）
@@ -56,7 +56,7 @@ GlobalAccessControl（以及所有 `EdgionPlugins`）可在三个粒度上挂载
 | `activeProfileRef` | EdgionConfigDataRef | 无 | 指向 `Selector` 类型 `EdgionConfigData` 的引用，在运行时覆盖当前生效的 profile。解析失败时回落到 `activeProfile` 并记录 `selector miss: base`。 |
 | `status` | Integer | `403` | 拒绝时返回的 HTTP 状态码。 |
 | `message` | String | 无 | 拒绝时返回的可选响应体。 |
-| `ipSource` | Enum | `RemoteAddr` | CIDR 匹配时使用的 IP 来源。`RemoteAddr` = TCP 对端（不可伪造）；`ClientIp` = RealIp/XFF 解析值（见安全说明）。 |
+| `ipSource` | Enum | `DirectPeerIp` | CIDR 匹配时使用的 IP 来源。`DirectPeerIp` = 物理传输对端；`RemoteIp` = PROXY/RealIp/XFF 解析后的客户端（见安全说明）。 |
 
 ### AllowProfile
 
@@ -219,7 +219,7 @@ spec:
         activeProfile: lockdown          # 基线；运行时由 activeProfileRef 覆盖
         status: 403
         message: "forbidden: origin accepts CDN traffic only"
-        # ipSource 默认 RemoteAddr（TCP 对端，不可伪造）——CDN 锁定必须保持默认值
+        # ipSource 默认 DirectPeerIp（物理传输对端，不可伪造）——CDN 锁定必须保持默认值
         activeProfileRef:
           name: origin-lockdown-selector
           namespace: edgion-system
@@ -361,7 +361,7 @@ flowchart TD
     A["GlobalAccessControl 插件被调用"] --> B{"enable?"}
     B -->|false| Z1["log: disabled:pass → GoodNext"]
     B -->|true| C["通过 activeProfileRef 解析当前 profile\n（失败时回落到 activeProfile）"]
-    C --> D["按 ipSource 获取客户端 IP\n（默认: RemoteAddr = TCP 对端）"]
+    C --> D["按 ipSource 获取客户端 IP\n（默认: DirectPeerIp = 物理传输对端）"]
     D --> E["遍历每个规则组（组间 OR）"]
     E --> F{"client IP ∈ group.ip CIDRs\n（或未配置 ip）？"}
     F -->|否| G["该组不命中 → 下一组"]
@@ -377,15 +377,15 @@ flowchart TD
 
 ## 安全与运维说明
 
-### 1. IP 来源：RemoteAddr vs ClientIp
+### 1. IP 来源：DirectPeerIp vs RemoteIp
 
-`ipSource` 默认为 `RemoteAddr`，读取 **TCP 对端地址**——即真实的网络层来源，客户端无法伪造。这是 CDN 锁定的正确选择，因为 CDN 始终从自己的 IP 段发起连接。
+`ipSource` 默认为 `DirectPeerIp`，读取 **物理传输对端地址**——即真实的网络层来源，客户端无法伪造。这是 CDN 锁定的正确选择，因为 CDN 始终从自己的 IP 段发起连接。
 
-**仅在以下条件同时满足时才考虑 `ipSource: ClientIp`**：
+**仅在以下条件同时满足时才考虑 `ipSource: RemoteIp`**：
 - Edgion Gateway 前置的是**可信的 L4 负载均衡器**（非 CDN 本身），且
 - 同一路由上已正确配置 `RealIp` 插件，可从可信的 XFF 或 `X-Real-IP` 头提取真实 IP。
 
-若在没有可信 L4 LB + 正确 RealIp 的情况下使用 `ClientIp`，攻击者可以伪造 XFF 头，完全绕过 CIDR 检查。
+若在没有可信 L4 LB + 正确 RealIp 的情况下使用 `RemoteIp`，攻击者可以伪造 XFF 头，完全绕过 CIDR 检查。
 
 ### 2. 初始化失败时 fail-open（放行所有流量）
 
@@ -476,4 +476,4 @@ reason: InvalidPluginsRef
 
 - [IpRestriction](./ip-restriction.md) — 纯 IP 黑白名单（无 profiles，无密钥 header）
 - [RequestRestriction](./request-restriction.md) — 请求属性过滤（无 CIDR，无 profiles）
-- [RealIp](./real-ip.md) — 客户端真实 IP 提取（使用 `ipSource: ClientIp` 时必须配合）
+- [RealIp](./real-ip.md) — 客户端身份解析（使用 `ipSource: RemoteIp` 时必须配合）

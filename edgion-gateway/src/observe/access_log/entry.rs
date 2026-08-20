@@ -49,9 +49,9 @@ struct GeoSlotLog {
     city: Option<String>,
     /// A single `"lat,lon"` string rather than two `f64` fields: the masking
     /// pipeline operates on strings, and this reuses the same `masked`
-    /// serializer `client-addr`/`remote-addr` get. Present only when
+    /// serializer `direct_peer_ip`/`remote_ip` get. Present only when
     /// Present when the record carried both coordinates. Always masked through
-    /// the process-global sensitive mode, like `client-addr` and `remote-addr`.
+    /// the process-global sensitive mode, like `direct_peer_ip` and `remote_ip`.
     #[serde(
         skip_serializing_if = "Option::is_none",
         serialize_with = "edgion_resources::sensitive::masked_opt::serialize"
@@ -103,21 +103,21 @@ impl GeoSlotLog {
 #[derive(Serialize)]
 pub struct GeoLogBlock {
     #[serde(skip_serializing_if = "Option::is_none")]
-    client: Option<GeoSlotLog>,
+    remote: Option<GeoSlotLog>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    direct: Option<GeoSlotLog>,
+    direct_peer: Option<GeoSlotLog>,
 }
 
 impl GeoLogBlock {
     /// `None` when neither slot was resolved, so the `geo` key is omitted
     /// entirely rather than emitted empty.
-    pub fn from_slots(client: Option<&GeoLookup>, direct: Option<&GeoLookup>) -> Option<Self> {
-        if client.is_none() && direct.is_none() {
+    pub fn from_slots(remote: Option<&GeoLookup>, direct_peer: Option<&GeoLookup>) -> Option<Self> {
+        if remote.is_none() && direct_peer.is_none() {
             return None;
         }
         Some(Self {
-            client: client.map(GeoSlotLog::from_lookup),
-            direct: direct.map(GeoSlotLog::from_lookup),
+            remote: remote.map(GeoSlotLog::from_lookup),
+            direct_peer: direct_peer.map(GeoSlotLog::from_lookup),
         })
     }
 }
@@ -218,7 +218,7 @@ impl<'a> AccessLogEntry<'a> {
 
         // `.get()`, never the accessors: the accessors are `get_or_init` and
         // would make every request pay a lookup just to build its log line.
-        let geo = GeoLogBlock::from_slots(ctx.client_geo.get(), ctx.direct_geo.get());
+        let geo = GeoLogBlock::from_slots(ctx.remote_geo.get(), ctx.direct_peer_geo.get());
 
         Self {
             timestamp: chrono::Utc::now().timestamp_millis(),
@@ -278,7 +278,7 @@ mod tests {
             "resolved slot must report its status: {json}"
         );
         assert!(
-            !json.contains("direct"),
+            !json.contains("direct_peer"),
             "unresolved slot must be absent entirely: {json}"
         );
     }

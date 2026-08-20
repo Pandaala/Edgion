@@ -1,8 +1,8 @@
 # Routes both listeners of ppin-gw to the local test_server, whose /headers
 # endpoint echoes the request headers back as JSON. That echo is how the test
 # observes which client address Edgion decided on: the gateway injects
-# X-Forwarded-For / X-Real-IP from the downstream peer address, which is exactly
-# what the PROXY protocol header replaces.
+# X-Forwarded-For / X-Real-IP from the resolved RemoteIp, which starts from the
+# downstream peer address that the PROXY protocol header supplies.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

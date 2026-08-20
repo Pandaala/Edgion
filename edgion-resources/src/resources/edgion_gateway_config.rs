@@ -39,6 +39,10 @@ pub struct EdgionGatewayConfigSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub real_ip: Option<RealIpConfig>,
 
+    /// Gateway-owned headers sent to upstream requests.
+    #[serde(default)]
+    pub forwarded_headers: ForwardedHeadersConfig,
+
     /// Security protection configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security_protect: Option<SecurityProtectConfig>,
@@ -110,6 +114,38 @@ pub struct DnsResolverConfig {
     #[serde(default = "default_dns_cache_ttl")]
     #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub cache_ttl: String,
+}
+
+/// Gateway-owned headers sent to upstream requests.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardedHeadersConfig {
+    /// Header receiving the final resolved RemoteIp value on upstream requests.
+    #[serde(default = "default_remote_ip_header")]
+    #[schemars(
+        pattern(crate::gwapi_types::HEADER_NAME_PATTERN),
+        length(max = crate::gwapi_types::HEADER_NAME_MAX_LEN)
+    )]
+    pub remote_ip_header: String,
+}
+
+fn default_remote_ip_header() -> String {
+    crate::gwapi_types::DEFAULT_REMOTE_IP_HEADER.to_string()
+}
+
+impl Default for ForwardedHeadersConfig {
+    fn default() -> Self {
+        Self {
+            remote_ip_header: default_remote_ip_header(),
+        }
+    }
+}
+
+impl ForwardedHeadersConfig {
+    /// Validate the operator-configured upstream RemoteIp header name.
+    pub fn validate(&self) -> Result<(), String> {
+        crate::gwapi_types::validate_remote_ip_header_name(&self.remote_ip_header)
+    }
 }
 
 fn default_dns_cache_ttl() -> String {
@@ -486,6 +522,7 @@ impl Default for EdgionGatewayConfigSpec {
             http_timeout: None,
             max_retries: default_max_retries(),
             real_ip: None,
+            forwarded_headers: ForwardedHeadersConfig::default(),
             security_protect: None,
             request_body: RequestBodyConfig::default(),
             global_plugins_ref: None,
@@ -770,6 +807,12 @@ impl EdgionGatewayConfigSpec {
         self.request_body.validate()
     }
 
+    /// Validate `spec.forwardedHeaders` at ingest. Returns error strings
+    /// suitable for an `Accepted=False/reason=Invalid` condition.
+    pub fn validate_forwarded_headers(&self) -> Vec<String> {
+        self.forwarded_headers.validate().err().into_iter().collect()
+    }
+
     /// Validate `spec.dnsResolver` at ingest. Returns error strings suitable for
     /// an `Accepted=False/reason=Invalid` condition (empty = OK).
     ///
@@ -975,6 +1018,41 @@ mod tcp_timeout_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forwarded_headers_default_to_x_real_ip() {
+        let spec: EdgionGatewayConfigSpec = serde_json::from_str("{}").unwrap();
+        assert_eq!(spec.forwarded_headers.remote_ip_header, "X-Real-IP");
+        assert!(spec.validate_forwarded_headers().is_empty());
+    }
+
+    #[test]
+    fn forwarded_headers_accept_custom_remote_ip_header() {
+        let spec: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "forwardedHeaders": {"remoteIpHeader": "X-Edgion-Remote-IP"}
+        }))
+        .unwrap();
+        assert_eq!(spec.forwarded_headers.remote_ip_header, "X-Edgion-Remote-IP");
+        assert!(spec.validate_forwarded_headers().is_empty());
+    }
+
+    #[test]
+    fn forwarded_headers_reject_invalid_and_reserved_remote_ip_headers() {
+        for name in [
+            "",
+            "bad header",
+            "Host",
+            "Content-Length",
+            "Connection",
+            "X-Forwarded-For",
+        ] {
+            let spec: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+                "forwardedHeaders": {"remoteIpHeader": name}
+            }))
+            .unwrap();
+            assert_eq!(spec.validate_forwarded_headers().len(), 1, "{name} must be rejected");
+        }
+    }
 
     #[test]
     fn egc_outbound_tls_roundtrips() {

@@ -1018,15 +1018,29 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.inner.shutdown().await;
     }
 
-    fn client_addr(&self) -> &str {
-        &self.ctx.request_info.client_addr
+    fn direct_peer_ip(&self) -> &str {
+        &self.ctx.request_info.direct_peer_ip
     }
-    fn remote_addr(&self) -> &str {
-        &self.ctx.request_info.remote_addr
+    fn downstream_peer_ip(&self) -> &str {
+        &self.ctx.request_info.downstream_peer_ip
+    }
+    fn remote_ip(&self) -> &str {
+        &self.ctx.request_info.remote_ip
     }
 
-    fn set_remote_addr(&mut self, addr: &str) -> PluginSessionResult<()> {
-        self.ctx.request_info.remote_addr = addr.to_string();
+    fn set_remote_ip(&mut self, addr: &str) -> PluginSessionResult<()> {
+        let canonical = crate::ctx::canonicalize_ip_str(addr).ok_or_else(|| {
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "remote IP must be a valid IP address",
+            )) as PluginSessionError
+        })?;
+        if self.ctx.request_info.remote_ip != canonical {
+            self.ctx.request_info.remote_ip = canonical;
+            // A RealIp plugin may run after an earlier GeoIpLocation consumer.
+            // Never retain facts resolved for the previous RemoteIp.
+            self.ctx.remote_geo.take();
+        }
         Ok(())
     }
 
@@ -1485,8 +1499,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     async fn key_get(&self, key: &KeyGet) -> Option<String> {
         match key {
             // ---- Sync variants: zero-cost, no actual await ----
-            KeyGet::ClientIp => {
-                let ip = self.remote_addr();
+            KeyGet::RemoteIp => {
+                let ip = self.remote_ip();
                 if ip.is_empty() {
                     None
                 } else {
@@ -1499,8 +1513,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             KeyGet::Path => Some(self.get_path().to_string()),
             KeyGet::Method => Some(self.get_method().to_string()),
             KeyGet::Ctx { name } => self.get_ctx_var(name),
-            KeyGet::ClientIpAndPath => {
-                let ip = self.remote_addr();
+            KeyGet::RemoteIpAndPath => {
+                let ip = self.remote_ip();
                 if ip.is_empty() {
                     None
                 } else {
@@ -1522,8 +1536,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn key_get_local(&self, key: &KeyGet) -> Option<String> {
         match key {
-            KeyGet::ClientIp => {
-                let ip = self.remote_addr();
+            KeyGet::RemoteIp => {
+                let ip = self.remote_ip();
                 if ip.is_empty() {
                     None
                 } else {
@@ -1536,8 +1550,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             KeyGet::Path => Some(self.get_path().to_string()),
             KeyGet::Method => Some(self.get_method().to_string()),
             KeyGet::Ctx { name } => self.get_ctx_var(name),
-            KeyGet::ClientIpAndPath => {
-                let ip = self.remote_addr();
+            KeyGet::RemoteIpAndPath => {
+                let ip = self.remote_ip();
                 if ip.is_empty() {
                     None
                 } else {
@@ -2455,6 +2469,22 @@ mod record_outcome_tests {
         adapter.record_outcome(DyeOutcome::FailOpen, "redis-unreachable");
 
         assert_single_append(&ctx, "X-O", "rate_limit_redis:fail-open:redis-unreachable");
+    }
+
+    #[tokio::test]
+    async fn set_remote_ip_canonicalizes_and_invalidates_cached_geo() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.remote_ip = "192.0.2.1".to_string();
+        ctx.remote_geo.set(crate::geoip::GeoLookup::NotFound).unwrap();
+
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            adapter.set_remote_ip("::ffff:203.0.113.9").unwrap();
+        }
+
+        assert_eq!(ctx.request_info.remote_ip, "203.0.113.9");
+        assert!(ctx.remote_geo.get().is_none());
     }
 
     #[tokio::test]

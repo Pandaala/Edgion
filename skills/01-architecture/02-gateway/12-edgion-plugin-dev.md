@@ -437,7 +437,7 @@ High-frequency APIs:
 
 - `header_value()` / `request_headers()`
 - `get_path()` / `get_request_path()` / `get_uri()` / `get_request_uri()` / `get_query()`
-- `client_addr()` / `remote_addr()` / `client_cert_info()`
+- `direct_peer_ip()` / `remote_ip()` / `client_cert_info()`
 - `set_request_header()` / `append_request_header()` / `remove_request_header()`
 - `set_upstream_uri()` / `set_upstream_host()` / `set_upstream_method()`
 - `write_response_header()` / `write_response_body()` / `shutdown()`

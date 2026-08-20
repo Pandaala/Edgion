@@ -450,7 +450,8 @@ return deny(204, nil)
 立即终止请求处理，不发送任何响应。适用于需要直接关闭连接的场景：
 
 ```dsl
-let ip = req.client_ip()
+// 该精确网络来源规则故意匹配物理传输对端。
+let ip = req.direct_peer_ip()
 if ip == "1.2.3.4" {
     return terminate()
 }
@@ -687,7 +688,8 @@ return next()
 ### 示例 5：IP 范围检查
 
 ```dsl
-let ip = req.client_ip()
+// 该内网来源豁免故意使用物理传输对端。
+let ip = req.direct_peer_ip()
 
 // 内网 IP 允许直接通过，无需 Token
 if ip_in_cidr(ip, "10.0.0.0/8") || ip_in_cidr(ip, "172.16.0.0/12") {

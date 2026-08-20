@@ -8,6 +8,8 @@ metadata:
 spec:
   maxRetries: 0
   requestBody: {}
+  forwardedHeaders:
+    remoteIpHeader: X-Edgion-Remote-IP
   realIp:
     trustedIps:
       - name: peer-gateways

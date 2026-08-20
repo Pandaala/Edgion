@@ -456,7 +456,8 @@ return deny(204, nil)
 Immediately terminates request processing without sending any response. Use this when you need to close the connection directly:
 
 ```dsl
-let ip = req.client_ip()
+// Deliberately match the physical peer for this exact network-origin block.
+let ip = req.direct_peer_ip()
 if ip == "1.2.3.4" {
     return terminate()
 }
@@ -693,7 +694,8 @@ return next()
 ### Example 5: IP Range Check
 
 ```dsl
-let ip = req.client_ip()
+// Deliberately use the physical peer for this internal-origin bypass.
+let ip = req.direct_peer_ip()
 
 // Internal IPs are allowed through directly without a token
 if ip_in_cidr(ip, "10.0.0.0/8") || ip_in_cidr(ip, "172.16.0.0/12") {

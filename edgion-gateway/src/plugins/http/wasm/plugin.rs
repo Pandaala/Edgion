@@ -135,7 +135,7 @@ impl WasmPlugin {
             "request.host".to_string(),
             session.header_value("host").unwrap_or_default(),
         );
-        p.insert("source.address".to_string(), session.remote_addr().to_string());
+        p.insert("source.address".to_string(), session.remote_ip().to_string());
         p.insert("plugin_name".to_string(), PLUGIN_NAME.to_string());
         if phase == WasmPhase::ResponseHeaders {
             if let Some(code) = session.get_response_status() {
@@ -915,7 +915,7 @@ mod tests {
         s.expect_get_path().return_const("/x".to_string());
         s.expect_get_method().return_const("GET".to_string());
         s.expect_header_value().returning(|_| None);
-        s.expect_remote_addr().return_const("1.2.3.4".to_string());
+        s.expect_remote_ip().return_const("1.2.3.4".to_string());
         // Default request-body-phase stubs: a WAT guest without a
         // `proxy_on_request_body` export never reaches these, but the real
         // proxy-wasm SDK guest does. Ungated (no `body:`) → `read_request_body`
@@ -1098,7 +1098,7 @@ mod tests {
         s.expect_get_path().return_const("/x".to_string());
         s.expect_get_method().return_const("GET".to_string());
         s.expect_header_value().returning(|_| None);
-        s.expect_remote_addr().return_const("1.2.3.4".to_string());
+        s.expect_remote_ip().return_const("1.2.3.4".to_string());
         s
     }
 
@@ -1487,7 +1487,7 @@ mod tests {
         s.expect_header_value().returning(move |name| hmap.get(name).cloned());
         s.expect_get_path().return_const("/x".to_string());
         s.expect_get_method().return_const("GET".to_string());
-        s.expect_remote_addr().return_const("1.2.3.4".to_string());
+        s.expect_remote_ip().return_const("1.2.3.4".to_string());
         // A guest deny path (send_http_response) applies local-response headers.
         s.expect_set_response_header().returning(|_, _| Ok(()));
         // The proxy-wasm Rust SDK exports `proxy_on_request_body` on every
@@ -1837,7 +1837,7 @@ mod tests {
         s.expect_get_path().return_const("/x".to_string());
         s.expect_get_method().return_const("GET".to_string());
         s.expect_header_value().returning(|_| None);
-        s.expect_remote_addr().return_const("1.2.3.4".to_string());
+        s.expect_remote_ip().return_const("1.2.3.4".to_string());
         s.expect_ctx().return_const(crate::EdgionHttpContext::new());
         s.expect_read_request_body().return_once(move |_| read);
         s
@@ -2156,7 +2156,7 @@ mod tests {
         session.expect_get_path().return_const("/x".to_string());
         session.expect_get_method().return_const("GET".to_string());
         session.expect_header_value().returning(|_| None);
-        session.expect_remote_addr().return_const("1.2.3.4".to_string());
+        session.expect_remote_ip().return_const("1.2.3.4".to_string());
         session.expect_ctx().return_const(crate::EdgionHttpContext::new());
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let calls2 = calls.clone();

@@ -554,7 +554,7 @@ mod tests {
     fn base_quota() -> AiTokenQuotaConfig {
         AiTokenQuotaConfig {
             redis_ref: "default/ai-quota".to_string(),
-            key: vec![KeyGet::ClientIp],
+            key: vec![KeyGet::RemoteIp],
             on_missing_key: OnMissingKey::Deny,
             on_redis_failure: OnRedisFailure::Deny,
             limits: vec![AiTokenQuotaLimit {

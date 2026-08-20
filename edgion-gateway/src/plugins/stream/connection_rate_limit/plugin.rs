@@ -191,7 +191,7 @@ impl StreamPlugin for ConnectionRateLimitPlugin {
 
         // ---- Stage 2: perSourceIp (Redis) ----
         if let Some(rate) = self.ip_rate {
-            let key = format!("ip:{}:{}", port, ctx.client_ip);
+            let key = format!("ip:{}:{}", port, ctx.direct_peer_ip);
             let allowed = self
                 .redis_dimension("source_ip", &key, rate, self.ip_interval_ms, &self.ip_on_redis_failure)
                 .await;

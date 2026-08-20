@@ -691,7 +691,7 @@ Templates in `path.template`, `method.template`, and `custom[].template` reuse t
 | `${path}` / `${uri}` | Current (possibly rewritten) path / URI. |
 | `${requestPath}` / `${requestUri}` | Frozen entry-time path / URI. |
 | `${method}` | Current HTTP method. |
-| `${clientIp}` | Real client IP. |
+| `${remoteIp}` | Resolved client IP. |
 
 A `${ctx:X}` that names an undefined variable resolves to an empty string. To enforce presence, use `presence: required` on an origin field, or set the ctx variable in a ctx-set step before calling the webhook.
 
@@ -775,7 +775,7 @@ When `retry` is omitted, the webhook fails immediately on the first error.
 
 One connection-level field can be driven by the same per-request template engine used in `request.*` (see [Template variables](#template-variables)) — but with a **much narrower variable allow-list** than `request.*`. It is compiled and validated at admission; a malformed template, or one that references a disallowed variable type, is rejected with `Accepted=False`.
 
-> ⚠️ **Only `${ctx:...}`, `${clientIp}`, `${matchedHttpRoute:...}`, and `${matchedGrpcRoute:...}` are accepted in `timeoutMsTemplate`.** `${header:...}`, `${query:...}`, `${cookie:...}`, `${path}`, `${uri}`, `${requestPath}`, `${requestUri}`, `${method}`, and `${secretRef:...}` are all rejected at admission for this field specifically (they remain fully allowed in `request.*`). The field is security-sensitive: `timeoutMsTemplate` sets the auth-service call deadline. A client-controlled source would let an attacker pin the deadline to a value so small the call always times out (a reliable denial of service).
+> ⚠️ **Only `${ctx:...}`, `${remoteIp}`, `${matchedHttpRoute:...}`, and `${matchedGrpcRoute:...}` are accepted in `timeoutMsTemplate`.** `${header:...}`, `${query:...}`, `${cookie:...}`, `${path}`, `${uri}`, `${requestPath}`, `${requestUri}`, `${method}`, and `${secretRef:...}` are all rejected at admission for this field specifically (they remain fully allowed in `request.*`). The field is security-sensitive: `timeoutMsTemplate` sets the auth-service call deadline. A client-controlled source would let an attacker pin the deadline to a value so small the call always times out (a reliable denial of service).
 
 ```yaml
 timeoutMsTemplate: "${ctx:desired_timeout_ms}"     # falls back to timeoutMs
@@ -963,7 +963,7 @@ spec:
           - name: X-Forwarded-Path
             template: "${requestPath}"     # frozen entry-time path
           - name: X-Client-Ip
-            template: "${clientIp}"
+            template: "${remoteIp}"
 ```
 
 #### 6. Presence policies (required / skipIfMissing / warnIfMissing)

@@ -161,7 +161,7 @@ pub enum BuiltinId {
     ReqQuery,
     ReqQueryString,
     ReqCookie,
-    ReqClientIp,
+    ReqDirectPeerIp,
     ReqRemoteIp,
     ReqPathParam,
     ReqHeaderNames,

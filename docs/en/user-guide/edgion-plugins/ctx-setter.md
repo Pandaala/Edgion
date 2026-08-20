@@ -47,8 +47,8 @@ CtxSet supports extracting data from multiple sources (Header, Query, Cookie, Pa
 
 | `type` | Extra field | Reads from |
 |--------|-------------|------------|
-| `clientIp` | — | The client IP address (respects RealIp if present) |
-| `clientIpAndPath` | — | Client IP combined with the request path |
+| `remoteIp` | — | The resolved client IP address |
+| `remoteIpAndPath` | — | Resolved client IP combined with the request path |
 | `header` | `name` | The named request header |
 | `query` | `name` | The named query-string parameter |
 | `cookie` | `name` | The named cookie |
@@ -73,7 +73,7 @@ A `template` is a literal string with `${...}` markers. Supported markers:
 | `${requestPath}` | Entry-time raw path (frozen, immune to later rewrites) |
 | `${requestUri}` | Entry-time raw full URI (frozen) |
 | `${method}` | HTTP method |
-| `${clientIp}` | Client IP address |
+| `${remoteIp}` | Resolved client IP address |
 
 User-controlled values that contain `${...}` are emitted as literal text, so templates are not vulnerable to injection.
 
@@ -171,7 +171,7 @@ spec:
       config:
         vars:
           - name: "rate_key"
-            template: "${header:X-Tenant}_${clientIp}"
+            template: "${header:X-Tenant}_${remoteIp}"
 ```
 
 ### 2. Case conversion

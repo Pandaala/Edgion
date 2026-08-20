@@ -81,7 +81,7 @@ spec:
                                     type:
                                       type: string
                                       description: "Key source type"
-                                      enum: [clientIp, header, cookie, query, path, method, ctx, clientIpAndPath, webhook]
+                                      enum: [remoteIp, header, cookie, query, path, method, ctx, remoteIpAndPath, webhook]
                                     name:
                                       type: string
                                       description: "Key name (required for header, cookie, query, ctx)"

@@ -27,7 +27,7 @@ spec:
             resp.set_header("X-Request-ID", id)
           }
 
-          let client = req.client_ip
+          let client = req.direct_peer_ip
           if ip_in_cidr(client, "127.0.0.0/8") {
             resp.set_header("X-Network", "loopback")
           }

@@ -19,7 +19,7 @@ spec:
     - enable: true
       type: IpRestriction
       config:
-        ipSource: remoteAddr
+        ipSource: RemoteIp
         defaultAction: allow
         allowRefs:
           - name: ecd-does-not-exist

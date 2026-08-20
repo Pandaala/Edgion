@@ -149,17 +149,17 @@ req.set_header("X-Session-Id", session)
 
 ---
 
-### req.client_ip
+### req.direct_peer_ip
 
-**签名**：`req.client_ip` → `Str`
+**签名**：`req.direct_peer_ip` → `Str`
 
-返回经过 `real-ip` 插件处理后的客户端 IP 地址。若未配置 `real-ip` 插件，则与 `req.remote_ip` 相同，返回直接连接的远端地址。
+返回下游物理传输对端（`DirectPeerIp`）。它不会被入站 PROXY Protocol 或转发 Header 处理改写。普通客户端身份、限流和实验分桶场景请使用 `req.remote_ip`。
 
 **返回值**：IP 地址字符串（IPv4 或 IPv6 格式）
 
 **示例**：
 ```
-let ip = req.client_ip
+let ip = req.direct_peer_ip
 if ip_in_cidr(ip, "10.0.0.0/8") {
   req.set_header("X-Internal-Request", "true")
 }
@@ -171,14 +171,14 @@ if ip_in_cidr(ip, "10.0.0.0/8") {
 
 **签名**：`req.remote_ip` → `Str`
 
-返回 TCP 连接的直接对端 IP 地址，不经过任何代理头处理。这是底层连接的实际远端地址。
+返回当前请求层解析出的客户端身份（`RemoteIp`）。它从 L4 有效对端开始，并可能被可信代理的 `RealIp`/XFF 解析器更新。
 
 **返回值**：IP 地址字符串（IPv4 或 IPv6 格式）
 
 **示例**：
 ```
 let remote = req.remote_ip
-log("direct connection from: " + remote)
+log("resolved client: " + remote)
 ```
 
 ---
@@ -1773,7 +1773,7 @@ if r["value"] == "on" {
 
 **示例 — 简单限流**：
 ```
-let r = redis.incr("cache", "rate:" + req.client_ip)
+let r = redis.incr("cache", "rate:" + req.remote_ip)
 if !r["ok"] {
   return deny(503, "service unavailable")
 }
@@ -1889,7 +1889,7 @@ if r["ok"] {
 
 **示例**：
 ```
-let ip = req.client_ip
+let ip = req.direct_peer_ip
 if ip_in_cidr(ip, "10.0.0.0/8") or ip_in_cidr(ip, "172.16.0.0/12") or ip_in_cidr(ip, "192.168.0.0/16") {
   req.set_header("X-Private-Network", "true")
 } else {
@@ -2070,7 +2070,7 @@ if cl != nil and cl > 524288 {
 ```
 let sig = req.header("X-Signature")
 if sig == nil {
-  log_error("missing signature header, rejecting request from: " + req.client_ip)
+  log_error("missing signature header, rejecting request from: " + req.remote_ip)
   return deny(401, "signature required")
 }
 ```
@@ -2087,7 +2087,7 @@ if sig == nil {
 | `req.query(name)` | 请求读取 | `Str\|Nil` | 1 |
 | `req.query_string` | 请求读取 | `Str\|Nil` | 0 |
 | `req.cookie(name)` | 请求读取 | `Str\|Nil` | 1 |
-| `req.client_ip` | 请求读取 | `Str` | 0 |
+| `req.direct_peer_ip` | 请求读取 | `Str` | 0 |
 | `req.remote_ip` | 请求读取 | `Str` | 0 |
 | `req.path_param(name)` | 请求读取 | `Str\|Nil` | 1 |
 | `req.header_names` | 请求读取 | `List` | 0 |

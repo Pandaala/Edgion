@@ -47,7 +47,7 @@ and avoid logging the raw dynamic error into `PluginLog`; classify it or use the
 sensitive logging path.
 
 ```dsl
-let r = redis.incr("ratelimit", "rate:" + req.client_ip)
+let r = redis.incr("ratelimit", "rate:" + req.remote_ip)
 if !r["ok"] {
   log_warn("redis unavailable")
   return deny(503, "service unavailable")

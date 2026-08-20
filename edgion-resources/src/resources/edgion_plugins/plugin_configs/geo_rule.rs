@@ -120,8 +120,8 @@ pub struct GeoDimFacts<'a> {
 /// `remote: GeoDimFacts::default()` — those fields are simply never read.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GeoRuleContext<'a> {
-    pub direct_ip: Option<IpAddr>,
-    pub direct: GeoDimFacts<'a>,
+    pub direct_peer_ip: Option<IpAddr>,
+    pub direct_peer: GeoDimFacts<'a>,
     pub remote_ip: Option<IpAddr>,
     pub remote: GeoDimFacts<'a>,
 }
@@ -144,12 +144,13 @@ impl GeoRule {
     ///
     /// `is_stream` is the ONLY place layer awareness enters this shared
     /// module: an L4 (`is_stream: true`) config using `RemoteIp` is a hard
-    /// admission error (L4 has no XFF to resolve a real client from).
+    /// admission error because one stream resource may run before PROXY
+    /// resolution, where only DirectPeerIp is uniformly available.
     pub fn field_error(&self, is_stream: bool) -> Option<String> {
         if is_stream && self.source == GeoRuleSource::RemoteIp {
             return Some(
-                "source RemoteIp is not valid in an L4 (stream) GeoIpLocation config — L4 has no \
-                 X-Forwarded-For to resolve a real client from; use DirectPeerIp"
+                "source RemoteIp is not valid in an L4 (stream) GeoIpLocation config because the \
+                 resource may execute before PROXY resolution; use uniformly available DirectPeerIp"
                     .to_string(),
             );
         }
@@ -271,7 +272,7 @@ impl GeoRuleGroup {
     pub fn matches(&self, ctx: &GeoRuleContext<'_>) -> bool {
         self.rules.iter().all(|rule| {
             let (ip, facts) = match rule.source {
-                GeoRuleSource::DirectPeerIp => (ctx.direct_ip, &ctx.direct),
+                GeoRuleSource::DirectPeerIp => (ctx.direct_peer_ip, &ctx.direct_peer),
                 GeoRuleSource::RemoteIp => (ctx.remote_ip, &ctx.remote),
             };
             rule.matches(ip, facts)
@@ -398,7 +399,7 @@ mod tests {
         group.compile(false).unwrap();
 
         let ctx_hit = GeoRuleContext {
-            direct: GeoDimFacts {
+            direct_peer: GeoDimFacts {
                 country: Some("RU"),
                 city: Some("Moscow"),
                 ..Default::default()
@@ -409,7 +410,7 @@ mod tests {
 
         // Country matches but city doesn't -> AND fails.
         let ctx_miss = GeoRuleContext {
-            direct: GeoDimFacts {
+            direct_peer: GeoDimFacts {
                 country: Some("RU"),
                 city: Some("Kazan"),
                 ..Default::default()

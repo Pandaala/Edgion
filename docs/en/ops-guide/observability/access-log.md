@@ -155,7 +155,7 @@ The log is always JSON, one entry per line. Optional fields are omitted entirely
 {
   "ts": 1767089146376,
   "request_info": {
-    "client-addr": "192.168.1.20",
+    "direct_peer_ip": "192.168.1.20",
     "host": "api.example.com",
     "path": "/health",
     "status": 200
@@ -169,7 +169,7 @@ The log is always JSON, one entry per line. Optional fields are omitted entirely
 }
 ```
 
-Request-scoped fields (`client-addr`, `host`, `path`, `status`, etc.) nest one level deep under `request_info`; routing, backend, and plugin information sit alongside it at the top level.
+Request-scoped fields (`direct_peer_ip`, `host`, `path`, `status`, etc.) nest one level deep under `request_info`; routing, backend, and plugin information sit alongside it at the top level.
 
 ## Field reference
 
@@ -193,9 +193,9 @@ Nested one level deep under the top-level `request_info` object (see [Top-level 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `client-addr` | String | Client TCP connection address |
+| `direct_peer_ip` | String | Physical downstream transport peer (`DirectPeerIp`) |
 | `client-port` | Integer | Client TCP port |
-| `remote-addr` | String | Real client IP after proxy resolution (e.g. from `X-Forwarded-For`) |
+| `remote_ip` | String | Resolved client IP (`RemoteIp`) after the applicable proxy/RealIp resolution |
 | `x-trace-id` | String | Per-request trace ID; propagate the same value from clients to correlate |
 | `host` | String | Request `Host` header |
 | `path` | String | Normalized request path |
@@ -441,7 +441,7 @@ as the log's built-in sensitive fields (see [gateway configuration →
 access_log_sensitive](../configuration/gateway-config.md#access_log_sensitive)).
 **As of this release `access_log_sensitive.mode` defaults to `replace`**, so
 out of the box, with no configuration required: `ext` fields render `***`
-unless whitelisted, and `path`, `client-addr`, `remote-addr`,
+unless whitelisted, and `path`, `direct_peer_ip`, `remote_ip`,
 `x-forwarded-for`, `sni`, and `request_uri` render `***` unconditionally —
 the whitelist has no effect on these six built-in fields; they are masked
 by `masked::serialize` regardless of `unmaskedKeys`.
@@ -574,9 +574,9 @@ access_log_options:
 {
   "ts": 1767089146376,
   "request_info": {
-    "client-addr": "192.168.1.20",
+    "direct_peer_ip": "192.168.1.20",
     "client-port": 54882,
-    "remote-addr": "192.168.1.20",
+    "remote_ip": "192.168.1.20",
     "x-trace-id": "eff524a7-10a4-483c-a534-3c50b1199aa0",
     "host": "test.example.com",
     "path": "/health",

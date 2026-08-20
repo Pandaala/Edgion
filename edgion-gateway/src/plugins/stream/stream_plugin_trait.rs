@@ -70,23 +70,20 @@ pub(crate) fn access_decision_to_stream_result(decision: AccessDecision, on_deny
 /// Context for stream plugin execution
 #[derive(Debug, Clone)]
 pub struct StreamContext {
-    /// Client IP address
-    pub client_ip: IpAddr,
+    /// Physical downstream transport peer IP.
+    pub direct_peer_ip: IpAddr,
     /// Listener port that received the connection
     pub listener_port: u16,
-    /// Optional: remote address string (for logging)
-    pub remote_addr: Option<String>,
     /// Explicit execution layer used by bounded per-layer metrics.
     pub layer: StreamLayer,
 }
 
 impl StreamContext {
     /// Create a new stream context for an explicit execution layer.
-    pub fn new(client_ip: IpAddr, listener_port: u16, layer: StreamLayer) -> Self {
+    pub fn new(direct_peer_ip: IpAddr, listener_port: u16, layer: StreamLayer) -> Self {
         Self {
-            client_ip,
+            direct_peer_ip,
             listener_port,
-            remote_addr: None,
             layer,
         }
     }

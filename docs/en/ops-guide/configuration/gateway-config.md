@@ -307,7 +307,7 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 
 ### access_log_sensitive
 
-Controls redaction of fields marked sensitive in the access log, ssl.log, and plugin log. **`mode=replace` by default** — sensitive values render `***` out of the box. This is a wider blast radius than the built-in field list alone: the nine built-in fields (`client_addr` / `remote_addr` / `path` / `x_forwarded_for` / `sni` / `request_uri` / client-cert `subject`/`sans`/`cn`), 46 `sensitive()`-marked plugin-log parameters across 13 plugins, DSL `log_warn`/`log_error` user args, ssl.log mTLS-failure cert fields, and — new — any `ext` field declared via [`AccessLogExtern`](../observability/access-log.md) that is not whitelisted in `EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys`.
+Controls redaction of fields marked sensitive in the access log, ssl.log, and plugin log. **`mode=replace` by default** — sensitive values render `***` out of the box. This is a wider blast radius than the built-in field list alone: the nine built-in fields (`direct_peer_ip` / `remote_ip` / `path` / `x_forwarded_for` / `sni` / `request_uri` / client-cert `subject`/`sans`/`cn`), 46 `sensitive()`-marked plugin-log parameters across 13 plugins, DSL `log_warn`/`log_error` user args, ssl.log mTLS-failure cert fields, and — new — any `ext` field declared via [`AccessLogExtern`](../observability/access-log.md) that is not whitelisted in `EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -316,7 +316,22 @@ Controls redaction of fields marked sensitive in the access log, ssl.log, and pl
 | `wrap_prefix` | `String` | `"<E>"` | Prefix added when `mode=wrap` |
 | `wrap_suffix` | `String` | `"</E>"` | Suffix added when `mode=wrap` |
 
-Behavior (using `client_addr=192.168.1.10`):
+### Upstream RemoteIp header
+
+`EdgionGatewayConfig.spec.forwardedHeaders.remoteIpHeader` controls the header
+that the Gateway writes on upstream HTTP requests after the final request-stage
+`RemoteIp` has been resolved. It defaults to `X-Real-IP`, matching the existing
+behavior and the common Nginx convention. Operators may choose a custom header,
+for example `X-Edgion-Remote-IP`. The configured name is validated and cannot be
+a hop-by-hop header, `Host`, `Content-Length`, `X-Forwarded-For`, or another
+reserved transport header. The Gateway overwrites an incoming value with its
+canonical value after all request plugins have run.
+
+This output setting is independent from `spec.realIp.realIpHeader`, which names
+the downstream header read by the RealIp extractor. The former propagates the
+resolved identity upstream; the latter establishes it from a trusted proxy.
+
+Behavior (using `direct_peer_ip=192.168.1.10`):
 
 | Mode | Output |
 |------|--------|

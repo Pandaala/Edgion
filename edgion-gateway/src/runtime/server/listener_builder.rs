@@ -295,7 +295,6 @@ pub fn add_http_listener(
         crate::routes::http::get_global_http_route_managers().get_or_create_listener_manager(&context.listener_key);
     let grpc_route_manager =
         crate::routes::grpc::get_global_grpc_route_managers().get_or_create_listener_manager(&context.listener_key);
-
     let edgion_http = EdgionHttpProxy {
         gateway_class_name: context.gateway_class_name.clone(),
         listener: context.listener.clone(),

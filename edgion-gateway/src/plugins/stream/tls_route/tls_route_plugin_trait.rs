@@ -14,7 +14,8 @@ use crate::observe::logs::LogBuffer;
 /// Enriched context available after TLS handshake + TLSRoute match.
 #[derive(Debug, Clone)]
 pub struct TlsRouteContext {
-    pub client_ip: IpAddr,
+    pub direct_peer_ip: IpAddr,
+    pub remote_ip: IpAddr,
     pub listener_port: u16,
     pub sni: String,
     pub tls_id: Option<String>,

@@ -37,7 +37,7 @@ spec:
         rate: 100
         interval: "1s"
         key:
-          - type: clientIp
+          - type: remoteIp
 ```
 
 ### Configuration Parameters
@@ -46,7 +46,7 @@ spec:
 |-----------|------|---------|-------------|
 | `rate` | Integer | `100` | Rate limit threshold (max requests per interval) |
 | `interval` | String | `"1s"` | Time window, supports `ms`, `s`, `m`, `h`, `d` |
-| `key` | Array\<Object\> | `[{type: clientIp}]` | Rate limiting key configuration (a single key is used verbatim; multiple keys are combined, see below) |
+| `key` | Array\<Object\> | `[{type: remoteIp}]` | Rate limiting key configuration (a single key is used verbatim; multiple keys are combined, see below) |
 | `scope` | Enum | `Instance` | Rate limiting scope. Values: `Instance` | `Cluster` |
 | `skewTolerance` | Float | `1.2` | Traffic skew tolerance (Cluster mode only, range 1.0~2.0) |
 | `onMissingKey` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` | `Deny` |
@@ -83,19 +83,19 @@ The rate limiting key determines which dimension to rate limit on. Supported key
 
 | Type | Description | Requires name |
 |------|-------------|--------------|
-| `clientIp` | Rate limit by client IP | No |
+| `remoteIp` | Rate limit by resolved client IP | No |
 | `header` | Rate limit by request header value | Yes |
 | `path` | Rate limit by request path | No |
-| `clientIpAndPath` | Rate limit by IP + Path combination | No |
+| `remoteIpAndPath` | Rate limit by resolved IP + Path combination | No |
 
-**Empty key list**: omitting `key` applies the default `[{type: clientIp}]`. An explicitly empty `key: []` means "one global bucket" — every request composes to the same empty key and is still rate limited. It is **not** treated as a key extraction failure, so `onMissingKey` / `defaultKey` do not apply to it.
+**Empty key list**: omitting `key` applies the default `[{type: remoteIp}]`. An explicitly empty `key: []` means "one global bucket" — every request composes to the same empty key and is still rate limited. It is **not** treated as a key extraction failure, so `onMissingKey` / `defaultKey` do not apply to it.
 
 **Multi-key composition**: A single configured key is used as the rate limiting key verbatim. When multiple keys are configured, each value is length-prefixed as `<byte-length>:<value>` and the parts are joined with `_`, one slot per configured key in configuration order (`-` for a key that could not be extracted). The length prefix is what makes the composite key unambiguous: without it, values that themselves contain `_` (or a key that resolves for one request but not the next) could make two different clients share the same rate limiting bucket.
 
 ```yaml
 # Rate limit by IP + API Key combination
 key:
-  - type: clientIp
+  - type: remoteIp
   - type: header
     name: "X-API-Key"
 # Rate limiting key example: 11:192.168.1.1_14:my-api-key-123
@@ -251,7 +251,7 @@ spec:
         rate: 100
         interval: "1s"
         key:
-          - type: clientIp
+          - type: remoteIp
 ```
 
 Maximum 100 requests per second per client IP.
@@ -294,7 +294,7 @@ spec:
         rate: 50
         interval: "1s"
         key:
-          - type: clientIp
+          - type: remoteIp
           - type: path
         defaultKey: "anonymous"
 ```
@@ -318,7 +318,7 @@ spec:
         interval: "1s"
         scope: Cluster
         key:
-          - type: clientIp
+          - type: remoteIp
 ```
 
 Cluster-wide quota of 1000 req/s, automatically distributed across instances, with 20% default skew tolerance.
@@ -340,7 +340,7 @@ spec:
         scope: Cluster
         skewTolerance: 1.0
         key:
-          - type: clientIp
+          - type: remoteIp
 ```
 
 Cluster-wide quota of 1000 req/s, strict even distribution, no exceeding (suitable for round-robin load balancing).
@@ -388,7 +388,7 @@ spec:
         rate: 10
         interval: "1s"
         key:
-          - type: clientIp
+          - type: remoteIp
         rejectStatus: 503
         rejectMessage: "Service temporarily unavailable, please try again later"
         showLimitHeaders: false
@@ -514,13 +514,13 @@ requestPlugins:
     config:
       rate: 1000
       key:
-        - type: clientIp
+        - type: remoteIp
   # Fine-grained per-path rate limiting
   - type: RateLimit
     config:
       rate: 50
       key:
-        - type: clientIp
+        - type: remoteIp
         - type: path
 ```
 

@@ -5,8 +5,8 @@ for **fr-types-01** (the plugin was built via `IpRestriction::create` without
 `validate_and_init`, so the runtime matchers were never compiled and the evaluator fell
 through to `Default(Allow)` — a whitelist silently allowed every IP).
 
-All cases set `ipSource: remoteAddr`, so the checked IP is the deterministic TCP peer of
-the test client (`127.0.0.1`), independent of RealIp / X-Forwarded-For processing.
+All cases set `ipSource: RemoteIp`, so the checked IP is the resolved address, which is
+the deterministic TCP peer when no forwarded address is supplied.
 
 | Path | Config | Expected |
 |------|--------|----------|

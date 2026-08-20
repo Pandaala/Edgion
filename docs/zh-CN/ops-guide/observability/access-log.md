@@ -155,7 +155,7 @@ Authorization: Bearer <admin-token>
 {
   "ts": 1767089146376,
   "request_info": {
-    "client-addr": "192.168.1.20",
+    "direct_peer_ip": "192.168.1.20",
     "host": "api.example.com",
     "path": "/health",
     "status": 200
@@ -169,7 +169,7 @@ Authorization: Bearer <admin-token>
 }
 ```
 
-请求作用域字段（`client-addr`、`host`、`path`、`status` 等）嵌套在 `request_info` 对象内、下沉一层；路由、后端和插件信息与它一起并列在顶层。
+请求作用域字段（`direct_peer_ip`、`host`、`path`、`status` 等）嵌套在 `request_info` 对象内、下沉一层；路由、后端和插件信息与它一起并列在顶层。
 
 ## 字段参考
 
@@ -193,9 +193,9 @@ Authorization: Bearer <admin-token>
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `client-addr` | String | 客户端 TCP 连接地址 |
+| `direct_peer_ip` | String | 下游物理传输对端（`DirectPeerIp`） |
 | `client-port` | Integer | 客户端 TCP 端口 |
-| `remote-addr` | String | 代理解析后的真实客户端 IP（如来自 `X-Forwarded-For`） |
+| `remote_ip` | String | 经过适用的 PROXY/RealIp 解析后的客户端 IP（`RemoteIp`） |
 | `x-trace-id` | String | 每请求追踪 ID；客户端传递相同值可关联日志 |
 | `host` | String | 请求 `Host` 头 |
 | `path` | String | 规范化后的请求路径 |
@@ -390,7 +390,7 @@ spec:
 
 白名单**未命中仍会输出该字段**——是脱敏而非丢弃——因此操作员看到的是 `"ext":{"session":"***"}`，能明确知道该值已解析出来只是未加入白名单，而不是面对一个缺失的字段去猜测：究竟是来源没有值、字段名写错了，还是一个被禁止的名称已在 `Accepted=False` 中上报、并在网关加载该资源时被丢弃了。
 
-脱敏渲染遵循与内置敏感字段相同的全局开关 `access_log_sensitive.mode`（见[网关配置 → access_log_sensitive](../configuration/gateway-config.md#access_log_sensitive)）。**从本版本起 `access_log_sensitive.mode` 默认值为 `replace`**，因此开箱即可、无需任何额外配置：`ext` 字段只要未加入白名单就会渲染为 `***`；而 `path`、`client-addr`、`remote-addr`、`x-forwarded-for`、`sni`、`request_uri` 这六个内置字段则是**无条件**渲染为 `***`——白名单对这六个内置字段不生效，它们始终经由 `masked::serialize` 脱敏，与 `unmaskedKeys` 无关。
+脱敏渲染遵循与内置敏感字段相同的全局开关 `access_log_sensitive.mode`（见[网关配置 → access_log_sensitive](../configuration/gateway-config.md#access_log_sensitive)）。**从本版本起 `access_log_sensitive.mode` 默认值为 `replace`**，因此开箱即可、无需任何额外配置：`ext` 字段只要未加入白名单就会渲染为 `***`；而 `path`、`direct_peer_ip`、`remote_ip`、`x-forwarded-for`、`sni`、`request_uri` 这六个内置字段则是**无条件**渲染为 `***`——白名单对这六个内置字段不生效，它们始终经由 `masked::serialize` 脱敏，与 `unmaskedKeys` 无关。
 
 **不存在既保留 `path` 可读、又对 `ext` 中的 cookie 脱敏的配置。** `mode: off` 会让白名单失效（一切都渲染为明文，包括 `ext`）；`mode: wrap` 会把原始值写进网关自己的本地日志文件/stdout，用 `<E>value</E>` 标记以便下游管道在入库前剥离——但原始值仍留在本地磁盘上。如果需要可读的 path，请在这两种权衡中明确二选一；不存在第三种既保留内置字段明文又能脱敏 `ext` 的配置。
 
@@ -508,9 +508,9 @@ access_log_options:
 {
   "ts": 1767089146376,
   "request_info": {
-    "client-addr": "192.168.1.20",
+    "direct_peer_ip": "192.168.1.20",
     "client-port": 54882,
-    "remote-addr": "192.168.1.20",
+    "remote_ip": "192.168.1.20",
     "x-trace-id": "eff524a7-10a4-483c-a534-3c50b1199aa0",
     "host": "test.example.com",
     "path": "/health",

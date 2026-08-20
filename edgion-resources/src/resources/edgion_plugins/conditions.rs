@@ -866,10 +866,10 @@ mod tests {
 
     #[test]
     fn test_key_get_serialization() {
-        // KeyGet uses tagged enum with camelCase
+        // KeyGet uses tagged enum with lower camel-case values.
         assert_eq!(
-            serde_json::to_string(&KeyGet::ClientIp).unwrap(),
-            r#"{"type":"clientIp"}"#
+            serde_json::to_string(&KeyGet::RemoteIp).unwrap(),
+            r#"{"type":"remoteIp"}"#
         );
         assert_eq!(
             serde_json::to_string(&KeyGet::Header {

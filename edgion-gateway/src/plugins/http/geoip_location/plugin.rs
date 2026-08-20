@@ -2,10 +2,10 @@
 //!
 //! Two jobs, driven entirely by whether `config.is_parse_only()`:
 //!
-//! - **Parse-only**: resolve both `ctx.direct_geo()` and `ctx.client_geo()` (so
+//! - **Parse-only**: resolve both `ctx.direct_peer_geo()` and `ctx.remote_geo()` (so
 //!   the access log's `geo` block is populated) and pass through. No decision,
 //!   no `failOpen` requirement.
-//! - **Rule mode**: resolve `ctx.direct_geo()` always, and `ctx.client_geo()`
+//! - **Rule mode**: resolve `ctx.direct_peer_geo()` always, and `ctx.remote_geo()`
 //!   only when a configured rule actually references `RemoteIp` (avoids a
 //!   needless second MMDB lookup). If any CONSULTED lookup is
 //!   `GeoLookup::Unavailable`, this plugin's own `failOpen` decides — `false`
@@ -65,12 +65,12 @@ pub struct GeoIpLocation {
     /// — the remote address itself is needed. Always true in parse-only mode.
     needs_remote_ip: bool,
     /// Some configured `DirectPeerIp` rule needs resolved geo dimensions (a
-    /// key other than `Cidr`) — worth resolving `ctx.direct_geo()` and
+    /// key other than `Cidr`) — worth resolving `ctx.direct_peer_geo()` and
     /// letting its `Unavailable` state drive `failOpen`. A CIDR-only config
     /// needs no GeoIP database at all. Always true in parse-only mode
     /// (maximize log usefulness, its whole purpose).
     needs_direct_facts: bool,
-    /// Same as `needs_direct_facts`, for `RemoteIp` rules / `ctx.client_geo()`.
+    /// Same as `needs_direct_facts`, for `RemoteIp` rules / `ctx.remote_geo()`.
     needs_remote_facts: bool,
 }
 
@@ -141,12 +141,12 @@ impl RequestFilter for GeoIpLocation {
         // otherwise a CIDR-only rule set on a side needs no GeoIP database at
         // all — see `needs_direct_facts`/`needs_remote_facts`.
         let direct_lookup = if self.needs_direct_facts {
-            Some(session.ctx().direct_geo().clone())
+            Some(session.ctx().direct_peer_geo().clone())
         } else {
             None
         };
         let remote_lookup = if self.needs_remote_facts {
-            Some(session.ctx().client_geo().clone())
+            Some(session.ctx().remote_geo().clone())
         } else {
             None
         };
@@ -175,10 +175,10 @@ impl RequestFilter for GeoIpLocation {
         }
 
         let ctx = GeoRuleContext {
-            direct_ip: Self::parse_ip(session.client_addr()),
-            direct: direct_facts,
+            direct_peer_ip: Self::parse_ip(session.direct_peer_ip()),
+            direct_peer: direct_facts,
             remote_ip: if self.needs_remote_ip {
-                Self::parse_ip(session.remote_addr())
+                Self::parse_ip(session.remote_ip())
             } else {
                 None
             },
@@ -240,22 +240,22 @@ mod tests {
     }
 
     /// A session whose `ctx()` returns a fresh `EdgionHttpContext` and whose
-    /// `client_addr`/`remote_addr` are set, so `direct_geo()`/`client_geo()`
+    /// `direct_peer_ip`/`remote_ip` are set, so `direct_peer_geo()`/`remote_geo()`
     /// resolve live against `GeoIpProvider::global()` (cleared by the caller
     /// under `crate::geoip::GEO_TEST_LOCK` for db-unavailable determinism).
-    fn session_with_ips(client_addr: &'static str, remote_addr: &'static str) -> MockPluginSession {
+    fn session_with_ips(direct_peer_ip: &'static str, remote_ip: &'static str) -> MockPluginSession {
         let mut ctx = EdgionHttpContext::new();
-        // `ctx.direct_geo()`/`client_geo()` resolve off `ctx.request_info`, a
-        // separate field from the `PluginSession::client_addr()`/
-        // `remote_addr()` trait methods mocked below — both must be set for
+        // `ctx.direct_peer_geo()`/`remote_geo()` resolve off `ctx.request_info`, a
+        // separate field from the canonical PluginSession methods mocked
+        // below — both must be set for
         // the two to agree, as the real session wrapper keeps them in sync.
-        ctx.request_info.client_addr = client_addr.to_string();
-        ctx.request_info.remote_addr = remote_addr.to_string();
+        ctx.request_info.direct_peer_ip = direct_peer_ip.to_string();
+        ctx.request_info.remote_ip = remote_ip.to_string();
 
         let mut s = MockPluginSession::new();
         s.expect_ctx().return_const(ctx);
-        s.expect_client_addr().return_const(client_addr.to_string());
-        s.expect_remote_addr().return_const(remote_addr.to_string());
+        s.expect_direct_peer_ip().return_const(direct_peer_ip.to_string());
+        s.expect_remote_ip().return_const(remote_ip.to_string());
         s
     }
 

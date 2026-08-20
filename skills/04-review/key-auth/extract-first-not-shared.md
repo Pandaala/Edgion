@@ -25,7 +25,7 @@ via `common::resolve_rate_limit_key` (see
 
 `key_auth::extract_key` filters the `KeyGet` variant before calling
 `session.key_get` — only `Header`, `Query`, `Cookie`, `Ctx`, `Webhook` are
-honored; `ClientIp`, `Path`, `Method`, etc. are silently skipped. This is a
+honored; `RemoteIp`, `Path`, `Method`, etc. are silently skipped. This is a
 runtime defense-in-depth in addition to whatever the resource validator enforces.
 `region_route::extract_first` honors every `KeyGet` variant.
 

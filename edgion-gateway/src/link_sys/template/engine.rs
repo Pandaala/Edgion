@@ -83,7 +83,7 @@ fn resolve_var_present(
         TemplateVarType::RequestPath => Some(session.get_request_path().to_string()),
         TemplateVarType::RequestUri => Some(session.get_request_uri()),
         TemplateVarType::Method => Some(session.get_method().to_string()),
-        TemplateVarType::ClientIp => Some(session.remote_addr().to_string()),
+        TemplateVarType::RemoteIp => Some(session.remote_ip().to_string()),
         TemplateVarType::MatchedHttpRoute => var_name
             .and_then(|n| session.matched_route_meta(crate::plugins::runtime::traits::session::RouteProto::Http, n)),
         TemplateVarType::MatchedGrpcRoute => var_name
@@ -108,7 +108,7 @@ pub(crate) fn resolve_var(var_type: &TemplateVarType, var_name: Option<&str>, se
         TemplateVarType::RequestPath => session.get_request_path().to_string(),
         TemplateVarType::RequestUri => session.get_request_uri(),
         TemplateVarType::Method => session.get_method().to_string(),
-        TemplateVarType::ClientIp => session.remote_addr().to_string(),
+        TemplateVarType::RemoteIp => session.remote_ip().to_string(),
         TemplateVarType::MatchedHttpRoute => var_name
             .and_then(|n| session.matched_route_meta(crate::plugins::runtime::traits::session::RouteProto::Http, n))
             .unwrap_or_default(),

@@ -49,6 +49,12 @@ pub async fn upstream_request_filter(
 
     sync_body_framing_headers(upstream_request, ctx)?;
 
+    // This is the final owned-header mutation. It intentionally runs after
+    // gRPC deadline, authority, framing, and every request-plugin stage so a
+    // configured RemoteIp header remains authoritative even when its name
+    // overlaps another locally managed header.
+    finalize_forwarded_headers(&ctx.remote_ip_header, upstream_request, ctx);
+
     // All fallible local header/framing preparation has succeeded. Crossing
     // the boundary here keeps a local preparation failure pre-dispatch.
     crate::ai::dispatch::mark_ai_dispatch_started(ctx).map_err(|_| {
@@ -65,6 +71,27 @@ pub async fn upstream_request_filter(
     ctx.request_info.in_request_body_stage = false;
 
     Ok(())
+}
+
+/// Authoritatively publish the canonical downstream identity after every
+/// request plugin, including backendRef-scoped runtimes, has completed.
+fn finalize_forwarded_headers(
+    remote_ip_header: &http::HeaderName,
+    upstream_request: &mut RequestHeader,
+    ctx: &EdgionHttpContext,
+) {
+    let peer = &ctx.request_info.downstream_peer_ip;
+    if let Some(existing) = &ctx.request_info.x_forwarded_for {
+        let mut value = String::with_capacity(existing.len() + 2 + peer.len());
+        value.push_str(existing);
+        value.push_str(", ");
+        value.push_str(peer);
+        let _ = upstream_request.insert_header("X-Forwarded-For", value);
+    } else {
+        let _ = upstream_request.insert_header("X-Forwarded-For", peer);
+    }
+
+    let _ = upstream_request.insert_header(remote_ip_header.clone(), &ctx.request_info.remote_ip);
 }
 
 fn sync_body_framing_headers(
@@ -105,7 +132,7 @@ pub(crate) fn apply_upstream_authority(req: &mut RequestHeader, ctx: &EdgionHttp
 
 #[cfg(test)]
 mod authority_tests {
-    use super::apply_upstream_authority;
+    use super::{apply_upstream_authority, finalize_forwarded_headers};
     use crate::ctx::EdgionHttpContext;
 
     /// The filter writes the upstream Host from the ctx when an authority was
@@ -126,6 +153,24 @@ mod authority_tests {
         let ctx2 = EdgionHttpContext::default();
         apply_upstream_authority(&mut req2, &ctx2);
         assert_eq!(req2.headers.get("host").unwrap(), "gw.example.com");
+    }
+
+    #[test]
+    fn canonical_forwarded_headers_overwrite_plugin_values() {
+        let mut req = pingora_http::RequestHeader::build("GET", b"/", None).unwrap();
+        req.insert_header("X-Forwarded-For", "spoofed").unwrap();
+        req.insert_header("X-Edgion-Remote-IP", "spoofed").unwrap();
+
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.x_forwarded_for = Some("198.51.100.8".to_string());
+        ctx.request_info.downstream_peer_ip = "10.0.0.5".to_string();
+        ctx.request_info.remote_ip = "203.0.113.9".to_string();
+        let name = http::HeaderName::from_static("x-edgion-remote-ip");
+
+        finalize_forwarded_headers(&name, &mut req, &ctx);
+
+        assert_eq!(req.headers.get("x-forwarded-for").unwrap(), "198.51.100.8, 10.0.0.5");
+        assert_eq!(req.headers.get(&name).unwrap(), "203.0.113.9");
     }
 }
 

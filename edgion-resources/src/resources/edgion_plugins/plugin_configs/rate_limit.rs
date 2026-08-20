@@ -171,7 +171,7 @@ pub enum OnMissingKey {
 ///   rate: 100              # 100 requests per interval
 ///   interval: "1s"         # 1 second window (default)
 ///   key:
-///     type: clientIp       # Rate limit by IP (default)
+///     type: remoteIp       # Rate limit by resolved IP (default)
 ///   showLimitHeaders: true
 /// ```
 ///
@@ -179,7 +179,7 @@ pub enum OnMissingKey {
 /// ```yaml
 /// # By client IP (default)
 /// key:
-///   type: clientIp
+///   type: remoteIp
 ///
 /// # By API key header
 /// key:
@@ -188,7 +188,7 @@ pub enum OnMissingKey {
 ///
 /// # By client IP + path combination
 /// key:
-///   type: clientIpAndPath
+///   type: remoteIpAndPath
 /// ```
 ///
 /// ## Algorithm Behavior:
@@ -219,7 +219,7 @@ pub struct RateLimitConfig {
     /// unambiguous composite key (`<byte-len>:<value>` per configured key,
     /// "-" when it does not resolve, joined with "_").
     ///
-    /// Default: [{ type: clientIp }]. An explicitly empty list is a valid
+    /// Default: [{ type: remoteIp }]. An explicitly empty list is a valid
     /// configuration meaning "one global bucket": it is not a key miss, so it
     /// still rate-limits rather than falling through to `onMissingKey`.
     ///
@@ -228,11 +228,11 @@ pub struct RateLimitConfig {
     /// ```yaml
     /// # Single key - limit by client IP
     /// key:
-    ///   - type: clientIp
+    ///   - type: remoteIp
     ///
     /// # Multiple keys - limit by IP + API key + path
     /// key:
-    ///   - type: clientIp
+    ///   - type: remoteIp
     ///   - type: header
     ///     name: "X-Api-Key"
     ///   - type: path
@@ -350,7 +350,7 @@ pub struct RateLimitConfig {
 /// Must match the `Default` impl and the documented default — `#[serde(default)]`
 /// would yield an empty list instead, which is a different (global-bucket) policy.
 fn default_key_sources() -> Vec<KeyGet> {
-    vec![KeyGet::ClientIp]
+    vec![KeyGet::RemoteIp]
 }
 
 fn default_interval() -> String {
@@ -736,27 +736,27 @@ key:
     }
 
     #[test]
-    fn test_yaml_key_client_ip() {
-        // Test clientIp key
+    fn test_yaml_key_remote_ip() {
+        // Test remoteIp key
         let yaml = r#"
 rate: 50
 key:
-  - type: clientIp
+  - type: remoteIp
 "#;
         let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.key, vec![KeyGet::ClientIp]);
+        assert_eq!(config.key, vec![KeyGet::RemoteIp]);
     }
 
     #[test]
-    fn test_yaml_key_client_ip_and_path() {
-        // Test clientIpAndPath key
+    fn test_yaml_key_remote_ip_and_path() {
+        // Test remoteIpAndPath key
         let yaml = r#"
 rate: 50
 key:
-  - type: clientIpAndPath
+  - type: remoteIpAndPath
 "#;
         let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.key, vec![KeyGet::ClientIpAndPath]);
+        assert_eq!(config.key, vec![KeyGet::RemoteIpAndPath]);
     }
 
     #[test]
@@ -766,7 +766,7 @@ key:
 rate: 100
 interval: "1s"
 key:
-  - type: clientIp
+  - type: remoteIp
   - type: header
     name: "X-API-Key"
   - type: path
@@ -776,7 +776,7 @@ key:
         assert_eq!(
             config.key,
             vec![
-                KeyGet::ClientIp,
+                KeyGet::RemoteIp,
                 KeyGet::Header {
                     name: "X-API-Key".to_string()
                 },
@@ -786,7 +786,7 @@ key:
     }
 
     #[test]
-    fn test_yaml_omitted_key_defaults_to_client_ip() {
+    fn test_yaml_omitted_key_defaults_to_remote_ip() {
         // An omitted `key` must match the documented default and the `Default`
         // impl. It used to deserialize to an empty list, which the gateway then
         // treated as a key miss — with the default `onMissingKey: Allow` that
@@ -795,7 +795,7 @@ key:
 rate: 50
 "#;
         let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.key, vec![KeyGet::ClientIp]);
+        assert_eq!(config.key, vec![KeyGet::RemoteIp]);
     }
 
     #[test]
@@ -970,7 +970,7 @@ interval: "1s"
 scope: Cluster
 skewTolerance: 1.5
 key:
-  - type: clientIp
+  - type: remoteIp
 "#;
         let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.scope, RateLimitScope::Cluster);

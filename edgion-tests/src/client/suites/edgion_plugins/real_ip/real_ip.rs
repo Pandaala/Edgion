@@ -142,7 +142,7 @@ impl RealIpPluginTestSuite {
                                         }
                                     };
 
-                                    // Direct connection, X-Real-IP should be client_addr.
+                                    // Direct connection, X-Real-IP should carry the resolved RemoteIp.
                                     let real_ip = match headers.get("x-real-ip").and_then(|v| v.as_str()) {
                                         Some(ip) => ip,
                                         None => {
@@ -307,6 +307,31 @@ impl RealIpPluginTestSuite {
                             })
                         })
                         .unwrap_or(false);
+
+                    let request_info = &entry.data["request_info"];
+                    let direct_peer_ip = request_info["direct_peer_ip"].as_str();
+                    let remote_ip = request_info["remote_ip"].as_str();
+                    if direct_peer_ip.is_none() || remote_ip != Some("203.0.113.1") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "canonical request IP fields missing or incorrect: direct_peer_ip={direct_peer_ip:?}, remote_ip={remote_ip:?}"
+                            ),
+                        );
+                    }
+                    if direct_peer_ip == remote_ip {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "direct_peer_ip must remain distinct from the XFF-resolved remote_ip in this test"
+                                .to_string(),
+                        );
+                    }
+                    if request_info.get("client-addr").is_some() || request_info.get("remote-addr").is_some() {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "legacy client-addr/remote-addr fields must not be emitted".to_string(),
+                        );
+                    }
 
                     if found {
                         TestResult::passed_with_message(start.elapsed(), "RealIp found in stage_logs".to_string())

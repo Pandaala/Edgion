@@ -160,7 +160,7 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
         let allow_arcs = resolve_ip_list_matchers(allow_keys);
         let deny_refs: Vec<&IpRadixMatcher> = deny_arcs.iter().map(|a| a.as_ref()).collect();
         let allow_refs: Vec<&IpRadixMatcher> = allow_arcs.iter().map(|a| a.as_ref()).collect();
-        let ip_decision = profile.check_ip_with_refs(&ctx.client_ip, &deny_refs, &allow_refs);
+        let ip_decision = profile.check_ip_with_refs(&ctx.direct_peer_ip, &deny_refs, &allow_refs);
         access_decision_to_stream_result(ip_decision, || record_conn_ip_restriction_event("denied"))
     }
 }

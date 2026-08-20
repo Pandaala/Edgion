@@ -95,7 +95,7 @@ impl KeyAuth {
                         }
                     }
                 }
-                // Ignore unsupported sources (ClientIp, Path, Method, etc.)
+                // Ignore unsupported sources (RemoteIp, Path, Method, etc.)
                 _ => {}
             }
         }

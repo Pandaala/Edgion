@@ -6,7 +6,7 @@
 //!
 //! 1. **Parse-only** (`denyRuleGroups`/`allowRuleGroups` both empty) —
 //!    **HTTP only**: resolve geo for the request and stop, populating the
-//!    access log's `geo` block via `ctx.direct_geo()`/`client_geo()`. The
+//!    access log's `geo` block via `ctx.direct_peer_geo()`/`remote_geo()`. The
 //!    plugin makes no allow/deny decision and does not require `failOpen`.
 //!    At L4 this same config is a hard admission error: `StreamContext` has
 //!    no logging sink and there is no L4 access log, so a resolved location
@@ -306,7 +306,7 @@ mod tests {
 
         // Deny hit dominates even though it's also outside the allow set.
         let deny_ctx = GeoRuleContext {
-            direct: GeoDimFacts {
+            direct_peer: GeoDimFacts {
                 country: Some("RU"),
                 city: Some("Moscow"),
                 ..Default::default()
@@ -317,8 +317,8 @@ mod tests {
 
         // Neither deny nor allow hit -> allow configured and missed -> Deny.
         let miss_ctx = GeoRuleContext {
-            direct_ip: Some("8.8.8.8".parse().unwrap()),
-            direct: GeoDimFacts {
+            direct_peer_ip: Some("8.8.8.8".parse().unwrap()),
+            direct_peer: GeoDimFacts {
                 country: Some("US"),
                 ..Default::default()
             },
@@ -328,8 +328,8 @@ mod tests {
 
         // Allow hit -> Allow.
         let allow_ctx = GeoRuleContext {
-            direct_ip: Some("10.1.2.3".parse().unwrap()),
-            direct: GeoDimFacts {
+            direct_peer_ip: Some("10.1.2.3".parse().unwrap()),
+            direct_peer: GeoDimFacts {
                 country: Some("US"),
                 ..Default::default()
             },
@@ -376,7 +376,7 @@ mod tests {
             ..Default::default()
         };
         let hit = GeoRuleContext {
-            direct: GeoDimFacts {
+            direct_peer: GeoDimFacts {
                 country: Some("CN"),
                 ..Default::default()
             },
@@ -386,7 +386,7 @@ mod tests {
         // A miss under the same config still denies (whitelist miss), and it
         // denies because of the miss, not because of `defaultAction`.
         let miss = GeoRuleContext {
-            direct: GeoDimFacts {
+            direct_peer: GeoDimFacts {
                 country: Some("RU"),
                 ..Default::default()
             },
@@ -409,7 +409,7 @@ mod tests {
             ..Default::default()
         };
         let miss = GeoRuleContext {
-            direct: GeoDimFacts {
+            direct_peer: GeoDimFacts {
                 country: Some("RU"),
                 ..Default::default()
             },

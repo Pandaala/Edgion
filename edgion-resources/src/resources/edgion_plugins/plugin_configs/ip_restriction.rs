@@ -52,11 +52,11 @@ pub struct IpRestrictionConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deny: Option<Vec<IpGroup>>,
 
-    /// IP source to check (default: ClientIp)
-    /// - ClientIp: Reads `remote_addr` — pre-processed by RealIp plugin or global `spec.realIp`.
+    /// IP source to check (default: RemoteIp)
+    /// - RemoteIp: Reads the resolved remote address, pre-processed by RealIp plugin or global `spec.realIp`.
     ///   Falls back to TCP IP if neither is configured (safe, not forgeable in that case).
     ///   To extract the true client IP from XFF/X-Real-IP headers, configure RealIp first.
-    /// - RemoteAddr: Always the TCP connection peer address (`client_addr`), never forgeable.
+    /// - DirectPeerIp: Always the raw physical TCP connection peer address, never forgeable.
     #[serde(default)]
     pub ip_source: IpSource,
 
@@ -98,16 +98,16 @@ pub struct IpRestrictionConfig {
 
 /// IP source for extracting client IP address
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "PascalCase")]
 #[derive(Default)]
 pub enum IpSource {
-    /// Reads `remote_addr` (pre-processed by RealIp plugin or global `spec.realIp`).
+    /// Reads the resolved remote address (pre-processed by RealIp plugin or global `spec.realIp`).
     /// Without RealIp configured, falls back to TCP connection IP — not forgeable.
     /// Configure RealIp to extract the true client IP from XFF/X-Real-IP headers.
     #[default]
-    ClientIp,
-    /// Always reads TCP connection peer address (`client_addr`), never forgeable.
-    RemoteAddr,
+    RemoteIp,
+    /// Always reads the raw physical TCP connection peer address, never forgeable.
+    DirectPeerIp,
 }
 
 /// Default action when no rules match
@@ -392,7 +392,7 @@ mod tests {
         let config = IpRestrictionConfig::default();
         assert!(config.allow.is_none());
         assert!(config.deny.is_none());
-        assert_eq!(config.ip_source, IpSource::ClientIp);
+        assert_eq!(config.ip_source, IpSource::RemoteIp);
         assert_eq!(config.message, None);
         assert_eq!(config.status, 403);
         assert_eq!(config.default_action, DefaultAction::Allow);
@@ -590,7 +590,7 @@ mod tests {
         let config = IpRestrictionConfig {
             allow: Some(vec![group("a", &["192.168.1.0/24"])]),
             deny: Some(vec![group("b", &["192.168.1.100"])]),
-            ip_source: IpSource::RemoteAddr,
+            ip_source: IpSource::DirectPeerIp,
             message: Some("Access denied".to_string()),
             status: 404,
             default_action: DefaultAction::Deny,
@@ -610,10 +610,25 @@ mod tests {
         );
         assert_eq!(deserialized.allow.as_ref().unwrap()[0].name, "a");
         assert_eq!(deserialized.deny.as_ref().unwrap()[0].name, "b");
-        assert_eq!(deserialized.ip_source, IpSource::RemoteAddr);
+        assert_eq!(deserialized.ip_source, IpSource::DirectPeerIp);
         assert_eq!(deserialized.message, Some("Access denied".to_string()));
         assert_eq!(deserialized.status, 404);
         assert_eq!(deserialized.default_action, DefaultAction::Deny);
+    }
+
+    #[test]
+    fn ip_source_uses_exact_pascal_case_and_rejects_old_values() {
+        assert_eq!(serde_json::to_string(&IpSource::RemoteIp).unwrap(), r#""RemoteIp""#);
+        assert_eq!(
+            serde_json::to_string(&IpSource::DirectPeerIp).unwrap(),
+            r#""DirectPeerIp""#
+        );
+        for old in ["clientIp", "remoteAddr", "ClientIp", "RemoteAddr"] {
+            assert!(
+                serde_json::from_str::<IpSource>(&format!(r#""{old}""#)).is_err(),
+                "{old} must be rejected"
+            );
+        }
     }
 
     #[test]
@@ -625,7 +640,7 @@ mod tests {
                 cidrs: vec!["192.168.0.0/16".into()],
             }]),
             deny: None,
-            ip_source: IpSource::ClientIp,
+            ip_source: IpSource::RemoteIp,
             message: None,
             status: 403,
             default_action: DefaultAction::Allow,
@@ -655,7 +670,7 @@ mod tests {
                 description: None,
                 cidrs: vec!["10.0.0.100/32".into()],
             }]),
-            ip_source: IpSource::ClientIp,
+            ip_source: IpSource::RemoteIp,
             message: None,
             status: 403,
             default_action: DefaultAction::Allow,

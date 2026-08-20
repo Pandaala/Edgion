@@ -116,22 +116,22 @@ fn test_req_cookie() {
 }
 
 #[test]
-fn test_req_client_ip() {
+fn test_req_direct_peer_ip() {
     let mut session = MockPluginSession::new();
-    session.expect_client_addr().return_const("1.2.3.4".to_string());
+    session.expect_direct_peer_ip().return_const("1.2.3.4".to_string());
     session
         .expect_set_request_header()
         .withf(|h, v| h == "X-IP" && v == "1.2.3.4")
         .times(1)
         .returning(|_, _| Ok(()));
-    let result = run(r#"req.set_header("X-IP", req.client_ip)"#, session);
+    let result = run(r#"req.set_header("X-IP", req.direct_peer_ip)"#, session);
     assert_eq!(result, good_next());
 }
 
 #[test]
 fn test_req_remote_ip() {
     let mut session = MockPluginSession::new();
-    session.expect_remote_addr().return_const("10.0.0.1".to_string());
+    session.expect_remote_ip().return_const("10.0.0.1".to_string());
     session
         .expect_set_request_header()
         .withf(|h, v| h == "X-RIP" && v == "10.0.0.1")

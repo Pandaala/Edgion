@@ -156,13 +156,13 @@ pub(super) fn validate_restricted_template(template: &str, field: &str) -> Optio
             if !matches!(
                 var_type,
                 TemplateVarType::Ctx
-                    | TemplateVarType::ClientIp
+                    | TemplateVarType::RemoteIp
                     | TemplateVarType::MatchedHttpRoute
                     | TemplateVarType::MatchedGrpcRoute
                     | TemplateVarType::SecretRef
             ) {
                 return Some(format!(
-                    "{field} must not read client-controlled request input; use a trusted ctx, clientIp, matched-route, or secretRef variable"
+                    "{field} must not read client-controlled request input; use a trusted ctx, remoteIp, matched-route, or secretRef variable"
                 ));
             }
         }

@@ -114,6 +114,15 @@ mod tests {
     }
 
     #[test]
+    fn legacy_client_ip_builtin_is_rejected() {
+        let err = resolve_script(Some("let ip = req.client_ip"), None, &ValidationLimits::default())
+            .expect_err("the legacy client_ip builtin must not remain as an alias");
+        assert!(err.contains("DSL compile errors"), "got: {err}");
+
+        compile("let direct = req.direct_peer_ip\nlet remote = req.remote_ip");
+    }
+
+    #[test]
     fn resolve_script_requires_source_or_bytecode() {
         let err = resolve_script(None, None, &ValidationLimits::default()).expect_err("empty input must fail");
         assert_eq!(err, "either source or bytecode must be provided");

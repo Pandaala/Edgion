@@ -61,8 +61,8 @@ spec:
 
 | `type` | 额外字段 | 读取来源 |
 |--------|----------|----------|
-| `clientIp` | — | 客户端 IP 地址（若存在 RealIp 插件则使用其结果） |
-| `clientIpAndPath` | — | 客户端 IP 与请求路径的组合 |
+| `remoteIp` | — | 解析后的客户端 IP 地址 |
+| `remoteIpAndPath` | — | 解析后的客户端 IP 与请求路径的组合 |
 | `header` | `name` | 指定的请求头 |
 | `query` | `name` | 指定的查询参数 |
 | `cookie` | `name` | 指定的 Cookie |
@@ -87,7 +87,7 @@ spec:
 | `${requestPath}` | 入口时的原始路径（冻结，不受后续重写影响） |
 | `${requestUri}` | 入口时的原始完整 URI（冻结） |
 | `${method}` | HTTP 方法 |
-| `${clientIp}` | 客户端 IP 地址 |
+| `${remoteIp}` | 解析后的客户端 IP 地址 |
 
 用户控制的值若自身包含 `${...}`，会作为字面量文本输出，因此模板不存在注入漏洞。
 
@@ -156,7 +156,7 @@ spec:
       config:
         vars:
           - name: "rate_key"
-            template: "${header:X-Tenant}_${clientIp}"
+            template: "${header:X-Tenant}_${remoteIp}"
 ```
 
 ### 3. 提取、转换并映射套餐等级

@@ -266,7 +266,8 @@ spec:
 
           // /internal/* is only accessible from internal networks
           if path.starts_with("/internal/") {
-            let ip = req.client_ip()
+            // Deliberately enforce the physical peer for this network-origin rule.
+            let ip = req.direct_peer_ip()
             if !ip_in_cidr(ip, "10.0.0.0/8") {
               return deny(403, "internal endpoints are not publicly accessible")
             }
@@ -305,7 +306,7 @@ spec:
             return next()
           }
 
-          let ip = req.client_ip()
+          let ip = req.remote_ip()
 
           // Apply HMAC with a fixed salt to get a deterministic hash
           let hash = hmac_sha256("ab-test-salt-2024", ip)
@@ -351,7 +352,8 @@ spec:
       config:
         name: "internal-ip-bypass"
         source: |
-          let ip = req.client_ip()
+          // Deliberately use the physical peer for this internal-origin rule.
+          let ip = req.direct_peer_ip()
 
           // Check common internal network ranges
           if ip_in_cidr(ip, "10.0.0.0/8") {
@@ -634,7 +636,7 @@ spec:
         source: |
           let method = req.method()
           let path = req.path()
-          let ip = req.client_ip()
+          let ip = req.remote_ip()
           let proto = req.protocol
 
           // Record a structured audit log entry

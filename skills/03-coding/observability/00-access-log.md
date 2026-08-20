@@ -34,8 +34,8 @@ Each access log entry must contain enough information for an operator to locate 
 
 | Field | Meaning |
 |------|------|
-| `client-addr` | Direct TCP IP |
-| `remote-addr` | Real client IP (after RealIp plugin processing) |
+| `direct_peer_ip` | Physical downstream transport peer (`DirectPeerIp`) |
+| `remote_ip` | Resolved client IP (`RemoteIp`) after the applicable PROXY/RealIp processing |
 | `host` / `path` | Request host and the **normalized** current path (no query) |
 | `request_uri` | **Optional** — client-entry **raw URI** (raw path + raw query); only emitted when `access_log_options.includeRawUri: true` |
 | `x-trace-id` | trace id (passed from client or auto-generated UUID) |
@@ -163,7 +163,7 @@ hard way**:
 
 1. **`access_log_sensitive.mode` now defaults to `replace`.** `ext` rendering
    reuses the same global switch as the nine built-in masked fields (`path`,
-   `client-addr`, `remote-addr`, `x-forwarded-for`, `sni`, `request_uri`, and
+   `direct_peer_ip`, `remote_ip`, `x-forwarded-for`, `sni`, `request_uri`, and
    the client-cert fields), 46 `sensitive()` plugin-log sites, DSL
    `log_warn`/`log_error` args, and ssl.log cert fields. All of it renders
    `***` out of the box now, not just `ext`.

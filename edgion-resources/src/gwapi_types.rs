@@ -35,6 +35,25 @@ pub const HEADER_NAME_PATTERN: &str = r"^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$";
 /// Maximum header name length.
 pub const HEADER_NAME_MAX_LEN: u32 = 256;
 
+/// Default upstream header carrying the final resolved remote IP.
+pub const DEFAULT_REMOTE_IP_HEADER: &str = "X-Real-IP";
+
+/// Header names that the Gateway owns for HTTP framing, connection control, or
+/// the separately managed forwarding chain. Comparisons are case-insensitive.
+pub const RESERVED_REMOTE_IP_HEADER_NAMES: [&str; 11] = [
+    "host",
+    "content-length",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "x-forwarded-for",
+];
+
 /// Kubernetes label-value charset used by Edgion named-group references
 /// (KeyAuth `secretGroups[].name`, JwtAuth `issuerGroups[].name`, ...).
 /// Runtime twin: [`crate::resources::common::group_name::validate_group_name`].
@@ -61,6 +80,23 @@ pub fn is_valid_header_token(name: &str) -> bool {
                 | b'^' | b'_' | b'`' | b'|' | b'~'
                 | b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z')
         })
+}
+
+/// Validate an operator-configured upstream header that carries `RemoteIp`.
+///
+/// The scalar remote-IP value must never overwrite framing, hop-by-hop, or the
+/// Gateway-managed `X-Forwarded-For` chain.
+pub fn validate_remote_ip_header_name(name: &str) -> Result<(), String> {
+    if name.len() > HEADER_NAME_MAX_LEN as usize || !is_valid_header_token(name) {
+        return Err("forwardedHeaders.remoteIpHeader must be a valid HTTP header name".to_string());
+    }
+    if RESERVED_REMOTE_IP_HEADER_NAMES
+        .iter()
+        .any(|reserved| name.eq_ignore_ascii_case(reserved))
+    {
+        return Err(format!("forwardedHeaders.remoteIpHeader '{name}' is reserved"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -129,6 +165,20 @@ mod tests {
                 re.is_match(s),
                 is_valid_header_token(s),
                 "pattern and is_valid_header_token disagree on {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_ip_header_validation_rejects_reserved_names() {
+        assert!(validate_remote_ip_header_name(DEFAULT_REMOTE_IP_HEADER).is_ok());
+        assert!(validate_remote_ip_header_name("X-Edgion-Remote-IP").is_ok());
+        assert!(validate_remote_ip_header_name("bad header").is_err());
+        assert!(validate_remote_ip_header_name(&"x".repeat(HEADER_NAME_MAX_LEN as usize + 1)).is_err());
+        for reserved in RESERVED_REMOTE_IP_HEADER_NAMES {
+            assert!(
+                validate_remote_ip_header_name(reserved).is_err(),
+                "{reserved} must be reserved"
             );
         }
     }

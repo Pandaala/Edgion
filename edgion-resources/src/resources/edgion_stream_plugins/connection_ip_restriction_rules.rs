@@ -304,7 +304,7 @@ mod tests {
         // CR deserialization at the watcher level.
         let json = r#"{
             "allow": [{"name":"office","cidrs":["192.168.1.0/24"]}],
-            "ipSource": "RemoteAddr",
+            "ipSource": "DirectPeerIp",
             "message": "blocked",
             "status": 403
         }"#;

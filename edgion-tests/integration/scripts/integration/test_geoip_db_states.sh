@@ -38,7 +38,7 @@
 #      absent (no "database tier" concept -- onMissing governs, same as any
 #      other missing value) -- proved by the city-rule-inert check itself, not
 #      by an admin-endpoint snapshot (there is no admin endpoint for this).
-#   3. City-tier: geo.client.coord is present in the
+#   3. City-tier: geo.remote.coord is present in the
 #      access log and masked ("***"); the city rule (inert against Country-tier
 #      in Phase 2) becomes live, proving a City-tier database is actually loaded.
 #   4. Updater hot-swap: db_path starts at the Country fixture, update_url
@@ -122,7 +122,7 @@ fi
 # `disk_usage_threshold_percent` (product default 90, see
 # `default_disk_usage_threshold_percent` in edgion-resources/src/output.rs).
 # Phases 2 and 3 assert on access-log content (the geo block's status/country
-# fields, masked geo.client.coord), so on a >=90%-full host those assertions fail
+# fields, masked geo.remote.coord), so on a >=90%-full host those assertions fail
 # for a reason
 # unrelated to geoip. Detect the unfit environment up front (same precedent as
 # test_plugin_policy.sh's precheck_disk_space) rather than letting it surface
@@ -1186,8 +1186,8 @@ run_phase3() {
     # geo-wl403 is the whitelist-shaped allowRuleGroups/country==CN config:
     # with a real database loaded, CN (127.0.0.1) matches the allow group and
     # passes (200). What we actually care about here is only the access-log
-    # geo block: this route's plugin queries `DirectPeerIp`, so the `direct`
-    # slot is populated regardless of the decision outcome (entry.rs::
+    # geo block: this route's plugin queries `DirectPeerIp`, so the
+    # `direct_peer` slot is populated regardless of the decision outcome (entry.rs::
     # from_context reads whatever the plugin already resolved — no global
     # switch, no forced lookup) — this route is just a convenient one
     # guaranteed to reach the backend with a loaded database.
@@ -1195,10 +1195,10 @@ run_phase3() {
         "$(http_status -H 'Host: geo-wl403.example.com' "http://127.0.0.1:${GW_HTTP_PORT}/")" "200"
 
     if wait_for_access_log_contains '"coord":"\*\*\*"'; then
-        echo "PASS: access log has geo.direct.coord, masked (\"***\")"
+    echo "PASS: access log has geo.direct_peer.coord, masked (\"***\")"
         PASS_COUNT=$((PASS_COUNT + 1))
     else
-        echo "FAIL: access log missing a masked geo.direct.coord field"
+    echo "FAIL: access log missing a masked geo.direct_peer.coord field"
         FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
 

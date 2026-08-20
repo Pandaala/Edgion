@@ -182,7 +182,7 @@ spec:
       type: RateLimit
       config:
         key:
-          - type: clientIp
+          - type: remoteIp
         limit: 100
         window: "60s"
 ```

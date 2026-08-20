@@ -1004,7 +1004,7 @@ spec:
         allow:
           - name: default
             cidrs: ["10.0.0.0/8"]
-        ipSource: RemoteAddr
+        ipSource: DirectPeerIp
         message: blocked
         status: 403
 "#;

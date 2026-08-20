@@ -28,7 +28,7 @@ spec:
         rate: 100
         interval: "1m"
         key:                 # Multi-key: each part is length-prefixed, then joined with "_"
-          - type: clientIp
+          - type: remoteIp
           - type: header
             name: "X-API-Key"
           - type: path
@@ -36,5 +36,4 @@ spec:
         rejectStatus: 429
         rejectMessage: "API rate limit exceeded"
         showLimitHeaders: true
-
 

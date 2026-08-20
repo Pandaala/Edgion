@@ -256,16 +256,19 @@ pub trait PluginSession: Send + Sync {
 
     async fn shutdown(&mut self);
 
-    /// Get client IP address (TCP direct connection, without port)
-    fn client_addr(&self) -> &str;
+    /// Physical downstream transport peer IP, before PROXY/XFF rewriting.
+    fn direct_peer_ip(&self) -> &str;
 
-    /// Get remote address (real client IP, extracted from proxy headers)
-    fn remote_addr(&self) -> &str;
+    /// PROXY-effective downstream peer before HTTP RealIp/XFF processing.
+    fn downstream_peer_ip(&self) -> &str;
 
-    /// Set remote address (real client IP)
+    /// Layer-resolved client IP.
+    fn remote_ip(&self) -> &str;
+
+    /// Set the layer-resolved client IP.
     ///
     /// Used by RealIp plugin to update the extracted real client IP.
-    fn set_remote_addr(&mut self, addr: &str) -> PluginSessionResult<()>;
+    fn set_remote_ip(&mut self, addr: &str) -> PluginSessionResult<()>;
 
     /// Overwrite the request's trace id (`ctx.request_info.x_trace_id`).
     ///
@@ -516,14 +519,14 @@ pub trait PluginSession: Send + Sync {
     ///
     /// # Returns
     /// * `Some(String)` - The extracted value
-    /// * `None` - If the value doesn't exist or is empty (for ClientIp)
+    /// * `None` - If the value doesn't exist or is empty (for RemoteIp)
     async fn key_get(&self, key: &KeyGet) -> Option<String>;
 
     /// Synchronous version of key_get for local key sources only.
     ///
     /// Used by sync filter contexts (UpstreamResponseFilter, UpstreamResponseBodyFilter)
     /// where async is not available. Only supports local variants (Header, Cookie, Query,
-    /// Path, Method, Ctx, ClientIp, ClientIpAndPath). Returns None for Webhook variants.
+    /// Path, Method, Ctx, RemoteIp, RemoteIpAndPath). Returns None for Webhook variants.
     fn key_get_local(&self, key: &KeyGet) -> Option<String>;
 
     /// Set a value using KeySet accessor

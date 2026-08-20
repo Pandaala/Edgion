@@ -14,7 +14,7 @@ spec:
     - enable: true
       type: IpRestriction
       config:
-        ipSource: remoteAddr
+        ipSource: RemoteIp
         defaultAction: allow
         deny:
           - name: mixed-good-and-bad

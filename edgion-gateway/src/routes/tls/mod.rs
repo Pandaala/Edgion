@@ -97,14 +97,21 @@ pub(super) async fn run_tls_route_plugins(
     let Some(store_key) = store_key else {
         return true;
     };
-    // Fail-close: if the client address cannot be parsed (e.g. Pingora set it
+    // Fail-close: if either canonical address cannot be parsed
     // to the literal "unknown" because peer extraction failed), an IP-allowlist
     // policy referenced by the rule cannot be enforced. Admitting the
     // connection here would silently bypass that policy.
-    let Ok(client_ip) = ctx.client_addr.parse() else {
+    let Ok(direct_peer_ip) = ctx.direct_peer_ip.parse() else {
         ctx.err_log = Some(format!(
-            "client address '{}' could not be parsed; rejecting (fail-close)",
-            ctx.client_addr,
+            "direct peer IP '{}' could not be parsed; rejecting (fail-close)",
+            ctx.direct_peer_ip,
+        ));
+        return false;
+    };
+    let Ok(remote_ip) = ctx.remote_ip.parse() else {
+        ctx.err_log = Some(format!(
+            "remote IP '{}' could not be parsed; rejecting (fail-close)",
+            ctx.remote_ip,
         ));
         return false;
     };
@@ -126,7 +133,8 @@ pub(super) async fn run_tls_route_plugins(
     let tls_runtime = &resource.tls_route_plugin_runtime;
     if !tls_runtime.is_empty() {
         let mut tls_ctx = TlsRouteContext {
-            client_ip,
+            direct_peer_ip,
+            remote_ip,
             listener_port,
             sni: sni.to_string(),
             tls_id,
@@ -153,7 +161,7 @@ pub(super) async fn run_tls_route_plugins(
     // Fall back to Stage 1 (ConnectionFilter) runtime
     let stream_runtime = &resource.stream_plugin_runtime;
     if !stream_runtime.is_empty() {
-        let stream_ctx = StreamContext::new(client_ip, listener_port, StreamLayer::Tls);
+        let stream_ctx = StreamContext::new(direct_peer_ip, listener_port, StreamLayer::Tls);
         return match stream_runtime.run(&stream_ctx).await {
             StreamPluginResult::Allow => {
                 ctx.push_log("stream plugin allowed (compat)");
@@ -166,7 +174,7 @@ pub(super) async fn run_tls_route_plugins(
                 // itself) is the only signal, precisely to deny a
                 // country-blocked scanner the amplification of "does logging
                 // this connection cost the gateway more than dropping it".
-                // `ctx.err_log` is emitted alongside `client_addr` in the same
+                // `ctx.err_log` is emitted alongside `direct_peer_ip` in the same
                 // JSON object (`proxy.rs`), so a geo reason must never reach
                 // it — collapse it the way the TCP path
                 // (`routes/tcp/edgion_tcp.rs::check_stream_plugins`) already
@@ -214,7 +222,7 @@ mod fail_close_tests {
         let key = "default/__fail_close_missing__".to_string();
         assert!(store.get(&key).is_none(), "test precondition: key must not be in store");
 
-        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string());
+        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
 
         let allowed = run_tls_route_plugins(Some(key.as_str()), &mut ctx, "example.com", 443, None, false).await;
         assert!(!allowed, "missing ESP must fail-close");
@@ -232,29 +240,29 @@ mod fail_close_tests {
     #[tokio::test]
     async fn admit_when_store_key_is_none() {
         // No ESP attached to the rule — intentional pass-through, must allow.
-        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string());
+        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
         let allowed = run_tls_route_plugins(None, &mut ctx, "example.com", 443, None, false).await;
         assert!(allowed, "rule with no store_key must pass through");
         assert!(ctx.err_log.is_none());
     }
 
     #[tokio::test]
-    async fn reject_when_client_addr_unparseable() {
-        // Rule references an ESP but client_addr is not a valid IP (e.g. the
+    async fn reject_when_direct_peer_ip_unparseable() {
+        // Rule references an ESP but DirectPeerIp is not a valid IP (e.g. the
         // literal "unknown" set when Pingora cannot extract the peer addr).
         // Without a parseable client IP we cannot evaluate an IP-allowlist
         // policy, so the connection must be rejected (fail-close).
-        let mut ctx = TlsContext::new(443, "unknown".to_string(), 0, "unknown".to_string());
+        let mut ctx = TlsContext::new(443, "unknown".to_string(), 0, "unknown".to_string(), 0);
         let allowed = run_tls_route_plugins(Some("default/anything"), &mut ctx, "example.com", 443, None, false).await;
-        assert!(!allowed, "unparseable client_addr must fail-close");
+        assert!(!allowed, "unparseable DirectPeerIp must fail-close");
         let err = ctx.err_log.as_deref().unwrap_or("");
         assert!(
             err.contains("fail-close"),
             "err_log should mention fail-close, got: {err}"
         );
         assert!(
-            err.contains("client address"),
-            "err_log should mention 'client address', got: {err}"
+            err.contains("direct peer IP"),
+            "err_log should mention DirectPeerIp, got: {err}"
         );
     }
 

@@ -52,6 +52,7 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         // structural CRD cannot express `oneOf`, so it is enforced here).
         errors.extend(egc.spec.validate_dns_resolver());
         errors.extend(egc.spec.validate_request_body());
+        errors.extend(egc.spec.validate_forwarded_headers());
         errors
     }
 
@@ -331,6 +332,20 @@ mod tests {
         assert!(
             errors.iter().any(|e| e.contains("maxBodySize")),
             "expected a maxBodySize preparse error; got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn egc_reserved_remote_ip_header_is_rejected_at_ingest() {
+        let ctx = make_ctx_with_secrets(HashMap::new());
+        let mut spec = EdgionGatewayConfigSpec::default();
+        spec.forwarded_headers.remote_ip_header = "X-Forwarded-For".to_string();
+        let mut egc = EdgionGatewayConfig::new("cluster-egc-forwarded", spec);
+
+        let errors = EdgionGatewayConfigHandler::new().preparse(&mut egc, &ctx);
+        assert!(
+            errors.iter().any(|e| e.contains("remoteIpHeader")),
+            "expected remoteIpHeader validation error; got: {errors:?}"
         );
     }
 

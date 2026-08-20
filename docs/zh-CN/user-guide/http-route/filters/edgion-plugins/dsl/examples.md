@@ -266,7 +266,8 @@ spec:
 
           // /internal/* 仅允许内网访问
           if path.starts_with("/internal/") {
-            let ip = req.client_ip()
+            // 该网络来源规则故意要求物理传输对端。
+            let ip = req.direct_peer_ip()
             if !ip_in_cidr(ip, "10.0.0.0/8") {
               return deny(403, "internal endpoints are not publicly accessible")
             }
@@ -305,7 +306,7 @@ spec:
             return next()
           }
 
-          let ip = req.client_ip()
+          let ip = req.remote_ip()
 
           // 使用固定 salt 对 IP 做 HMAC，得到确定性哈希
           let hash = hmac_sha256("ab-test-salt-2024", ip)
@@ -351,7 +352,8 @@ spec:
       config:
         name: "internal-ip-bypass"
         source: |
-          let ip = req.client_ip()
+          // 该内网来源规则故意使用物理传输对端。
+          let ip = req.direct_peer_ip()
 
           // 检查常见内网段
           if ip_in_cidr(ip, "10.0.0.0/8") {
@@ -634,7 +636,7 @@ spec:
         source: |
           let method = req.method()
           let path = req.path()
-          let ip = req.client_ip()
+          let ip = req.remote_ip()
           let proto = req.protocol
 
           // 记录结构化审计日志

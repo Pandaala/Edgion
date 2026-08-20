@@ -45,7 +45,7 @@ spec:
         rate: 100
         interval: "60s"
         key:
-          - type: clientIp
+          - type: remoteIp
 ```
 
 > **Schema note**: RateLimit runs in the `requestPlugins` phase and uses the

@@ -409,6 +409,18 @@ LogConfig:
 | `max_estimator_slots_k` | `usize` | `1024` | CMS maximum slot cap |
 | `gateway_instance_count` | `u32` | `1` | Gateway instance count (denominator for cluster rate limiting; static fallback when there is no Controller) |
 
+### Upstream RemoteIp header
+
+`EdgionGatewayConfig.spec.forwardedHeaders.remoteIpHeader` is the GatewayClass-
+wide output-header name for the final HTTP `RemoteIp` sent to upstream services.
+It defaults to `X-Real-IP` and may be customized, for example to
+`X-Edgion-Remote-IP`. The Gateway validates the name, rejects reserved or
+hop-by-hop headers (including `Host`, `Content-Length`, and
+`X-Forwarded-For`), and overwrites the configured header after all request
+plugins have completed. This is independent from
+`spec.realIp.realIpHeader`: that field selects the downstream input header used
+to resolve `RemoteIp`, while `remoteIpHeader` propagates the result upstream.
+
 ### access_log_sensitive
 
 Controls the redaction behavior of fields marked as sensitive in access log, ssl.log, and plugin log. **`mode=replace` by default** (flipped from `off` — see rationale below): sensitive values render `***` out of the box.
@@ -420,7 +432,7 @@ Controls the redaction behavior of fields marked as sensitive in access log, ssl
 | `wrap_prefix` | `String` | `"<E>"` | Prefix appended when `mode=wrap` |
 | `wrap_suffix` | `String` | `"</E>"` | Suffix appended when `mode=wrap` |
 
-**Behavior of the three modes** (using `client_addr=1.2.3.4` as an example):
+**Behavior of the three modes** (using `direct_peer_ip=1.2.3.4` as an example):
 
 | Mode | Output |
 |------|--------|
@@ -429,7 +441,7 @@ Controls the redaction behavior of fields marked as sensitive in access log, ssl
 | `wrap` | `"<E>1.2.3.4</E>"` |
 
 **Scope** — larger than the field list on this page alone; do not assume it stops at the built-ins:
-- Access log fields: `client_addr` / `remote_addr` / `path` / `x_forwarded_for` / `sni` / `request_uri` / client certificate `subject` / `sans` / `cn`.
+- Access log fields: `direct_peer_ip` / `remote_ip` / `path` / `x_forwarded_for` / `sni` / `request_uri` / client certificate `subject` / `sans` / `cn`.
 - `ext` fields declared via `AccessLogExtern` (`EdgionPlugins.spec.accessLogExtern`) render under this same switch: `routeLabel`/`routeAnnotation` sources are always clear, everything else follows `mode` unless whitelisted in `EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys` (a whitelist **miss** still emits the key, rendered per `mode` — it does not drop the field). See [`../../03-coding/observability/00-access-log.md`](../../03-coding/observability/00-access-log.md).
 - Plugin log: 46 `sensitive()`-marked parameter sites across 13 plugins (real_ip's IP, basic/key/ldap/jwt/hmac usernames, direct_endpoint's address, region_route's keys/regions/hosts, proxy_rewrite's method); user parameters of DSL `log_warn` / `log_error`.
 - ssl.log: client certificate fields in mTLS allowlist validation failure errors.

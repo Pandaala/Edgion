@@ -303,7 +303,7 @@ pub fn validate_connection_target(conn: &ExternalHttpConnection) -> Option<Strin
 /// tiny (forcing a timeout on every call — a reliable DoS).
 ///
 /// ALLOW ONLY `${ctx:...}` (set by a trusted upstream plugin, never the raw
-/// client request), `${clientIp}`, and matched-route metadata
+/// client request), `${remoteIp}`, and matched-route metadata
 /// (`${matchedHttpRoute:...}` / `${matchedGrpcRoute:...}`). Everything else —
 /// `header`/`query`/`cookie`/`path`/`uri`/`requestPath`/`requestUri`/`method`/
 /// `secretRef` — is rejected.
@@ -317,14 +317,14 @@ fn reject_client_controlled_vars(
             let allowed = matches!(
                 var_type,
                 TemplateVarType::Ctx
-                    | TemplateVarType::ClientIp
+                    | TemplateVarType::RemoteIp
                     | TemplateVarType::MatchedHttpRoute
                     | TemplateVarType::MatchedGrpcRoute
             );
             if !allowed {
                 return Some(format!(
                     "{field_name} must not read client-controlled input (header/query/cookie/path/method/uri); \
-                     use ${{ctx:...}} (set by a trusted upstream plugin), ${{clientIp}}, or a matched-route variable"
+                     use ${{ctx:...}} (set by a trusted upstream plugin), ${{remoteIp}}, or a matched-route variable"
                 ));
             }
         }
@@ -610,7 +610,7 @@ pub struct ExternalHttpConnection {
     pub timeout_ms: u64,
 
     /// Template rendering a per-request timeout in milliseconds, e.g.
-    /// "${ctx:desired_timeout_ms}". Only `${ctx:...}`, `${clientIp}`, and
+    /// "${ctx:desired_timeout_ms}". Only `${ctx:...}`, `${remoteIp}`, and
     /// matched-route variables are accepted at admission (see
     /// `reject_client_controlled_vars`) — a client-controlled source
     /// (header/query/cookie/path/method/uri) would let an attacker pin the
@@ -870,7 +870,7 @@ mod timeout_ms_template_tests {
     fn timeout_template_accepts_trusted_vars() {
         for expr in [
             "${ctx:is_staging}",
-            "${clientIp}",
+            "${remoteIp}",
             "${matchedHttpRoute:name}",
             "${matchedGrpcRoute:name}",
         ] {

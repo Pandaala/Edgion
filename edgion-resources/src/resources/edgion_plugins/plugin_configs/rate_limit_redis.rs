@@ -134,7 +134,7 @@ pub struct RateLimitPolicy {
 /// config:
 ///   redisRef: "default/shared-redis"
 ///   key:
-///     - type: clientIp
+///     - type: remoteIp
 ///   policies:
 ///     - rate: 100
 ///       interval: "1s"
@@ -168,7 +168,7 @@ pub struct RateLimitRedisConfig {
     /// A single key is used verbatim; multiple keys are combined into an
     /// unambiguous composite key (`<byte-len>:<value>` per configured key,
     /// "-" when it does not resolve, joined with "_").
-    /// Default: [{ type: clientIp }]. An explicitly empty list is a valid
+    /// Default: [{ type: remoteIp }]. An explicitly empty list is a valid
     /// configuration meaning "one global bucket": it is not a key miss, so it
     /// still rate-limits rather than falling through to `onMissingKey`.
     #[serde(default = "default_key_sources")]
@@ -255,7 +255,7 @@ fn default_true() -> bool {
 /// Must match the `Default` impl and the documented default — `#[serde(default)]`
 /// would yield an empty list instead, which is a different (global-bucket) policy.
 fn default_key_sources() -> Vec<KeyGet> {
-    vec![KeyGet::ClientIp]
+    vec![KeyGet::RemoteIp]
 }
 
 fn default_key_prefix() -> String {
@@ -629,7 +629,7 @@ mod tests {
         let yaml = r#"
 redisRef: "default/shared-redis"
 key:
-  - type: clientIp
+  - type: remoteIp
 policies:
   - rate: 100
     interval: "1s"

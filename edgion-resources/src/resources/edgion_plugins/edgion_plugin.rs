@@ -744,7 +744,7 @@ mod global_access_control_variant_tests {
             active_profile_ref: None,
             status: 403,
             message: None,
-            ip_source: crate::resources::edgion_plugins::plugin_configs::IpSource::RemoteAddr,
+            ip_source: crate::resources::edgion_plugins::plugin_configs::IpSource::DirectPeerIp,
         };
         let p = EdgionPlugin::GlobalAccessControl(cfg);
         assert!(p.validation_error().unwrap().contains("activeProfile"));
@@ -871,7 +871,7 @@ mod dye_capability_tests {
         );
 
         // Non-header key source contributes nothing.
-        let direct_ip: DirectEndpointConfig = serde_yaml::from_str("from:\n  type: clientIp\n").unwrap();
+        let direct_ip: DirectEndpointConfig = serde_yaml::from_str("from:\n  type: remoteIp\n").unwrap();
         assert!(EdgionPlugin::DirectEndpoint(direct_ip).key_header_names().is_empty());
     }
 

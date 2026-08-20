@@ -32,7 +32,7 @@ fn default_status() -> u16 {
 
 fn default_ip_source() -> IpSource {
     // CDN/origin lockdown must match the true TCP peer, which cannot be forged.
-    IpSource::RemoteAddr
+    IpSource::DirectPeerIp
 }
 
 /// GlobalAccessControl plugin configuration.
@@ -65,7 +65,7 @@ pub struct GlobalAccessControlConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 
-    /// IP source. Defaults to RemoteAddr (TCP peer, un-forgeable). Only set ClientIp when a
+    /// IP source. Defaults to DirectPeerIp (raw TCP peer, un-forgeable). Only set RemoteIp when a
     /// trusted L4 LB fronts the gateway and RealIp is correctly configured.
     #[serde(default = "default_ip_source")]
     pub ip_source: IpSource,
@@ -291,7 +291,7 @@ mod tests {
             active_profile_ref: None,
             status: 403,
             message: None,
-            ip_source: IpSource::RemoteAddr,
+            ip_source: IpSource::DirectPeerIp,
         };
         cfg.validate_and_init().unwrap();
         cfg
@@ -354,8 +354,8 @@ mod tests {
     // The former evaluate()-based tests here (`allow_when_ip_and_header_both_match`,
     // `deny_when_ip_matches_but_header_missing`, `deny_when_header_matches_but_ip_outside`,
     // `second_group_or_matches`, `base_profile_default_allow_passes_everything`,
-    // `header_only_group_matches_without_client_ip`,
-    // `ip_constrained_group_denies_when_client_ip_unknown`) exercised
+    // `header_only_group_matches_without_source_ip`,
+    // `ip_constrained_group_denies_when_source_ip_unknown`) exercised
     // `AllowProfile::evaluate`/`AllowRuleGroup::matches`, which have been deleted
     // (no callers left — the gateway ported the logic; see the module doc). Their
     // coverage now lives in
@@ -363,8 +363,8 @@ mod tests {
     // module: `allow_when_cidr_and_secret_match`, `deny_when_cidr_matches_but_secret_absent`,
     // `deny_when_secret_matches_but_ip_outside_cidr` already existed there;
     // `second_group_or_matches`, `base_profile_default_allow_passes_everything`,
-    // `header_only_group_matches_without_client_ip`, and
-    // `ip_constrained_group_denies_when_client_ip_unknown` were ported as part of
+    // `header_only_group_matches_without_source_ip`, and
+    // `ip_constrained_group_denies_when_source_ip_unknown` were ported as part of
     // this deletion (Task 10 review).
 
     #[test]

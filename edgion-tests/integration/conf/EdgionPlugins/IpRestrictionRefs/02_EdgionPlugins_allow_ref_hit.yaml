@@ -10,7 +10,7 @@ spec:
     - enable: true
       type: IpRestriction
       config:
-        ipSource: remoteAddr
+        ipSource: RemoteIp
         allowRefs:
           - name: ipref-allowlist
         status: 403

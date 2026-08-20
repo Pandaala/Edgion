@@ -149,17 +149,17 @@ req.set_header("X-Session-Id", session)
 
 ---
 
-### req.client_ip
+### req.direct_peer_ip
 
-**Signature**: `req.client_ip` → `Str`
+**Signature**: `req.direct_peer_ip` → `Str`
 
-Returns the client IP address after processing by the `real-ip` plugin. If the `real-ip` plugin is not configured, this is identical to `req.remote_ip` and returns the direct peer address of the connection.
+Returns the physical downstream transport peer (`DirectPeerIp`). It is not changed by inbound PROXY protocol or forwarded-header processing. Use `req.remote_ip` for ordinary client identity, rate-limit, and experiment-bucketing use cases.
 
 **Return value**: IP address string (IPv4 or IPv6 format)
 
 **Example**:
 ```
-let ip = req.client_ip
+let ip = req.direct_peer_ip
 if ip_in_cidr(ip, "10.0.0.0/8") {
   req.set_header("X-Internal-Request", "true")
 }
@@ -171,14 +171,14 @@ if ip_in_cidr(ip, "10.0.0.0/8") {
 
 **Signature**: `req.remote_ip` → `Str`
 
-Returns the direct peer IP address of the TCP connection, without any proxy header processing. This is the actual remote address of the underlying connection.
+Returns the resolved client identity (`RemoteIp`) for the current request layer. It starts from the effective L4 peer and may be updated by the trusted-proxy `RealIp`/XFF resolver.
 
 **Return value**: IP address string (IPv4 or IPv6 format)
 
 **Example**:
 ```
 let remote = req.remote_ip
-log("direct connection from: " + remote)
+log("resolved client: " + remote)
 ```
 
 ---
@@ -1812,7 +1812,7 @@ Atomically increments the integer value of a key by 1. Creates the key with valu
 
 **Example — simple rate limiting**:
 ```
-let r = redis.incr("cache", "rate:" + req.client_ip)
+let r = redis.incr("cache", "rate:" + req.remote_ip)
 if !r["ok"] {
   log_warn("redis error: " + r["error"])
   return deny(503, "service unavailable")
@@ -1929,7 +1929,7 @@ Checks whether the specified IP address belongs to the given CIDR range. Both IP
 
 **Example**:
 ```
-let ip = req.client_ip
+let ip = req.direct_peer_ip
 if ip_in_cidr(ip, "10.0.0.0/8") or ip_in_cidr(ip, "172.16.0.0/12") or ip_in_cidr(ip, "192.168.0.0/16") {
   req.set_header("X-Private-Network", "true")
 } else {
@@ -2110,7 +2110,7 @@ Records a log message at the ERROR level. The message is written to the Gateway'
 ```
 let sig = req.header("X-Signature")
 if sig == nil {
-  log_error("missing signature header, rejecting request from: " + req.client_ip)
+  log_error("missing signature header, rejecting request from: " + req.remote_ip)
   return deny(401, "signature required")
 }
 ```
@@ -2127,7 +2127,7 @@ if sig == nil {
 | `req.query(name)` | Request Reading | `Str\|Nil` | 1 |
 | `req.query_string` | Request Reading | `Str\|Nil` | 0 |
 | `req.cookie(name)` | Request Reading | `Str\|Nil` | 1 |
-| `req.client_ip` | Request Reading | `Str` | 0 |
+| `req.direct_peer_ip` | Request Reading | `Str` | 0 |
 | `req.remote_ip` | Request Reading | `Str` | 0 |
 | `req.path_param(name)` | Request Reading | `Str\|Nil` | 1 |
 | `req.header_names` | Request Reading | `List` | 0 |

@@ -41,7 +41,7 @@ pub(super) fn resolve_namespace_method(namespace: &str, method: &str) -> Option<
         ("req", "query") => Some(BuiltinId::ReqQuery),
         ("req", "query_string") => Some(BuiltinId::ReqQueryString),
         ("req", "cookie") => Some(BuiltinId::ReqCookie),
-        ("req", "client_ip") => Some(BuiltinId::ReqClientIp),
+        ("req", "direct_peer_ip") => Some(BuiltinId::ReqDirectPeerIp),
         ("req", "remote_ip") => Some(BuiltinId::ReqRemoteIp),
         ("req", "path_param") => Some(BuiltinId::ReqPathParam),
         ("req", "header_names") => Some(BuiltinId::ReqHeaderNames),
@@ -124,7 +124,7 @@ pub(crate) fn builtin_arity(id: &BuiltinId) -> BuiltinArity {
         BuiltinId::ReqMethod
         | BuiltinId::ReqPath
         | BuiltinId::ReqQueryString
-        | BuiltinId::ReqClientIp
+        | BuiltinId::ReqDirectPeerIp
         | BuiltinId::ReqRemoteIp
         | BuiltinId::ReqHeaderNames
         | BuiltinId::ReqScheme

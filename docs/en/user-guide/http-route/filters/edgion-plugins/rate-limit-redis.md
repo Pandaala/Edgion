@@ -61,7 +61,7 @@ spec:
       config:
         redisRef: "default/shared-redis"
         key:
-          - type: clientIp
+          - type: remoteIp
         policies:
           - rate: 100
             interval: "1s"
@@ -89,7 +89,7 @@ spec:
 |-----------|------|---------|-------------|
 | `redisRef` | String | — (required) | Redis LinkSys resource reference in `"namespace/name"` format. Only alphanumeric characters, `-`, and `_` are allowed |
 | `policies` | Array\<Object\> | — (required) | Rate limiting policy list. At least 1, maximum 10. See Policy Configuration below |
-| `key` | Array\<Object\> | `[{type: clientIp}]` | Rate limiting dimension list. A single key is used verbatim; multiple keys are length-prefixed and joined with `_`. See Key Configuration below |
+| `key` | Array\<Object\> | `[{type: remoteIp}]` | Rate limiting dimension list. A single key is used verbatim; multiple keys are length-prefixed and joined with `_`. See Key Configuration below |
 | `onMissingKey` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` \| `Deny` |
 | `defaultKey` | String | none | Default key value when extraction fails, takes precedence over `onMissingKey` |
 | `rejectStatus` | Integer | `429` | HTTP status code on rejection (100–599) |
@@ -142,20 +142,20 @@ Identical to the [RateLimit plugin](rate-limit.md). Supported key types:
 
 | type | Requires `name` | Description |
 |------|-----------------|-------------|
-| `clientIp` | No | Client IP address (after real IP extraction) |
+| `remoteIp` | No | Resolved client IP address |
 | `header` | Yes | Value of a specific request header |
 | `cookie` | Yes | Value of a specific cookie |
 | `query` | Yes | Value of a specific query parameter |
 | `path` | No | Request path |
 | `method` | No | HTTP method |
 | `ctx` | Yes | Context variable set by another plugin |
-| `clientIpAndPath` | No | Combined client IP and path |
+| `remoteIpAndPath` | No | Combined resolved client IP and path |
 
 Example of combining multiple keys:
 
 ```yaml
 key:
-  - type: clientIp
+  - type: remoteIp
   - type: header
     name: "X-API-Key"
 ```
@@ -166,7 +166,7 @@ The resulting Redis key looks like `{keyPrefix}{pluginScope}:{algorithm}:{policy
 
 Multiple routes referencing the **same** EdgionPlugins resource share one limiter — that is how a rate limit is shared across routes, and it matches the in-memory `RateLimit`, whose counter is likewise shared per resource. Two *different* resources can no longer share a bucket by construction: to share a quota across routes, point them at one resource rather than duplicating the configuration.
 
-Omitting `key` applies the default `[{type: clientIp}]`. An explicitly empty `key: []` means "one global bucket": every request composes to the same empty key and is still rate limited — it is not treated as a key extraction failure, so `onMissingKey` / `defaultKey` do not apply to it.
+Omitting `key` applies the default `[{type: remoteIp}]`. An explicitly empty `key: []` means "one global bucket": every request composes to the same empty key and is still rate limited — it is not treated as a key extraction failure, so `onMissingKey` / `defaultKey` do not apply to it.
 
 ---
 
@@ -226,7 +226,7 @@ spec:
       config:
         redisRef: "default/shared-redis"
         key:
-          - type: clientIp
+          - type: remoteIp
         policies:
           - rate: 100
             interval: "1s"

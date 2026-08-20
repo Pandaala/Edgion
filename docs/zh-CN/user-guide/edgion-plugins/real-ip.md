@@ -113,11 +113,11 @@ spec:
   10.0.0.99 → 可信 → 继续
   1.2.3.4   → 不可信 → 返回
 
-结果: 网关认定 client_ip = 1.2.3.4（攻击者伪造）
+结果：网关解析出的 `RemoteIp = 1.2.3.4`（攻击者伪造）
 ```
 
 攻击者随后：
-- 绕过依赖 `client_ip` 的 IP 白名单（`ip_restriction`）
+- 绕过依赖 `RemoteIp` 的 IP 白名单（`ip_restriction`）
 - 把基于 IP 的限流计数写到任意其他用户名下
 - 让审计日志记录伪造的源 IP
 
@@ -183,8 +183,8 @@ Edgion 默认采用 Nginx 风格（无上限，向后兼容），同时通过 `m
 ### 算法流程
 
 ```text
-1. 检查 client_addr 是否在 trustedIps 中
-   ├─ 否 → 直接使用 client_addr 作为 real IP
+1. 检查 downstream_peer_ip 是否在 trustedIps 中
+   ├─ 否 → 保持 downstream_peer_ip 作为 RemoteIp
    └─ 是 → 继续步骤 2
 
 2. 从 realIpHeader 提取 IP 列表
@@ -196,7 +196,7 @@ Edgion 默认采用 Nginx 风格（无上限，向后兼容），同时通过 `m
    ├─ 198.51.100.2 → 在 trustedIps 中 ✓ 继续
    └─ 203.0.113.1 → 不在 trustedIps 中 ✗ 这是真实 IP！
 
-4. 更新 ctx.request_info.remote_addr（通过 set_remote_addr 方法）
+4. 更新 ctx.request_info.remote_ip（通过 set_remote_ip 方法）
 ```
 
 ### 示例场景
@@ -210,7 +210,7 @@ CDN (198.51.100.2, trusted)
     ↓ X-Forwarded-For: 203.0.113.1
 负载均衡器 (192.168.1.1, trusted)
     ↓ X-Forwarded-For: 203.0.113.1, 198.51.100.2
-Edgion Gateway (client_addr: 192.168.1.1)
+Edgion Gateway (downstream_peer_ip: 192.168.1.1)
 ```
 
 **配置：**
@@ -226,7 +226,7 @@ realIpHeader: "X-Forwarded-For"
 recursive: true
 ```
 
-**结果：** `remote_addr = 203.0.113.1`
+**结果：** `remote_ip = 203.0.113.1`
 
 #### 场景 2：Cloudflare CDN
 
@@ -332,21 +332,21 @@ spec:
 
 1. **安全性**：只信任你控制的代理 IP，不要信任过大的 CIDR 范围
 2. **性能**：IP 匹配使用 Radix Tree，性能开销极小
-3. **顺序**：插件应该在其他需要使用 `remote_addr` 的插件（如限流、IP 限制）之前执行
+3. **顺序**：插件应该在其他需要使用 `remote_ip` 的插件（如限流、IP 限制）之前执行
 4. **全局配置**：如果同时配置了全局 `realIp` 和插件级 `RealIp`，插件配置会覆盖全局配置
-5. **实时生效**：插件会直接修改 `ctx.request_info.remote_addr`，后续的插件和访问日志将使用更新后的值
+5. **实时生效**：插件会直接修改 `ctx.request_info.remote_ip`，后续的插件和访问日志将使用更新后的值
 
 ## 常见问题
 
-### Q: 为什么要区分 client_addr 和 remote_addr？
+### Q: 为什么要区分 DirectPeerIp 和 RemoteIp？
 
 A: 
-- `client_addr`: TCP 连接的直接来源 IP（通常是负载均衡器）
-- `remote_addr`: 提取后的真实客户端 IP（用于业务逻辑）
+- `DirectPeerIp`：传输连接的物理来源 IP（通常是负载均衡器）
+- `RemoteIp`：经过可信 PROXY/RealIp 边界解析的客户端身份（用于业务逻辑）
 
 ### Q: 如何验证配置是否生效？
 
-A: 查看请求日志中的 `remote_addr` 字段，或者在后端服务查看 `X-Real-IP` Header。
+A：查看请求日志中的 `remote_ip` 字段，或者在后端服务查看配置的 RemoteIp Header（默认是 `X-Real-IP`）。
 
 ### Q: 可以同时信任多个 CDN 吗？
 

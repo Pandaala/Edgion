@@ -159,6 +159,20 @@ spec:
                       format: int32
 
                 # ============================================
+                # Upstream Forwarded Header Configuration
+                # ============================================
+                forwardedHeaders:
+                  type: object
+                  description: "Gateway-owned headers sent to upstream requests"
+                  properties:
+                    remoteIpHeader:
+                      type: string
+                      description: "Header receiving the final resolved RemoteIp on upstream requests"
+                      pattern: "^[A-Za-z0-9!#$%&'*+\\-.^_`|~]+$"
+                      maxLength: 256
+                      default: "X-Real-IP"
+
+                # ============================================
                 # Security Protection Configuration
                 # ============================================
                 securityProtect:

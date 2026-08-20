@@ -412,8 +412,10 @@ impl Vm {
                 let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.get_cookie(&name), self.limits.max_string_len)
             }
-            BuiltinId::ReqClientIp => checked_value_str(session.client_addr().to_string(), self.limits.max_string_len),
-            BuiltinId::ReqRemoteIp => checked_value_str(session.remote_addr().to_string(), self.limits.max_string_len),
+            BuiltinId::ReqDirectPeerIp => {
+                checked_value_str(session.direct_peer_ip().to_string(), self.limits.max_string_len)
+            }
+            BuiltinId::ReqRemoteIp => checked_value_str(session.remote_ip().to_string(), self.limits.max_string_len),
             BuiltinId::ReqPathParam => {
                 let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.get_path_param(&name), self.limits.max_string_len)
@@ -1692,7 +1694,7 @@ impl Vm {
             | BuiltinId::ReqQuery
             | BuiltinId::ReqQueryString
             | BuiltinId::ReqCookie
-            | BuiltinId::ReqClientIp
+            | BuiltinId::ReqDirectPeerIp
             | BuiltinId::ReqRemoteIp
             | BuiltinId::ReqPathParam
             | BuiltinId::ReqHeaderNames

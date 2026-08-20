@@ -300,15 +300,18 @@ Details, verified consumer lists, and exemptions: `skills/01-architecture/00-com
     Whitelist behaviour is implied by configuring an allow list (see
     `IpRestrictionConfig::allow_mode`); anything unmatched falls to
     `defaultAction`.
-12. Two client IPs, never conflated. **`DirectPeerIp`** is the immediate TCP peer
-    — the previous hop, never rewritten, unforgeable, available at both L4 and
-    L7. **`RemoteIp`** is the client resolved from `X-Forwarded-For` against the
-    trusted-proxy set — L7 only, and forgeable whenever that set is
-    misconfigured, so security rules should prefer `DirectPeerIp` unless the
+12. Two client IPs, never conflated. **`DirectPeerIp`** is the physical transport
+    peer observed before inbound PROXY protocol or HTTP forwarded-header
+    processing; it is never rewritten and is available wherever an inet peer
+    exists. **`RemoteIp`** is the client identity resolved for the current layer:
+    it may come from a trusted PROXY hop at L4 and from the trusted-proxy
+    `RealIp`/XFF resolver at L7. It is only as trustworthy as those trust
+    boundaries, so security rules should prefer `DirectPeerIp` unless the
     deployment genuinely terminates behind a trusted proxy. These map to Envoy's
-    `direct_remote_ip` / `remote_ip`. Note the access log's field names predate
-    this and read inverted: `client-addr` is the direct peer, `remote-addr` is
-    the resolved client (see `tasks/access-log-ip-field-naming.md`).
+    `direct_remote_ip` / `remote_ip`. `RealIp` names the resolution mechanism,
+    not an address field. HTTP access-log fields use the canonical names
+    `direct_peer_ip` and `remote_ip`; protocol-specific logs follow the same
+    vocabulary.
 
 ## Git constraints
 

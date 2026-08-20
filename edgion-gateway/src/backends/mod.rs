@@ -223,18 +223,18 @@ pub(crate) async fn try_get_peer(
                 return Err(EdgionStatus::BackendServiceNotFound);
             }
 
-            // Only ConsistentHash consumes the client IP; skip the clone (and its
+            // Only ConsistentHash consumes RemoteIp; skip the clone (and its
             // allocation) for the RR/LeastConn/Ewma hot paths.
-            let client_ip = if matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
-                ctx.request_info.remote_addr.clone()
+            let remote_ip = if matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
+                ctx.request_info.remote_ip.clone()
             } else {
                 String::new()
             };
             let backend = take_sp_target_or_select(ctx, &service_key, inherit_service_state, || {
                 if inherit_service_state {
-                    select_from_endpoint_slice(&service_key, &lb_policy, session, &client_ip)
+                    select_from_endpoint_slice(&service_key, &lb_policy, session, &remote_ip)
                 } else {
-                    select_from_endpoint_slice_discovery_only(&service_key, &lb_policy, session, &client_ip)
+                    select_from_endpoint_slice_discovery_only(&service_key, &lb_policy, session, &remote_ip)
                 }
             })?;
 
@@ -342,15 +342,15 @@ pub(crate) async fn try_get_peer(
                 ExternalNamePath::EndpointSlice => {
                     // Controller loop resolved this ExternalName to a ready
                     // EndpointSlice — route through it like any LB-backed service.
-                    // Only ConsistentHash consumes the client IP; skip the clone
+                    // Only ConsistentHash consumes RemoteIp; skip the clone
                     // (and its allocation) for the RR/LeastConn/Ewma hot paths.
-                    let client_ip = if matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
-                        ctx.request_info.remote_addr.clone()
+                    let remote_ip = if matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
+                        ctx.request_info.remote_ip.clone()
                     } else {
                         String::new()
                     };
                     let backend = take_sp_target_or_select(ctx, &service_key, true, || {
-                        select_from_endpoint_slice(&service_key, &lb_policy, session, &client_ip)
+                        select_from_endpoint_slice(&service_key, &lb_policy, session, &remote_ip)
                     })?;
                     build_peer_from_lb_selection(
                         ctx,
@@ -422,15 +422,15 @@ pub(crate) async fn try_get_peer(
         ServiceBackendKind::Unsupported(_) => Err(EdgionStatus::BackendUnsupportedKind),
 
         ServiceBackendKind::ServiceEndpointSlice => {
-            // Only ConsistentHash consumes the client IP; skip the clone (and its
+            // Only ConsistentHash consumes RemoteIp; skip the clone (and its
             // allocation) for the RR/LeastConn/Ewma hot paths.
-            let client_ip = if matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
-                ctx.request_info.remote_addr.clone()
+            let remote_ip = if matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
+                ctx.request_info.remote_ip.clone()
             } else {
                 String::new()
             };
             let backend = take_sp_target_or_select(ctx, &service_key, true, || {
-                select_from_endpoint_slice(&service_key, &lb_policy, session, &client_ip)
+                select_from_endpoint_slice(&service_key, &lb_policy, session, &remote_ip)
             })?;
             build_peer_from_lb_selection(
                 ctx,
@@ -610,8 +610,8 @@ fn build_peer_from_lb_selection(
     let lb_policy_clone = lb_policy.clone();
 
     if ctx.gateway_info.metrics_test_type.is_some() && matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
-        let client_ip = ctx.request_info.remote_addr.clone();
-        let hash_key_bytes = extract_hash_key(session, lb_policy, &client_ip);
+        let remote_ip = ctx.request_info.remote_ip.clone();
+        let hash_key_bytes = extract_hash_key(session, lb_policy, &remote_ip);
         ctx.hash_key = String::from_utf8(hash_key_bytes).ok();
     }
 

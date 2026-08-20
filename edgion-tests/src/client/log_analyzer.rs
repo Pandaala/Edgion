@@ -24,6 +24,12 @@ struct RequestInfo {
     host: String,
     path: String,
     status: u16,
+    #[serde(default)]
+    direct_peer_ip: Option<String>,
+    #[serde(default)]
+    direct_peer_port: Option<u16>,
+    #[serde(default)]
+    remote_ip: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -235,6 +241,19 @@ mod tests {
         assert_eq!(result.total_requests, 2);
         assert_eq!(*result.lb_policy_counts.get("RoundRobin").unwrap(), 2);
         assert_eq!(result.backend_counts.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_canonical_downstream_ip_fields() {
+        let lines = r#"{"request_info":{"x-trace-id":"ip-1","host":"h","path":"/","status":200,"direct_peer_ip":"192.0.2.10","direct_peer_port":443,"remote_ip":"203.0.113.7"},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":9000}]}}
+"#;
+        let (_f, a) = analyzer_for(lines);
+        let entries = a.parse_log().unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].request_info.direct_peer_ip.as_deref(), Some("192.0.2.10"));
+        assert_eq!(entries[0].request_info.direct_peer_port, Some(443));
+        assert_eq!(entries[0].request_info.remote_ip.as_deref(), Some("203.0.113.7"));
     }
 
     // Test 1: prefix filtering — only entries whose trace-id starts with the

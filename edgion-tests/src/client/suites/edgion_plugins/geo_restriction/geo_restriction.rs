@@ -454,7 +454,7 @@ impl GeoRestrictionTestSuite {
     }
 
     /// Access log content: a rule-mode config consulting only `DirectPeerIp`
-    /// populates `geo.direct.*` and leaves `geo.client` absent — the log
+    /// populates `geo.direct_peer.*` and leaves `geo.remote` absent — the log
     /// reads whatever slot(s) the plugin actually resolved, never forcing an
     /// unconsulted lookup.
     fn access_log_geo_fields() -> TestCase {
@@ -465,7 +465,7 @@ impl GeoRestrictionTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     // Deny on an unrelated value so the request is ALLOWED (200) and
-                    // reliably reaches the access-log write path with the direct slot resolved.
+                    // reliably reaches the access-log write path with the direct_peer slot resolved.
                     let config = "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: never-matches\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"ZZ\"]\n";
                     if let Err(e) = apply_geo_rr(&ctx, config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
@@ -484,35 +484,36 @@ impl GeoRestrictionTestSuite {
                         Ok(entry) => entry,
                         Err(e) => return TestResult::failed(start.elapsed(), format!("access log missing: {e}")),
                     };
-                    let direct_country = entry.get_nested_str("geo.direct.country");
-                    let client_country = entry.get_nested_str("geo.client.country");
-                    if direct_country != Some("HK") {
+                    let direct_peer_country = entry.get_nested_str("geo.direct_peer.country");
+                    let remote_country = entry.get_nested_str("geo.remote.country");
+                    if direct_peer_country != Some("HK") {
                         return TestResult::failed(
                             start.elapsed(),
-                            format!("geo.direct.country expected HK, got {direct_country:?}"),
+                            format!("geo.direct_peer.country expected HK, got {direct_peer_country:?}"),
                         );
                     }
                     // The rule under test only consults DirectPeerIp, so nothing ever
-                    // resolved the remote/client slot — its absence proves the access log
+                    // resolved the remote slot — its absence proves the access log
                     // reads slots lazily instead of forcing a lookup on every request.
-                    if client_country.is_some() {
+                    if remote_country.is_some() {
                         return TestResult::failed(
                             start.elapsed(),
-                            format!("geo.client must be absent when no rule consulted it, got {client_country:?}"),
+                            format!("geo.remote must be absent when no rule consulted it, got {remote_country:?}"),
                         );
                     }
                     // 127.0.0.7 (HK/Kowloon) carries coordinates in the fixture, so
                     // `coord` IS emitted — presence follows the record, rendered through
                     // the shared `masked` serializer under the process-global sensitive mode.
-                    if entry.data["geo"]["direct"]["coord"].is_null() {
+                    if entry.data["geo"]["direct_peer"]["coord"].is_null() {
                         return TestResult::failed(
                             start.elapsed(),
-                            "geo.direct.coord expected present (the fixture record carries coordinates)".to_string(),
+                            "geo.direct_peer.coord expected present (the fixture record carries coordinates)"
+                                .to_string(),
                         );
                     }
                     TestResult::passed_with_message(
                         start.elapsed(),
-                        "geo.direct.country=GB present, geo.client absent".to_string(),
+                        "geo.direct_peer.country=GB present, geo.remote absent".to_string(),
                     )
                 })
             },
@@ -520,14 +521,14 @@ impl GeoRestrictionTestSuite {
     }
 
     /// Parse-only mode (`config: {}`): every request passes through
-    /// unconditionally, and BOTH `geo.direct`/`geo.client` are populated in
+    /// unconditionally, and BOTH `geo.direct_peer`/`geo.remote` are populated in
     /// the access log — parse-only resolves both slots (its whole purpose),
     /// unlike rule mode which resolves only what a rule actually consults.
     /// This is the core new capability this refactor exists to add.
     fn parse_only_mode_passes_and_populates_access_log() -> TestCase {
         TestCase::new(
             "parse_only_mode_passes_and_populates_access_log",
-            "config: {} never denies, and populates both geo.direct and geo.client in the access log",
+            "config: {} never denies, and populates both geo.direct_peer and geo.remote in the access log",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -543,19 +544,19 @@ impl GeoRestrictionTestSuite {
                         Ok(entry) => entry,
                         Err(e) => return TestResult::failed(start.elapsed(), format!("access log missing: {e}")),
                     };
-                    let direct_country = entry.get_nested_str("geo.direct.country");
-                    let client_country = entry.get_nested_str("geo.client.country");
-                    if direct_country != Some("CN") {
+                    let direct_peer_country = entry.get_nested_str("geo.direct_peer.country");
+                    let remote_country = entry.get_nested_str("geo.remote.country");
+                    if direct_peer_country != Some("CN") {
                         return TestResult::failed(
                             start.elapsed(),
-                            format!("geo.direct.country expected CN, got {direct_country:?}"),
+                            format!("geo.direct_peer.country expected CN, got {direct_peer_country:?}"),
                         );
                     }
-                    if client_country != Some("CN") {
+                    if remote_country != Some("CN") {
                         return TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "geo.client.country expected CN (parse-only resolves both slots), got {client_country:?}"
+                                "geo.remote.country expected CN (parse-only resolves both slots), got {remote_country:?}"
                             ),
                         );
                     }

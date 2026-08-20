@@ -5,8 +5,8 @@
 // entry still enforces the valid entry — the invalid one is skipped, not fatal,
 // and the list never collapses to deny-all.
 //
-// All cases use ipSource: remoteAddr so the checked IP is the deterministic TCP
-// peer of the test client (127.0.0.1). The first two cases source the IP groups
+// All cases use ipSource: RemoteIp so the checked IP is the resolved address,
+// which is the deterministic TCP peer when no forwarded address is supplied. The first two cases source the IP groups
 // from EdgionConfigData (IpList) objects referenced via denyRefs; the last two
 // (inline-deny) carry the groups directly in the plugin's inline `deny`. Every
 // group contains a deliberately invalid CIDR sibling.

@@ -441,21 +441,26 @@ mod normalized_hostname_tests {
 /// Request information extracted from the incoming request
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RequestInfo {
-    /// TCP client IP address (direct connection, immutable)
+    /// Physical downstream transport peer IP before PROXY/XFF rewriting.
     #[serde(
-        rename = "client-addr",
+        rename = "direct_peer_ip",
         serialize_with = "edgion_resources::sensitive::masked::serialize"
     )]
-    pub client_addr: String,
-    /// TCP client port (direct connection, 0 if unknown)
-    #[serde(rename = "client-port")]
-    pub client_port: u16,
-    /// Real client address (extracted from headers if behind trusted proxy)
+    pub direct_peer_ip: String,
+    /// Physical downstream transport peer port, or zero when unknown.
+    pub direct_peer_port: u16,
+    /// PROXY-effective downstream peer before HTTP RealIp/XFF processing.
+    #[serde(skip)]
+    pub downstream_peer_ip: String,
+    /// PROXY-effective downstream peer port, or zero when unknown.
+    #[serde(skip)]
+    pub downstream_peer_port: u16,
+    /// Layer-resolved client IP, possibly updated by trusted RealIp processing.
     #[serde(
-        rename = "remote-addr",
+        rename = "remote_ip",
         serialize_with = "edgion_resources::sensitive::masked::serialize"
     )]
-    pub remote_addr: String,
+    pub remote_ip: String,
     /// Trace ID from x-trace-id header
     #[serde(rename = "x-trace-id")]
     pub x_trace_id: Option<String>,
@@ -1308,6 +1313,11 @@ pub struct EdgionHttpContext {
     /// reads these numeric values.
     pub request_body_config: crate::request_body::ResolvedRequestBodyConfig,
 
+    /// Validated upstream header carrying the final RemoteIp. Captured from the
+    /// immutable EGC runtime snapshot when this request context is created, so
+    /// an in-flight request is unaffected by a later config update.
+    pub remote_ip_header: http::HeaderName,
+
     /// Full request-body cache and mutation framing state. Its read-only view
     /// stays available through the final upstream-response header plugin chain
     /// and is then released before streaming the response.
@@ -1536,7 +1546,7 @@ pub struct EdgionHttpContext {
     /// was not attempted (bypass paths, no policy).
     pub cb_permit: Option<crate::backends::circuit_breaker::CbPermit>,
 
-    /// Geo for the direct peer address (`request_info.client_addr`).
+    /// Geo for the physical direct peer (`request_info.direct_peer_ip`).
     ///
     /// `OnceLock` rather than `RefCell`: `extract_rule_values` and other geo
     /// consumers take `&self`, and this context must stay `Send + Sync`
@@ -1544,15 +1554,15 @@ pub struct EdgionHttpContext {
     /// `cached_query_cell` comment above for the same reasoning). Set-once is
     /// exactly the semantics needed — a resolved lookup, including a
     /// `NotFound`, is never re-queried.
-    pub direct_geo: std::sync::OnceLock<crate::geoip::GeoLookup>,
+    pub direct_peer_geo: std::sync::OnceLock<crate::geoip::GeoLookup>,
 
-    /// Geo for the real client address (`request_info.remote_addr`).
+    /// Geo for the resolved client (`request_info.remote_ip`).
     ///
     /// Filled lazily by its first consumer, never eagerly at request entry:
-    /// the `real_ip` plugin can overwrite `remote_addr` after the
+    /// the `real_ip` plugin can overwrite `remote_ip` after the
     /// listener-level extractor runs, and an eager fill would cache the
     /// pre-plugin address.
-    pub client_geo: std::sync::OnceLock<crate::geoip::GeoLookup>,
+    pub remote_geo: std::sync::OnceLock<crate::geoip::GeoLookup>,
 }
 
 /// Parse a `RequestInfo` address field as an `IpAddr`, tolerating either a
@@ -1566,6 +1576,25 @@ fn parse_ip_str(addr: &str) -> Option<std::net::IpAddr> {
         .map(|sa| sa.ip())
         .or_else(|_| addr.parse::<std::net::IpAddr>())
         .ok()
+}
+
+/// Return one canonical textual form for a downstream IP identity.
+///
+/// IPv4-mapped IPv6 addresses are collapsed to native IPv4 so policy keys,
+/// logs, templates, and GeoIP all observe the same host spelling.
+pub(crate) fn canonicalize_ip(ip: std::net::IpAddr) -> String {
+    match ip {
+        std::net::IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map(std::net::IpAddr::V4)
+            .unwrap_or(std::net::IpAddr::V6(v6))
+            .to_string(),
+        std::net::IpAddr::V4(v4) => v4.to_string(),
+    }
+}
+
+pub(crate) fn canonicalize_ip_str(value: &str) -> Option<String> {
+    value.parse::<std::net::IpAddr>().ok().map(canonicalize_ip)
 }
 
 impl Default for EdgionHttpContext {
@@ -1708,6 +1737,7 @@ impl EdgionHttpContext {
             sp_sticky_consumed: false,
             allow_loopback_upstream: false,
             request_body_config: crate::request_body::ResolvedRequestBodyConfig::default(),
+            remote_ip_header: http::HeaderName::from_static("x-real-ip"),
             request_body: RequestBodyState::default(),
             request_body_stream: Vec::new(),
             request_body_stream_active: false,
@@ -1747,8 +1777,8 @@ impl EdgionHttpContext {
             response_denial: None,
             response_stream_kind: ResponseStreamKind::None,
             cb_permit: None,
-            direct_geo: std::sync::OnceLock::new(),
-            client_geo: std::sync::OnceLock::new(),
+            direct_peer_geo: std::sync::OnceLock::new(),
+            remote_geo: std::sync::OnceLock::new(),
         }
     }
 
@@ -1781,38 +1811,38 @@ impl EdgionHttpContext {
             .get_or_init(|| raw_query.map(uri_utils::parse_query_string).unwrap_or_default())
     }
 
-    /// Geo for the real client address (`request_info.remote_addr`). Resolves
+    /// Geo for the resolved client (`request_info.remote_ip`). Resolves
     /// on first call, then caches. Never queries eagerly — the `real_ip`
-    /// plugin can rewrite `remote_addr` after the listener-level extractor
+    /// plugin can rewrite `remote_ip` after the listener-level extractor
     /// runs, so filling this at request entry would cache the wrong address.
-    pub fn client_geo(&self) -> &crate::geoip::GeoLookup {
-        self.client_geo.get_or_init(|| {
+    pub fn remote_geo(&self) -> &crate::geoip::GeoLookup {
+        self.remote_geo.get_or_init(|| {
             self.resolve_geo(
-                &self.request_info.remote_addr,
-                &self.direct_geo,
-                &self.request_info.client_addr,
+                &self.request_info.remote_ip,
+                &self.direct_peer_geo,
+                &self.request_info.direct_peer_ip,
             )
         })
     }
 
-    /// Geo for the direct peer address (`request_info.client_addr`). Resolves
+    /// Geo for the physical direct peer (`request_info.direct_peer_ip`). Resolves
     /// on first call, then caches.
-    pub fn direct_geo(&self) -> &crate::geoip::GeoLookup {
-        self.direct_geo.get_or_init(|| {
+    pub fn direct_peer_geo(&self) -> &crate::geoip::GeoLookup {
+        self.direct_peer_geo.get_or_init(|| {
             self.resolve_geo(
-                &self.request_info.client_addr,
-                &self.client_geo,
-                &self.request_info.remote_addr,
+                &self.request_info.direct_peer_ip,
+                &self.remote_geo,
+                &self.request_info.remote_ip,
             )
         })
     }
 
     /// Resolve `addr`, reusing `other_slot` when the two addresses normalize
-    /// equal. Most requests have no `X-Forwarded-For`, so `client_addr` and
-    /// `remote_addr` are usually the same host — and comparing the raw
+    /// equal. Most requests have no `X-Forwarded-For`, so `direct_peer_ip` and
+    /// `remote_ip` are usually the same host — and comparing the raw
     /// strings would miss that, because `::ffff:203.0.113.5` and
     /// `203.0.113.5` are the same host spelled two ways. Mirrors
-    /// `real_ip_extractor`'s handling of `client_addr`: try `SocketAddr`
+    /// `real_ip_extractor`'s address handling: try `SocketAddr`
     /// first (a peer address may carry a port), then fall back to a bare
     /// `IpAddr`. An address that fails to parse yields `NotFound`, not a
     /// panic.
@@ -2349,8 +2379,8 @@ mod sensitive_tests {
     fn test_request_info_wrap_mode() {
         let _g = set_mode(2);
         let ri = RequestInfo {
-            client_addr: "127.0.0.1".to_string(),
-            remote_addr: "10.0.0.1".to_string(),
+            direct_peer_ip: "127.0.0.1".to_string(),
+            remote_ip: "10.0.0.1".to_string(),
             entry_raw_path: "/api/users/alice".to_string(),
             normalized_current_path: "/api/users/alice".to_string(),
             x_forwarded_for: Some("203.0.113.5, 10.0.0.1".to_string()),
@@ -2358,8 +2388,8 @@ mod sensitive_tests {
             ..Default::default()
         };
         let json = serde_json::to_string(&ri).unwrap();
-        assert!(json.contains("<E>127.0.0.1</E>"), "client_addr: {}", json);
-        assert!(json.contains("<E>10.0.0.1</E>"), "remote_addr: {}", json);
+        assert!(json.contains("<E>127.0.0.1</E>"), "direct_peer_ip: {}", json);
+        assert!(json.contains("<E>10.0.0.1</E>"), "remote_ip: {}", json);
         assert!(json.contains("<E>/api/users/alice</E>"), "path: {}", json);
         assert!(json.contains("<E>203.0.113.5, 10.0.0.1</E>"), "xff: {}", json);
         assert!(json.contains("<E>example.com</E>"), "sni: {}", json);
@@ -2369,17 +2399,27 @@ mod sensitive_tests {
     fn test_request_info_replace_mode() {
         let _g = set_mode(1);
         let ri = RequestInfo {
-            client_addr: "127.0.0.1".to_string(),
-            remote_addr: "10.0.0.1".to_string(),
+            direct_peer_ip: "127.0.0.1".to_string(),
+            remote_ip: "10.0.0.1".to_string(),
             entry_raw_path: "/api/users/alice".to_string(),
             normalized_current_path: "/api/users/alice".to_string(),
             ..Default::default()
         };
         let json = serde_json::to_string(&ri).unwrap();
-        assert!(!json.contains("127.0.0.1"), "client_addr leaked: {}", json);
-        assert!(!json.contains("10.0.0.1"), "remote_addr leaked: {}", json);
+        assert!(!json.contains("127.0.0.1"), "direct_peer_ip leaked: {}", json);
+        assert!(!json.contains("10.0.0.1"), "remote_ip leaked: {}", json);
         assert!(!json.contains("/api/users/alice"), "path leaked: {}", json);
         assert!(json.contains("***"), "replace_with not found: {}", json);
+    }
+
+    #[test]
+    fn downstream_ip_canonicalization_collapses_ipv4_mapped_ipv6() {
+        assert_eq!(
+            canonicalize_ip_str("::ffff:203.0.113.7").as_deref(),
+            Some("203.0.113.7")
+        );
+        assert_eq!(canonicalize_ip_str("2001:db8::1").as_deref(), Some("2001:db8::1"));
+        assert!(canonicalize_ip_str("not-an-ip").is_none());
     }
 
     #[test]
@@ -2661,13 +2701,13 @@ mod geo_context_tests {
         GeoIpProvider::global().clear();
 
         let mut ctx = EdgionHttpContext::default();
-        ctx.request_info.client_addr = "203.0.113.7".to_string();
-        ctx.request_info.remote_addr = "203.0.113.7".to_string();
+        ctx.request_info.direct_peer_ip = "203.0.113.7".to_string();
+        ctx.request_info.remote_ip = "203.0.113.7".to_string();
 
         // No database loaded in this test process.
-        assert_eq!(*ctx.client_geo(), GeoLookup::Unavailable);
+        assert_eq!(*ctx.remote_geo(), GeoLookup::Unavailable);
         // Second call returns the cached value, not a second lookup.
-        assert_eq!(*ctx.client_geo(), GeoLookup::Unavailable);
+        assert_eq!(*ctx.remote_geo(), GeoLookup::Unavailable);
     }
 
     #[test]
@@ -2676,12 +2716,12 @@ mod geo_context_tests {
         GeoIpProvider::global().clear();
 
         let mut ctx = EdgionHttpContext::default();
-        ctx.request_info.client_addr = "::ffff:203.0.113.7".to_string();
-        ctx.request_info.remote_addr = "203.0.113.7".to_string();
+        ctx.request_info.direct_peer_ip = "::ffff:203.0.113.7".to_string();
+        ctx.request_info.remote_ip = "203.0.113.7".to_string();
         // The mapped and plain forms normalize equal, so the second slot must
         // reuse the first result rather than resolving independently.
-        let a = ctx.direct_geo().clone();
-        let b = ctx.client_geo().clone();
+        let a = ctx.direct_peer_geo().clone();
+        let b = ctx.remote_geo().clone();
         assert_eq!(a, b);
     }
 
@@ -2691,8 +2731,8 @@ mod geo_context_tests {
         GeoIpProvider::global().clear();
 
         let mut ctx = EdgionHttpContext::default();
-        ctx.request_info.remote_addr = "not-an-ip".to_string();
-        assert_eq!(*ctx.client_geo(), GeoLookup::NotFound);
+        ctx.request_info.remote_ip = "not-an-ip".to_string();
+        assert_eq!(*ctx.remote_geo(), GeoLookup::NotFound);
     }
 }
 

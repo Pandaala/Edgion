@@ -150,7 +150,7 @@ EdgionDSL's syntax is inspired by Rust and JavaScript conventions to minimize th
 **Variable declaration.** Both immutable and mutable variables are supported:
 
 ```
-let ip = req.client_ip()
+let ip = req.remote_ip()
 let mut count = 0
 count = count + 1
 ```
@@ -184,7 +184,7 @@ for name in req.header_names() {
 
 | Category | Count | Representative Functions |
 |----------|-------|--------------------------|
-| Request read | 15 | `req.header()`, `req.method()`, `req.path()`, `req.query()`, `req.cookie()`, `req.client_ip()`, `req.remote_ip()`, `req.path_param()`, `req.header_names()`, `req.scheme()`, `req.host()`, `req.uri()`, `req.content_type()`, `req.has_header()`, `req.query_string()` |
+| Request read | 15 | `req.header()`, `req.method()`, `req.path()`, `req.query()`, `req.cookie()`, `req.direct_peer_ip()`, `req.remote_ip()`, `req.path_param()`, `req.header_names()`, `req.scheme()`, `req.host()`, `req.uri()`, `req.content_type()`, `req.has_header()`, `req.query_string()` |
 | Request modify | 6 | `req.set_header()`, `req.append_header()`, `req.remove_header()`, `req.set_uri()`, `req.set_host()`, `req.set_method()` |
 | Response read | 3 | `resp.status()`, `resp.header()`, `resp.has_header()` |
 | Response modify | 3 | `resp.set_header()`, `resp.append_header()`, `resp.remove_header()` |
@@ -303,7 +303,8 @@ return next()
 **Use case 3: Internal IP rate-limit bypass.** Determine from the client IP whether a request is internal; if so, mark it via a context variable so that a downstream RateLimit plugin can skip rate limiting:
 
 ```
-let ip = req.client_ip()
+// Deliberately use the physical peer for this network-origin bypass rule.
+let ip = req.direct_peer_ip()
 
 // Simple CIDR prefix matching for internal networks
 if ip.starts_with("10.") || ip.starts_with("192.168.") || ip.starts_with("172.") {
@@ -346,7 +347,7 @@ pub trait RequestFilter: Send + Sync {
 
 **UpstreamResponse (Upstream Response Phase, Async).** Executed after the complete upstream response has been received. Used for plugins that require complete response information to function, such as conditional logic based on response status codes.
 
-All phases share the same `PluginSession` trait as the session abstraction. `PluginSession` provides a unified read/write interface for requests and responses, including header reading (`header_value`, `get_path`, `get_query_param`, `get_cookie`), header modification (`set_request_header`, `set_response_header`, `remove_request_header`), context variables (`get_ctx_var`, `set_ctx_var`), client information (`client_addr`, `remote_addr`, `client_cert_info`), and other methods. This design ensures that the DSL engine and native Rust plugins share the same session interface, guaranteeing behavioral consistency.
+All phases share the same `PluginSession` trait as the session abstraction. `PluginSession` provides a unified read/write interface for requests and responses, including header reading (`header_value`, `get_path`, `get_query_param`, `get_cookie`), header modification (`set_request_header`, `set_response_header`, `remove_request_header`), context variables (`get_ctx_var`, `set_ctx_var`), client information (`direct_peer_ip`, `remote_ip`, `client_cert_info`), and other methods. This design ensures that the DSL engine and native Rust plugins share the same session interface, guaranteeing behavioral consistency.
 
 ### 5.2 Stream Plugin Framework
 

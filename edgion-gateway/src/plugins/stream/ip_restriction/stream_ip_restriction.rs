@@ -73,7 +73,9 @@ impl StreamPlugin for StreamIpRestriction {
         let allow_arcs = resolve_ip_list_matchers(&self.allow_ref_keys);
         let deny_refs: Vec<&IpRadixMatcher> = deny_arcs.iter().map(|a| a.as_ref()).collect();
         let allow_refs: Vec<&IpRadixMatcher> = allow_arcs.iter().map(|a| a.as_ref()).collect();
-        let decision = self.rules.check_ip_with_refs(&ctx.client_ip, &deny_refs, &allow_refs);
+        let decision = self
+            .rules
+            .check_ip_with_refs(&ctx.direct_peer_ip, &deny_refs, &allow_refs);
         access_decision_to_stream_result(decision, || {})
     }
 }

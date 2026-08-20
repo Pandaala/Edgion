@@ -645,7 +645,7 @@ custom:
 | `${path}` / `${uri}` | 当前（可能已改写的）路径 / URI。 |
 | `${requestPath}` / `${requestUri}` | 冻结的入口路径 / URI。 |
 | `${method}` | 当前 HTTP 方法。 |
-| `${clientIp}` | 真实客户端 IP。 |
+| `${remoteIp}` | 解析后的客户端 IP。 |
 
 引用未定义变量的 `${ctx:X}` 解析为空字符串。要强制存在性，请在 origin 字段上使用 `presence: required`，或在调用 webhook 之前用 ctx-set 步骤设置该变量。
 
@@ -729,7 +729,7 @@ success:
 
 有一个连接层字段可以由 `request.*` 所用的同一套单次请求模板引擎驱动（见[模板变量](#模板变量)）——但它的变量白名单比 `request.*` **窄得多**。它会在准入时编译并校验；格式错误的模板，或引用了不允许的变量类型的模板，都会被拒绝并报 `Accepted=False`。
 
-> ⚠️ **`timeoutMsTemplate` 只接受 `${ctx:...}`、`${clientIp}`、`${matchedHttpRoute:...}` 和 `${matchedGrpcRoute:...}`。** `${header:...}`、`${query:...}`、`${cookie:...}`、`${path}`、`${uri}`、`${requestPath}`、`${requestUri}`、`${method}` 以及 `${secretRef:...}` 在这个字段上都会被专门拒绝（它们在 `request.*` 中仍然完全可用）。该字段是安全敏感的：`timeoutMsTemplate` 设置鉴权服务调用的截止时间。一个客户端可控的来源会让攻击者把超时压到小到必然超时的值（可靠的拒绝服务）。
+> ⚠️ **`timeoutMsTemplate` 只接受 `${ctx:...}`、`${remoteIp}`、`${matchedHttpRoute:...}` 和 `${matchedGrpcRoute:...}`。** `${header:...}`、`${query:...}`、`${cookie:...}`、`${path}`、`${uri}`、`${requestPath}`、`${requestUri}`、`${method}` 以及 `${secretRef:...}` 在这个字段上都会被专门拒绝（它们在 `request.*` 中仍然完全可用）。该字段是安全敏感的：`timeoutMsTemplate` 设置鉴权服务调用的截止时间。一个客户端可控的来源会让攻击者把超时压到小到必然超时的值（可靠的拒绝服务）。
 
 ```yaml
 timeoutMsTemplate: "${ctx:desired_timeout_ms}"     # 回退到 timeoutMs
@@ -917,7 +917,7 @@ spec:
           - name: X-Forwarded-Path
             template: "${requestPath}"     # 冻结的入口路径
           - name: X-Client-Ip
-            template: "${clientIp}"
+            template: "${remoteIp}"
 ```
 
 #### 6. 存在性策略（required / skipIfMissing / warnIfMissing）

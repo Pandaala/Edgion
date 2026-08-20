@@ -2,7 +2,7 @@
 #
 # Unlike the ProxyProtocolInbound fixture set this one DOES carry a
 # parametersRef. Without it `real_ip_extractor` is None, hop 2 reports hop 1's
-# address for X-Real-IP and every IP-based plugin, and a test asserting only on
+# address for the configured RemoteIp header and every IP-based plugin, and a test asserting only on
 # X-Forwarded-For would pass while the chain had already lost the client.
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass

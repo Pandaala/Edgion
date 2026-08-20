@@ -2009,7 +2009,7 @@ main() {
     # while failOpen:true admits; Country-tier country rules work and a city
     # rule's predicate is simply absent (no "database tier" concept; onMissing
     # governs); City-tier coordinate emission
-    # emits a masked geo.client.coord in the access log; and the updater
+    # emits a masked geo.remote.coord in the access log; and the updater
     # hot-swap end to end (download -> validate -> rename -> re-mmap -> ArcSwap)
     # turns a previously-inert city rule live (the behavioral proof the swap
     # actually happened — there is no admin-endpoint snapshot), writes

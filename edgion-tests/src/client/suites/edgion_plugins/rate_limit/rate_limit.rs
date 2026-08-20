@@ -678,7 +678,7 @@ impl RateLimitTestSuite {
     // was omitted, and an empty list was then treated as a key-extraction MISS
     // — so with the default `onMissingKey: Allow` the limiter was silently
     // bypassed for every request. This is now fixed: an omitted `key`
-    // deserializes to the documented default `[{type: clientIp}]`, and an
+    // deserializes to the documented default `[{type: remoteIp}]`, and an
     // explicitly empty `key: []` means "one global bucket" — every request
     // composes to the same empty key and IS rate-limited; it is NOT a key
     // miss, so `onMissingKey` / `defaultKey` never apply.

@@ -401,7 +401,7 @@ fn validate_template_variable_shapes(template: &CompiledTemplate) -> Result<(), 
             | TemplateVarType::RequestPath
             | TemplateVarType::RequestUri
             | TemplateVarType::Method
-            | TemplateVarType::ClientIp => {
+            | TemplateVarType::RemoteIp => {
                 if var_name.is_some() {
                     return Err("scalar variable must not include a selector".to_string());
                 }

@@ -8,7 +8,7 @@
 //!
 //! Parameters are embedded directly into enum variants for compile-time safety:
 //! - `Header { name }` - name is required
-//! - `ClientIp` - no parameters needed
+//! - `RemoteIp` - no parameters needed
 //!
 //! ## YAML Configuration
 //!
@@ -54,9 +54,9 @@ use serde::{Deserialize, Serialize};
 ///   type: header
 ///   name: "X-Api-Key"
 ///
-/// # Get client IP (no name needed)
+/// # Get resolved remote IP (no name needed)
 /// key:
-///   type: clientIp
+///   type: remoteIp
 ///
 /// # Get from cookie
 /// key:
@@ -66,10 +66,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum KeyGet {
-    /// Client IP address (after real IP extraction)
+    /// Resolved remote IP address (after RealIp extraction)
     /// No additional parameters needed.
     #[default]
-    ClientIp,
+    RemoteIp,
 
     /// HTTP request header value
     /// Requires `name` to specify which header to read.
@@ -107,10 +107,10 @@ pub enum KeyGet {
         name: String,
     },
 
-    /// Combination of ClientIP and Path
+    /// Combination of RemoteIp and Path
     /// Produces a key like "192.168.1.1:/api/users"
     /// No additional parameters needed.
-    ClientIpAndPath,
+    RemoteIpAndPath,
 
     /// Resolve key from an external webhook service (LinkSys resource).
     ///
@@ -190,14 +190,14 @@ impl KeyGet {
     /// Get a short string representation for logging
     pub fn as_log_str(&self) -> String {
         match self {
-            KeyGet::ClientIp => "ip".to_string(),
+            KeyGet::RemoteIp => "remote-ip".to_string(),
             KeyGet::Header { name } => format!("hdr:{}", name),
             KeyGet::Cookie { name } => format!("cookie:{}", name),
             KeyGet::Query { name } => format!("query:{}", name),
             KeyGet::Path => "path".to_string(),
             KeyGet::Method => "method".to_string(),
             KeyGet::Ctx { name } => format!("ctx:{}", name),
-            KeyGet::ClientIpAndPath => "ip+path".to_string(),
+            KeyGet::RemoteIpAndPath => "remote-ip+path".to_string(),
             KeyGet::Webhook { webhook_ref, .. } => format!("webhook:{}", webhook_ref),
         }
     }
@@ -205,14 +205,14 @@ impl KeyGet {
     /// Get the source type as a static string
     pub fn source_type(&self) -> &'static str {
         match self {
-            KeyGet::ClientIp => "clientIp",
+            KeyGet::RemoteIp => "remoteIp",
             KeyGet::Header { .. } => "header",
             KeyGet::Cookie { .. } => "cookie",
             KeyGet::Query { .. } => "query",
             KeyGet::Path => "path",
             KeyGet::Method => "method",
             KeyGet::Ctx { .. } => "ctx",
-            KeyGet::ClientIpAndPath => "clientIpAndPath",
+            KeyGet::RemoteIpAndPath => "remoteIpAndPath",
             KeyGet::Webhook { .. } => "webhook",
         }
     }
@@ -318,7 +318,7 @@ mod tests {
 
     #[test]
     fn test_key_get_as_log_str() {
-        assert_eq!(KeyGet::ClientIp.as_log_str(), "ip");
+        assert_eq!(KeyGet::RemoteIp.as_log_str(), "remote-ip");
         assert_eq!(
             KeyGet::Header {
                 name: "X-Api-Key".to_string()
@@ -327,7 +327,7 @@ mod tests {
             "hdr:X-Api-Key"
         );
         assert_eq!(KeyGet::Path.as_log_str(), "path");
-        assert_eq!(KeyGet::ClientIpAndPath.as_log_str(), "ip+path");
+        assert_eq!(KeyGet::RemoteIpAndPath.as_log_str(), "remote-ip+path");
         assert_eq!(
             KeyGet::Webhook {
                 webhook_ref: "prod/resolver".to_string(),
@@ -341,12 +341,12 @@ mod tests {
 
     #[test]
     fn test_key_get_default() {
-        assert_eq!(KeyGet::default(), KeyGet::ClientIp);
+        assert_eq!(KeyGet::default(), KeyGet::RemoteIp);
     }
 
     #[test]
     fn test_key_get_source_type() {
-        assert_eq!(KeyGet::ClientIp.source_type(), "clientIp");
+        assert_eq!(KeyGet::RemoteIp.source_type(), "remoteIp");
         assert_eq!(
             KeyGet::Header {
                 name: "X-Test".to_string()
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_key_get_name() {
-        assert_eq!(KeyGet::ClientIp.name(), None);
+        assert_eq!(KeyGet::RemoteIp.name(), None);
         assert_eq!(
             KeyGet::Header {
                 name: "X-Test".to_string()
@@ -447,20 +447,20 @@ mod tests {
     }
 
     #[test]
-    fn test_key_get_serde_client_ip() {
-        let key = KeyGet::ClientIp;
+    fn test_key_get_serde_remote_ip() {
+        let key = KeyGet::RemoteIp;
         let json = serde_json::to_string(&key).unwrap();
-        assert_eq!(json, "{\"type\":\"clientIp\"}");
+        assert_eq!(json, "{\"type\":\"remoteIp\"}");
 
         let deserialized: KeyGet = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, key);
     }
 
     #[test]
-    fn test_key_get_serde_client_ip_and_path() {
-        let key = KeyGet::ClientIpAndPath;
+    fn test_key_get_serde_remote_ip_and_path() {
+        let key = KeyGet::RemoteIpAndPath;
         let json = serde_json::to_string(&key).unwrap();
-        assert_eq!(json, "{\"type\":\"clientIpAndPath\"}");
+        assert_eq!(json, "{\"type\":\"remoteIpAndPath\"}");
 
         let deserialized: KeyGet = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, key);
@@ -498,10 +498,18 @@ name: X-Api-Key
     #[test]
     fn test_key_get_yaml_no_name() {
         let yaml = r#"
-type: clientIp
+type: remoteIp
 "#;
         let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(key, KeyGet::ClientIp);
+        assert_eq!(key, KeyGet::RemoteIp);
+    }
+
+    #[test]
+    fn old_client_ip_key_types_are_rejected() {
+        for old in ["clientIp", "clientIpAndPath"] {
+            let yaml = format!("type: {old}\n");
+            assert!(serde_yaml::from_str::<KeyGet>(&yaml).is_err(), "{old} must be rejected");
+        }
     }
 
     #[test]

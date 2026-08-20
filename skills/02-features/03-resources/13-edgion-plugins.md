@@ -23,7 +23,7 @@ spec:
       config:                   # Plugin configuration (varies by type)
         rate: 100
         burst: 200
-        key: "$remote_addr"
+        key: "$remote_ip"
     - type: Cors
       config:
         allowOrigins: ["*"]

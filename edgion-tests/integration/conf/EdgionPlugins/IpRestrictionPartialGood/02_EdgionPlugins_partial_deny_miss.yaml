@@ -12,7 +12,7 @@ spec:
     - enable: true
       type: IpRestriction
       config:
-        ipSource: remoteAddr
+        ipSource: RemoteIp
         defaultAction: allow
         denyRefs:
           - name: ippg-blocklist-miss

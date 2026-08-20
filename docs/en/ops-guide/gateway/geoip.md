@@ -335,7 +335,7 @@ to be loaded.
 client-controlled input. It is only trustworthy when the deployment genuinely terminates behind
 a trusted proxy — i.e., a `RealIp` plugin is configured with a `trustedIps` set that actually,
 tightly matches your real proxy/CDN egress ranges, and the connection's TCP peer is inside that
-set. If those conditions don't hold, `remote_addr` is just a clone of the TCP peer address, and
+set. If those conditions don't hold, `RemoteIp` is just a clone of the effective L4 peer address, and
 a `RemoteIp` rule degrades to (harmlessly) the same value a `DirectPeerIp` rule would read.
 
 The dangerous configuration is a `trustedIps` set scoped far too broadly — the extreme case being
@@ -514,12 +514,12 @@ There is no switch for latitude/longitude: a `geo` slot emits `coord` whenever t
 record actually carries coordinates, and omits it otherwise — the same "reads whatever the
 plugin already resolved" rule as the rest of the `geo` object, with no separate gate on top. When
 present, coordinates are emitted as a single `coord` string and pass through the same masking
-treatment as `client-addr`/`remote-addr`.
+treatment as `direct_peer_ip`/`remote_ip`.
 
 **There is no per-key unmasking for `coord`.** Masking is controlled entirely by the
 process-global sensitive-log mode — an all-or-nothing switch. The per-`LogExtSource` allowlist
-mechanism that lets some ext-log fields opt out of masking does not apply here; `client-addr` and
-`remote-addr` aren't individually unmaskable today either, and `coord` follows the same rule.
+mechanism that lets some ext-log fields opt out of masking does not apply here; `direct_peer_ip` and
+`remote_ip` aren't individually unmaskable today either, and `coord` follows the same rule.
 
 ## Metrics
 

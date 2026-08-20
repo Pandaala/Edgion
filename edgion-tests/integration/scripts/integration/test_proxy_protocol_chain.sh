@@ -17,13 +17,16 @@
 # gw2 has NO proxy-protocol annotation — nothing sends it a header — and resolves
 # the client by walking XFF, which only works because the GatewayClass carries a
 # parametersRef to an EdgionGatewayConfig listing hop 1 in realIp.trustedIps.
+# The config also uses X-Edgion-Remote-IP to prove the upstream RemoteIp header
+# is independently configurable from the downstream realIp input header.
 #
-# THE LOAD-BEARING ASSERTION IS X-Real-IP, NOT X-Forwarded-For. XFF is appended
+# THE LOAD-BEARING ASSERTION IS X-EDGION-REMOTE-IP, NOT X-Forwarded-For. XFF is appended
 # unconditionally by every hop, so it carries the client whether or not hop 2
 # resolved anything; asserting on it alone would pass while every IP-based plugin
-# at hop 2 still saw hop 1. X-Real-IP is written from the RESOLVED address, so it
+# at hop 2 still saw hop 1. The configured RemoteIp header is written from the
+# RESOLVED address, so it
 # is the only field that fails when the chain is misconfigured. Confirmed by
-# deleting realIp from EdgionGatewayConfig__chain-egc.yaml: X-Real-IP degrades to
+# deleting realIp from EdgionGatewayConfig__chain-egc.yaml: X-Edgion-Remote-IP degrades to
 # 127.0.0.1 and this suite fails, while both XFF assertions still pass.
 #
 # Only the v2 leg is driven. What this suite tests is address propagation across
@@ -420,7 +423,7 @@ phase_wire_versions() {
 
 phase_chain() {
     log_section "Phase: two-hop chain"
-    local body xff xri
+    local body xff remote_ip_header default_remote_ip_header
     body=$(probe_via "${LB_IP}:${LB_V2_PORT}")
     if [ -z "$body" ]; then
         fail "no response through the chain"
@@ -429,15 +432,22 @@ phase_chain() {
         return
     fi
     xff=$(header_value "$body" x-forwarded-for)
-    xri=$(header_value "$body" x-real-ip)
-    log_info "chain x-forwarded-for='${xff}' x-real-ip='${xri}'"
+    remote_ip_header=$(header_value "$body" x-edgion-remote-ip)
+    default_remote_ip_header=$(header_value "$body" x-real-ip)
+    log_info "chain x-forwarded-for='${xff}' x-edgion-remote-ip='${remote_ip_header}' x-real-ip='${default_remote_ip_header}'"
 
-    # The load-bearing assertion. X-Real-IP is written from the RESOLVED address,
+    # The load-bearing assertion. The configured RemoteIp header is written from
+    # the RESOLVED address,
     # so it is the only field that notices when hop 2 fails to walk the chain.
-    if [ "$xri" = "$CLIENT_IP" ]; then
+    if [ "$remote_ip_header" = "$CLIENT_IP" ]; then
         log_ok "hop 2 resolved the real client ${CLIENT_IP}"
     else
-        fail "hop 2 X-Real-IP is '${xri}', expected ${CLIENT_IP} — the chain lost the client"
+        fail "hop 2 X-Edgion-Remote-IP is '${remote_ip_header}', expected ${CLIENT_IP} — the chain lost the client"
+    fi
+    if [ -n "$default_remote_ip_header" ]; then
+        fail "custom RemoteIp header must replace the default X-Real-IP header, got '${default_remote_ip_header}'"
+    else
+        log_ok "custom RemoteIp header replaced default X-Real-IP"
     fi
 
     case "$xff" in

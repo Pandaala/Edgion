@@ -254,7 +254,7 @@ not in-process checks.
   `edgion-resources/src/resources/common/outbound_request.rs`; rendering in
   `edgion-gateway/src/plugins/http/common/outbound/request.rs` (the
   `${type:name}` engine: `ctx` / `header` / `query` / `cookie` / `secretRef`
-  / `clientIp` / ...).
+  / `remoteIp` / ...).
 - **Safety discipline**: security-sensitive fields (anything that steers a
   deadline or a destination) MUST use a restricted
   variable allow-list that rejects client-controlled variable types at

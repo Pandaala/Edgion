@@ -150,7 +150,7 @@ EdgionDSL 的语法设计借鉴了 Rust 和 JavaScript 的习惯，降低学习�
 **变量声明。** 支持不可变和可变变量：
 
 ```
-let ip = req.client_ip()
+let ip = req.remote_ip()
 let mut count = 0
 count = count + 1
 ```
@@ -184,7 +184,7 @@ for name in req.header_names() {
 
 | 分类 | 数量 | 代表函数 |
 |------|------|---------|
-| 请求读取 | 15 | `req.header()`, `req.method()`, `req.path()`, `req.query()`, `req.cookie()`, `req.client_ip()`, `req.remote_ip()`, `req.path_param()`, `req.header_names()`, `req.scheme()`, `req.host()`, `req.uri()`, `req.content_type()`, `req.has_header()`, `req.query_string()` |
+| 请求读取 | 15 | `req.header()`, `req.method()`, `req.path()`, `req.query()`, `req.cookie()`, `req.direct_peer_ip()`, `req.remote_ip()`, `req.path_param()`, `req.header_names()`, `req.scheme()`, `req.host()`, `req.uri()`, `req.content_type()`, `req.has_header()`, `req.query_string()` |
 | 请求修改 | 6 | `req.set_header()`, `req.append_header()`, `req.remove_header()`, `req.set_uri()`, `req.set_host()`, `req.set_method()` |
 | 响应读取 | 3 | `resp.status()`, `resp.header()`, `resp.has_header()` |
 | 响应修改 | 3 | `resp.set_header()`, `resp.append_header()`, `resp.remove_header()` |
@@ -303,7 +303,8 @@ return next()
 **用例 3：内网 IP 限流豁免。** 从客户端 IP 判断是否为内网请求，若是则通过上下文变量标记，供后续 RateLimit 插件跳过限流：
 
 ```
-let ip = req.client_ip()
+// 该网络来源豁免规则故意使用物理传输对端。
+let ip = req.direct_peer_ip()
 
 // 内网 CIDR 段简单匹配
 if ip.starts_with("10.") || ip.starts_with("192.168.") || ip.starts_with("172.") {
@@ -349,7 +350,7 @@ pub trait RequestFilter: Send + Sync {
 
 **UpstreamResponse（上游响应阶段，异步）。** 在完整收到上游响应后执行。用于需要完整响应信息才能工作的插件，如基于响应状态码的条件逻辑。
 
-所有阶段共享同一个 `PluginSession` trait 作为会话抽象。`PluginSession` 提供了统一的请求/响应读写接口，包括 header 读取（`header_value`、`get_path`、`get_query_param`、`get_cookie`）、header 修改（`set_request_header`、`set_response_header`、`remove_request_header`）、上下文变量（`get_ctx_var`、`set_ctx_var`）、客户端信息（`client_addr`、`remote_addr`、`client_cert_info`）等方法。这一设计使得 DSL 引擎和原生 Rust 插件共享同一套会话接口，保证了行为的一致性。
+所有阶段共享同一个 `PluginSession` trait 作为会话抽象。`PluginSession` 提供了统一的请求/响应读写接口，包括 header 读取（`header_value`、`get_path`、`get_query_param`、`get_cookie`）、header 修改（`set_request_header`、`set_response_header`、`remove_request_header`）、上下文变量（`get_ctx_var`、`set_ctx_var`）、客户端信息（`direct_peer_ip`、`remote_ip`、`client_cert_info`）等方法。这一设计使得 DSL 引擎和原生 Rust 插件共享同一套会话接口，保证了行为的一致性。
 
 ### 5.2 Stream 插件体系
 

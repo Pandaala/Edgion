@@ -11,6 +11,7 @@ use std::sync::Arc;
 struct EdgionGatewayConfigSnapshot {
     configs: HashMap<String, EdgionGatewayConfig>,
     request_body_configs: HashMap<String, ResolvedRequestBodyConfig>,
+    remote_ip_headers: HashMap<String, http::HeaderName>,
 }
 
 impl EdgionGatewayConfigSnapshot {
@@ -24,9 +25,31 @@ impl EdgionGatewayConfigSnapshot {
                 )
             })
             .collect();
+        let remote_ip_headers = configs
+            .values()
+            .filter_map(|config| {
+                let errors = config.spec.validate_forwarded_headers();
+                if !errors.is_empty() {
+                    tracing::error!(
+                        config = %config.name_any(),
+                        errors = ?errors,
+                        "Ignoring invalid forwardedHeaders configuration received by the gateway"
+                    );
+                    return None;
+                }
+                config
+                    .spec
+                    .forwarded_headers
+                    .remote_ip_header
+                    .parse::<http::HeaderName>()
+                    .ok()
+                    .map(|header| (config.name_any(), header))
+            })
+            .collect();
         Self {
             configs,
             request_body_configs,
+            remote_ip_headers,
         }
     }
 
@@ -86,6 +109,23 @@ pub fn get_resolved_request_body_config(config_name: Option<&str>) -> ResolvedRe
         .and_then(|name| snapshot.request_body_configs.get(name))
         .copied()
         .unwrap_or_default()
+}
+
+/// Load the validated header that carries RemoteIp to an HTTP upstream.
+///
+/// The resource and its parsed request-path value are published atomically, so
+/// partial EGC updates take effect without rebuilding existing listeners. A
+/// missing, deleted, or invalid configuration fails safely to the nginx-style
+/// default instead of forwarding through an operator-controlled reserved name.
+#[inline]
+pub fn get_remote_ip_header(config_name: Option<&str>) -> http::HeaderName {
+    static DEFAULT: std::sync::LazyLock<http::HeaderName> =
+        std::sync::LazyLock::new(|| http::HeaderName::from_static("x-real-ip"));
+    let snapshot = EDGION_GATEWAY_CONFIG_STORE.load();
+    config_name
+        .and_then(|name| snapshot.remote_ip_headers.get(name))
+        .cloned()
+        .unwrap_or_else(|| DEFAULT.clone())
 }
 
 /// The data-plane default DNS resolver (`spec.dnsResolver`) from the effectively
@@ -295,6 +335,7 @@ mod tests {
                 http_timeout: None,
                 max_retries: 3,
                 real_ip: None,
+                forwarded_headers: Default::default(),
                 security_protect: None,
                 request_body: Default::default(),
                 global_plugins_ref: None,
@@ -371,6 +412,42 @@ mod tests {
         let result = get_edgion_gateway_config_by_name("foo").expect("must exist after update");
         assert_eq!(result.spec.max_retries, 99);
         assert_eq!(count_edgion_gateway_configs(), 1);
+    }
+
+    #[test]
+    fn remote_ip_header_snapshot_updates_and_rejects_reserved_names() {
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        let handler = EdgionGatewayConfigHandler::new();
+
+        let mut initial = make_config("foo");
+        initial.spec.forwarded_headers.remote_ip_header = "X-Initial-Remote-IP".to_string();
+        handler.partial_update(
+            HashMap::from([("foo".to_string(), Arc::new(initial))]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        let in_flight_header = get_remote_ip_header(Some("foo"));
+        assert_eq!(in_flight_header, "x-initial-remote-ip");
+
+        let mut updated = make_config("foo");
+        updated.spec.forwarded_headers.remote_ip_header = "X-Updated-Remote-IP".to_string();
+        handler.partial_update(
+            HashMap::new(),
+            HashMap::from([("foo".to_string(), Arc::new(updated))]),
+            HashSet::new(),
+        );
+        assert_eq!(get_remote_ip_header(Some("foo")), "x-updated-remote-ip");
+        assert_eq!(in_flight_header, "x-initial-remote-ip");
+
+        let mut invalid = make_config("foo");
+        invalid.spec.forwarded_headers.remote_ip_header = "Host".to_string();
+        handler.partial_update(
+            HashMap::new(),
+            HashMap::from([("foo".to_string(), Arc::new(invalid))]),
+            HashSet::new(),
+        );
+        assert_eq!(get_remote_ip_header(Some("foo")), "x-real-ip");
     }
 
     #[test]

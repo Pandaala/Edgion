@@ -137,9 +137,9 @@ pub fn get_backends_for_service_key(service_key: &str) -> Arc<Vec<Arc<EdgionBack
 
 /// Extract hash key from request based on LB policy configuration.
 ///
-/// `client_ip` is the RealIp-normalized client source IP (`ctx.request_info.remote_addr`),
+/// `remote_ip` is the RealIp-normalized client source IP (`ctx.request_info.remote_ip`),
 /// used only by the `SourceIp` mode; the other modes read from the request headers/URI.
-pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>, client_ip: &str) -> Vec<u8> {
+pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>, remote_ip: &str) -> Vec<u8> {
     let Some(ParsedLBPolicy::ConsistentHash(hash_on)) = lb_policy else {
         return Vec::new();
     };
@@ -190,7 +190,7 @@ pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPol
         // SourceIp hashes on the normalized client IP; an empty IP yields an
         // empty key, driving the internal RR fallback like the other modes when
         // their value is missing.
-        ConsistentHashOn::SourceIp => client_ip.as_bytes().to_vec(),
+        ConsistentHashOn::SourceIp => remote_ip.as_bytes().to_vec(),
     }
 }
 
@@ -227,7 +227,7 @@ fn pick(
     service_key: &str,
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
-    client_ip: &str,
+    remote_ip: &str,
     not_found: NotFoundMap,
 ) -> Result<Arc<EdgionBackend>, EdgionStatus> {
     let cell = compiled_selector::get_or_create_cell(service_key);
@@ -241,7 +241,7 @@ fn pick(
     // Build the hash key only for ConsistentHash; an empty key triggers the
     // internal RR fallback inside `CompiledSelector::ConsistentHash::select`.
     let (hash_key, hash_key_used) = if matches!(kind, PolicyKind::ConsistentHash) {
-        let key = extract_hash_key(session, lb_policy, client_ip);
+        let key = extract_hash_key(session, lb_policy, remote_ip);
         let used = !key.is_empty();
         (Some(key), used)
     } else {
@@ -263,13 +263,13 @@ pub(crate) fn select_from_endpoint_slice(
     service_key: &str,
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
-    client_ip: &str,
+    remote_ip: &str,
 ) -> Result<Arc<EdgionBackend>, EdgionStatus> {
     pick(
         service_key,
         lb_policy,
         session,
-        client_ip,
+        remote_ip,
         NotFoundMap {
             empty: EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault,
             rr: EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin,
@@ -287,7 +287,7 @@ pub(crate) fn select_from_endpoint_slice_discovery_only(
     service_key: &str,
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
-    client_ip: &str,
+    remote_ip: &str,
 ) -> Result<Arc<EdgionBackend>, EdgionStatus> {
     let cell = compiled_selector::get_or_create_cell(service_key);
     if !hydrate_cell_if_empty(&cell, service_key) {
@@ -295,7 +295,7 @@ pub(crate) fn select_from_endpoint_slice_discovery_only(
     }
     let kind = policy_to_kind(lb_policy);
     let selector = cell.get_or_build(kind);
-    let hash_key = matches!(kind, PolicyKind::ConsistentHash).then(|| extract_hash_key(session, lb_policy, client_ip));
+    let hash_key = matches!(kind, PolicyKind::ConsistentHash).then(|| extract_hash_key(session, lb_policy, remote_ip));
     selector
         .select(hash_key.as_deref(), |_| true)
         .ok_or(EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin)
