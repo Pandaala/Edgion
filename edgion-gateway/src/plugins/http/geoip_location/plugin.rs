@@ -21,9 +21,7 @@ use async_trait::async_trait;
 use std::net::IpAddr;
 
 use crate::geoip::{GeoInfo, GeoLookup};
-use crate::plugins::http::common::auth_common::send_gateway_plain_error_response;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use bytes::Bytes;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{
     GeoDecision, GeoDimFacts, GeoIpLocationConfig, GeoRuleContext, GeoRuleSource,
@@ -112,19 +110,18 @@ impl GeoIpLocation {
         addr.parse::<IpAddr>().ok()
     }
 
-    async fn deny(
+    fn deny(
         &self,
         session: &mut dyn PluginSession,
         plugin_log: &mut PluginLog,
         log_reason: &str,
     ) -> PluginRunningResult {
         plugin_log.push(log_reason);
-        let status = default_status();
-        let body = Bytes::from(serde_json::json!({ "message": "Access denied" }).to_string());
-        if let Err(_e) = send_gateway_plain_error_response(session, status, "application/json", body).await {
-            plugin_log.push_err("write response fail");
+        let _ = session.set_response_header("content-type", "application/json");
+        PluginRunningResult::ErrResponse {
+            status: default_status(),
+            body: Some(serde_json::json!({ "message": "Access denied" }).to_string()),
         }
-        PluginRunningResult::ErrTerminateRequest
     }
 }
 
@@ -136,7 +133,7 @@ impl RequestFilter for GeoIpLocation {
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         if self.init_failed {
-            return self.deny(session, plugin_log, "init fail: fail-closed").await;
+            return self.deny(session, plugin_log, "init fail: fail-closed");
         }
 
         // Resolve only what this config actually needs. Parse-only mode
@@ -174,7 +171,7 @@ impl RequestFilter for GeoIpLocation {
                 plugin_log.push("db:unavailable fail-open");
                 return PluginRunningResult::GoodNext;
             }
-            return self.deny(session, plugin_log, "db:unavailable fail-closed").await;
+            return self.deny(session, plugin_log, "db:unavailable fail-closed");
         }
 
         let ctx = GeoRuleContext {
@@ -193,7 +190,7 @@ impl RequestFilter for GeoIpLocation {
                 plugin_log.push("allow");
                 PluginRunningResult::GoodNext
             }
-            GeoDecision::Deny => self.deny(session, plugin_log, "deny").await,
+            GeoDecision::Deny => self.deny(session, plugin_log, "deny"),
         }
     }
 }
@@ -280,12 +277,19 @@ mod tests {
         GeoIpProvider::global().clear();
         let plugin = GeoIpLocation::create(&rule_mode_config(false));
         let mut session = session_with_ips("8.8.8.8", "8.8.8.8");
-        session.expect_write_response_header().returning(|_, _| Ok(()));
-        session.expect_write_response_body().returning(|_, _| Ok(()));
-        session.expect_shutdown().returning(|| {});
+        session.expect_set_response_header().returning(|name, value| {
+            assert_eq!((name, value), ("content-type", "application/json"));
+            Ok(())
+        });
         let mut log = PluginLog::new("GeoIpLocation");
         let result = plugin.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 403,
+                body: Some(r#"{"message":"Access denied"}"#.to_string()),
+            }
+        );
         assert!(log.contains("db:unavailable fail-closed"));
     }
 
@@ -322,12 +326,19 @@ mod tests {
         assert_eq!(allowed, PluginRunningResult::GoodNext);
 
         let mut denied_session = session_with_ips("8.8.8.8", "8.8.8.8");
-        denied_session.expect_write_response_header().returning(|_, _| Ok(()));
-        denied_session.expect_write_response_body().returning(|_, _| Ok(()));
-        denied_session.expect_shutdown().returning(|| {});
+        denied_session.expect_set_response_header().returning(|name, value| {
+            assert_eq!((name, value), ("content-type", "application/json"));
+            Ok(())
+        });
         let mut log2 = PluginLog::new("GeoIpLocation");
         let denied = plugin.run_request(&mut denied_session, &mut log2).await;
-        assert_eq!(denied, PluginRunningResult::ErrTerminateRequest);
+        assert_eq!(
+            denied,
+            PluginRunningResult::ErrResponse {
+                status: 403,
+                body: Some(r#"{"message":"Access denied"}"#.to_string()),
+            }
+        );
     }
 
     #[tokio::test]
@@ -339,12 +350,19 @@ mod tests {
         cfg.fail_open = None;
         let plugin = GeoIpLocation::create(&cfg);
         let mut session = session_with_ips("8.8.8.8", "8.8.8.8");
-        session.expect_write_response_header().returning(|_, _| Ok(()));
-        session.expect_write_response_body().returning(|_, _| Ok(()));
-        session.expect_shutdown().returning(|| {});
+        session.expect_set_response_header().returning(|name, value| {
+            assert_eq!((name, value), ("content-type", "application/json"));
+            Ok(())
+        });
         let mut log = PluginLog::new("GeoIpLocation");
         let result = plugin.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 403,
+                body: Some(r#"{"message":"Access denied"}"#.to_string()),
+            }
+        );
         assert!(log.contains("init fail: fail-closed"));
     }
 }

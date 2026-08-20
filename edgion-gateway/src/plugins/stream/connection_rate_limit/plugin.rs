@@ -208,6 +208,7 @@ impl StreamPlugin for ConnectionRateLimitPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::stream::stream_plugin_trait::StreamLayer;
     use edgion_resources::resources::edgion_stream_plugins::{ConnectionRateLimitConfig, PerListenerLimit};
     use std::net::IpAddr;
 
@@ -249,7 +250,7 @@ mod tests {
         // Use a unique port so the global registry slot is isolated from other tests.
         let port = 64111u16;
         let plugin = ConnectionRateLimitPlugin::new(&cfg_local_only(2), "default/test-esp/#0");
-        let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), port);
+        let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), port, StreamLayer::Stage1);
         let mut admitted = 0;
         for _ in 0..5 {
             if matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow) {

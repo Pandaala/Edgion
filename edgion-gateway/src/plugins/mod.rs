@@ -12,6 +12,6 @@ pub use runtime::{
     StageLogs, UpstreamResponse, UpstreamResponseFilter,
 };
 pub use stream::{
-    StreamContext, StreamPlugin, StreamPluginResult, StreamPluginRuntime, TlsRouteContext, TlsRoutePlugin,
+    StreamContext, StreamLayer, StreamPlugin, StreamPluginResult, StreamPluginRuntime, TlsRouteContext, TlsRoutePlugin,
     TlsRoutePluginRuntime,
 };

@@ -21,7 +21,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use super::stream_plugin_store::StreamPluginStore;
-use super::stream_plugin_trait::{StreamContext, StreamPluginResult};
+use super::stream_plugin_trait::{StreamContext, StreamLayer, StreamPluginResult};
 
 /// Bridge that adapts Edgion's StreamPlugin system to Pingora's ConnectionFilter.
 ///
@@ -78,7 +78,7 @@ impl ConnectionFilter for StreamPluginConnectionFilter {
             return true; // No active plugins, allow
         }
 
-        let ctx = StreamContext::new(addr.ip(), self.listener_port);
+        let ctx = StreamContext::new(addr.ip(), self.listener_port, StreamLayer::Stage1);
         match runtime.run(&ctx).await {
             StreamPluginResult::Allow => true,
             StreamPluginResult::Deny(_) => false,

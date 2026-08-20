@@ -2126,11 +2126,11 @@ main() {
             unset EDGION_TEST_ENABLE_GENAI_METRICS
         fi
 
-        # geoip is gated on the selected resource, not enabled unconditionally: with it
-        # on, 127.0.0.1 resolves for every request, so a `geo` object appears in every
-        # access-log line of a full sweep. Existing assertions are substring/key-lookup
-        # based and should tolerate the additive field, but gating keeps a regression
-        # cheap to bisect (flip this first if the full sweep goes red after a geoip change).
+        # Limit GeoIP fixture injection to resource suites that exercise it. With the
+        # fixture present, 127.0.0.1 resolves whenever a rule requests a lookup, so a
+        # `geo` object may appear in those access-log lines. Existing assertions are
+        # substring/key-lookup based and should tolerate the additive field, but this
+        # scope keeps a regression cheap to bisect.
         if [ -z "$G_RESOURCE" ] || [ "$G_RESOURCE" = "EdgionPlugins" ] || [ "$G_RESOURCE" = "TCPRoute" ] || [ "$G_RESOURCE" = "TLSRoute" ]; then
             export EDGION_TEST_ENABLE_GEOIP=1
         else

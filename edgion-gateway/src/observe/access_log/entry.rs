@@ -181,8 +181,8 @@ pub struct AccessLogEntry<'a> {
     /// Resolved geo attributes for the client and direct-peer addresses.
     /// Present only when a plugin (or L4 predicate) resolved at least one geo
     /// slot during the request; absent otherwise. Building this entry never
-    /// triggers a lookup — there is no global `geoip.enabled` switch, so an
-    /// unresolved slot stays unresolved rather than being forced here.
+    /// triggers a lookup, so an unresolved slot stays unresolved rather than
+    /// being forced here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub geo: Option<GeoLogBlock>,
 
@@ -259,7 +259,7 @@ mod tests {
     use crate::geoip::GeoInfo;
 
     #[test]
-    fn geo_block_is_omitted_when_geoip_is_disabled() {
+    fn geo_block_is_omitted_when_no_geo_lookup_ran() {
         let ctx = EdgionHttpContext::default();
         let entry = AccessLogEntry::from_context(&ctx);
         assert!(!entry.to_json().contains("\"geo\""));

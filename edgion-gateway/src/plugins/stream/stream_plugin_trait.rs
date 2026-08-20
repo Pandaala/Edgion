@@ -14,6 +14,31 @@ pub enum StreamPluginResult {
     Deny(String),
 }
 
+/// Execution layer for a stream plugin chain.
+///
+/// This is intentionally closed because it is emitted as the bounded `layer`
+/// label on `edgion_geoip_denied_total`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamLayer {
+    /// Listener-level connection filter, before route matching.
+    Stage1,
+    /// TCPRoute-level plugin execution.
+    Tcp,
+    /// TLSRoute compatibility plugin execution.
+    Tls,
+}
+
+impl StreamLayer {
+    /// Return the bounded metric-label representation.
+    pub(crate) const fn as_metric_label(self) -> &'static str {
+        match self {
+            Self::Stage1 => "stage1",
+            Self::Tcp => "tcp",
+            Self::Tls => "tls",
+        }
+    }
+}
+
 /// Translate an [`AccessDecision`] into a [`StreamPluginResult`], invoking
 /// `on_deny` once on each deny outcome (used by the connection-IP-restriction
 /// plugins that also need to record a deny metric).
@@ -51,37 +76,19 @@ pub struct StreamContext {
     pub listener_port: u16,
     /// Optional: remote address string (for logging)
     pub remote_addr: Option<String>,
-    /// Construction-site label for the `layer` metric dimension: `"stage1"` |
-    /// `"tcp"` | `"tls"`. Defaults to `"stage1"` so the 20+ existing `new()`
-    /// call sites (mostly tests) do not need updating; the three production
-    /// call sites that are not stage1 set it explicitly via `with_layer`.
-    pub layer: &'static str,
+    /// Explicit execution layer used by bounded per-layer metrics.
+    pub layer: StreamLayer,
 }
 
 impl StreamContext {
-    /// Create a new stream context.
-    ///
-    /// `layer` defaults to `"stage1"`, which is correct ONLY for the
-    /// connection-filter stage. **Any new production call site that runs after
-    /// the PROXY-protocol handshake — a TCP, TLS, or future route stage — MUST
-    /// chain `.with_layer(...)`.** Forgetting to is silent: the context still
-    /// builds, and `edgion_geoip_denied_total` simply attributes that stage's
-    /// denials to `stage1`. Since L4 geo denials are never logged, that metric is
-    /// the only record of them, so a wrong label is a wrong answer with nothing
-    /// to cross-check it against.
-    pub fn new(client_ip: IpAddr, listener_port: u16) -> Self {
+    /// Create a new stream context for an explicit execution layer.
+    pub fn new(client_ip: IpAddr, listener_port: u16, layer: StreamLayer) -> Self {
         Self {
             client_ip,
             listener_port,
             remote_addr: None,
-            layer: "stage1",
+            layer,
         }
-    }
-
-    /// Override the `layer` label used for the `edgion_geoip_denied_total` metric.
-    pub fn with_layer(mut self, layer: &'static str) -> Self {
-        self.layer = layer;
-        self
     }
 }
 
@@ -93,4 +100,16 @@ pub trait StreamPlugin: Send + Sync {
 
     /// Execute plugin logic for a new TCP/UDP connection.
     async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StreamLayer;
+
+    #[test]
+    fn stream_layer_metric_labels_are_stable() {
+        assert_eq!(StreamLayer::Stage1.as_metric_label(), "stage1");
+        assert_eq!(StreamLayer::Tcp.as_metric_label(), "tcp");
+        assert_eq!(StreamLayer::Tls.as_metric_label(), "tls");
+    }
 }

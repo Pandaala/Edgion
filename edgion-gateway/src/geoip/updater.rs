@@ -8,9 +8,10 @@
 //!
 //! Free-space precheck: implemented via `rustix::fs::statvfs`, which is already
 //! a workspace dependency (used by the `LocalFile` log sink's disk-usage probe).
-//! During a swap the volume can transiently hold the old inode, the new file,
-//! and the `.tmp` — up to 3x the database size — so the precheck requires 3x
-//! `max_db_bytes` of available space before starting a download.
+//! During a swap the volume can transiently hold the bounded `.tmp` plus two
+//! copies of the current database around the rename. The precheck therefore
+//! requires `max_db_bytes + 2 * current_database_size`, or `max_db_bytes` when
+//! no live database exists yet.
 //!
 //! Jitter: applied to the initial fetch as well as every subsequent interval.
 //! Without it, a fleet-wide rolling restart would issue N simultaneous
@@ -297,6 +298,7 @@ pub struct GeoIpUpdater {
 
 impl GeoIpUpdater {
     pub fn new(cfg: GeoIpConfig, provider: &'static GeoIpProvider) -> Result<Self, String> {
+        cfg.validate_updater_settings()?;
         let db_path = cfg
             .db_path
             .clone()

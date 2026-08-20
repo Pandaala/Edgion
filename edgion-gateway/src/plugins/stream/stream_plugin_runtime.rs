@@ -158,6 +158,7 @@ impl StreamPlugin for PolicyBlockStreamPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::stream::stream_plugin_trait::StreamLayer;
     use edgion_resources::resources::edgion_plugins::{OnRedisFailure, RateLimitAlgorithm};
     use edgion_resources::resources::edgion_stream_plugins::{ConnectionRateLimitConfig, PerListenerLimit};
     use edgion_resources::resources::plugin_policy::PluginPolicyAction;
@@ -188,7 +189,7 @@ mod tests {
             plugin: EdgionStreamPlugin::ConnectionRateLimit(cfg_local_only(10)),
         };
         let runtime = StreamPluginRuntime::from_stream_plugins(&[blocked], "default", "default/test-esp");
-        let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8080);
+        let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8080, StreamLayer::Stage1);
         match runtime.run(&ctx).await {
             StreamPluginResult::Deny(reason) => assert!(reason.contains("plugin disabled by policy")),
             other => panic!("expected Deny, got {other:?}"),
@@ -218,7 +219,7 @@ mod tests {
             plugin: EdgionStreamPlugin::ConnectionRateLimit(cfg_local_only(10)),
         };
         let runtime = StreamPluginRuntime::from_stream_plugins(&[normal, blocked], "default", "default/test-esp");
-        let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8081);
+        let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8081, StreamLayer::Stage1);
         match runtime.run(&ctx).await {
             StreamPluginResult::Deny(reason) => {
                 assert!(reason.contains("plugin disabled by policy: stream/ConnectionRateLimit"))
@@ -236,7 +237,7 @@ mod tests {
         };
         let runtime = StreamPluginRuntime::from_stream_plugins(&[entry], "default", "default/test-esp");
         assert!(!runtime.is_empty());
-        let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8082);
+        let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8082, StreamLayer::Stage1);
         assert!(matches!(runtime.run(&ctx).await, StreamPluginResult::Allow));
     }
 }

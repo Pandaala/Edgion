@@ -119,6 +119,7 @@ impl StreamPlugin for GeoIpLocationStreamPlugin {
 mod tests {
     use super::*;
     use crate::geoip::GEO_TEST_LOCK;
+    use crate::plugins::stream::stream_plugin_trait::StreamLayer;
     use edgion_resources::resources::edgion_plugins::plugin_configs::{
         DefaultAction, GeoRule, GeoRuleGroup, GeoRuleKey, GeoRuleSource,
     };
@@ -133,7 +134,7 @@ mod tests {
     }
 
     fn stream_ctx(ip: &str) -> StreamContext {
-        StreamContext::new(ip.parse().unwrap(), 8080).with_layer("stage1")
+        StreamContext::new(ip.parse().unwrap(), 8080, StreamLayer::Stage1)
     }
 
     /// A rule-less L4 config never reaches `on_connection` — it fails at

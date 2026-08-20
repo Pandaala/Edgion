@@ -11,7 +11,7 @@ use pingora_core::upstreams::peer::BasicPeer;
 use crate::backends::{resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr};
 use crate::observe::{log_tcp, TcpLogEntry};
 use crate::plugins::stream::get_global_stream_plugin_store;
-use crate::plugins::{StreamContext, StreamPluginResult};
+use crate::plugins::{StreamContext, StreamLayer, StreamPluginResult};
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::routes::l4_duplex::{bidirectional_relay, DuplexError, DuplexHooks};
 use crate::routes::tcp::TcpPortRouteManager;
@@ -346,7 +346,7 @@ pub(crate) async fn check_stream_plugins(
         return StreamPluginCheck::Allow;
     }
 
-    let stream_ctx = StreamContext::new(client_ip, listener_port).with_layer("tcp");
+    let stream_ctx = StreamContext::new(client_ip, listener_port, StreamLayer::Tcp);
     match runtime.run(&stream_ctx).await {
         StreamPluginResult::Allow => StreamPluginCheck::Allow,
         StreamPluginResult::Deny(_) => StreamPluginCheck::Deny("stream plugin policy denied"),

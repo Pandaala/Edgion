@@ -128,11 +128,7 @@ fn city_fixture_readback_matches_address_map() {
     let reader: maxminddb::Reader<memmap2::Mmap> = unsafe { maxminddb::Reader::open_mmap(&path) }
         .unwrap_or_else(|e| panic!("failed to open {}: {e}", path.display()));
 
-    assert!(
-        reader.metadata().database_type.contains("City"),
-        "city fixture database_type must contain \"City\", got {:?}",
-        reader.metadata().database_type
-    );
+    assert_eq!(reader.metadata().database_type, "Edgion-Test-City");
 
     for probe in PROBES {
         let ip: IpAddr = probe.addr.parse().expect("valid probe address");
@@ -193,16 +189,7 @@ fn country_fixture_readback_matches_address_map() {
     let reader: maxminddb::Reader<memmap2::Mmap> = unsafe { maxminddb::Reader::open_mmap(&path) }
         .unwrap_or_else(|e| panic!("failed to open {}: {e}", path.display()));
 
-    assert!(
-        !reader.metadata().database_type.contains("City"),
-        "country fixture database_type must NOT contain \"City\", got {:?}",
-        reader.metadata().database_type
-    );
-    assert!(
-        reader.metadata().database_type.contains("Country"),
-        "country fixture database_type must contain \"Country\", got {:?}",
-        reader.metadata().database_type
-    );
+    assert_eq!(reader.metadata().database_type, "Edgion-Test-Country");
 
     for probe in PROBES {
         let ip: IpAddr = probe.addr.parse().expect("valid probe address");

@@ -31,10 +31,10 @@ this table. Do not edit it without updating every consumer.
 | 198.51.100.0/24         | HK      | AS        | (none)   | (none)      | no     |
 | anything else (incl. 8.8.8.8, 127.0.0.2-4) | unmapped | | | | |
 
-127.0.0.6 and 198.51.100.0/24 are country-only on purpose: they exercise the
-per-record dimension-absence path on a City-tier database (a record that
-simply lacks city/subdivision/location fields), which is a different failure
-mode than a database-tier mismatch. 8.8.8.8 is the GeoLookup::NotFound probe.
+127.0.0.6 and 198.51.100.0/24 are country-only on purpose: even though other
+records in the fixture carry city data, these records lack city, subdivision,
+and location fields and therefore exercise the ordinary per-record onMissing
+path. 8.8.8.8 is the GeoLookup::NotFound probe.
 
 Deliberately absent: no record at ::ffff:0:0/96. The absence reproduces the
 exact IPv4-mapped-address pathology the design calls out, which makes
@@ -55,10 +55,9 @@ import mmdb_writer
 FIXED_BUILD_EPOCH = 1755043200  # 2026-08-13T00:00:00Z, arbitrary fixed point
 time.time = lambda: FIXED_BUILD_EPOCH
 
-# `database_type` predicate pinned here and in README.md: the gateway's tier
-# check (check_database_tier) does `database_type.contains("City")`. The city
-# fixture's type string must contain "City"; the country fixture's must not,
-# and must contain "Country" instead. Keep these two in lockstep.
+# Distinct `database_type` identities let readback tests detect an accidentally
+# swapped fixture. The gateway does not infer record capabilities from this
+# free-text metadata. Keep these values in lockstep with README.md.
 CITY_DATABASE_TYPE = "Edgion-Test-City"
 COUNTRY_DATABASE_TYPE = "Edgion-Test-Country"
 

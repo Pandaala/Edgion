@@ -24,7 +24,7 @@ pub use routes_mgr::{get_global_tls_route_managers, GlobalTlsRouteManagers, TlsR
 pub use conf_handler_impl::create_tls_route_handler;
 
 use crate::plugins::stream::get_global_stream_plugin_store;
-use crate::plugins::{StreamContext, StreamPluginResult, TlsRouteContext};
+use crate::plugins::{StreamContext, StreamLayer, StreamPluginResult, TlsRouteContext};
 use crate::routes::l4_duplex::{DuplexError, DuplexHooks};
 use proxy::TlsContext;
 
@@ -153,7 +153,7 @@ pub(super) async fn run_tls_route_plugins(
     // Fall back to Stage 1 (ConnectionFilter) runtime
     let stream_runtime = &resource.stream_plugin_runtime;
     if !stream_runtime.is_empty() {
-        let stream_ctx = StreamContext::new(client_ip, listener_port).with_layer("tls");
+        let stream_ctx = StreamContext::new(client_ip, listener_port, StreamLayer::Tls);
         return match stream_runtime.run(&stream_ctx).await {
             StreamPluginResult::Allow => {
                 ctx.push_log("stream plugin allowed (compat)");

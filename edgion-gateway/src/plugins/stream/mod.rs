@@ -24,5 +24,5 @@ pub use stream_plugin_store::{
     compile_stream_plugins, create_stream_plugin_handler, get_global_stream_plugin_store, CompiledStreamPlugins,
     StreamPluginStore,
 };
-pub use stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
+pub use stream_plugin_trait::{StreamContext, StreamLayer, StreamPlugin, StreamPluginResult};
 pub use tls_route::{TlsRouteContext, TlsRoutePlugin, TlsRoutePluginRuntime};

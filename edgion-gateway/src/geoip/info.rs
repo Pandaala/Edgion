@@ -27,40 +27,6 @@ pub struct GeoInfo {
     pub longitude: Option<f64>,
 }
 
-/// The four matchable dimensions, parsed from a rule's `key`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GeoDimension {
-    Country,
-    Continent,
-    City,
-    Subdivision,
-}
-
-impl GeoDimension {
-    /// Parse a config `key`. Returns `None` for anything else; the caller
-    /// rejects that at ingest rather than guessing.
-    pub fn parse(key: &str) -> Option<Self> {
-        match key {
-            "country" => Some(Self::Country),
-            "continent" => Some(Self::Continent),
-            "city" => Some(Self::City),
-            "subdivision" => Some(Self::Subdivision),
-            _ => None,
-        }
-    }
-}
-
-impl GeoInfo {
-    pub fn dimension(&self, dim: GeoDimension) -> Option<&str> {
-        match dim {
-            GeoDimension::Country => self.country_iso.as_deref(),
-            GeoDimension::Continent => self.continent.as_deref(),
-            GeoDimension::City => self.city.as_deref(),
-            GeoDimension::Subdivision => self.subdivision.as_deref(),
-        }
-    }
-}
-
 /// The outcome of one lookup.
 ///
 /// `Unavailable` and `NotFound` drive different policies everywhere downstream:
@@ -141,37 +107,5 @@ mod tests {
     fn genuine_ipv6_is_left_alone() {
         let v6: IpAddr = "2001:db8::1".parse().unwrap();
         assert_eq!(normalize_addr(v6), v6);
-    }
-
-    #[test]
-    fn dimension_reads_the_pinned_fields() {
-        let info = GeoInfo {
-            country_iso: Some("CN".into()),
-            continent: Some("AS".into()),
-            subdivision: Some("BJ".into()),
-            city: Some("Beijing".into()),
-            latitude: Some(39.9),
-            longitude: Some(116.4),
-        };
-        assert_eq!(info.dimension(GeoDimension::Country), Some("CN"));
-        assert_eq!(info.dimension(GeoDimension::Continent), Some("AS"));
-        assert_eq!(info.dimension(GeoDimension::Subdivision), Some("BJ"));
-        assert_eq!(info.dimension(GeoDimension::City), Some("Beijing"));
-    }
-
-    #[test]
-    fn absent_dimensions_report_none() {
-        let info = GeoInfo::default();
-        assert_eq!(info.dimension(GeoDimension::City), None);
-        assert_eq!(info.dimension(GeoDimension::Country), None);
-    }
-
-    #[test]
-    fn dimension_parses_from_config_key() {
-        assert_eq!(GeoDimension::parse("country"), Some(GeoDimension::Country));
-        assert_eq!(GeoDimension::parse("continent"), Some(GeoDimension::Continent));
-        assert_eq!(GeoDimension::parse("city"), Some(GeoDimension::City));
-        assert_eq!(GeoDimension::parse("subdivision"), Some(GeoDimension::Subdivision));
-        assert_eq!(GeoDimension::parse("region"), None);
     }
 }

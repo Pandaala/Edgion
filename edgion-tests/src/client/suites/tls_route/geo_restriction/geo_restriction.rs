@@ -9,7 +9,7 @@
 // second) — the `GeoIpLocation` plugin owns geo exclusively post-refactor.
 // Per edgion-gateway/src/routes/tls/mod.rs::check_tls_route_plugins, an empty
 // Stage-2 tls_route_plugin_runtime falls back to running the Stage-1 runtime
-// with `.with_layer("tls")`.
+// with `StreamLayer::Tls`.
 //
 // Source binding: connect FROM 127.0.0.5 (RU, per the GeoIP test fixture) to
 // deny, and FROM 127.0.0.1 (CN) to prove the same listener still admits an

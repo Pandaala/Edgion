@@ -81,12 +81,12 @@ trap above is one level higher, where no `deny_unknown_fields` exists to catch i
 | `db_path` | path | none | Local MMDB path. May not exist at first start — see [Database file lifecycle](#database-file-lifecycle). There is no separate master switch: an unset `db_path` means no database, and geo lookups report `Unavailable`. |
 | `update_url` | string | none | Update source. Empty/absent means load the local file only and never spawn the updater. Redacted in every log line. |
 | `update_auth_header_env` | string | none | Name of an environment variable whose value is sent verbatim as the `Authorization` header. In Kubernetes, inject it from a Secret via `secretKeyRef`. |
-| `update_interval_sec` | u64 | `86400` | Steady-state interval between update cycles (after the first successful load). |
+| `update_interval_sec` | u64 | `86400` | Steady-state interval between update cycles (after the first successful load). Must be greater than zero when `update_url` is set. |
 | `retry_interval_sec` | u64 | `600` | Steady-state retry backoff after a failed cycle, **once a database has already loaded successfully once**. Not used for the very first fetch — see [cold-start backoff](#multi-replica-update-behavior-jitter-and-the-meta-validator). |
 | `connect_timeout_sec` | u64 | `10` | TCP connect timeout for the update request. |
 | `download_deadline_sec` | u64 | `600` | Whole-cycle deadline for one download attempt. Distinct from any client-level total timeout, which is deliberately left unset (see below). |
 | `stall_timeout_sec` | u64 | `60` | Abort a download that makes no progress for this long. |
-| `max_db_bytes` | u64 | `268435456` (256 MiB) | Hard cap enforced *while streaming* the update. |
+| `max_db_bytes` | u64 | `268435456` (256 MiB) | Hard cap enforced *while streaming* the update. Must be greater than zero when `update_url` is set. |
 
 The updater's outbound HTTP client is built through the project's shared `build_outbound_client`
 helper, so it goes through the same egress policy (proxy handling, redirect denial, DNS

@@ -8,7 +8,7 @@ pub mod updater;
 use std::path::Path;
 
 pub use config::GeoIpConfig;
-pub use info::{GeoDimension, GeoInfo, GeoLookup};
+pub use info::{GeoInfo, GeoLookup};
 pub use provider::GeoIpProvider;
 #[cfg(test)]
 pub use provider::GEO_TEST_LOCK;
@@ -60,11 +60,12 @@ fn ensure_swap_directory_ready(db_path: &Path) -> Result<(), String> {
 /// database; an empty `update_url` means no updater task.
 ///
 /// Startup never blocks on the network and never exits on a database problem: a
-/// missing file WARNs, an unparseable file ERRORs, and the gateway serves on
-/// with geo lookups reporting `Unavailable`. The operator's `failOpen` setting
-/// (per `GeoIpLocation` plugin instance, at either layer) decides what that
-/// means for that plugin's own traffic decision. There is deliberately no
-/// readiness gate here.
+/// configured-but-missing file WARNs, an unparseable file ERRORs, and the
+/// gateway serves on with geo lookups reporting `Unavailable`. Leaving GeoIP
+/// unconfigured is a normal, quiet state. The operator's `failOpen` setting
+/// (per `GeoIpLocation` plugin instance, at either layer) decides what database
+/// unavailability means for that plugin's own traffic decision. There is
+/// deliberately no readiness gate here.
 pub fn init(cfg: &GeoIpConfig) {
     let provider = GeoIpProvider::global();
 
@@ -94,12 +95,16 @@ pub fn init(cfg: &GeoIpConfig) {
             }
         },
         None => {
-            tracing::warn!("geoip.db_path is not set; geo lookups will report Unavailable");
             crate::observe::metrics::set_geoip_db_loaded(false);
         }
     }
 
     if cfg.update_url.as_deref().unwrap_or("").is_empty() {
+        return;
+    }
+
+    if let Err(e) = cfg.validate_updater_settings() {
+        tracing::error!(error = %e, "geoip updater not started: invalid updater settings");
         return;
     }
 
@@ -128,7 +133,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn init_with_default_config_leaves_provider_unloaded() {
+    fn init_with_unconfigured_geoip_leaves_provider_unloaded() {
         let _g = GEO_TEST_LOCK.lock();
         GeoIpProvider::global().clear();
 

@@ -16,12 +16,10 @@ use std::sync::{Arc, LazyLock};
 
 use super::info::{normalize_addr, project, GeoLookup};
 
-/// One loaded database plus the metadata operators need to diagnose it.
+/// One loaded database plus the build timestamp used by the staleness metric.
 struct LoadedDb {
     reader: maxminddb::Reader<memmap2::Mmap>,
-    database_type: String,
     build_epoch: u64,
-    node_count: u32,
 }
 
 pub struct GeoIpProvider {
@@ -78,9 +76,7 @@ impl GeoIpProvider {
             return Err(format!("mmdb {} has node_count 0", path.display()));
         }
         let loaded = LoadedDb {
-            database_type: meta.database_type.clone(),
             build_epoch: meta.build_epoch,
-            node_count: meta.node_count,
             reader,
         };
         self.db.store(Some(Arc::new(loaded)));
@@ -91,16 +87,8 @@ impl GeoIpProvider {
         self.db.load().is_some()
     }
 
-    pub fn database_type(&self) -> Option<String> {
-        self.db.load().as_ref().map(|d| d.database_type.clone())
-    }
-
     pub fn build_epoch(&self) -> Option<u64> {
         self.db.load().as_ref().map(|d| d.build_epoch)
-    }
-
-    pub fn node_count(&self) -> Option<u32> {
-        self.db.load().as_ref().map(|d| d.node_count)
     }
 
     /// Resolve one address.
@@ -142,7 +130,6 @@ impl Default for GeoIpProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::super::info::GeoDimension;
     use super::*;
     use std::io::Write;
 
@@ -183,7 +170,6 @@ mod tests {
         let p = GeoIpProvider::new();
         p.load_from(&fixture_city_db()).expect("fixture must load");
         assert!(p.is_loaded());
-        assert!(p.database_type().is_some());
 
         match p.lookup("203.0.113.7".parse().unwrap()) {
             GeoLookup::Found(info) => {
@@ -224,8 +210,8 @@ mod tests {
             panic!("127.0.0.6 must resolve on the City fixture");
         };
         assert_eq!(info.country_iso.as_deref(), Some("US"));
-        assert_eq!(info.dimension(GeoDimension::City), None);
-        assert_eq!(info.dimension(GeoDimension::Subdivision), None);
+        assert_eq!(info.city, None);
+        assert_eq!(info.subdivision, None);
     }
 
     /// Reloading swaps the active database without disturbing the API.

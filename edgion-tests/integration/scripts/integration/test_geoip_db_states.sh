@@ -357,7 +357,7 @@ PY
 
     # "Database mirror": serves edgion-test-city.mmdb with a fixed delay before
     # the first response byte. The delay is not cosmetic: it makes Phase 4's
-    # "read /geoip BEFORE the swap completes" assertion deterministic instead
+    # pre-swap behavior assertion deterministic instead
     # of racing the updater's own 0-5s startup jitter (updater.rs
     # sleep_with_jitter) against however long our own curl takes to run.
     cat > "${SCRATCH_DIR}/update_server.py" <<'PY'

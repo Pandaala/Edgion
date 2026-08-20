@@ -11,8 +11,8 @@ repo's integration test clients always connect from loopback (`127.0.0.1`)
 and RFC1918 addresses. A borrowed fixture would make most of the GeoIP
 feature untestable from a closed harness. These fixtures map exactly the
 loopback and RFC1918 ranges the integration tests use to synthetic
-countries, so the entire decision table (allow/deny by country, tier
-mismatch, dimension-absence, unmapped address) is reachable without any
+countries, so the entire decision table (allow/deny by country and city,
+dimension absence, unmapped address) is reachable without any
 outbound network access. Being self-authored, they also need no third-party
 redistribution review.
 
@@ -63,15 +63,16 @@ country-only).
 every network above **except** `127.0.0.6/32` and `198.51.100.0/24`, which
 carry only `country` + `continent` (see dimension-absence note above).
 
-## `database_type` predicate (pinned)
+## `database_type` identity (pinned)
 
-The gateway's tier check (`check_database_tier`, Task 10 step 6) decides
-"is this a City-tier database" via `database_type.contains("City")`. These
-two strings must never drift apart:
+The two fixtures use distinct `database_type` metadata so readback tests can
+detect an accidentally swapped asset. The gateway does not infer database
+capabilities from this free-text field; matching depends on the dimensions
+present in each decoded record. Keep these identities in lockstep with
+`generate.py`:
 
-- City fixture: `database_type = "Edgion-Test-City"` (contains `"City"`)
-- Country fixture: `database_type = "Edgion-Test-Country"` (contains
-  `"Country"`, does **not** contain `"City"`)
+- City fixture: `database_type = "Edgion-Test-City"`
+- Country fixture: `database_type = "Edgion-Test-Country"`
 
 ## Reproducibility
 

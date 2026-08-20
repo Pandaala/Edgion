@@ -6,6 +6,8 @@
 use metrics::{counter, gauge, histogram, Counter, Gauge, Label};
 use std::sync::{LazyLock, OnceLock};
 
+use crate::plugins::StreamLayer;
+
 /// Metric names as constants for consistency
 pub mod names {
     pub const CTX_CREATED: &str = "edgion_ctx_created_total";
@@ -944,8 +946,8 @@ pub fn record_geoip_lookup_panic() {
 /// L4 geo denials, which are never logged (see the design's §6.6).
 /// `layer` is stage1 | tcp | tls; `reason` is deny_country | allow_miss | db_unavailable.
 /// Neither label carries a client address.
-pub fn record_geoip_denied(layer: &'static str, reason: &'static str) {
-    counter!(names::GEOIP_DENIED, "layer" => layer, "reason" => reason).increment(1);
+pub fn record_geoip_denied(layer: StreamLayer, reason: &'static str) {
+    counter!(names::GEOIP_DENIED, "layer" => layer.as_metric_label(), "reason" => reason).increment(1);
 }
 
 #[cfg(test)]

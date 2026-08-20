@@ -77,12 +77,12 @@ camelCase）。该结构体带有 `#[serde(deny_unknown_fields)]`，因此 `geoi
 | `db_path` | 路径 | 无 | 本地 MMDB 路径。首次启动时可能不存在，见[数据库文件生命周期](#数据库文件生命周期)。没有独立的总开关：`db_path` 未设置就意味着没有数据库，地理查询会报告 `Unavailable`。 |
 | `update_url` | string | 无 | 更新源。留空/不填表示只加载本地文件，永不启动更新任务。在所有日志行中都会被脱敏。 |
 | `update_auth_header_env` | string | 无 | 环境变量名，其值会原样作为 `Authorization` 头发送。在 Kubernetes 中通过 `secretKeyRef` 从 Secret 注入。 |
-| `update_interval_sec` | u64 | `86400` | 首次成功加载**之后**，两次更新周期之间的稳态间隔。 |
+| `update_interval_sec` | u64 | `86400` | 首次成功加载**之后**，两次更新周期之间的稳态间隔。设置 `update_url` 时必须大于零。 |
 | `retry_interval_sec` | u64 | `600` | 数据库**已经成功加载过一次之后**，失败重试的稳态退避时间。首次拉取不使用该值，见[冷启动退避](#多副本更新行为抖动和-meta-校验器)。 |
 | `connect_timeout_sec` | u64 | `10` | 更新请求的 TCP 连接超时。 |
 | `download_deadline_sec` | u64 | `600` | 单次下载尝试的整体截止时间。与客户端级别的总超时不同——后者刻意留空，见下文。 |
 | `stall_timeout_sec` | u64 | `60` | 下载在此时长内无任何进展则中止。 |
-| `max_db_bytes` | u64 | `268435456`（256 MiB） | 流式下载**过程中**强制生效的硬上限。 |
+| `max_db_bytes` | u64 | `268435456`（256 MiB） | 流式下载**过程中**强制生效的硬上限。设置 `update_url` 时必须大于零。 |
 
 更新器的出站 HTTP 客户端通过项目共享的 `build_outbound_client` 辅助函数构建，因此走的是与其他所有
 Gateway 发起的出站调用相同的出口策略（代理处理、重定向拒绝、DNS 解析器）。客户端自身的总请求超时

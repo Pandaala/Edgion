@@ -531,12 +531,12 @@ There is no master-switch field: an unset `db_path` means no database (geo looku
 | `db_path` | `PathBuf?` | none | Local MMDB path. May not exist at first start (no bundled image database) — normal, not a failure. |
 | `update_url` | `String?` | none | Update source; empty/absent never spawns the updater. Redacted in logs. |
 | `update_auth_header_env` | `String?` | none | Env var name whose value is sent verbatim as `Authorization`. |
-| `update_interval_sec` | `u64` | `86400` | Steady-state cycle interval, after the first successful load. |
+| `update_interval_sec` | `u64` | `86400` | Steady-state cycle interval, after the first successful load. Must be greater than zero when `update_url` is set. |
 | `retry_interval_sec` | `u64` | `600` | Steady-state retry backoff; not used before the first success (short escalating backoff instead, capped at 30s). |
 | `connect_timeout_sec` | `u64` | `10` | Connect timeout. |
 | `download_deadline_sec` | `u64` | `600` | Whole-cycle deadline. `reqwest` client-level `total_timeout` stays unset on purpose. |
 | `stall_timeout_sec` | `u64` | `60` | No-progress abort. |
-| `max_db_bytes` | `u64` | `268435456` | Hard cap enforced while streaming. |
+| `max_db_bytes` | `u64` | `268435456` | Hard cap enforced while streaming. Must be greater than zero when `update_url` is set. |
 
 **Never write `db_path` in place** (`kubectl cp`, initContainer overwrite, truncate+rewrite) —
 the gateway holds it memory-mapped, so an external in-place write causes SIGBUS (not a Rust

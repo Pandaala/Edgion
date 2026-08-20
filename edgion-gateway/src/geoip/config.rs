@@ -104,12 +104,30 @@ impl Default for GeoIpConfig {
     }
 }
 
+impl GeoIpConfig {
+    /// Validate settings that are meaningful only when the background updater
+    /// is configured. An absent or empty URL keeps the updater disabled and
+    /// leaves the remaining values inert.
+    pub(crate) fn validate_updater_settings(&self) -> Result<(), String> {
+        if self.update_url.as_deref().unwrap_or("").is_empty() {
+            return Ok(());
+        }
+        if self.update_interval_sec == 0 {
+            return Err("geoip.update_interval_sec must be greater than zero when update_url is set".to_string());
+        }
+        if self.max_db_bytes == 0 {
+            return Err("geoip.max_db_bytes must be greater than zero when update_url is set".to_string());
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_disabled_and_safe() {
+    fn defaults_leave_geoip_unconfigured_and_safe() {
         let cfg: GeoIpConfig = serde_yaml::from_str("{}").unwrap();
         assert!(cfg.db_path.is_none());
         assert!(cfg.update_url.is_none());
@@ -128,6 +146,50 @@ max_db_bytes: 1024
         let cfg: GeoIpConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(cfg.db_path, Some(PathBuf::from("/var/lib/edgion/geoip/db.mmdb")));
         assert_eq!(cfg.max_db_bytes, 1024);
+    }
+
+    #[test]
+    fn configured_updater_accepts_safe_defaults() {
+        let cfg = GeoIpConfig {
+            update_url: Some("https://mirror.internal/geo.mmdb".into()),
+            ..Default::default()
+        };
+        assert!(cfg.validate_updater_settings().is_ok());
+    }
+
+    #[test]
+    fn configured_updater_rejects_zero_interval_and_size_cap() {
+        let mut cfg = GeoIpConfig {
+            update_url: Some("https://mirror.internal/geo.mmdb".into()),
+            update_interval_sec: 0,
+            ..Default::default()
+        };
+        let err = cfg.validate_updater_settings().unwrap_err();
+        assert!(err.contains("update_interval_sec"), "got: {err}");
+
+        cfg.update_interval_sec = default_update_interval_sec();
+        cfg.max_db_bytes = 0;
+        let err = cfg.validate_updater_settings().unwrap_err();
+        assert!(err.contains("max_db_bytes"), "got: {err}");
+    }
+
+    #[test]
+    fn disabled_updater_leaves_updater_only_values_inert() {
+        let cfg = GeoIpConfig {
+            update_url: None,
+            update_interval_sec: 0,
+            max_db_bytes: 0,
+            ..Default::default()
+        };
+        assert!(cfg.validate_updater_settings().is_ok());
+
+        let cfg = GeoIpConfig {
+            update_url: Some("".into()),
+            update_interval_sec: 0,
+            max_db_bytes: 0,
+            ..Default::default()
+        };
+        assert!(cfg.validate_updater_settings().is_ok());
     }
 
     /// A camelCase typo must be a loud error, never a silent all-defaults struct.
