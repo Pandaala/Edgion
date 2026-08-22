@@ -11,8 +11,10 @@ description: Canonical EdgionBackend exactly-one AI/A2A/MCP schema, typed HTTPRo
 `EdgionBackend` is a typed HTTP backend with exactly one configured variant: `spec.ai` defines an
 AI provider, `spec.a2a` defines an A2A transport, and `spec.mcp` defines a stateless MCP upstream.
 An HTTPRoute references the direct EdgionBackend identity. AiProxy accepts only AI variants and
-ordinary forwarding supports A2A. MCP remains a compiled transport handoff until an explicit
-McpGateway frontend consumes it; an ordinary HTTPRoute is not implicitly an MCP frontend.
+ordinary forwarding supports A2A. The Controller may classify a strict direct HTTPRoute rule as
+MCP-eligible. MCP uses no separate McpGateway resource: eligibility is derived from the current
+backend variant and route shape rather than a persisted marker. Eligibility alone is not a
+client-facing MCP wire implementation.
 
 ## Full schema
 
@@ -178,8 +180,27 @@ from the CRD schema, and is redacted from Admin serialization, Debug output, sta
 
 WP9 does not implement protocol sessions, `initialize`, `initialized`, `Mcp-Session-Id`,
 `Last-Event-ID`, GET event streams, SSE response handling, JSON-RPC dispatch, tool discovery/calls,
-or a client-facing MCP route. The `transport.type` identifies the MCP protocol transport; it does
-not choose HTTP/1.1 versus HTTP/2.
+or a client-facing MCP route. WP10 derives that route from an ordinary HTTPRoute under the strict
+contract below. The `transport.type` identifies the MCP protocol transport; it does not choose
+HTTP/1.1 versus HTTP/2.
+
+### MCP HTTPRoute eligibility contract
+
+An MCP-eligible direct HTTPRoute rule has exactly one positive-weight
+`edgion.io/EdgionBackend` backendRef resolving to the current sole `spec.mcp` variant. The rule
+requires exactly one explicit `Exact` match, no method/header/query predicates, no session
+persistence, and a stable ASCII absolute path without parameters, escapes, repeated/trailing
+slashes, query, or fragment. Delegated composition is unsupported.
+
+Invalid MCP-evident rules use normal HTTPRoute status: `PartiallyInvalid=True/RuleInvalid` when a
+sibling survives, or `Accepted=False/UnsupportedValue` when no rule survives. Replacing the backend
+with AI/A2A or deleting it removes MCP evidence on the next ordinary backend dependency requeue;
+there is no marker or tombstone. Missing references continue to report
+`ResolvedRefs=False/BackendNotFound`.
+
+This section describes Controller classification and status. Gateway request recognition, Origin
+validation, protocol handling, and public activation are later WP10 stages and are not implied by
+an eligible route appearing in the config cache.
 
 ### A2A HTTPRoute contract
 

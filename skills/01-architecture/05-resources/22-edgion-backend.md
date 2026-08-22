@@ -11,8 +11,10 @@ description: EdgionBackend AI/A2A/MCP variants, Controller resolution, route dep
 `EdgionBackend` is a namespaced, typed `HTTPRoute.backendRef` with an exactly-one variant union:
 `spec.ai` describes an AI provider, `spec.a2a` describes an A2A transport target, and `spec.mcp`
 describes a stateless Streamable HTTP upstream. Configuring zero or multiple variants is invalid.
-`AiProxy` consumes only AI and ordinary forwarding consumes A2A. WP9 publishes MCP transport proof
-for a future explicit McpGateway consumer; it does not reinterpret ordinary HTTPRoute traffic.
+`AiProxy` consumes only AI and ordinary forwarding consumes A2A. The Controller classifies a direct
+HTTPRoute as MCP-eligible when its sole rule satisfies the strict exact-path contract; no separate
+McpGateway resource or placement marker is used. This eligibility stage does not by itself activate
+client-facing MCP traffic.
 
 ## Controller processing
 
@@ -120,7 +122,8 @@ The snapshot starts at generation zero and advances exactly once for each semant
 change. Empty, invalid-absent, and equivalent updates retain the exact snapshot Arc; changed target,
 UID, or bearer material replaces it. A standalone snapshot-bound `SelectedMcpBackend` proves the
 selected logical slot, direct policy identity, runtime UID, transport, credential seam, and
-generation. It is deliberately not reachable from ordinary HTTP dispatch in WP9.
+generation. Later WP10 runtime stages consume that proof only after the HTTPRoute exact-shape and
+current-variant gates; WP9 and the Controller eligibility stage do not activate HTTP dispatch.
 
 `defaults.timeout` does not exist. `HTTPRoute.timeouts` owns request and per-attempt deadlines;
 EdgionBackendTrafficPolicy `connection.connectTimeout` owns connection establishment.

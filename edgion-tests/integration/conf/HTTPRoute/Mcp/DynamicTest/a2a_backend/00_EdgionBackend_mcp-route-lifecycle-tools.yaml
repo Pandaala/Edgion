@@ -1,0 +1,10 @@
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: mcp-route-lifecycle-tools
+  namespace: edgion-test
+spec:
+  a2a:
+    target:
+      endpoint: http://127.0.0.1:30002/a2a
+    allowInsecureHttp: true

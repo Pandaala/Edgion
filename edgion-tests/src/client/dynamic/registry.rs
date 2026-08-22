@@ -10,6 +10,7 @@ pub fn all() -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::ai_backend_lifecycle::SCENARIO,
         crate::dynamic::scenarios::ai_backend_secret_rotation::SCENARIO,
         crate::dynamic::scenarios::mcp_backend_lifecycle::SCENARIO,
+        crate::dynamic::scenarios::mcp_route_lifecycle::SCENARIO,
         crate::dynamic::scenarios::ai_backend_weighted::SCENARIO,
         crate::dynamic::scenarios::gateway_dynamic::SCENARIO,
         crate::dynamic::scenarios::dsl_dynamic::SCENARIO,

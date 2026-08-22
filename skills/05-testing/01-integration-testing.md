@@ -263,7 +263,10 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 
 ### Current scenario set
 
-> Source of truth is `edgion-tests/src/client/dynamic/registry.rs` (`all()`); run `--list-dynamic-scenarios` for the live list. As of this writing it registers 10 scenarios:
+> Source of truth is `edgion-tests/src/client/dynamic/registry.rs` (`all()`); run
+> `--list-dynamic-scenarios` for the live list. As of this writing it registers 27 scenarios. The
+> table below highlights the common and protocol-lifecycle scenarios rather than duplicating the
+> complete registry.
 
 | Scenario id | conf directory (`conf_path`) | Verifies |
 |-------------|----------|---------|
@@ -278,6 +281,8 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 | `RouteDelegationDynamic` | `HTTPRoute/Delegation/DynamicTest` | Delegation child rule moves /pay → /pay2; parent re-flattens and gateway hot-swaps routing |
 | `SpBackendChange` | `HTTPRoute/Backend/SessionPersistenceBackendChange/DynamicTest` | SessionPersistence cookie re-routes to a healthy backend after backend-a is drained |
 | `TcpEspReload` | `TCPRoute/StreamPlugins/DynamicTest` | Hot-reload of EdgionStreamPlugins allow-list on a TCPRoute listener (allow→deny→allow) |
+| `McpBackendLifecycle` | `EdgionBackend/Mcp/DynamicTest` | MCP target, credential, ReferenceGrant, variant, redaction, and runtime publication lifecycle without a frontend |
+| `McpRouteLifecycle` | `HTTPRoute/Mcp/DynamicTest` | MCP route shape, MCP↔A2A recomputation, exact-path repair, and backend delete/recreate in Controller and Gateway config; sends no MCP traffic |
 
 ### Where the framework lives
 
@@ -291,10 +296,10 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 
 ### Adding a dynamic scenario
 
-1. Write `initial/` + `updates/` YAML under `edgion-tests/integration/conf/<Resource>/<Item>/DynamicTest/` (`load_conf.sh` automatically skips `updates/` and `delete/`)
-2. Write two phase suites in `edgion-tests/src/client/suites/<family>/dynamic.rs` (`<Name>InitialTestSuite` / `<Name>UpdateTestSuite`); re-export them via the family `mod.rs` to `suites::*`
-3. Add branches to the three dispatch tables in `test_client.rs`: `resolve_suite` (for aliases if needed), `suite_to_port_key`, `add_suites_for_suite` (selects a suite by `--phase`)
-4. Write the scenario in `edgion-tests/src/client/dynamic/scenarios/<id>.rs`; the `run` function chains the N phases in order: `assert_phase` (initial) → `apply_dir` / `delete_resources` (changes) → `wait_phase` (with timeout, until the final-state business assertions all pass). **Do not** rely on `sleep` as a fallback and **do not** use `wait_resource_sync` — the former is unreliable, and the latter is no longer exposed on ScenarioCtx
+1. Write phase YAML under `edgion-tests/integration/conf/<Resource>/<Item>/DynamicTest/`. Remember that the static loader may preload dynamic fixture files; use unique resource names and make the scenario clean up and poll for absence before applying its initial generation.
+2. Define phase suites either in `edgion-tests/src/client/suites/<family>/dynamic.rs` for reusable traffic suites, or directly in the scenario for focused Controller/Gateway state assertions.
+3. Add `test_client.rs` dispatch entries only when the phase suites must also be selectable through `-r/-i --phase`; a self-contained registered scenario does not need those aliases.
+4. Write the scenario in `edgion-tests/src/client/dynamic/scenarios/<id>.rs`; the `run` function chains the N phases with `apply_dir` / `delete_resources` and `wait_phase` (with timeout, until the final-state business assertions all pass). Always clean up on success and failure. **Do not** rely on `sleep` as a fallback and **do not** use `wait_resource_sync` — the former is unreliable, and the latter is no longer exposed on ScenarioCtx
 5. Add `pub mod <id>;` to `dynamic/scenarios/mod.rs`
 6. Append `crate::dynamic::scenarios::<id>::SCENARIO` to `all()` in `dynamic/registry.rs`
 

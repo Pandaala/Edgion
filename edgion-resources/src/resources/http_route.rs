@@ -332,6 +332,113 @@ pub struct HTTPQueryParamMatch {
     pub value: String,
 }
 
+/// A syntactically valid direct MCP HTTPRoute rule.
+///
+/// This result proves only the stable route shape. The caller must separately
+/// prove that `backend_ref` resolves to a current MCP EdgionBackend snapshot.
+#[derive(Clone, Copy, Debug)]
+pub struct ValidMcpHttpRouteRule<'a> {
+    pub path: &'a str,
+    pub backend_ref: &'a HTTPBackendRef,
+}
+
+/// Stable validation failures for the direct MCP HTTPRoute shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpHttpRouteRuleError {
+    BackendRefCount,
+    BackendRefKind,
+    BackendRefWeight,
+    BackendRefPort,
+    BackendRefDenied,
+    MatchCount,
+    MatchPredicates,
+    PathMissing,
+    PathType,
+    PathValueMissing,
+    PathNotStableLiteral,
+    SessionPersistence,
+}
+
+impl fmt::Display for McpHttpRouteRuleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::BackendRefCount => "MCP rules require exactly one backendRef",
+            Self::BackendRefKind => "MCP rules require an edgion.io/EdgionBackend backendRef",
+            Self::BackendRefWeight => "MCP rules require a positive backendRef weight",
+            Self::BackendRefPort => "MCP EdgionBackend references must not set port",
+            Self::BackendRefDenied => "MCP EdgionBackend reference is not permitted",
+            Self::MatchCount => "MCP rules require exactly one explicit match",
+            Self::MatchPredicates => "MCP matches must not set method, headers, or queryParams",
+            Self::PathMissing => "MCP matches require an explicit path",
+            Self::PathType => "MCP matches require path type Exact",
+            Self::PathValueMissing => "MCP matches require an explicit path value",
+            Self::PathNotStableLiteral => "MCP paths must use the stable literal absolute-path grammar",
+            Self::SessionPersistence => "MCP rules do not support sessionPersistence",
+        };
+        f.write_str(message)
+    }
+}
+
+fn is_stable_mcp_route_path(path: &str) -> bool {
+    if path == "/" {
+        return true;
+    }
+    if !path.starts_with('/') || path.ends_with('/') || !path.is_ascii() {
+        return false;
+    }
+    path[1..].split('/').all(|segment| {
+        !segment.is_empty()
+            && segment != "."
+            && segment != ".."
+            && segment
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~'))
+    })
+}
+
+/// Validate the configuration-independent route shape required by the MCP
+/// Streamable HTTP frontend. This function performs no resource lookup.
+pub fn validate_mcp_http_route_rule(rule: &HTTPRouteRule) -> Result<ValidMcpHttpRouteRule<'_>, McpHttpRouteRuleError> {
+    if rule.session_persistence.is_some() {
+        return Err(McpHttpRouteRuleError::SessionPersistence);
+    }
+
+    let backend_refs = rule.backend_refs.as_deref().unwrap_or_default();
+    let [backend_ref] = backend_refs else {
+        return Err(McpHttpRouteRuleError::BackendRefCount);
+    };
+    if backend_ref.backend_kind() != HTTPBackendRefKind::EdgionBackend {
+        return Err(McpHttpRouteRuleError::BackendRefKind);
+    }
+    if backend_ref.weight.unwrap_or(1) <= 0 {
+        return Err(McpHttpRouteRuleError::BackendRefWeight);
+    }
+    if backend_ref.port.is_some() {
+        return Err(McpHttpRouteRuleError::BackendRefPort);
+    }
+    if backend_ref.ref_denied.is_some() {
+        return Err(McpHttpRouteRuleError::BackendRefDenied);
+    }
+
+    let matches = rule.matches.as_deref().unwrap_or_default();
+    let [route_match] = matches else {
+        return Err(McpHttpRouteRuleError::MatchCount);
+    };
+    if route_match.method.is_some() || route_match.headers.is_some() || route_match.query_params.is_some() {
+        return Err(McpHttpRouteRuleError::MatchPredicates);
+    }
+    let path = route_match.path.as_ref().ok_or(McpHttpRouteRuleError::PathMissing)?;
+    if path.match_type.as_deref() != Some("Exact") {
+        return Err(McpHttpRouteRuleError::PathType);
+    }
+    let path = path.value.as_deref().ok_or(McpHttpRouteRuleError::PathValueMissing)?;
+    if !is_stable_mcp_route_path(path) {
+        return Err(McpHttpRouteRuleError::PathNotStableLiteral);
+    }
+
+    Ok(ValidMcpHttpRouteRule { path, backend_ref })
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPBackendRef {
@@ -1415,6 +1522,188 @@ mod tests {
             backend_tls_policy: None,
             ref_denied: None,
         }
+    }
+
+    fn mcp_rule(path: &str) -> HTTPRouteRule {
+        serde_json::from_value(serde_json::json!({
+            "matches": [{"path": {"type": "Exact", "value": path}}],
+            "backendRefs": [{
+                "group": "edgion.io",
+                "kind": "EdgionBackend",
+                "name": "mcp"
+            }]
+        }))
+        .expect("MCP rule fixture should deserialize")
+    }
+
+    #[test]
+    fn mcp_rule_shape_accepts_stable_exact_paths() {
+        for path in ["/", "/mcp", "/api-v1/mcp_endpoint~stable", "/v1.2/tools"] {
+            let rule = mcp_rule(path);
+            let valid = validate_mcp_http_route_rule(&rule).expect("stable path should be valid");
+            assert_eq!(valid.path, path);
+            assert_eq!(valid.backend_ref.name, "mcp");
+        }
+    }
+
+    #[test]
+    fn mcp_rule_shape_rejects_unstable_paths() {
+        for path in [
+            "",
+            "relative",
+            "/mcp/",
+            "/mcp//tools",
+            "/.",
+            "/..",
+            "/a/../b",
+            "/%41",
+            "/%2f",
+            "/%",
+            "/a;param",
+            "/a\\b",
+            "/:id",
+            "/::literal",
+            "/a?x=1",
+            "/a#fragment",
+            "/café",
+            "/a\n",
+        ] {
+            assert_eq!(
+                validate_mcp_http_route_rule(&mcp_rule(path)).unwrap_err(),
+                McpHttpRouteRuleError::PathNotStableLiteral,
+                "path {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_rule_shape_requires_one_permitted_positive_unported_backend() {
+        let mut rule = mcp_rule("/mcp");
+        rule.backend_refs = None;
+        assert_eq!(
+            validate_mcp_http_route_rule(&rule).unwrap_err(),
+            McpHttpRouteRuleError::BackendRefCount
+        );
+
+        let mut rule = mcp_rule("/mcp");
+        rule.backend_refs
+            .as_mut()
+            .unwrap()
+            .push(backend_ref(None, Some("Service")));
+        assert_eq!(
+            validate_mcp_http_route_rule(&rule).unwrap_err(),
+            McpHttpRouteRuleError::BackendRefCount
+        );
+
+        let mut rule = mcp_rule("/mcp");
+        rule.backend_refs.as_mut().unwrap()[0] = backend_ref(None, Some("Service"));
+        assert_eq!(
+            validate_mcp_http_route_rule(&rule).unwrap_err(),
+            McpHttpRouteRuleError::BackendRefKind
+        );
+
+        let mut rule = mcp_rule("/mcp");
+        rule.backend_refs.as_mut().unwrap()[0].weight = Some(0);
+        assert_eq!(
+            validate_mcp_http_route_rule(&rule).unwrap_err(),
+            McpHttpRouteRuleError::BackendRefWeight
+        );
+
+        let mut rule = mcp_rule("/mcp");
+        rule.backend_refs.as_mut().unwrap()[0].port = Some(8080);
+        assert_eq!(
+            validate_mcp_http_route_rule(&rule).unwrap_err(),
+            McpHttpRouteRuleError::BackendRefPort
+        );
+
+        let mut rule = mcp_rule("/mcp");
+        rule.backend_refs.as_mut().unwrap()[0].ref_denied = Some(RefDenied {
+            target_namespace: "other".to_string(),
+            target_name: "mcp".to_string(),
+            reason: Some("NoMatchingReferenceGrant".to_string()),
+        });
+        assert_eq!(
+            validate_mcp_http_route_rule(&rule).unwrap_err(),
+            McpHttpRouteRuleError::BackendRefDenied
+        );
+    }
+
+    #[test]
+    fn mcp_rule_shape_requires_one_predicate_free_explicit_exact_match() {
+        let mut rule = mcp_rule("/mcp");
+        rule.matches = None;
+        assert_eq!(
+            validate_mcp_http_route_rule(&rule).unwrap_err(),
+            McpHttpRouteRuleError::MatchCount
+        );
+
+        let mut rule = mcp_rule("/mcp");
+        rule.matches.as_mut().unwrap().push(HTTPRouteMatch {
+            path: None,
+            headers: None,
+            query_params: None,
+            method: None,
+        });
+        assert_eq!(
+            validate_mcp_http_route_rule(&rule).unwrap_err(),
+            McpHttpRouteRuleError::MatchCount
+        );
+
+        for predicate in ["headers", "queryParams", "method"] {
+            let value = match predicate {
+                "headers" => serde_json::json!({"headers": []}),
+                "queryParams" => serde_json::json!({"queryParams": []}),
+                _ => serde_json::json!({"method": ""}),
+            };
+            let mut rule = mcp_rule("/mcp");
+            let route_match = rule.matches.as_mut().unwrap().first_mut().unwrap();
+            match predicate {
+                "headers" => route_match.headers = serde_json::from_value(value["headers"].clone()).unwrap(),
+                "queryParams" => {
+                    route_match.query_params = serde_json::from_value(value["queryParams"].clone()).unwrap()
+                }
+                _ => route_match.method = Some(String::new()),
+            }
+            assert_eq!(
+                validate_mcp_http_route_rule(&rule).unwrap_err(),
+                McpHttpRouteRuleError::MatchPredicates
+            );
+        }
+
+        let mut rule = mcp_rule("/mcp");
+        rule.matches.as_mut().unwrap()[0].path = None;
+        assert_eq!(
+            validate_mcp_http_route_rule(&rule).unwrap_err(),
+            McpHttpRouteRuleError::PathMissing
+        );
+
+        let mut rule = mcp_rule("/mcp");
+        rule.matches.as_mut().unwrap()[0].path.as_mut().unwrap().match_type = Some("PathPrefix".to_string());
+        assert_eq!(
+            validate_mcp_http_route_rule(&rule).unwrap_err(),
+            McpHttpRouteRuleError::PathType
+        );
+
+        let mut rule = mcp_rule("/mcp");
+        rule.matches.as_mut().unwrap()[0].path.as_mut().unwrap().match_type = Some("RegularExpression".to_string());
+        assert_eq!(
+            validate_mcp_http_route_rule(&rule).unwrap_err(),
+            McpHttpRouteRuleError::PathType
+        );
+
+        let mut rule = mcp_rule("/mcp");
+        rule.matches.as_mut().unwrap()[0].path.as_mut().unwrap().value = None;
+        assert_eq!(
+            validate_mcp_http_route_rule(&rule).unwrap_err(),
+            McpHttpRouteRuleError::PathValueMissing
+        );
+
+        let mut rule = mcp_rule("/mcp");
+        rule.session_persistence = Some(serde_json::from_value(serde_json::json!({})).unwrap());
+        assert_eq!(
+            validate_mcp_http_route_rule(&rule).unwrap_err(),
+            McpHttpRouteRuleError::SessionPersistence
+        );
     }
 
     #[test]
