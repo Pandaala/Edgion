@@ -8,7 +8,7 @@ spec:
   - enable: true
     type: RequestRestriction
     config:
-      mode: Blacklist
+      mode: Deny
       ruleGroups:
       - rules:
         - name: block-admin-normalized

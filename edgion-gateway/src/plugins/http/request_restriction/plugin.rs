@@ -4,11 +4,12 @@
 //! query parameters, path, method, and referer.
 //!
 //! ## Model (DNF: OR-of-AND)
+//! - `mode` is required: `Deny` (match => reject, unmatched passes) or `Allow`
+//!   (match => pass, unmatched is rejected). It has no default, so a config that
+//!   omits it is rejected instead of silently picking a polarity.
 //! - `ruleGroups` is OR: the policy fires if any group matches.
 //! - Each group's `rules` is AND: a group matches only when all non-skipped
 //!   predicates are true.
-//! - A global `mode` decides the polarity: `Blacklist` (match => reject) or
-//!   `Whitelist` (match => pass, otherwise reject).
 //!
 //! A rule is a pure predicate (`value ∈ values` OR `value` matches `regex`).
 //! HashSet optimization kicks in for exact lists > 16; missing values are handled
@@ -16,10 +17,10 @@
 //!
 //! ## Configuration Examples:
 //!
-//! ### Blacklist: block bots OR /admin paths:
+//! ### Deny: block bots OR /admin paths:
 //! ```yaml
 //! requestRestriction:
-//!   mode: Blacklist
+//!   mode: Deny
 //!   ruleGroups:
 //!     - rules:
 //!         - source: Header
@@ -32,10 +33,10 @@
 //!   message: "Bot access denied"
 //! ```
 //!
-//! ### Whitelist: allow only specific paths:
+//! ### Allow: allow only specific paths:
 //! ```yaml
 //! requestRestriction:
-//!   mode: Whitelist
+//!   mode: Allow
 //!   ruleGroups:
 //!     - rules:
 //!         - source: Path
@@ -46,7 +47,7 @@
 //! ### AND within a group: deny only DELETE to /admin:
 //! ```yaml
 //! requestRestriction:
-//!   mode: Blacklist
+//!   mode: Deny
 //!   ruleGroups:
 //!     - rules:
 //!         - source: Method
@@ -61,7 +62,7 @@ use bytes::Bytes;
 use crate::plugins::http::common::auth_common::send_gateway_plain_error_response;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::{RequestRestrictionConfig, RestrictionMode, RuleGroup};
+use edgion_resources::resources::edgion_plugins::{RequestRestrictionConfig, RuleGroup};
 
 /// Request Restriction plugin
 pub struct RequestRestriction {
@@ -133,24 +134,22 @@ impl RequestFilter for RequestRestriction {
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        // Evaluate all groups (OR), then apply the global mode polarity.
+        // Evaluate all groups (OR), then apply the configured polarity: Allow mode
+        // denies what it does not match, Deny mode denies what it does.
+        let allow_mode = self.config.allow_mode();
         let (any_matched, matched_idx) = self.evaluate_groups(session);
-        let denied = match self.config.mode {
-            RestrictionMode::Blacklist => any_matched,
-            RestrictionMode::Whitelist => !any_matched,
-        };
+        let denied = any_matched != allow_mode;
 
         if denied {
-            let deny_msg = match (&self.config.mode, matched_idx) {
-                (RestrictionMode::Blacklist, Some(i)) => {
+            let deny_msg = match matched_idx {
+                Some(i) => {
                     let label = self.config.rule_groups[i]
                         .name
                         .clone()
                         .unwrap_or_else(|| format!("group[{}]", i));
                     format!("Deny group {}", label)
                 }
-                (RestrictionMode::Whitelist, _) => "Deny (no allow group matched)".to_string(),
-                _ => "Deny".to_string(),
+                None => "Deny (no allow group matched)".to_string(),
             };
             plugin_log.push(&deny_msg);
 
@@ -189,7 +188,7 @@ mod tests {
 
     fn cfg(mode: RestrictionMode, groups: Vec<RuleGroup>) -> RequestRestrictionConfig {
         let mut c = RequestRestrictionConfig {
-            mode,
+            mode: Some(mode),
             rule_groups: groups,
             ..Default::default()
         };
@@ -198,10 +197,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_blacklist_missing_header_match_denies() {
+    async fn test_deny_mode_missing_header_match_denies() {
         // onMissing: Match => absent X-Auth-Token counts as a hit => deny.
         let config = cfg(
-            RestrictionMode::Blacklist,
+            RestrictionMode::Deny,
             vec![RuleGroup {
                 name: Some("missing-token".to_string()),
                 rules: vec![RestrictionRule {
@@ -232,7 +231,7 @@ mod tests {
         // RequestPath source must call get_request_path(), not get_path().
         // The value is kept raw (/%61dmin) and must match the raw entry path.
         let config = cfg(
-            RestrictionMode::Blacklist,
+            RestrictionMode::Deny,
             vec![RuleGroup {
                 name: Some("deny-raw-path".to_string()),
                 rules: vec![RestrictionRule {
@@ -256,10 +255,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_blacklist_and_group_needs_all_predicates() {
+    async fn test_deny_mode_and_group_needs_all_predicates() {
         // Group = (Method == DELETE) AND (Path == /admin). DELETE /other must pass.
         let config = cfg(
-            RestrictionMode::Blacklist,
+            RestrictionMode::Deny,
             vec![RuleGroup {
                 name: Some("delete-admin".to_string()),
                 rules: vec![
@@ -288,10 +287,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_whitelist_denies_when_no_group_matches() {
-        // Whitelist: only GET passes. POST => deny.
+    async fn test_allow_mode_denies_when_no_group_matches() {
+        // Allow mode: only GET passes. POST => deny.
         let config = cfg(
-            RestrictionMode::Whitelist,
+            RestrictionMode::Allow,
             vec![RuleGroup {
                 name: Some("readonly".to_string()),
                 rules: vec![RestrictionRule {
@@ -319,7 +318,7 @@ mod tests {
         // Group = (X-Opt Skip-on-missing) AND (Method DELETE).
         // X-Opt absent => that predicate is dropped; the group still ANDs the rest.
         let config = cfg(
-            RestrictionMode::Blacklist,
+            RestrictionMode::Deny,
             vec![RuleGroup {
                 name: Some("skip-then-and".to_string()),
                 rules: vec![
@@ -356,11 +355,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_all_skip_group_blacklist_passes() {
+    async fn test_all_skip_group_deny_mode_passes() {
         // A group whose only predicate is Skip-on-missing yields considered==0 =>
-        // group does not match => Blacklist => not denied (fail-open).
+        // group does not match => Deny mode => not denied (fail-open).
         let config = cfg(
-            RestrictionMode::Blacklist,
+            RestrictionMode::Deny,
             vec![RuleGroup {
                 name: Some("all-skip".to_string()),
                 rules: vec![RestrictionRule {
@@ -385,11 +384,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_all_skip_group_whitelist_denies() {
-        // Same all-Skip group under Whitelist: considered==0 => no group matched =>
-        // Whitelist => deny (fail-closed). Documents the foot-gun.
+    async fn test_all_skip_group_allow_mode_denies() {
+        // Same all-Skip group under Allow mode: considered==0 => no group matched =>
+        // Allow mode => deny (fail-closed). Documents the foot-gun.
         let config = cfg(
-            RestrictionMode::Whitelist,
+            RestrictionMode::Allow,
             vec![RuleGroup {
                 name: Some("all-skip".to_string()),
                 rules: vec![RestrictionRule {
@@ -417,11 +416,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_whitelist_multi_group_or_passes_on_second_group() {
-        // Whitelist OR across groups: (Method GET) OR (X-Tier gold). A POST with
+    async fn test_allow_mode_multi_group_or_passes_on_second_group() {
+        // Allow-mode OR across groups: (Method GET) OR (X-Tier gold). A POST with
         // X-Tier: gold matches the second group => pass.
         let config = cfg(
-            RestrictionMode::Whitelist,
+            RestrictionMode::Allow,
             vec![
                 RuleGroup {
                     name: Some("readonly".to_string()),
@@ -460,7 +459,7 @@ mod tests {
         // An invalid regex fails validation at construction; run_request must fail
         // closed (terminate) rather than evaluate a half-compiled config.
         let config = cfg(
-            RestrictionMode::Blacklist,
+            RestrictionMode::Deny,
             vec![RuleGroup {
                 name: Some("bad".to_string()),
                 rules: vec![RestrictionRule {

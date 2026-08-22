@@ -28,7 +28,7 @@ spec:
     - enable: true
       type: RequestRestriction
       config:
-        mode: Whitelist
+        mode: Allow
         ruleGroups:
           - rules:
               - name: "require-admin-role"

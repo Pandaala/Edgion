@@ -13,7 +13,7 @@ spec:
     - enable: true
       type: RequestRestriction
       config:
-        mode: Whitelist
+        mode: Allow
         ruleGroups:
           - rules:
               - name: "allow-cn"
@@ -36,7 +36,7 @@ spec:
     - enable: true
       type: RequestRestriction
       config:
-        mode: Whitelist
+        mode: Allow
         ruleGroups:
           - rules:
               - name: "allow-san-email"

@@ -20,7 +20,7 @@ Supports auto-detection of the issue directory, issue ID lookup, or explicit pat
 | **Security iron rules** (timing, weak passwords, cache keys — cross-feature) | [security/iron-rules.md](security/iron-rules.md) |
 | **Authentication** (basic / key / jwt / JWE / hmac / ldap / oidc / cert / forward / webhook) | [auth-timing/](auth-timing/), [basic-auth/](basic-auth/), [key-auth/](key-auth/), [jwt-auth/](jwt-auth/), [jwe-decrypt/](jwe-decrypt/), [hmac-auth/](hmac-auth/), [ldap-auth/](ldap-auth/), [oidc/](oidc/), [header-cert-auth/](header-cert-auth/), [forward-auth/](forward-auth/), [webhook-key/](webhook-key/), [admin-cors/](admin-cors/), [cors/](cors/), [gateway-admin-auth/](gateway-admin-auth/) |
 | **CSRF** (token cookie attributes) | [csrf/](csrf/) |
-| **Network access control** | [ip-restriction/](ip-restriction/), [real-ip/](real-ip/), [ssrf/](ssrf/) |
+| **Network access control** | [ip-restriction/](ip-restriction/), [request-restriction/](request-restriction/), [real-ip/](real-ip/), [ssrf/](ssrf/) |
 | **TLS** (downstream / upstream / EdgionTls) | [edgion-tls/](edgion-tls/), [ssl/](ssl/) |
 | **Backends** (health / circuit-breaker / consistent-hash / IPv6 addressing) | [backends/](backends/) |
 | **HTTP/1.1 · HTTP/2 · gRPC · Host/:authority · redirect** (protocol semantics) | [http1/](http1/), [h2-grpc/](h2-grpc/), [host-header/](host-header/), [redirect/](redirect/) |

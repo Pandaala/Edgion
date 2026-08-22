@@ -8,19 +8,21 @@
 
 `RequestRestriction` 插件用于基于请求属性限制访问，支持多种数据源和匹配方式。与 `IpRestriction` 插件专注于 IP 地址不同，本插件支持基于 Header、Cookie、Query 参数、Path、Method 和 Referer 的访问控制，并额外支持**认证后身份**——mTLS 客户端证书的 subject / SAN / CN（`MtlsSubject` / `MtlsSan` / `MtlsCn`）以及已验证的 JWT claim（`JwtClaim`）。
 
-它仍然是一个**本地 allow/deny 匹配器**，而非完整的 RBAC 编排层：一条 rule 仍是纯断言，由唯一的全局 `mode` 决定命中意味着放行还是拒绝。身份数据源让你在匹配「请求发了什么」之外，还能匹配「调用方是谁」，但并不会把插件变成角色 / principal 引擎。
+它仍然是一个**本地 allow/deny 匹配器**，而非完整的 RBAC 编排层：一条 rule 仍是纯断言，由必填的 `mode` 决定命中意味着放行还是拒绝。身份数据源让你在匹配「请求发了什么」之外，还能匹配「调用方是谁」，但并不会把插件变成角色 / principal 引擎。
 
-## 模型：规则分组（OR-of-AND）+ 全局 mode
+## 模型：规则分组（OR-of-AND）+ `mode`
 
 插件按析取范式（DNF）求值一组**规则分组（rule groups）**：
 
 - **`ruleGroups` 数组之间是 OR**——任一分组命中即生效。
 - **每个分组内的 `rules` 之间是 AND**——分组内所有（未被跳过的）断言都为真，该分组才命中。
-- 一个全局 **`mode`** 决定整份配置的极性：
-  - `Blacklist`（默认）：任一分组命中 ⇒ **拒绝**；否则放行。
-  - `Whitelist`：任一分组命中 ⇒ **放行**；否则拒绝。
+- **`mode` 必填**，决定命中意味着什么：
+  - `Deny`：任一分组命中 ⇒ **拒绝**；未命中则放行。
+  - `Allow`：任一分组命中 ⇒ **放行**；未命中则拒绝。
 
-**一条 rule 是纯断言**：当取到的值在 `values` 中**或**匹配 `regex` 时为真，自身不带 allow/deny——极性完全由全局 `mode` 决定。这样既能表达 `(A AND B) OR C`，又保持模型扁平（两层，不做更深嵌套、不做取反）。
+`mode` **没有默认值**。省略它是校验错误，而不是静默回退——本该是 `Allow` 的策略不会悄悄退化成 `Deny`（而 `Deny` 在没有分组命中时会放行所有请求）。
+
+**一条 rule 是纯断言**：当取到的值在 `values` 中**或**匹配 `regex` 时为真，自身不带 allow/deny——极性完全由 `mode` 决定。这样既能表达 `(A AND B) OR C`，又保持模型扁平（两层，不做更深嵌套、不做取反）。
 
 ## 功能特性
 
@@ -29,7 +31,7 @@
 - **精确匹配与正则匹配**：`values` 精确匹配，`regex` 正则匹配（任一命中断言即为真）
 - **自动性能优化**：精确匹配列表超过 16 个值时自动使用 HashSet (O(1) 查找)
 - **布尔组合**：分组内 AND、分组间 OR（DNF）
-- **全局极性**：`mode: Blacklist | Whitelist`
+- **显式极性**：`mode: Deny | Allow`（必填，无默认值）
 - **缺失值处理**：可配置断言在值缺失时的结果（`Match` / `NoMatch` / `Skip`）
 - **自定义响应**：可配置拒绝时的状态码和消息
 
@@ -48,7 +50,7 @@
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `mode` | `string` | ❌ | `Blacklist` | 全局极性。`Blacklist`：任一分组命中即拒绝；`Whitelist`：任一分组命中即放行，否则拒绝 |
+| `mode` | `string`（`Deny` \| `Allow`） | ✅ | - | 极性。`Deny`：任一分组命中即拒绝；`Allow`：任一分组命中即放行，否则拒绝。无默认值，省略即校验错误 |
 | `ruleGroups` | `RuleGroup[]` | ✅ | - | 规则分组列表，分组之间为 OR |
 | `status` | `integer` | ❌ | `403` | 拒绝时的 HTTP 状态码 |
 | `message` | `string` | ❌ | `Access denied...` | 拒绝时的响应消息 |
@@ -100,7 +102,7 @@
 
 **推荐用法**：绝大多数 ACL 场景使用 `Path`，它覆盖 `%XX` 编码 / 双斜杠 / dot-segment / path-parameter 等所有绕过变体。`RequestPath` 仅用于需要按字面 raw 形态判断的特殊场景（如「只要含 `%2F` 就拒绝」）。`regex` 永远不会被规范化。
 
-**`Path` + 白名单分组的 `;param` 副作用**：path normalization 会剥除每个 segment 中的 `;param=...`（例如 `/api/users;v=1/data` → `/api/users/data`）。若白名单配置了精确路径，迁移时注意检查含 `;` 的请求样本，确认规则仍按预期命中。
+**`Path` + 允许模式分组的 `;param` 副作用**：path normalization 会剥除每个 segment 中的 `;param=...`（例如 `/api/users;v=1/data` → `/api/users/data`）。若允许模式配置了精确路径，迁移时注意检查含 `;` 的请求样本，确认规则仍按预期命中。
 
 ### 身份数据源
 
@@ -152,9 +154,9 @@
 > `values`/`regex` 的规则，当值**缺失**时为真；值**存在**时没有可匹配的集合，断言为假。（"要求认证
 > Header" 例子里的 `missing-token` 组就是这么工作的。）
 >
-> **Whitelist + `Skip` 是个坑。** 在 `mode: Whitelist` 下，若某分组的断言因 source 缺失而**全部被
-> Skip 剔除**，该分组不命中，因此无法放行——请求会被拒。一个只由 `Skip` 断言组成的白名单分组会拒掉
-> 所有请求。白名单里当 source 可能缺失时，请用 `NoMatch`/`Match`，不要用 `Skip`。
+> **`mode: Allow` + `Skip` 是个坑。** 在 `mode: Allow` 下，若某分组的断言因 source 缺失而**全部被
+> Skip 剔除**，该分组不命中，因此无法放行——请求会被拒。一个只由 `Skip` 断言组成的允许模式分组会拒掉
+> 所有请求。`mode: Allow` 下当 source 可能缺失时，请用 `NoMatch`/`Match`，不要用 `Skip`。
 
 ## 执行逻辑
 
@@ -178,8 +180,8 @@ flowchart TD
     H -->|否| N["分组未命中"]
     M --> J{"mode"}
     N --> J
-    J -->|"Blacklist：有分组命中"| K["拒绝（status/message）"]
-    J -->|"Whitelist：无分组命中"| K
+    J -->|"Deny：有分组命中"| K["拒绝（status/message）"]
+    J -->|"Allow：无分组命中"| K
     J -->|其他| L["继续处理链"]
 ```
 
@@ -196,7 +198,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Blacklist
+        mode: Deny
         ruleGroups:
           - rules:
               - name: "block-bots"
@@ -213,7 +215,7 @@ spec:
         message: "Bot access denied"
 ```
 
-### 2. 路径白名单（只允许 API 路径）
+### 2. 路径允许模式（只允许 API 路径）
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -224,7 +226,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Whitelist
+        mode: Allow
         ruleGroups:
           - rules:
               - name: "api-only"
@@ -249,7 +251,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Whitelist
+        mode: Allow
         ruleGroups:
           - rules:
               - name: "readonly"
@@ -275,7 +277,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Blacklist
+        mode: Deny
         ruleGroups:
           - rules:
               - name: "bad-token"
@@ -296,7 +298,7 @@ spec:
 
 ### 5. Referer 限制（防盗链）
 
-只允许内部 Referer——白名单模式，缺失 Referer 视为不允许。
+只允许内部 Referer——`mode: Allow`，缺失 Referer 视为不允许。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -307,7 +309,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Whitelist
+        mode: Allow
         ruleGroups:
           - rules:
               - name: "allow-internal"
@@ -333,7 +335,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Blacklist
+        mode: Deny
         ruleGroups:
           - rules:
               - name: "block-debug-query"
@@ -366,7 +368,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Blacklist
+        mode: Deny
         ruleGroups:
           - rules:
               - name: "is-delete"
@@ -390,7 +392,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Blacklist
+        mode: Deny
         ruleGroups:
           # 阻止爬虫
           - rules:
@@ -420,9 +422,9 @@ spec:
         message: "Access denied by security policy"
 ```
 
-### 9. 身份白名单（mTLS SAN 或 JWT claim）
+### 9. 身份允许模式（mTLS SAN 或 JWT claim）
 
-仅放行由 SPIFFE URI SAN 证明、**或**在已验证 JWT 中带 `admin` 角色的调用方——`Whitelist` 下两个单断言分组组间 OR。`JwtClaim` 分组生效的前提是认证插件（`jwt_auth` / `openid_connect`）在链中更早执行且设置 `store_claims_in_ctx: true`；`MtlsSan` 分组则需客户端证书已被暴露（见上文暴露开关）。
+仅放行由 SPIFFE URI SAN 证明、**或**在已验证 JWT 中带 `admin` 角色的调用方——`mode: Allow` 下两个单断言分组组间 OR。`JwtClaim` 分组生效的前提是认证插件（`jwt_auth` / `openid_connect`）在链中更早执行且设置 `store_claims_in_ctx: true`；`MtlsSan` 分组则需客户端证书已被暴露（见上文暴露开关）。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -433,7 +435,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Whitelist
+        mode: Allow
         ruleGroups:
           - rules:
               - source: MtlsSan
@@ -465,7 +467,7 @@ Edgion 的 `RequestRestriction` 插件将多种限制功能统一到一个插件
 
 ## 注意事项
 
-1. **分组顺序**：分组按配置顺序求值；`Blacklist` 模式在第一个命中的分组处停止（拒绝），`Whitelist` 模式在第一个命中的分组处停止（放行）。
+1. **分组顺序**：分组按配置顺序求值，在第一个命中的分组处停止——`mode: Deny` 是拒绝，`mode: Allow` 是放行。
 2. **极性是全局的**：rule 是纯断言，命中意味着放行还是拒绝由 `mode` 统一决定，而非逐条规则决定。
 3. **大小写敏感**：精确匹配（`values`）默认大小写敏感，可通过 `caseSensitive: false` 关闭；正则匹配使用 `(?i)` 前缀。
 4. **正则性能**：多个正则模式会合并为一个正则表达式（用 `|` 连接），减少匹配开销。
@@ -475,9 +477,9 @@ Edgion 的 `RequestRestriction` 插件将多种限制功能统一到一个插件
 
 ## 常见问题
 
-### Q1：如何表达黑名单 / 白名单？
+### Q1：如何表达拒绝列表 / 允许列表？
 
-**A**：设置全局 `mode`。`Blacklist`（默认）：任一分组命中即拒绝；`Whitelist`：除非有分组命中否则拒绝。rule 本身不带 allow/deny，它只是断言。
+**A**：设置 `mode`。`Deny`：任一分组命中即拒绝；`Allow`：除非有分组命中否则拒绝。`mode` 必填，没有默认值可以退。rule 本身不带 allow/deny，它只是断言。
 
 ### Q2：如何表达 `(A AND B) OR C`？
 
@@ -489,7 +491,7 @@ Edgion 的 `RequestRestriction` 插件将多种限制功能统一到一个插件
 
 ### Q4：`onMissing: Match` 有什么用？
 
-**A**：值缺失时让断言为真——适合「该 header/参数缺失时拒绝」。配合默认的 `Blacklist` 模式，缺失值会使该分组命中并拒绝请求。
+**A**：值缺失时让断言为真——适合「该 header/参数缺失时拒绝」。在 `mode: Deny` 下，缺失值会使该分组命中并拒绝请求。
 
 ### Q5：如何让精确匹配不区分大小写？
 

@@ -8,19 +8,21 @@
 
 The `RequestRestriction` plugin restricts access based on request attributes, supporting multiple data sources and matching methods. Unlike the `IpRestriction` plugin which focuses on IP addresses, this plugin supports access control based on Header, Cookie, Query parameters, Path, Method, and Referer, plus **post-authentication identity** — mTLS client-certificate subject / SAN / CN (`MtlsSubject` / `MtlsSan` / `MtlsCn`) and verified JWT claims (`JwtClaim`).
 
-It remains a **local allow/deny matcher**, not a full RBAC orchestration layer: a rule is still a pure predicate, and a single global `mode` decides whether a match means admit or reject. The identity sources let you match on *who* the caller is (in addition to *what* they are sending) without turning the plugin into a role/principal engine.
+It remains a **local allow/deny matcher**, not a full RBAC orchestration layer: a rule is still a pure predicate, and a single required `mode` decides whether a match means admit or reject. The identity sources let you match on *who* the caller is (in addition to *what* they are sending) without turning the plugin into a role/principal engine.
 
-## Model: rule groups (OR-of-AND) + global mode
+## Model: rule groups (OR-of-AND) + `mode`
 
 The plugin evaluates a list of **rule groups** in disjunctive normal form (DNF):
 
 - **`ruleGroups` is an array combined with OR** — the policy fires if **any** group matches.
 - **Each group's `rules` is combined with AND** — a group matches only when **all** of its (non-skipped) predicates are true.
-- A single global **`mode`** decides the outcome polarity for the whole config:
-  - `Blacklist` (default): any matching group ⇒ **reject**; otherwise pass.
-  - `Whitelist`: any matching group ⇒ **pass**; otherwise reject.
+- **`mode` is required** and decides what a match means:
+  - `Deny`: any matching group ⇒ **reject**; anything unmatched passes.
+  - `Allow`: any matching group ⇒ **pass**; anything unmatched is rejected.
 
-A **rule is a pure predicate**: it is true when the extracted value is in `values` **or** matches `regex`. It carries no per-rule allow/deny — the polarity lives entirely at the global `mode`. This lets you express `(A AND B) OR C` while keeping the model flat (two levels, no deeper nesting and no negation).
+`mode` has **no default**. Omitting it is a validation error, not a silent fallback — a policy that meant to be `Allow` can never quietly degrade into `Deny` (which, with no group matching, would let every request through).
+
+A **rule is a pure predicate**: it is true when the extracted value is in `values` **or** matches `regex`. It carries no per-rule allow/deny — the polarity lives entirely at `mode`. This lets you express `(A AND B) OR C` while keeping the model flat (two levels, no deeper nesting and no negation).
 
 ## Features
 
@@ -29,7 +31,7 @@ A **rule is a pure predicate**: it is true when the extracted value is in `value
 - **Exact and regex matching**: `values` for exact matching, `regex` for regex matching (a predicate is true if either matches)
 - **Automatic performance optimization**: Exact match lists exceeding 16 values automatically use HashSet (O(1) lookup)
 - **Boolean composition**: AND within a group, OR across groups (DNF)
-- **Global polarity**: `mode: Blacklist | Whitelist`
+- **Explicit polarity**: `mode: Deny | Allow` (required, no default)
 - **Missing value handling**: Configurable predicate behavior when the target value is missing (`Match` / `NoMatch` / `Skip`)
 - **Custom responses**: Configurable status code and message on denial
 
@@ -48,7 +50,7 @@ A **rule is a pure predicate**: it is true when the extracted value is in `value
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `mode` | Enum | `Blacklist` | Global polarity. `Blacklist`: any matching group rejects. `Whitelist`: any matching group passes, otherwise reject. |
+| `mode` | Enum (`Deny` \| `Allow`) | **Required** | Polarity. `Deny`: a matching group rejects. `Allow`: a matching group passes, otherwise reject. No default — omitting it is a validation error. |
 | `ruleGroups` | Array\<RuleGroup\> | **Required** | List of rule groups, combined with OR |
 | `status` | Integer | `403` | HTTP status code on denial |
 | `message` | String | `Access denied...` | Response message on denial |
@@ -142,10 +144,10 @@ In addition to request attributes, the plugin can match on **post-authentication
 > match against and the predicate is false. (This is how the "require auth" example's
 > `missing-token` group works.)
 >
-> **Whitelist + `Skip` is a foot-gun.** Under `mode: Whitelist`, a group whose predicates are all
+> **`mode: Allow` + `Skip` is a foot-gun.** Under `mode: Allow`, a group whose predicates are all
 > `Skip`-dropped (because their sources are absent) does **not** match, so it cannot grant access —
-> the request is denied. A whitelist group built only from `Skip` predicates therefore rejects every
-> request. Use `NoMatch`/`Match`, not `Skip`, when the source may be absent in a whitelist.
+> the request is denied. An allow-mode group built only from `Skip` predicates therefore rejects every
+> request. Use `NoMatch`/`Match`, not `Skip`, when the source may be absent under `mode: Allow`.
 
 ## Execution Logic
 
@@ -169,8 +171,8 @@ flowchart TD
     H -->|No| N["group does not match"]
     M --> J{"mode"}
     N --> J
-    J -->|"Blacklist: any group matched"| K["Reject (status/message)"]
-    J -->|"Whitelist: no group matched"| K
+    J -->|"Deny: a group matched"| K["Reject (status/message)"]
+    J -->|"Allow: no group matched"| K
     J -->|otherwise| L["Continue processing chain"]
 ```
 
@@ -187,7 +189,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Blacklist
+        mode: Deny
         ruleGroups:
           - rules:
               - name: "block-bots"
@@ -215,7 +217,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Whitelist
+        mode: Allow
         ruleGroups:
           - rules:
               - name: "api-only"
@@ -240,7 +242,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Whitelist
+        mode: Allow
         ruleGroups:
           - rules:
               - name: "readonly"
@@ -266,7 +268,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Blacklist
+        mode: Deny
         ruleGroups:
           - rules:
               - name: "bad-token"
@@ -287,7 +289,7 @@ spec:
 
 ### 5. Referer Restriction (Hotlink Protection)
 
-Allow only internal referers — whitelist mode, with a missing Referer treated as not allowed.
+Allow only internal referers — `mode: Allow`, with a missing Referer treated as not allowed.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -298,7 +300,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Whitelist
+        mode: Allow
         ruleGroups:
           - rules:
               - name: "allow-internal"
@@ -324,7 +326,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Blacklist
+        mode: Deny
         ruleGroups:
           - rules:
               - name: "block-debug-query"
@@ -357,7 +359,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Blacklist
+        mode: Deny
         ruleGroups:
           - rules:
               - name: "is-delete"
@@ -381,7 +383,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Blacklist
+        mode: Deny
         ruleGroups:
           # Block crawlers
           - rules:
@@ -413,7 +415,7 @@ spec:
 
 ### 9. Identity allowlist (mTLS SAN OR JWT claim)
 
-Admit only callers proven by a SPIFFE URI SAN **or** an `admin` role in the verified JWT — two single-predicate groups combined with OR under `Whitelist`. For the `JwtClaim` group to work, an auth plugin (`jwt_auth` / `openid_connect`) must run earlier in the chain with `store_claims_in_ctx: true`; for the `MtlsSan` group the client cert must be exposed (see the exposure gate above).
+Admit only callers proven by a SPIFFE URI SAN **or** an `admin` role in the verified JWT — two single-predicate groups combined with OR under `mode: Allow`. For the `JwtClaim` group to work, an auth plugin (`jwt_auth` / `openid_connect`) must run earlier in the chain with `store_claims_in_ctx: true`; for the `MtlsSan` group the client cert must be exposed (see the exposure gate above).
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -424,7 +426,7 @@ spec:
   requestPlugins:
     - type: RequestRestriction
       config:
-        mode: Whitelist
+        mode: Allow
         ruleGroups:
           - rules:
               - source: MtlsSan
@@ -456,7 +458,7 @@ Edgion's `RequestRestriction` plugin unifies multiple restriction capabilities i
 
 ## Notes
 
-1. **Group order**: Groups are evaluated in configuration order; in `Blacklist` mode processing stops at the first matching group (deny), and in `Whitelist` mode at the first matching group (pass).
+1. **Group order**: Groups are evaluated in configuration order and processing stops at the first matching group — a deny under `mode: Deny`, a pass under `mode: Allow`.
 2. **Polarity is global**: A rule is a pure predicate. Whether a match means allow or deny is decided once by `mode`, not per rule.
 3. **Case sensitivity**: Exact matching (`values`) is case-sensitive by default; use `caseSensitive: false` to disable; for regex, use the `(?i)` prefix.
 4. **Regex performance**: Multiple regex patterns are merged into a single regex (joined with `|`), reducing matching overhead.
@@ -468,7 +470,7 @@ Edgion's `RequestRestriction` plugin unifies multiple restriction capabilities i
 
 ### Q1: How do I express a blacklist vs a whitelist?
 
-**A**: Set the global `mode`. `Blacklist` (default) rejects a request when any group matches; `Whitelist` rejects a request unless some group matches. A rule itself never carries allow/deny — it is just a predicate.
+**A**: Set `mode`. `Deny` rejects a request when any group matches; `Allow` rejects a request unless some group matches. `mode` is required — there is no default to fall back on. A rule itself never carries allow/deny — it is just a predicate.
 
 ### Q2: How do I express `(A AND B) OR C`?
 
@@ -480,7 +482,7 @@ Edgion's `RequestRestriction` plugin unifies multiple restriction capabilities i
 
 ### Q4: What does `onMissing: Match` do?
 
-**A**: It makes the predicate true when the value is absent — useful for "deny when this header/parameter is missing". Combined with the default `Blacklist` mode, an absent value then causes the group to match and the request to be rejected.
+**A**: It makes the predicate true when the value is absent — useful for "deny when this header/parameter is missing". Under `mode: Deny`, an absent value then causes the group to match and the request to be rejected.
 
 ### Q5: How do I make exact matching case-insensitive?
 

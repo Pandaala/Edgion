@@ -11,7 +11,7 @@ spec:
     - enable: true
       type: RequestRestriction
       config:
-        mode: Blacklist
+        mode: Deny
         ruleGroups:
           - rules:
               # Path source: compared against normalized current path.

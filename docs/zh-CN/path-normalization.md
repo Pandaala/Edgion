@@ -130,12 +130,12 @@ path:
 
 若需要按字面 raw 拒绝，改用 `RestrictionSource::RequestPath`。
 
-### 4. `;param` 对白名单规则的副作用
+### 4. `;param` 对拒绝/允许模式规则的副作用
 
 path normalization 会剥除每个 segment 中的 `;param=...`（防 `..;/` 类绕过）。
 
-- 影响 **黑名单分组**（`mode: Blacklist`）：`/admin/..;jsessionid=x/secret` 在 ACL 视图为 `/secret`，能正确命中 `Path` 规则的 `values: ["/secret"]` ✓
-- 影响 **白名单分组**（`mode: Whitelist`）：请求 `/api/users;v=1/data` 在 ACL 视图为 `/api/users/data`——若配置 `Path` 规则 `values: ["/api/users"]` exact，**不命中**
+- 影响 **拒绝模式分组**（`mode: Deny`）：`/admin/..;jsessionid=x/secret` 在 ACL 视图为 `/secret`，能正确命中 `Path` 规则的 `values: ["/secret"]` ✓
+- 影响 **允许模式分组**（`mode: Allow`）：请求 `/api/users;v=1/data` 在 ACL 视图为 `/api/users/data`——若配置 `Path` 规则 `values: ["/api/users"]` exact，**不命中**
 
 上游仍收到含 `;param` 的 raw path，依赖 `;jsessionid` 的应用不受影响。
 
@@ -148,7 +148,7 @@ path normalization 会剥除每个 segment 中的 `;param=...`（防 `..;/` 类�
 ```yaml
 - type: RequestRestriction
   config:
-    mode: Blacklist
+    mode: Deny
     ruleGroups:
       - rules:
           - name: block-admin

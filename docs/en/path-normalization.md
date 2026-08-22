@@ -130,12 +130,12 @@ A `Path`-source rule's `values` are normalized at config load time (so they live
 
 If you need literal raw rejection, switch to `RestrictionSource::RequestPath`.
 
-### 4. `;param` side effect on whitelist rules
+### 4. `;param` side effect on allow-mode rules
 
 Path normalization strips `;param=...` from each segment (defends against `..;/` bypass).
 
-- Affects **blacklist groups** (`mode: Blacklist`): `/admin/..;jsessionid=x/secret` becomes `/secret` in the ACL view, correctly matching a `Path` rule with `values: ["/secret"]` ✓
-- Affects **whitelist groups** (`mode: Whitelist`): a request `/api/users;v=1/data` becomes `/api/users/data` in the ACL view — if you configured a `Path` rule with `values: ["/api/users"]` (exact), it **won't match**
+- Affects **deny-mode groups** (`mode: Deny`): `/admin/..;jsessionid=x/secret` becomes `/secret` in the ACL view, correctly matching a `Path` rule with `values: ["/secret"]` ✓
+- Affects **allow-mode groups** (`mode: Allow`): a request `/api/users;v=1/data` becomes `/api/users/data` in the ACL view — if you configured a `Path` rule with `values: ["/api/users"]` (exact), it **won't match**
 
 The upstream still receives the raw path with `;param` intact; applications relying on `;jsessionid` are unaffected.
 
@@ -148,7 +148,7 @@ The upstream still receives the raw path with `;param` intact; applications rely
 ```yaml
 - type: RequestRestriction
   config:
-    mode: Blacklist
+    mode: Deny
     ruleGroups:
       - rules:
           - name: block-admin

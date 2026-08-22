@@ -5,13 +5,14 @@
 //!
 //! ## Model (DNF: OR-of-AND)
 //!
+//! - `mode` is **required** and states what a match means: `Deny` (match =>
+//!   reject, unmatched passes) or `Allow` (match => pass, unmatched is
+//!   rejected). There is no default: omitting it is a validation error, so the
+//!   polarity is always written out and can never silently flip.
 //! - `ruleGroups` is an array combined with **OR**: the policy fires if **any**
 //!   group matches.
 //! - Each group's `rules` is combined with **AND**: a group matches only when all
 //!   of its (non-skipped) predicates are true.
-//! - A single global `mode` decides the outcome polarity for the whole config:
-//!   - `Blacklist` (default): any matching group => reject; otherwise pass.
-//!   - `Whitelist`: any matching group => pass; otherwise reject.
 //!
 //! A rule is a pure predicate (`value ∈ values` OR `value` matches `regex`); it
 //! carries no per-rule allow/deny. Predicates match request attributes
@@ -22,10 +23,10 @@
 //!
 //! ## Configuration Examples
 //!
-//! ### Blacklist: block bots OR /admin paths
+//! ### Deny: block bots OR /admin paths
 //! ```yaml
 //! requestRestriction:
-//!   mode: Blacklist
+//!   mode: Deny
 //!   ruleGroups:
 //!     - rules:
 //!         - source: Header
@@ -38,10 +39,10 @@
 //!   message: "Access denied"
 //! ```
 //!
-//! ### Whitelist: allow only read-only methods
+//! ### Allow: allow only read-only methods
 //! ```yaml
 //! requestRestriction:
-//!   mode: Whitelist
+//!   mode: Allow
 //!   ruleGroups:
 //!     - rules:
 //!         - source: Method
@@ -52,7 +53,7 @@
 //! ### AND within a group: deny only DELETE to /admin
 //! ```yaml
 //! requestRestriction:
-//!   mode: Blacklist
+//!   mode: Deny
 //!   ruleGroups:
 //!     - rules:
 //!         - source: Method
@@ -68,30 +69,36 @@ use super::request_match::RestrictionRule;
 #[cfg(test)]
 use super::request_match::{OnMissing, RestrictionSource};
 
-/// Global restriction polarity.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+/// What a matching rule group means. Required — there is no default, so the
+/// polarity is always stated explicitly in the configuration.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
 pub enum RestrictionMode {
-    /// Any matching group => reject; no group matches => pass. (default)
-    #[default]
-    Blacklist,
+    /// Any matching group => reject; no group matches => pass.
+    Deny,
     /// Any matching group => pass; no group matches => reject.
-    Whitelist,
+    Allow,
 }
 
 /// Request Restriction plugin configuration.
 ///
-/// DNF model: `ruleGroups` is OR; each group's `rules` is AND. A single global
-/// `mode` decides the outcome polarity. A rule is a pure predicate (no per-rule
+/// DNF model: `ruleGroups` is OR; each group's `rules` is AND. The required
+/// `mode` states what a match means. A rule is a pure predicate (no per-rule
 /// allow/deny). Predicates match request attributes and post-authentication
 /// identity (mTLS subject/SAN/CN, verified JWT claims); it remains a local
 /// allow/deny matcher, not a full RBAC orchestration layer.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestRestrictionConfig {
-    /// Global polarity (default: Blacklist).
-    #[serde(default)]
-    pub mode: RestrictionMode,
+    /// Polarity — **required**. `Deny`: a matching group rejects. `Allow`: a
+    /// matching group passes and anything unmatched is rejected.
+    ///
+    /// Modelled as `Option` rather than a serde-required field so that a missing
+    /// value is reported by `check_fields` through the normal plugin-validation
+    /// path (a readable `Accepted=False` reason) instead of failing the whole
+    /// resource's deserialization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<RestrictionMode>,
 
     /// Rule groups. The array is OR: the policy fires if ANY group matches.
     pub rule_groups: Vec<RuleGroup>,
@@ -128,7 +135,7 @@ fn default_status() -> u16 {
 impl Default for RequestRestrictionConfig {
     fn default() -> Self {
         Self {
-            mode: RestrictionMode::default(),
+            mode: None,
             rule_groups: Vec::new(),
             status: default_status(),
             message: None,
@@ -148,6 +155,9 @@ impl RequestRestrictionConfig {
     /// Stateless field validation — mirrors every error branch of validate_and_compile
     /// without mutating self or compiling any matchers.
     pub fn check_fields(&self) -> Option<String> {
+        if self.mode.is_none() {
+            return Some("mode must be specified (Deny | Allow)".to_string());
+        }
         if self.rule_groups.is_empty() {
             return Some("At least one rule group must be specified".to_string());
         }
@@ -166,6 +176,20 @@ impl RequestRestrictionConfig {
             }
         }
         None
+    }
+
+    /// Whether a matching group means "allow".
+    ///
+    /// `check_fields` rejects a missing `mode`, and the gateway fails closed on
+    /// an invalid config before evaluating any request, so the unvalidated
+    /// `None` case is unreachable. It resolves to allow-polarity, so unmatched
+    /// traffic is rejected rather than admitted.
+    pub fn allow_mode(&self) -> bool {
+        debug_assert!(
+            self.mode.is_some(),
+            "allow_mode called on an unvalidated config with no mode"
+        );
+        !matches!(self.mode, Some(RestrictionMode::Deny))
     }
 
     /// Validate and compile all predicates across all groups.
@@ -200,22 +224,61 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = RequestRestrictionConfig::default();
+        assert_eq!(config.mode, None);
         assert!(config.rule_groups.is_empty());
-        assert_eq!(config.mode, RestrictionMode::Blacklist);
         assert_eq!(config.status, 403);
         assert_eq!(config.message, None);
     }
 
     #[test]
     fn test_empty_groups_validation() {
-        let mut config = RequestRestrictionConfig::default();
+        let mut config = RequestRestrictionConfig {
+            mode: Some(RestrictionMode::Deny),
+            ..Default::default()
+        };
         let err = config.validate().unwrap_err();
         assert!(err.contains("rule group"));
     }
 
     #[test]
+    fn test_missing_mode_is_rejected() {
+        // `mode` has no default: an otherwise valid config without it must fail
+        // validation rather than silently picking a polarity.
+        let mut config = RequestRestrictionConfig {
+            mode: None,
+            rule_groups: vec![RuleGroup {
+                name: None,
+                rules: vec![RestrictionRule {
+                    source: RestrictionSource::Path,
+                    values: Some(vec!["/admin".to_string()]),
+                    ..Default::default()
+                }],
+            }],
+            ..Default::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("mode must be specified"));
+
+        // The same config with a mode is valid.
+        config.mode = Some(RestrictionMode::Allow);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_allow_mode_resolution() {
+        let mut c = RequestRestrictionConfig {
+            mode: Some(RestrictionMode::Deny),
+            ..Default::default()
+        };
+        assert!(!c.allow_mode());
+        c.mode = Some(RestrictionMode::Allow);
+        assert!(c.allow_mode());
+    }
+
+    #[test]
     fn test_empty_rules_in_group_validation() {
         let mut config = RequestRestrictionConfig {
+            mode: Some(RestrictionMode::Deny),
             rule_groups: vec![RuleGroup {
                 name: None,
                 rules: vec![],
@@ -229,6 +292,7 @@ mod tests {
     #[test]
     fn test_missing_key_for_header() {
         let mut config = RequestRestrictionConfig {
+            mode: Some(RestrictionMode::Deny),
             rule_groups: vec![RuleGroup {
                 name: None,
                 rules: vec![RestrictionRule {
@@ -247,6 +311,7 @@ mod tests {
     #[test]
     fn test_path_no_key_required() {
         let mut config = RequestRestrictionConfig {
+            mode: Some(RestrictionMode::Deny),
             rule_groups: vec![RuleGroup {
                 name: None,
                 rules: vec![RestrictionRule {
@@ -264,6 +329,7 @@ mod tests {
     fn test_predicate_needs_match_set_unless_on_missing_match() {
         // No values/regex + onMissing NoMatch => invalid.
         let mut bad = RequestRestrictionConfig {
+            mode: Some(RestrictionMode::Deny),
             rule_groups: vec![RuleGroup {
                 name: None,
                 rules: vec![RestrictionRule {
@@ -279,6 +345,7 @@ mod tests {
 
         // No values/regex + onMissing Match => valid (pure presence check).
         let mut ok = RequestRestrictionConfig {
+            mode: Some(RestrictionMode::Deny),
             rule_groups: vec![RuleGroup {
                 name: None,
                 rules: vec![RestrictionRule {
@@ -296,6 +363,7 @@ mod tests {
     #[test]
     fn test_invalid_regex() {
         let mut config = RequestRestrictionConfig {
+            mode: Some(RestrictionMode::Deny),
             rule_groups: vec![RuleGroup {
                 name: None,
                 rules: vec![RestrictionRule {
@@ -314,6 +382,7 @@ mod tests {
     #[test]
     fn test_empty_values_list() {
         let mut config = RequestRestrictionConfig {
+            mode: Some(RestrictionMode::Deny),
             rule_groups: vec![RuleGroup {
                 name: None,
                 rules: vec![RestrictionRule {

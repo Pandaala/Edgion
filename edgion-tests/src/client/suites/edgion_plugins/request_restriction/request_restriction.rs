@@ -471,8 +471,8 @@ impl RequestRestrictionTestSuite {
     }
 
     // ==================== 7. JwtClaim source (JwtAuth -> RequestRestriction chain) ====================
-    // The route runs JwtAuth (storeClaimsInCtx) first, then RequestRestriction with a
-    // Whitelist rule on the verified claim realm_access.roles. A token whose roles array
+    // The route runs JwtAuth (storeClaimsInCtx) first, then RequestRestriction in
+    // mode: Allow on the verified claim realm_access.roles. A token whose roles array
     // contains "admin" is admitted ("any element matches"); anything else is denied 403.
 
     fn test_jwt_claim_admin_allowed() -> TestCase {

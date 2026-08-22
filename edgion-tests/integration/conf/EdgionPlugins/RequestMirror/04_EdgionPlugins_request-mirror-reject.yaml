@@ -5,7 +5,7 @@
 # short-circuits on the first non-GoodNext result). So for every request:
 #
 #   1. RequestMirror starts the mirror (100% fraction, no `fraction` field).
-#   2. RequestRestriction denies unconditionally (Blacklist + Path regex ".*")
+#   2. RequestRestriction denies unconditionally (mode: Deny + Path regex ".*")
 #      by writing a 403 and returning ErrTerminateRequest, which makes
 #      ProxyHttp::request_filter return Ok(true) — Pingora then jumps straight
 #      to logging() and NEVER calls request_body_filter_action.
@@ -41,7 +41,7 @@ spec:
     - enable: true
       type: RequestRestriction
       config:
-        mode: Blacklist
+        mode: Deny
         ruleGroups:
           - rules:
               - name: "deny-everything"
