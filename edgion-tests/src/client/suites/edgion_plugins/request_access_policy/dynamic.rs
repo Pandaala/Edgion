@@ -19,6 +19,16 @@ async fn status(ctx: &TestContext, secret: &[u8]) -> reqwest::Result<u16> {
         .map(|response| response.status().as_u16())
 }
 
+async fn fallback_status(ctx: &TestContext) -> reqwest::Result<u16> {
+    ctx.http_client
+        .get(format!("http://{}:31180/health", ctx.target_host))
+        .header("host", HOST)
+        .header("X-Hmac-Fallback", "allow")
+        .send()
+        .await
+        .map(|response| response.status().as_u16())
+}
+
 async fn assert_statuses(ctx: &TestContext, initial: u16, rotated: u16) -> TestResult {
     let start = Instant::now();
     match (status(ctx, INITIAL_SECRET).await, status(ctx, ROTATED_SECRET).await) {
@@ -64,6 +74,43 @@ impl TestSuite for RequestAccessPolicyHmacDynamicUpdatedTestSuite {
             "request_access_policy_hmac_dynamic_updated",
             "Rotated Secret rejects the stale HMAC key and accepts the replacement",
             |ctx| Box::pin(async move { assert_statuses(&ctx, 403, 200).await }),
+        )]
+    }
+}
+
+pub struct RequestAccessPolicyHmacDynamicDeletedTestSuite;
+
+impl TestSuite for RequestAccessPolicyHmacDynamicDeletedTestSuite {
+    fn name(&self) -> &str {
+        "RequestAccessPolicy Nested HMAC Dynamic - Secret Deleted"
+    }
+
+    fn test_cases(&self) -> Vec<TestCase> {
+        vec![TestCase::new(
+            "request_access_policy_nested_hmac_secret_deleted",
+            "Deleting the nested credential Secret fails closed while a sibling alternative remains usable",
+            |ctx| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match (
+                        status(&ctx, INITIAL_SECRET).await,
+                        status(&ctx, ROTATED_SECRET).await,
+                        fallback_status(&ctx).await,
+                    ) {
+                        (Ok(403), Ok(403), Ok(200)) => TestResult::passed(start.elapsed()),
+                        (Ok(initial), Ok(rotated), Ok(fallback)) => TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected deleted Secret statuses 403/403 with fallback 200, got {initial}/{rotated}/{fallback}"
+                            ),
+                        ),
+                        (initial, rotated, fallback) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Request failure: initial={initial:?}, rotated={rotated:?}, fallback={fallback:?}"),
+                        ),
+                    }
+                })
+            },
         )]
     }
 }

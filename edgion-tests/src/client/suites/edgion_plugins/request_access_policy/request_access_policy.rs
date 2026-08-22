@@ -17,12 +17,14 @@
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use crate::suites::edgion_plugins::hmac_test_utils::build_hmac_headers;
+use crate::suites::status::helpers;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 pub struct RequestAccessPolicyTestSuite;
 
 const HMAC_HOST: &str = "gac-hmac.example.com";
+const URL_REF_HOST: &str = "gac-url.example.com";
 const HMAC_USERNAME: &str = "policy-user";
 const HMAC_SECRET: &[u8] = b"policy-hmac-secret-key-must-be-at-least-32-bytes";
 const BAD_HMAC_SECRET: &[u8] = b"policy-hmac-wrong-secret-key-must-also-be-long";
@@ -55,6 +57,30 @@ async fn send_hmac_request(
         request = request.body(body.to_vec());
     }
     request.send().await
+}
+
+async fn get_status(ctx: &TestContext, host: &str, path: &str, header: Option<(&str, &str)>) -> reqwest::Result<u16> {
+    let mut request = ctx
+        .http_client
+        .get(format!("{}{path}", ctx.http_url()))
+        .header("host", host);
+    if let Some((name, value)) = header {
+        request = request.header(name, value);
+    }
+    request.send().await.map(|response| response.status().as_u16())
+}
+
+async fn url_ref_hmac_status(ctx: &TestContext, secret: &[u8]) -> reqwest::Result<u16> {
+    let path = "/test/gac/url/hmac";
+    let signed = build_hmac_headers(HMAC_USERNAME, secret, "GET", path, None, URL_REF_HOST, None);
+    ctx.http_client
+        .get(format!("{}{path}", ctx.http_url()))
+        .header("host", URL_REF_HOST)
+        .header("date", signed.date)
+        .header("authorization", signed.authorization)
+        .send()
+        .await
+        .map(|response| response.status().as_u16())
 }
 
 // ---- Access-log deserialization types (mirrors plugin_condition/conditions.rs) ----
@@ -538,6 +564,138 @@ impl RequestAccessPolicyTestSuite {
             },
         )
     }
+
+    fn test_imported_url_secret_and_ip_dependencies() -> TestCase {
+        TestCase::new(
+            "imported_url_secret_and_ip_dependencies",
+            "Imported URL candidates bind nested Secret and IpList dependencies",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let secret_path = "/test/gac/url/secret/vendor-a";
+                    let outcomes = [
+                        get_status(
+                            &ctx,
+                            URL_REF_HOST,
+                            secret_path,
+                            Some(("X-CF-Secret", "cf-origin-token-123")),
+                        )
+                        .await,
+                        get_status(&ctx, URL_REF_HOST, secret_path, None).await,
+                        get_status(&ctx, URL_REF_HOST, secret_path, Some(("X-CF-Secret", "wrong"))).await,
+                        get_status(&ctx, URL_REF_HOST, "/test/gac/url/ip-allow", None).await,
+                        get_status(&ctx, URL_REF_HOST, "/test/gac/url/ip-deny", None).await,
+                    ];
+                    let actual = outcomes
+                        .into_iter()
+                        .map(|outcome| outcome.map_err(|error| error.to_string()))
+                        .collect::<Result<Vec<_>, _>>();
+                    match actual {
+                        Ok(actual) if actual == [200, 403, 403, 200, 403] => TestResult::passed(start.elapsed()),
+                        Ok(actual) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected Secret/IP statuses [200, 403, 403, 200, 403], got {actual:?}"),
+                        ),
+                        Err(error) => TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_imported_url_path_matchers() -> TestCase {
+        TestCase::new(
+            "imported_url_path_matchers",
+            "One compiled URL index preserves exact, prefix, parameter, regex, and host ownership",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let cases = [
+                        (URL_REF_HOST, "/test/gac/url/exact", 200),
+                        (URL_REF_HOST, "/test/gac/url/exact/child", 403),
+                        (URL_REF_HOST, "/test/gac/url/prefix/child", 200),
+                        (URL_REF_HOST, "/test/gac/url/prefix-other", 403),
+                        (URL_REF_HOST, "/test/gac/url/param/vendor-a", 200),
+                        (URL_REF_HOST, "/test/gac/url/param", 403),
+                        (URL_REF_HOST, "/test/gac/url/regex/42", 200),
+                        (URL_REF_HOST, "/test/gac/url/regex/not-a-number", 403),
+                        ("GAC-URL.EXAMPLE.COM:31180", "/test/gac/url/exact", 200),
+                        ("wrong.example.com", "/test/gac/url/exact", 403),
+                    ];
+                    for (host, path, expected) in cases {
+                        match get_status(&ctx, host, path, None).await {
+                            Ok(actual) if actual == expected => {}
+                            Ok(actual) => {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected {host}{path} to return {expected}, got {actual}"),
+                                );
+                            }
+                            Err(error) => {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Request to {host}{path} failed: {error}"),
+                                );
+                            }
+                        }
+                    }
+                    TestResult::passed(start.elapsed())
+                })
+            },
+        )
+    }
+
+    fn test_imported_url_hmac_dependency() -> TestCase {
+        TestCase::new(
+            "imported_url_hmac_dependency",
+            "Imported URL candidate resolves its nested HMAC Secret and denies invalid signatures",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match (
+                        url_ref_hmac_status(&ctx, HMAC_SECRET).await,
+                        url_ref_hmac_status(&ctx, BAD_HMAC_SECRET).await,
+                    ) {
+                        (Ok(200), Ok(403)) => TestResult::passed(start.elapsed()),
+                        (Ok(valid), Ok(invalid)) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected valid/invalid imported HMAC statuses 200/403, got {valid}/{invalid}"),
+                        ),
+                        (valid, invalid) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Request failure: valid={valid:?}, invalid={invalid:?}"),
+                        ),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_missing_url_ref_is_partial_not_unresolved() -> TestCase {
+        TestCase::new(
+            "missing_url_ref_is_partial_not_unresolved",
+            "A missing optional URL list preserves valid siblings and reports PartiallyInvalid",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match helpers::fetch_resource_status(&ctx, "EdgionPlugins", "edgion-test", "gac-url-refs").await {
+                        Ok(resource)
+                            if helpers::has_condition(&resource, "Accepted", "True")
+                                && helpers::has_condition(&resource, "ResolvedRefs", "True")
+                                && helpers::has_condition(&resource, "PartiallyInvalid", "True") =>
+                        {
+                            TestResult::passed(start.elapsed())
+                        }
+                        Ok(resource) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Unexpected RequestAccessPolicy status: {}", resource["status"]),
+                        ),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for RequestAccessPolicyTestSuite {
@@ -560,6 +718,11 @@ impl TestSuite for RequestAccessPolicyTestSuite {
             Self::test_hmac_invalid_signature_allows_explicit_sibling_fallback(),
             Self::test_hmac_policy_does_not_apply_standalone_header_mutations(),
             Self::test_hmac_body_digest_and_forwardable_fallback(),
+            // Imported RequestAccessUrlAllowList, including nested second-level dependencies.
+            Self::test_imported_url_secret_and_ip_dependencies(),
+            Self::test_imported_url_path_matchers(),
+            Self::test_imported_url_hmac_dependency(),
+            Self::test_missing_url_ref_is_partial_not_unresolved(),
         ]
     }
 }

@@ -718,4 +718,118 @@ mod tests {
         assert!(!json.contains("do-not-expose"), "{json}");
         assert!(json.contains("[redacted]"), "{json}");
     }
+
+    #[test]
+    fn url_ref_validation_limits_enforce_hard_bounds() {
+        assert!(UrlAllowListRefValidation::default().validate().is_ok());
+        for value in [
+            UrlAllowListRefValidation {
+                max_url_rules: 0,
+                ..Default::default()
+            },
+            UrlAllowListRefValidation {
+                max_url_rules: MAX_REFERENCED_URL_RULES + 1,
+                ..Default::default()
+            },
+            UrlAllowListRefValidation {
+                max_ip_rules: 0,
+                ..Default::default()
+            },
+            UrlAllowListRefValidation {
+                max_ip_rules: MAX_REFERENCED_IP_RULES + 1,
+                ..Default::default()
+            },
+        ] {
+            assert!(value.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn resolved_url_candidate_secrets_redact_for_admin_and_round_trip_for_conf_sync() {
+        let mut value = config();
+        let candidate = UrlAccessCandidate {
+            name: "vendor".to_string(),
+            hosts: vec!["callbacks.example.com".to_string()],
+            paths: vec![AccessPathMatch {
+                match_type: AccessPathMatchType::Exact,
+                value: "/callback".to_string(),
+            }],
+            all_of: vec![AccessCondition::SecretMatch(SecretMatchCondition {
+                key: KeyGet::Header {
+                    name: "X-Origin-Token".to_string(),
+                },
+                secret_ref: SecretObjectReference {
+                    name: "origin-token".to_string(),
+                    group: None,
+                    kind: None,
+                    namespace: None,
+                },
+                resolved_values: Some(vec!["nested-policy-secret".to_string()]),
+            })],
+        };
+        value.resolved_profiles = Some(HashMap::from([(
+            "default".to_string(),
+            RequestAccessProfile {
+                required_rule_groups: vec![RequiredRuleGroup {
+                    name: "url".to_string(),
+                    any_of_rules: vec![RequestAccessRule {
+                        name: "vendor".to_string(),
+                        rule: RequestAccessRuleType::Url(UrlAccessRuleConfig {
+                            hosts: vec![],
+                            paths: vec![],
+                            all_of: vec![],
+                            config_refs: vec![RequestAccessUrlAllowListRef {
+                                reference: EdgionConfigDataRef {
+                                    name: "vendor-list".to_string(),
+                                    ..Default::default()
+                                },
+                                validate: Default::default(),
+                            }],
+                            resolved_candidates: Some(vec![candidate]),
+                        }),
+                    }],
+                }],
+            },
+        )]));
+
+        let admin_json = {
+            let _guard = crate::redact::AdminRedactGuard::new();
+            serde_json::to_string(&value).unwrap()
+        };
+        assert!(!admin_json.contains("nested-policy-secret"), "{admin_json}");
+        assert!(admin_json.contains("[redacted]"), "{admin_json}");
+
+        let wire = serde_json::to_vec(&value).unwrap();
+        let decoded: RequestAccessPolicyConfig = serde_json::from_slice(&wire).unwrap();
+        let RequestAccessRuleType::Url(url) =
+            &decoded.runtime_profiles()["default"].required_rule_groups[0].any_of_rules[0].rule
+        else {
+            panic!("expected URL rule")
+        };
+        let AccessCondition::SecretMatch(secret) = &url.resolved_candidates.as_ref().unwrap()[0].all_of[0] else {
+            panic!("expected Secret match")
+        };
+        assert_eq!(
+            secret.resolved_values.as_deref(),
+            Some(["nested-policy-secret".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn runtime_resolution_fields_are_absent_from_schema() {
+        let schema = serde_json::to_string(&schemars::schema_for!(RequestAccessPolicyConfig)).unwrap();
+        for field in [
+            "resolvedProfiles",
+            "resolutionWarnings",
+            "resolvedCandidates",
+            "resolvedIps",
+            "resolvedValues",
+            "resolvedCredentials",
+        ] {
+            assert!(
+                !schema.contains(field),
+                "schema exposed runtime field {field}: {schema}"
+            );
+        }
+    }
 }

@@ -1,0 +1,59 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: gac-url-list
+  namespace: edgion-test
+spec:
+  data:
+    type: RequestAccessUrlAllowList
+    config:
+      items:
+        - name: secret-callback
+          hosts: [gac-url.example.com]
+          paths:
+            - {type: PathPrefix, value: /test/gac/url/secret/:vendor}
+          allOf:
+            - type: secretMatch
+              key: {type: header, name: X-CF-Secret}
+              secretRef: {name: gac-origin-secret}
+        - name: nested-ip-allow
+          hosts: [gac-url.example.com]
+          paths:
+            - {type: Exact, value: /test/gac/url/ip-allow}
+          allOf:
+            - type: directPeerIpMatch
+              ipRefs: [{name: gac-url-loopback}]
+        - name: nested-ip-deny
+          hosts: [gac-url.example.com]
+          paths:
+            - {type: Exact, value: /test/gac/url/ip-deny}
+          allOf:
+            - type: directPeerIpMatch
+              ipRefs: [{name: gac-url-external}]
+        - name: exact
+          hosts: [gac-url.example.com]
+          paths:
+            - {type: Exact, value: /test/gac/url/exact}
+        - name: prefix
+          hosts: [gac-url.example.com]
+          paths:
+            - {type: PathPrefix, value: /test/gac/url/prefix}
+        - name: parameter
+          hosts: [gac-url.example.com]
+          paths:
+            - {type: PathPrefix, value: /test/gac/url/param/:id}
+        - name: regex
+          hosts: [gac-url.example.com]
+          paths:
+            - {type: RegularExpression, value: "^/test/gac/url/regex/[0-9]+$"}
+        - name: nested-hmac
+          hosts: [gac-url.example.com]
+          paths:
+            - {type: Exact, value: /test/gac/url/hmac}
+          allOf:
+            - type: hmacAuth
+              secretGroups:
+                - name: policy
+                  secretRefs: [{name: gac-hmac-credentials}]
+              algorithms: [hmac-sha256]
+              enforceHeaders: ["@request-target", host, date]

@@ -531,6 +531,7 @@ impl EdgionPluginsHandler {
     /// Inspect every Secret this EdgionPlugins depends on (tracked in `SecretRefManager`
     /// by the `parse()` resolvers) and flag any that aren't present in the Secret store.
     fn resolve_secret_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
+        let owner_namespace = ep.metadata.namespace.as_deref().unwrap_or("default");
         let resource_ref = ResourceRef::new(
             ResourceKind::EdgionPlugins,
             ep.metadata.namespace.clone(),
@@ -551,6 +552,26 @@ impl EdgionPluginsHandler {
                 None => (String::new(), dep_key.clone()),
             };
             let ns_opt = if ns.is_empty() { None } else { Some(ns.as_str()) };
+            if let Some(target_namespace) = ns_opt.filter(|target_namespace| *target_namespace != owner_namespace) {
+                let allowed = ctx.runtime().ref_grant_store.check_reference_allowed(
+                    owner_namespace,
+                    "edgion.io",
+                    "EdgionPlugins",
+                    target_namespace,
+                    "",
+                    "Secret",
+                    Some(&name),
+                );
+                if !allowed {
+                    errors.push(ResolvedRefsError::RefNotPermitted {
+                        from_namespace: owner_namespace.to_string(),
+                        from_kind: "EdgionPlugins",
+                        target_namespace: target_namespace.to_string(),
+                        target_name: name,
+                    });
+                    continue;
+                }
+            }
             if ctx.runtime().secret_store.get(ns_opt, &name).is_none() {
                 errors.push(ResolvedRefsError::SecretNotFound {
                     namespace: if ns.is_empty() { "default".to_string() } else { ns },
@@ -1207,6 +1228,80 @@ mod tests {
             RequestAccessRuleType::DirectPeerIp(ip) | RequestAccessRuleType::RemoteIp(ip) => &ip.all_of[0],
             RequestAccessRuleType::Url(url) => &url.all_of[0],
         }
+    }
+
+    fn request_access_url_policy(config_refs_yaml: &str) -> EdgionPlugins {
+        let config: edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessPolicyConfig =
+            serde_yaml::from_str(&format!(
+                r#"
+defaultProfile: lockdown
+profiles:
+  lockdown:
+    requiredRuleGroups:
+      - name: callbacks
+        anyOfRules:
+          - name: referenced-vendors
+            type: url
+            config:
+              configRefs:
+{config_refs_yaml}
+"#
+            ))
+            .expect("valid RequestAccessPolicy URL fixture");
+        let mut ep = EdgionPlugins::new("url-policy", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestAccessPolicy(config))]);
+        ep
+    }
+
+    fn request_access_url_data(
+        namespace: &str,
+        name: &str,
+        candidates: Vec<edgion_resources::resources::edgion_plugins::plugin_configs::UrlAccessCandidate>,
+    ) -> EdgionConfigData {
+        use edgion_resources::resources::edgion_config_data::RequestAccessUrlAllowListData;
+        build_edgion_config_data(
+            namespace,
+            name,
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: Default::default(),
+                unknown_fields: Vec::new(),
+                data: ConfigEntry::RequestAccessUrlAllowList(RequestAccessUrlAllowListData { items: candidates }),
+            },
+        )
+    }
+
+    fn request_access_url_candidate(
+        name: &str,
+        conditions: Vec<edgion_resources::resources::edgion_plugins::plugin_configs::AccessCondition>,
+    ) -> edgion_resources::resources::edgion_plugins::plugin_configs::UrlAccessCandidate {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{AccessPathMatch, AccessPathMatchType};
+        edgion_resources::resources::edgion_plugins::plugin_configs::UrlAccessCandidate {
+            name: name.to_string(),
+            hosts: vec!["callbacks.example.com".to_string()],
+            paths: vec![AccessPathMatch {
+                match_type: AccessPathMatchType::PathPrefix,
+                value: format!("/callbacks/{name}"),
+            }],
+            all_of: conditions,
+        }
+    }
+
+    fn first_resolved_url_candidates(
+        ep: &EdgionPlugins,
+    ) -> &[edgion_resources::resources::edgion_plugins::plugin_configs::UrlAccessCandidate] {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessRuleType;
+        let EdgionPlugin::RequestAccessPolicy(config) = &ep.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("expected RequestAccessPolicy")
+        };
+        let RequestAccessRuleType::Url(url) =
+            &config.runtime_profiles()["lockdown"].required_rule_groups[0].any_of_rules[0].rule
+        else {
+            panic!("expected URL rule")
+        };
+        url.resolved_candidates.as_deref().expect("resolved URL candidates")
     }
 
     fn build_basic_auth_secret(namespace: &str, name: &str, username: &str, password: &str) -> Secret {
@@ -3088,6 +3183,771 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn request_access_policy_imported_url_candidate_binds_nested_secret() {
+        use edgion_resources::common::KeyGet;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{AccessCondition, SecretMatchCondition};
+
+        let condition = AccessCondition::SecretMatch(SecretMatchCondition {
+            key: KeyGet::Header {
+                name: "X-Vendor-Token".to_string(),
+            },
+            secret_ref: SecretObjectReference {
+                name: "vendor-token".to_string(),
+                group: None,
+                kind: None,
+                namespace: None,
+            },
+            resolved_values: None,
+        });
+        let url_data = request_access_url_data(
+            "default",
+            "vendor-list",
+            vec![request_access_url_candidate("vendor", vec![condition])],
+        );
+        let secret = build_secret("default", "vendor-token", "token", "nested-token-value");
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::from([("default/vendor-token".to_string(), secret)]));
+        runtime
+            .edgion_config_data_store
+            .replace_all(HashMap::from([("default/vendor-list".to_string(), url_data)]));
+
+        let authored = request_access_url_policy("                - name: vendor-list");
+        let parsed = match EdgionPluginsHandler.parse(authored, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        let candidates = first_resolved_url_candidates(&parsed);
+        let AccessCondition::SecretMatch(secret) = &candidates[0].all_of[0] else {
+            panic!("expected nested Secret match")
+        };
+        assert_eq!(
+            secret.resolved_values.as_deref(),
+            Some(["nested-token-value".to_string()].as_slice())
+        );
+        assert_eq!(ctx.secret_ref_manager().get_refs("default/vendor-token").len(), 1);
+        assert_eq!(
+            runtime.edgion_config_data_refs.get_refs("default/vendor-list"),
+            vec!["EdgionPlugins:default/url-policy".to_string()]
+        );
+
+        let EdgionPlugin::RequestAccessPolicy(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("expected policy")
+        };
+        use edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessRuleType;
+        let RequestAccessRuleType::Url(authored_url) =
+            &config.profiles["lockdown"].required_rule_groups[0].any_of_rules[0].rule
+        else {
+            panic!("expected authored URL rule")
+        };
+        assert!(authored_url.resolved_candidates.is_none());
+    }
+
+    #[tokio::test]
+    async fn request_access_policy_imported_missing_secret_is_hard_and_recovers() {
+        use edgion_resources::common::KeyGet;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{AccessCondition, SecretMatchCondition};
+
+        let condition = AccessCondition::SecretMatch(SecretMatchCondition {
+            key: KeyGet::Header {
+                name: "X-Vendor-Token".to_string(),
+            },
+            secret_ref: SecretObjectReference {
+                name: "late-token".to_string(),
+                group: None,
+                kind: None,
+                namespace: None,
+            },
+            resolved_values: Some(vec!["stale-token".to_string()]),
+        });
+        let url_data = request_access_url_data(
+            "default",
+            "vendor-list",
+            vec![request_access_url_candidate("vendor", vec![condition])],
+        );
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        runtime
+            .edgion_config_data_store
+            .replace_all(HashMap::from([("default/vendor-list".to_string(), url_data)]));
+        let authored = request_access_url_policy("                - name: vendor-list");
+
+        let mut missing = match EdgionPluginsHandler.parse(authored.clone(), &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        EdgionPluginsHandler.update_status(&mut missing, &ctx, &[]);
+        let AccessCondition::SecretMatch(secret) = &first_resolved_url_candidates(&missing)[0].all_of[0] else {
+            panic!("expected nested Secret")
+        };
+        assert!(secret.resolved_values.is_none());
+        assert_eq!(ctx.secret_ref_manager().get_refs("default/late-token").len(), 1);
+        let resolved = missing
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(resolved.status, "False");
+        assert_eq!(resolved.reason, "SecretNotFound");
+
+        runtime.secret_store.replace_all(HashMap::from([(
+            "default/late-token".to_string(),
+            build_secret("default", "late-token", "token", "fresh-token"),
+        )]));
+        let mut recovered = match EdgionPluginsHandler.parse(authored, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        EdgionPluginsHandler.update_status(&mut recovered, &ctx, &[]);
+        let AccessCondition::SecretMatch(secret) = &first_resolved_url_candidates(&recovered)[0].all_of[0] else {
+            panic!("expected nested Secret")
+        };
+        assert_eq!(
+            secret.resolved_values.as_deref(),
+            Some(["fresh-token".to_string()].as_slice())
+        );
+        let resolved = recovered
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(resolved.status, "True");
+    }
+
+    #[tokio::test]
+    async fn request_access_policy_cross_namespace_url_and_nested_secret_grants_are_independent() {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{AccessCondition, SecretMatchCondition};
+        use edgion_resources::resources::{ReferenceGrant, ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
+        use edgion_resources::ResourceKind;
+
+        fn grant(namespace: &str, name: &str, target_group: &str, target_kind: &str) -> ReferenceGrant {
+            let mut grant = ReferenceGrant::new(
+                name,
+                ReferenceGrantSpec {
+                    from: vec![ReferenceGrantFrom {
+                        group: "edgion.io".to_string(),
+                        kind: "EdgionPlugins".to_string(),
+                        namespace: "tenant-a".to_string(),
+                    }],
+                    to: vec![ReferenceGrantTo {
+                        group: target_group.to_string(),
+                        kind: target_kind.to_string(),
+                        name: None,
+                    }],
+                },
+            );
+            grant.metadata.namespace = Some(namespace.to_string());
+            grant
+        }
+
+        fn authored_policy() -> EdgionPlugins {
+            let mut policy = request_access_url_policy(
+                "                - name: shared-urls\n                  namespace: shared-policy\n",
+            );
+            policy.metadata.namespace = Some("tenant-a".to_string());
+            policy
+        }
+
+        let candidate = request_access_url_candidate(
+            "shared-secret",
+            vec![AccessCondition::SecretMatch(SecretMatchCondition {
+                key: edgion_resources::common::KeyGet::Header {
+                    name: "X-Origin-Token".to_string(),
+                },
+                secret_ref: SecretObjectReference {
+                    name: "origin-token".to_string(),
+                    namespace: Some("shared-secret".to_string()),
+                    group: None,
+                    kind: None,
+                },
+                resolved_values: None,
+            })],
+        );
+        let url_data = request_access_url_data("shared-policy", "shared-urls", vec![candidate]);
+        let secret = build_secret("shared-secret", "origin-token", "token", "shared-token");
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::from([("shared-secret/origin-token".to_string(), secret)]));
+        runtime
+            .edgion_config_data_store
+            .replace_all(HashMap::from([("shared-policy/shared-urls".to_string(), url_data)]));
+
+        let mut no_grants = match EdgionPluginsHandler.parse(authored_policy(), &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        EdgionPluginsHandler.update_status(&mut no_grants, &ctx, &[]);
+        assert!(first_resolved_url_candidates(&no_grants).is_empty());
+        assert_eq!(
+            no_grants
+                .status
+                .as_ref()
+                .unwrap()
+                .conditions
+                .iter()
+                .find(|condition| condition.type_ == "ResolvedRefs")
+                .unwrap()
+                .status,
+            "True"
+        );
+        assert!(runtime
+            .cross_ns_ref_mgr
+            .get_refs("shared-policy")
+            .iter()
+            .any(|reference| { reference.kind == ResourceKind::EdgionPlugins && reference.name == "url-policy" }));
+        assert!(runtime.cross_ns_ref_mgr.get_refs("shared-secret").is_empty());
+
+        runtime.ref_grant_store.upsert(
+            "shared-policy/allow-url".to_string(),
+            Arc::new(grant("shared-policy", "allow-url", "edgion.io", "EdgionConfigData")),
+        );
+        let mut url_only = match EdgionPluginsHandler.parse(authored_policy(), &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        EdgionPluginsHandler.update_status(&mut url_only, &ctx, &[]);
+        assert_eq!(first_resolved_url_candidates(&url_only).len(), 1);
+        let AccessCondition::SecretMatch(secret) = &first_resolved_url_candidates(&url_only)[0].all_of[0] else {
+            panic!("expected Secret match")
+        };
+        assert!(secret.resolved_values.is_none());
+        let unresolved = url_only
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(unresolved.status, "False");
+        assert_eq!(unresolved.reason, "RefNotPermitted");
+        assert!(runtime
+            .cross_ns_ref_mgr
+            .get_refs("shared-secret")
+            .iter()
+            .any(|reference| { reference.kind == ResourceKind::EdgionPlugins && reference.name == "url-policy" }));
+
+        runtime.ref_grant_store.upsert(
+            "shared-secret/allow-secret".to_string(),
+            Arc::new(grant("shared-secret", "allow-secret", "", "Secret")),
+        );
+        let mut both_grants = match EdgionPluginsHandler.parse(authored_policy(), &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        EdgionPluginsHandler.update_status(&mut both_grants, &ctx, &[]);
+        let AccessCondition::SecretMatch(secret) = &first_resolved_url_candidates(&both_grants)[0].all_of[0] else {
+            panic!("expected Secret match")
+        };
+        assert_eq!(
+            secret.resolved_values.as_deref(),
+            Some(["shared-token".to_string()].as_slice())
+        );
+        assert_eq!(
+            both_grants
+                .status
+                .as_ref()
+                .unwrap()
+                .conditions
+                .iter()
+                .find(|condition| condition.type_ == "ResolvedRefs")
+                .unwrap()
+                .status,
+            "True"
+        );
+
+        runtime.ref_grant_store.remove("shared-secret/allow-secret");
+        let mut secret_grant_removed = match EdgionPluginsHandler.parse(authored_policy(), &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        EdgionPluginsHandler.update_status(&mut secret_grant_removed, &ctx, &[]);
+        let condition = secret_grant_removed
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(
+            (condition.status.as_str(), condition.reason.as_str()),
+            ("False", "RefNotPermitted")
+        );
+    }
+
+    #[tokio::test]
+    async fn request_access_policy_imported_url_candidate_expands_nested_ip_refs() {
+        use edgion_resources::resources::edgion_config_data::{IpGroup, IpListData};
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{AccessCondition, IpAccessMatch};
+
+        let ip_data = build_edgion_config_data(
+            "default",
+            "vendor-networks",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: Default::default(),
+                unknown_fields: vec![],
+                data: ConfigEntry::IpList(IpListData {
+                    items: vec![IpGroup {
+                        name: "vendor".to_string(),
+                        description: None,
+                        cidrs: vec!["203.0.113.0/24".to_string()],
+                    }],
+                }),
+            },
+        );
+        let condition = AccessCondition::RemoteIpMatch(IpAccessMatch {
+            ips: vec!["198.51.100.0/24".to_string()],
+            ip_refs: vec![
+                EdgionConfigDataRef {
+                    name: "vendor-networks".to_string(),
+                    ..Default::default()
+                },
+                EdgionConfigDataRef {
+                    name: "missing-networks".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let url_data = request_access_url_data(
+            "default",
+            "vendor-list",
+            vec![request_access_url_candidate("vendor", vec![condition])],
+        );
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        runtime.edgion_config_data_store.replace_all(HashMap::from([
+            ("default/vendor-list".to_string(), url_data),
+            ("default/vendor-networks".to_string(), ip_data),
+        ]));
+
+        let parsed = match EdgionPluginsHandler
+            .parse(request_access_url_policy("                - name: vendor-list"), &ctx)
+            .await
+        {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        let AccessCondition::RemoteIpMatch(ip) = &first_resolved_url_candidates(&parsed)[0].all_of[0] else {
+            panic!("expected nested remote IP match")
+        };
+        let resolved = ip.resolved_ips.as_ref().expect("resolved nested IP union");
+        assert!(resolved.contains(&"198.51.100.0/24".to_string()));
+        assert!(resolved.contains(&"203.0.113.0/24".to_string()));
+        assert_eq!(runtime.edgion_config_data_refs.get_refs("default/vendor-list").len(), 1);
+        assert_eq!(
+            runtime
+                .edgion_config_data_refs
+                .get_refs("default/vendor-networks")
+                .len(),
+            1
+        );
+        assert_eq!(
+            runtime
+                .edgion_config_data_refs
+                .get_refs("default/missing-networks")
+                .len(),
+            1
+        );
+        let EdgionPlugin::RequestAccessPolicy(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("expected policy")
+        };
+        assert!(config
+            .resolution_warnings
+            .iter()
+            .any(|warning| warning.contains("missing-networks")));
+    }
+
+    #[tokio::test]
+    async fn request_access_policy_url_ref_failures_are_partial_and_keep_valid_siblings() {
+        use edgion_resources::resources::edgion_config_data::{IpGroup, IpListData};
+
+        let valid = request_access_url_data(
+            "default",
+            "valid-list",
+            vec![request_access_url_candidate("valid", vec![])],
+        );
+        let mut disabled = request_access_url_data(
+            "default",
+            "disabled-list",
+            vec![request_access_url_candidate("disabled", vec![])],
+        );
+        disabled.spec.enable = false;
+        let wrong_type = build_edgion_config_data(
+            "default",
+            "wrong-type",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: Default::default(),
+                unknown_fields: vec![],
+                data: ConfigEntry::IpList(IpListData {
+                    items: vec![IpGroup {
+                        name: "wrong".to_string(),
+                        description: None,
+                        cidrs: vec!["127.0.0.0/8".to_string()],
+                    }],
+                }),
+            },
+        );
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        runtime.edgion_config_data_store.replace_all(HashMap::from([
+            ("default/valid-list".to_string(), valid),
+            ("default/disabled-list".to_string(), disabled),
+            ("default/wrong-type".to_string(), wrong_type),
+        ]));
+        let refs = r#"
+                - name: valid-list
+                - name: missing-list
+                - name: disabled-list
+                - name: wrong-type
+"#;
+        let mut parsed = match EdgionPluginsHandler.parse(request_access_url_policy(refs), &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        EdgionPluginsHandler.update_status(&mut parsed, &ctx, &[]);
+        assert_eq!(first_resolved_url_candidates(&parsed).len(), 1);
+        for name in ["valid-list", "missing-list", "disabled-list", "wrong-type"] {
+            assert_eq!(
+                runtime
+                    .edgion_config_data_refs
+                    .get_refs(&format!("default/{name}"))
+                    .len(),
+                1
+            );
+        }
+        let conditions = &parsed.status.as_ref().unwrap().conditions;
+        assert_eq!(
+            conditions
+                .iter()
+                .find(|condition| condition.type_ == "Accepted")
+                .unwrap()
+                .status,
+            "True"
+        );
+        assert_eq!(
+            conditions
+                .iter()
+                .find(|condition| condition.type_ == "ResolvedRefs")
+                .unwrap()
+                .status,
+            "True"
+        );
+        let partial = conditions
+            .iter()
+            .find(|condition| condition.type_ == "PartiallyInvalid")
+            .unwrap();
+        assert_eq!(partial.status, "True");
+        for name in ["missing-list", "disabled-list", "wrong-type"] {
+            assert!(partial.message.contains(name), "{}", partial.message);
+        }
+    }
+
+    #[tokio::test]
+    async fn request_access_policy_url_ref_limits_are_all_or_nothing() {
+        let data = request_access_url_data(
+            "default",
+            "limited-list",
+            vec![
+                request_access_url_candidate("first", vec![]),
+                request_access_url_candidate("second", vec![]),
+            ],
+        );
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        runtime
+            .edgion_config_data_store
+            .replace_all(HashMap::from([("default/limited-list".to_string(), data)]));
+
+        let refs = r#"
+                - name: limited-list
+                  validate:
+                    maxUrlRules: 1
+"#;
+        let rejected = match EdgionPluginsHandler.parse(request_access_url_policy(refs), &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        assert!(
+            first_resolved_url_candidates(&rejected).is_empty(),
+            "an oversized reference must not import an order-dependent prefix"
+        );
+        assert!(super::request_access_policy_resolution_warnings(&rejected)[0].contains("validate limits"));
+
+        let refs = r#"
+                - name: limited-list
+                  validate:
+                    maxUrlRules: 2
+"#;
+        let accepted = match EdgionPluginsHandler.parse(request_access_url_policy(refs), &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        assert_eq!(first_resolved_url_candidates(&accepted).len(), 2);
+
+        let mut hostless = request_access_url_candidate("hostless", vec![]);
+        hostless.hosts.clear();
+        runtime.edgion_config_data_store.replace_all(HashMap::from([(
+            "default/limited-list".to_string(),
+            request_access_url_data("default", "limited-list", vec![hostless]),
+        )]));
+        let default_rejected = match EdgionPluginsHandler
+            .parse(
+                request_access_url_policy("                - name: limited-list\n"),
+                &ctx,
+            )
+            .await
+        {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        assert!(first_resolved_url_candidates(&default_rejected).is_empty());
+        let explicitly_allowed = match EdgionPluginsHandler
+            .parse(
+                request_access_url_policy(
+                    "                - name: limited-list\n                  validate:\n                    allowNoHosts: true\n",
+                ),
+                &ctx,
+            )
+            .await
+        {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        assert_eq!(first_resolved_url_candidates(&explicitly_allowed).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn request_access_policy_url_secret_retarget_replaces_dependency_and_value() {
+        use edgion_resources::common::KeyGet;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{AccessCondition, SecretMatchCondition};
+
+        let secret_condition = |name: &str| {
+            AccessCondition::SecretMatch(SecretMatchCondition {
+                key: KeyGet::Header {
+                    name: "X-Vendor-Token".to_string(),
+                },
+                secret_ref: SecretObjectReference {
+                    name: name.to_string(),
+                    group: None,
+                    kind: None,
+                    namespace: None,
+                },
+                resolved_values: None,
+            })
+        };
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::from([
+            (
+                "default/token-a".to_string(),
+                build_secret("default", "token-a", "token", "value-a"),
+            ),
+            (
+                "default/token-b".to_string(),
+                build_secret("default", "token-b", "token", "value-b"),
+            ),
+        ]));
+        let authored = request_access_url_policy("                - name: vendor-list");
+        runtime.edgion_config_data_store.replace_all(HashMap::from([(
+            "default/vendor-list".to_string(),
+            request_access_url_data(
+                "default",
+                "vendor-list",
+                vec![request_access_url_candidate(
+                    "vendor",
+                    vec![secret_condition("token-a")],
+                )],
+            ),
+        )]));
+        let first = match EdgionPluginsHandler.parse(authored.clone(), &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        let AccessCondition::SecretMatch(first_secret) = &first_resolved_url_candidates(&first)[0].all_of[0] else {
+            panic!("expected Secret match")
+        };
+        assert_eq!(
+            first_secret.resolved_values.as_deref(),
+            Some(["value-a".to_string()].as_slice())
+        );
+
+        runtime.edgion_config_data_store.replace_all(HashMap::from([(
+            "default/vendor-list".to_string(),
+            request_access_url_data(
+                "default",
+                "vendor-list",
+                vec![request_access_url_candidate(
+                    "vendor",
+                    vec![secret_condition("token-b")],
+                )],
+            ),
+        )]));
+        let second = match EdgionPluginsHandler.parse(authored, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        assert!(ctx.secret_ref_manager().get_refs("default/token-a").is_empty());
+        assert_eq!(ctx.secret_ref_manager().get_refs("default/token-b").len(), 1);
+        let AccessCondition::SecretMatch(second_secret) = &first_resolved_url_candidates(&second)[0].all_of[0] else {
+            panic!("expected Secret match")
+        };
+        assert_eq!(
+            second_secret.resolved_values.as_deref(),
+            Some(["value-b".to_string()].as_slice())
+        );
+    }
+
+    #[tokio::test]
+    async fn request_access_policy_url_ip_retarget_and_removal_clear_stale_dependencies() {
+        use edgion_resources::resources::edgion_config_data::{IpGroup, IpListData};
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{AccessCondition, IpAccessMatch};
+
+        let ip_data = |name: &str, cidr: &str| {
+            build_edgion_config_data(
+                "default",
+                name,
+                EdgionConfigDataSpec {
+                    enable: true,
+                    active: None,
+                    visibility: Default::default(),
+                    unknown_fields: vec![],
+                    data: ConfigEntry::IpList(IpListData {
+                        items: vec![IpGroup {
+                            name: name.to_string(),
+                            description: None,
+                            cidrs: vec![cidr.to_string()],
+                        }],
+                    }),
+                },
+            )
+        };
+        let condition = |name: &str| {
+            AccessCondition::DirectPeerIpMatch(IpAccessMatch {
+                ips: vec!["127.0.0.1/32".to_string()],
+                ip_refs: vec![EdgionConfigDataRef {
+                    name: name.to_string(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+        };
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let authored = request_access_url_policy("                - name: vendor-list");
+        runtime.edgion_config_data_store.replace_all(HashMap::from([
+            (
+                "default/vendor-list".to_string(),
+                request_access_url_data(
+                    "default",
+                    "vendor-list",
+                    vec![request_access_url_candidate("vendor", vec![condition("ip-a")])],
+                ),
+            ),
+            ("default/ip-a".to_string(), ip_data("ip-a", "192.0.2.0/24")),
+            ("default/ip-b".to_string(), ip_data("ip-b", "203.0.113.0/24")),
+        ]));
+        let _ = EdgionPluginsHandler.parse(authored.clone(), &ctx).await;
+        assert_eq!(runtime.edgion_config_data_refs.get_refs("default/ip-a").len(), 1);
+
+        runtime.edgion_config_data_store.replace_all(HashMap::from([
+            (
+                "default/vendor-list".to_string(),
+                request_access_url_data(
+                    "default",
+                    "vendor-list",
+                    vec![request_access_url_candidate("vendor", vec![condition("ip-b")])],
+                ),
+            ),
+            ("default/ip-a".to_string(), ip_data("ip-a", "192.0.2.0/24")),
+            ("default/ip-b".to_string(), ip_data("ip-b", "203.0.113.0/24")),
+        ]));
+        let second = match EdgionPluginsHandler.parse(authored.clone(), &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        assert!(runtime.edgion_config_data_refs.get_refs("default/ip-a").is_empty());
+        assert_eq!(runtime.edgion_config_data_refs.get_refs("default/ip-b").len(), 1);
+        let AccessCondition::DirectPeerIpMatch(ip) = &first_resolved_url_candidates(&second)[0].all_of[0] else {
+            panic!("expected direct peer IP match")
+        };
+        assert!(!ip.resolved_ips.as_ref().unwrap().contains(&"192.0.2.0/24".to_string()));
+        assert!(ip
+            .resolved_ips
+            .as_ref()
+            .unwrap()
+            .contains(&"203.0.113.0/24".to_string()));
+
+        runtime.edgion_config_data_store.replace_all(HashMap::from([
+            (
+                "default/vendor-list".to_string(),
+                request_access_url_data(
+                    "default",
+                    "vendor-list",
+                    vec![request_access_url_candidate("vendor", vec![])],
+                ),
+            ),
+            ("default/ip-a".to_string(), ip_data("ip-a", "192.0.2.0/24")),
+            ("default/ip-b".to_string(), ip_data("ip-b", "203.0.113.0/24")),
+        ]));
+        let third = match EdgionPluginsHandler.parse(authored, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        assert!(runtime.edgion_config_data_refs.get_refs("default/ip-b").is_empty());
+        assert!(first_resolved_url_candidates(&third)[0].all_of.is_empty());
+        assert_eq!(runtime.edgion_config_data_refs.get_refs("default/vendor-list").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn request_access_policy_imported_url_candidate_resolves_hmac_credentials() {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{AccessCondition, HmacMatchConfig};
+
+        let condition = AccessCondition::HmacAuth(HmacMatchConfig {
+            secret_groups: Some(vec![HmacAuthSecretGroup {
+                name: "vendor".to_string(),
+                description: None,
+                secret_refs: vec![SecretObjectReference {
+                    name: "vendor-hmac".to_string(),
+                    group: None,
+                    kind: None,
+                    namespace: None,
+                }],
+            }]),
+            ..Default::default()
+        });
+        let credentials = "- username: vendor\n  secret: vendor-secret-at-least-32-bytes-0001\n";
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::from([(
+            "default/vendor-hmac".to_string(),
+            build_secret("default", "vendor-hmac", "credentials.yaml", credentials),
+        )]));
+        runtime.edgion_config_data_store.replace_all(HashMap::from([(
+            "default/vendor-list".to_string(),
+            request_access_url_data(
+                "default",
+                "vendor-list",
+                vec![request_access_url_candidate("vendor", vec![condition])],
+            ),
+        )]));
+        let parsed = match EdgionPluginsHandler
+            .parse(request_access_url_policy("                - name: vendor-list"), &ctx)
+            .await
+        {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        let AccessCondition::HmacAuth(hmac) = &first_resolved_url_candidates(&parsed)[0].all_of[0] else {
+            panic!("expected nested HMAC")
+        };
+        assert!(hmac
+            .resolved_credentials
+            .as_ref()
+            .is_some_and(|credentials| credentials.contains_key("vendor")));
+        assert_eq!(ctx.secret_ref_manager().get_refs("default/vendor-hmac").len(), 1);
+        assert_eq!(runtime.edgion_config_data_refs.get_refs("default/vendor-list").len(), 1);
     }
 
     #[tokio::test]

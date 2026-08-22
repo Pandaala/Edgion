@@ -124,8 +124,8 @@ pub use rate_limit_redis::RateLimitRedisTestSuite;
 pub use real_ip::RealIpPluginTestSuite;
 pub use region_route::RegionRouteTestSuite;
 pub use request_access_policy::{
-    RequestAccessPolicyHmacDynamicInitialTestSuite, RequestAccessPolicyHmacDynamicUpdatedTestSuite,
-    RequestAccessPolicyTestSuite,
+    RequestAccessPolicyHmacDynamicDeletedTestSuite, RequestAccessPolicyHmacDynamicInitialTestSuite,
+    RequestAccessPolicyHmacDynamicUpdatedTestSuite, RequestAccessPolicyTestSuite,
 };
 pub use request_mirror::RequestMirrorTestSuite;
 pub use request_restriction::RequestRestrictionTestSuite;

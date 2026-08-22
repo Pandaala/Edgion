@@ -705,6 +705,250 @@ profiles:
         );
     }
 
+    fn imported_secret_config() -> RequestAccessPolicyConfig {
+        let mut config = parse_config(
+            r#"
+defaultProfile: lockdown
+profiles:
+  lockdown:
+    requiredRuleGroups:
+      - name: callback
+        anyOfRules:
+          - name: imported
+            type: url
+            config:
+              configRefs:
+                - name: vendor-list
+"#,
+        );
+        let RequestAccessRuleType::Url(url) =
+            &mut config.profiles.get_mut("lockdown").unwrap().required_rule_groups[0].any_of_rules[0].rule
+        else {
+            panic!("expected URL rule")
+        };
+        url.resolved_candidates = Some(vec![UrlAccessCandidate {
+            name: "vendor".to_string(),
+            hosts: vec!["callbacks.example.com".to_string()],
+            paths: vec![
+                edgion_resources::resources::edgion_plugins::plugin_configs::AccessPathMatch {
+                    match_type: AccessPathMatchType::PathPrefix,
+                    value: "/callbacks/:vendor".to_string(),
+                },
+            ],
+            all_of: vec![AccessCondition::SecretMatch(SecretMatchCondition {
+                key: edgion_resources::common::KeyGet::Header {
+                    name: "X-Vendor-Token".to_string(),
+                },
+                secret_ref: edgion_resources::resources::common::SecretObjectReference {
+                    name: "vendor-token".to_string(),
+                    group: None,
+                    kind: None,
+                    namespace: None,
+                },
+                resolved_values: Some(vec!["expected-token".to_string()]),
+            })],
+        }]);
+        config
+    }
+
+    async fn run_imported_secret_case(path: &str, host: &str, token: Option<&str>) -> PluginRunningResult {
+        let plugin = RequestAccessPolicy::create(&imported_secret_config(), "default", None);
+        let mut session = MockPluginSession::new();
+        session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
+        session.expect_remote_ip().return_const("203.0.113.8".to_string());
+        session.expect_get_path().return_const(path.to_string());
+        let host = host.to_string();
+        let token = token.map(str::to_string);
+        session
+            .expect_header_value()
+            .returning(move |name| name.eq_ignore_ascii_case("host").then(|| host.clone()));
+        session.expect_key_get_local().returning(move |key| match key {
+            edgion_resources::common::KeyGet::Header { name } if name.eq_ignore_ascii_case("X-Vendor-Token") => {
+                token.clone()
+            }
+            _ => None,
+        });
+        let mut log = PluginLog::new("RequestAccessPolicy");
+        plugin.run_request(&mut session, &mut log).await
+    }
+
+    #[tokio::test]
+    async fn imported_url_candidate_matches_path_host_and_nested_secret() {
+        assert_eq!(
+            run_imported_secret_case(
+                "/callbacks/acme/events",
+                "Callbacks.Example.Com:443",
+                Some("expected-token")
+            )
+            .await,
+            PluginRunningResult::GoodNext
+        );
+        for (path, host, token) in [
+            ("/callbacks/acme/events", "callbacks.example.com", None),
+            ("/callbacks/acme/events", "callbacks.example.com", Some("wrong-token")),
+            ("/other/acme", "callbacks.example.com", Some("expected-token")),
+            ("/callbacks/acme", "other.example.com", Some("expected-token")),
+        ] {
+            assert!(matches!(
+                run_imported_secret_case(path, host, token).await,
+                PluginRunningResult::ErrResponse { status: 403, .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn profile_url_index_preserves_exact_prefix_regex_and_candidate_ownership() {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::AccessPathMatch;
+
+        let candidates = vec![
+            UrlAccessCandidate {
+                name: "exact".to_string(),
+                hosts: vec!["a.example.com".to_string()],
+                paths: vec![AccessPathMatch {
+                    match_type: AccessPathMatchType::Exact,
+                    value: "/events/exact".to_string(),
+                }],
+                all_of: vec![],
+            },
+            UrlAccessCandidate {
+                name: "prefix".to_string(),
+                hosts: vec!["b.example.com".to_string()],
+                paths: vec![AccessPathMatch {
+                    match_type: AccessPathMatchType::PathPrefix,
+                    value: "/events/:tenant".to_string(),
+                }],
+                all_of: vec![],
+            },
+            UrlAccessCandidate {
+                name: "regex".to_string(),
+                hosts: vec!["c.example.com".to_string()],
+                paths: vec![AccessPathMatch {
+                    match_type: AccessPathMatchType::RegularExpression,
+                    value: r"^/events/v[0-9]+$".to_string(),
+                }],
+                all_of: vec![],
+            },
+        ];
+        let index = RuntimeUrlIndex::compile(candidates, None).unwrap();
+        assert_eq!(index.lookup("/events/exact"), vec![true, true, false]);
+        assert_eq!(index.lookup("/events/exact/suffix"), vec![false, true, false]);
+        assert_eq!(index.lookup("/events"), vec![false, false, false]);
+        assert_eq!(index.lookup("/events/v12"), vec![false, true, true]);
+    }
+
+    #[tokio::test]
+    async fn empty_resolved_url_candidates_fail_closed_but_allow_sibling_rule() {
+        let mut with_fallback = parse_config(
+            r#"
+defaultProfile: lockdown
+profiles:
+  lockdown:
+    requiredRuleGroups:
+      - name: callback
+        anyOfRules:
+          - name: missing-list
+            type: url
+            config:
+              configRefs: [{ name: missing-list }]
+          - name: internal
+            type: directPeerIp
+            config: { ips: [192.0.2.0/24] }
+"#,
+        );
+        let RequestAccessRuleType::Url(url) =
+            &mut with_fallback.profiles.get_mut("lockdown").unwrap().required_rule_groups[0].any_of_rules[0].rule
+        else {
+            panic!("expected URL rule")
+        };
+        url.resolved_candidates = Some(vec![]);
+        let plugin = RequestAccessPolicy::create(&with_fallback, "default", None);
+        let mut session = MockPluginSession::new();
+        session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
+        session.expect_remote_ip().return_const("203.0.113.8".to_string());
+        let mut log = PluginLog::new("RequestAccessPolicy");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+
+        with_fallback.profiles.get_mut("lockdown").unwrap().required_rule_groups[0]
+            .any_of_rules
+            .truncate(1);
+        let plugin = RequestAccessPolicy::create(&with_fallback, "default", None);
+        let mut session = MockPluginSession::new();
+        session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
+        session.expect_remote_ip().return_const("203.0.113.8".to_string());
+        let mut log = PluginLog::new("RequestAccessPolicy");
+        assert!(matches!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse { status: 403, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn imported_url_candidate_keeps_direct_and_remote_ip_distinct() {
+        let mut config = parse_config(
+            r#"
+defaultProfile: lockdown
+profiles:
+  lockdown:
+    requiredRuleGroups:
+      - name: callback
+        anyOfRules:
+          - name: imported
+            type: url
+            config:
+              configRefs: [{ name: vendor-list }]
+"#,
+        );
+        let RequestAccessRuleType::Url(url) =
+            &mut config.profiles.get_mut("lockdown").unwrap().required_rule_groups[0].any_of_rules[0].rule
+        else {
+            panic!("expected URL rule")
+        };
+        url.resolved_candidates = Some(vec![UrlAccessCandidate {
+            name: "vendor".to_string(),
+            hosts: vec!["callbacks.example.com".to_string()],
+            paths: vec![
+                edgion_resources::resources::edgion_plugins::plugin_configs::AccessPathMatch {
+                    match_type: AccessPathMatchType::Exact,
+                    value: "/callback".to_string(),
+                },
+            ],
+            all_of: vec![
+                AccessCondition::DirectPeerIpMatch(IpAccessMatch {
+                    ips: vec!["192.0.2.0/24".to_string()],
+                    ..Default::default()
+                }),
+                AccessCondition::RemoteIpMatch(IpAccessMatch {
+                    ips: vec!["203.0.113.0/24".to_string()],
+                    ..Default::default()
+                }),
+            ],
+        }]);
+        let run = |direct: &'static str, remote: &'static str, config: RequestAccessPolicyConfig| async move {
+            let plugin = RequestAccessPolicy::create(&config, "default", None);
+            let mut session = MockPluginSession::new();
+            session.expect_direct_peer_ip().return_const(direct.to_string());
+            session.expect_remote_ip().return_const(remote.to_string());
+            session.expect_get_path().return_const("/callback".to_string());
+            session.expect_header_value().returning(|name| {
+                name.eq_ignore_ascii_case("host")
+                    .then(|| "callbacks.example.com".to_string())
+            });
+            let mut log = PluginLog::new("RequestAccessPolicy");
+            plugin.run_request(&mut session, &mut log).await
+        };
+        assert_eq!(
+            run("192.0.2.10", "203.0.113.8", config.clone()).await,
+            PluginRunningResult::GoodNext
+        );
+        assert!(matches!(
+            run("203.0.113.8", "192.0.2.10", config).await,
+            PluginRunningResult::ErrResponse { status: 403, .. }
+        ));
+    }
+
     #[tokio::test]
     async fn bad_hmac_is_a_non_match_and_allows_sibling_fallback() {
         let config = hmac_fallback_config(false);

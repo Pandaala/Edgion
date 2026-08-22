@@ -147,11 +147,14 @@ fn fetch_secret_inner(
 
     // ── Step 2: register SecretRefManager dependency ─────────────────────
     // Before Grant check and Secret lookup: owners must be tracked for Secret
-    // lifecycle events even while Pending. ReferenceGrant changes requeue via
-    // `ReferenceGrantStore`, not SecretRefManager.
+    // lifecycle events even while Pending. Cross-namespace refs are also
+    // indexed so a ReferenceGrant change requeues the owner.
     if register_dependency {
         let secret_key = format_secret_key(Some(&secret_ns), &secret_ref.name);
         ctx.secret_ref_manager().add_ref(secret_key, owner.clone());
+        if secret_ref.is_cross_namespace(owner_ns) {
+            ctx.runtime().cross_ns_ref_mgr.add_ref(secret_ns.clone(), owner.clone());
+        }
     }
 
     // ── Step 3: cross-namespace ReferenceGrant check ─────────────────────

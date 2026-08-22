@@ -12,6 +12,10 @@ fn updated() -> Box<dyn TestSuite> {
     Box::new(suites::RequestAccessPolicyHmacDynamicUpdatedTestSuite)
 }
 
+fn deleted() -> Box<dyn TestSuite> {
+    Box::new(suites::RequestAccessPolicyHmacDynamicDeletedTestSuite)
+}
+
 static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
         name: "initial",
@@ -20,6 +24,10 @@ static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
         name: "updated",
         factory: updated,
+    },
+    PhaseSuite {
+        name: "deleted",
+        factory: deleted,
     },
 ];
 
@@ -35,13 +43,20 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         }
         .await;
 
+        let delete_result = async {
+            ctx.delete_resources("delete/secret.txt").await?;
+            ctx.wait_phase(scenario, "deleted", Duration::from_secs(15)).await
+        }
+        .await;
+
         let restore_result = async {
             ctx.apply_dir("initial/00_Secret_gac-hmac-dynamic.yaml").await?;
             ctx.wait_phase(scenario, "initial", Duration::from_secs(15)).await
         }
         .await;
         restore_result?;
-        rotation_result
+        rotation_result?;
+        delete_result
     })
 }
 
