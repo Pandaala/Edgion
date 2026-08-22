@@ -413,7 +413,7 @@ spec:
 
 ## Webhook 连接器
 
-> ⚠️ **破坏性变更，且是静默的：`successStatusCodes` 已被 `success.statusCodes` 取代。** `successStatusCodes` 已不再是可识别字段——`ExternalHttpConnection` 通过 `#[serde(flatten)]` 展平且未启用 `deny_unknown_fields`，因此仍设置 `successStatusCodes` 的 webhook YAML 会在准入时被**无错误、无告警地接受**：该字段被静默丢弃，成功判定退化为"任意 2xx"。这与本文档中其他迁移项（`auth`、`defaultHeaders`、`requestMethod`，均是"接受但打印 WARN"、保留一个版本的过渡期）不同——这里没有过渡期。请立即审查每个 webhook LinkSys（以及共用该连接类型的每个 ForwardAuth 插件）是否还在使用 `successStatusCodes`，并迁移到嵌套的 `success:` 块；详见下文[Success（成功判定）](#成功判定-success)。
+> ⚠️ **破坏性变更：`successStatusCodes` 已被 `success.statusCodes` 取代。** `successStatusCodes` 已不再是运行时可识别字段。仍设置它的 webhook YAML 会继续被接纳，但 serde 会丢弃该字段，成功判定退化为“任意 2xx”。Controller 现在会通过提示性的未知字段 warning、`UnknownConfigFields` 条件、diagnostics/metric，以及 Admin API 写入和 validate 响应报告精确路径；该发现不会改变 `Accepted`，也不会阻断同步。请立即审查每个 webhook LinkSys（以及共用该连接类型的每个 ForwardAuth 插件）并迁移到嵌套的 `success:` 块；详见下文[Success（成功判定）](#成功判定-success)。
 
 Webhook 连接器让插件（ctx-set、key-auth、hmac-auth 等）调用外部 HTTP 服务，用于用户解析、权限校验、上下文增强、审计日志等查询。该连接器是出站请求的**唯一事实来源**：它声明后端（直接写在 `target` 下的 `name`/`namespace`/`port`/`kind`/`group` 字段），并通过 `request` 块精确定义发送的路径、方法、查询参数、请求头和 Cookie。消费方插件不能再静默地改变请求形状——它们只能向 webhook 作者声明的命名槽位填值，可选地覆盖路径（在被允许时），以及解析响应。出站字段遵循**白名单**模型：除非 webhook 明确声明，否则不转发任何内容，因此上游某个行为异常的插件无法泄露运营者从未打算暴露的请求头。
 
@@ -673,7 +673,7 @@ custom:
 
 > **已移除的字段。** `requestMethod`、`auth` 和 `defaultHeaders` 已弃用。在滚动升级期间它们仍被接受但运行时忽略，控制器在遇到时记录 WARN。它们将在下一个版本中移除——请在此之前迁移。详见[从旧 schema 迁移](#从旧-schema-迁移)。
 >
-> `successStatusCodes` 不属于这条弃用路径：它根本不被展平后的连接结构体识别，会被静默丢弃且**不打印 WARN**。详见本节开头的警告以及 [Success（成功判定）](#成功判定-success)。
+> `successStatusCodes` 不属于这条弃用路径，也没有运行时兼容 shim。它会被忽略，但 Controller 会通过上述提示性未知字段界面报告。详见 [Success（成功判定）](#成功判定-success)。
 
 ### Success（成功判定）
 

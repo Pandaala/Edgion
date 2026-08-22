@@ -15,7 +15,8 @@ other struct family using `#[serde(flatten)]` or `#[serde(tag = "type", content 
 both — not just flatten, which is the commonly cited limitation. The detector actually
 shipped (`edgion-resources::schema_check::unknown_key_paths`) walks the `schemars`-generated
 JSON Schema against the raw input instead, which sees through both constructs by construction.
-Full background: `tasks/todo/plugin-config-unknown-field-detection/01-design.md` §2-3.
+The production implementation is `edgion-resources::schema_check`; its walker
+and regression tests are the canonical executable specification.
 
 ## Why `serde_ignored` fails here
 
@@ -101,8 +102,6 @@ by merging the chain, never by replacing the node with its final target.
 
 ## Reference cases
 
-- `tasks/todo/plugin-config-unknown-field-detection/01-design.md` §2 (the measured
-  `serde_ignored` table) and §3 (schemars output shape, checker rules).
 - `edgion-resources/src/schema_check/walk.rs` module doc (rule 1) and `mod.rs`.
 - `edgion-resources/src/schema_check/tests.rs` — the internally-tagged-enum regression tests.
 - `skills/04-review/architecture/deny-unknown-fields-credential-structs-forward-compat-tradeoff.md`

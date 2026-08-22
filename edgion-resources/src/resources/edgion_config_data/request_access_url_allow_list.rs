@@ -15,7 +15,7 @@ use crate::resources::edgion_plugins::plugin_configs::{
 /// EdgionPlugins Controller pass resolves them; this resource never embeds
 /// resolved Secret material and cannot recursively reference another URL list.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct RequestAccessUrlAllowListData {
     pub items: Vec<UrlAccessCandidate>,
 }

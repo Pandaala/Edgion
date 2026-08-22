@@ -84,7 +84,7 @@ impl From<EdgionStreamPluginsSpecShadow> for EdgionStreamPluginsSpec {
 
 /// Schema used by the unknown-key walk, built once.
 ///
-/// `pub` for the same reason as `edgion_plugins_spec_schema`: Phase 2b's
+/// `pub` for the same reason as `edgion_plugins_spec_schema`: the
 /// FileSystem/etcd loader seam and Admin API write handlers need it outside
 /// the Kubernetes-only `strict_ingest_enabled` gate.
 pub fn edgion_stream_plugins_spec_schema() -> &'static schemars::Schema {

@@ -192,7 +192,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
         let _ = super::super::plugin_policy_stamp::stamp_stream_entries(esp);
 
         // Unknown-field diagnostic: `spec.unknown_fields` was already
-        // populated at ingest (Phase 2 hook/loader/Admin-API seams), so this
+        // populated by the ingest hook, loader, or Admin API seam, so this
         // is a pure read — no re-walk here. Warn once on the apply path; the
         // status-side UnknownConfigFields condition is stamped in
         // update_status, mirroring PluginPolicyRestricted. Advisory only:
@@ -1273,7 +1273,7 @@ spec:
             .all(|c| c.type_ != condition_types::PLUGIN_POLICY_RESTRICTED));
     }
 
-    // ── UnknownConfigFields condition (Phase 4) ─────────────────────────────
+    // ── UnknownConfigFields condition ───────────────────────────────────────
 
     #[test]
     fn update_status_sets_unknown_config_fields_condition_with_exact_paths() {

@@ -113,10 +113,16 @@ Envelope (any variant): `enable: bool` (default true), `active: Option<String>`,
 ## Unknown Config Fields
 
 The Controller applies the shared advisory schema walk to the typed `KeyList`, `IpList`,
-`Selector`, and `RegionRouteOverride` payloads. A key that serde would otherwise ignore is
+`RequestAccessUrlAllowList`, `Selector`, and `RegionRouteOverride` payloads. A key that serde would otherwise ignore is
 reported through the `UnknownConfigFields=True` condition, a bounded Controller warning,
 `GET /api/v1/diagnostics/unknown-fields`, Admin write warnings, and
 `POST /api/v1/validate/EdgionConfigData`. It does not change `Accepted` or block conf_sync.
+
+Credential and authentication sub-structures nested inside typed policy data retain their
+strict deserialization boundary. For example, `SecretObjectReference`, SecretMatch, and HMAC
+credential shapes still reject unknown fields; this prevents inline or misspelled credential
+material from degrading into an unauthenticated configuration. The surrounding URL candidate,
+path, and IP-match data remains advisory.
 
 `Misc.config` remains deliberately free-form and is never inspected for unknown keys. The
 openness is scoped to that config node; raw-document ingresses still report unknown siblings

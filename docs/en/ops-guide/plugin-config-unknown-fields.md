@@ -1,18 +1,26 @@
 # Unknown Config Field Detection
 
-`EdgionPlugins`, `EdgionStreamPlugins`, and the typed variants of `EdgionConfigData` carry
-configuration below CRD nodes that preserve unknown fields. The consequence is that the Kubernetes API server
+`EdgionPlugins`, `EdgionStreamPlugins`, the typed variants of `EdgionConfigData`, and typed
+`LinkSys` provider configurations carry configuration below CRD nodes that preserve unknown fields.
+The consequence is that the Kubernetes API server
 does not prune a mistyped key inside those `config` blocks, and the Controller's Rust
 deserialization is the only remaining gate. Without a dedicated check, an unrecognized key is
 silently dropped: `deny:` mistyped as `denys:` leaves an `IpRestriction` entry with an empty
 deny list, `Accepted: True`, and nothing anywhere says the rule was never loaded. For a
 security-relevant plugin that is a fail-open, not a harmless no-op.
 
-For `EdgionConfigData`, the detector checks the typed `KeyList`, `IpList`, `Selector`, and
-`RegionRouteOverride` payloads. `data.type: Misc` is the documented free-form escape hatch, so
+For `EdgionConfigData`, the detector checks the typed `KeyList`, `IpList`,
+`RequestAccessUrlAllowList`, `Selector`, and `RegionRouteOverride` payloads. Credential and
+authentication sub-structures within typed policy data remain strict security boundaries.
+`data.type: Misc` is the documented free-form escape hatch, so
 arbitrary keys below `Misc.config` are intentionally not reported. Kubernetes prunes unknown
 siblings at the structural `spec` and `data` levels before the Controller sees them; raw-body
 FileSystem, etcd, Admin write, and validate ingresses can additionally report those envelope keys.
+
+For `LinkSys`, the detector checks the typed `redis`, `etcd`, `elasticsearch`, `kafka`, `webhook`,
+and `httpdns` provider bodies. Declared maps and arbitrary-JSON values remain open below their
+boundary; for example, the contents of a known JSON compatibility field are not interpreted as a
+LinkSys schema. Unknown siblings beside an open field are still reported.
 
 This document is the operator guide to the detector that catches it.
 
@@ -56,7 +64,7 @@ An operator can see a finding in four places:
    fixed; it is never left wedged at a stale `True`.
 
 3. **`GET /api/v1/diagnostics/unknown-fields`** — the fleet-wide answer, across every
-   `EdgionPlugins`, `EdgionStreamPlugins`, and `EdgionConfigData` resource the Controller currently holds:
+   `EdgionPlugins`, `EdgionStreamPlugins`, `EdgionConfigData`, and `LinkSys` resource the Controller currently holds:
 
    ```json
    {
@@ -80,7 +88,7 @@ An operator can see a finding in four places:
    100-item response cap; `truncated: true` when the cap bites.
 
 4. **`warnings` in the Admin API write response** — when you `POST`/`PUT` an `EdgionPlugins`,
-   `EdgionStreamPlugins`, or `EdgionConfigData` document through the Admin API and it contains an unrecognized
+   `EdgionStreamPlugins`, `EdgionConfigData`, or `LinkSys` document through the Admin API and it contains an unrecognized
    key, the response carries it immediately:
 
    ```json
@@ -121,8 +129,8 @@ POST /api/v1/validate/EdgionPlugins
 }
 ```
 
-`unknownFieldCheck` is `"performed"` for `EdgionPlugins`, `EdgionStreamPlugins`, and
-`EdgionConfigData`; it is `"unsupported"` for every other kind. Always
+`unknownFieldCheck` is `"performed"` for `EdgionPlugins`, `EdgionStreamPlugins`,
+`EdgionConfigData`, and `LinkSys`; it is `"unsupported"` for every other kind. Always
 check this field rather than assuming an empty `unknownFields` means "checked, nothing
 found": for an unsupported kind it means "not checked at all". Wire this endpoint into
 whatever gate you want to enforce blocking with — a `ValidatingAdmissionWebhook`, a CI step
@@ -135,6 +143,8 @@ in your GitOps pipeline, or a pre-`kubectl apply` check in your own tooling.
   — the `UnknownConfigFields` condition in context.
 - [EdgionConfigData](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/05-resources/15-edgion-config-data.md)
   — typed variants, the open `Misc` boundary, and Controller processing.
+- [LinkSys](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/18-link-sys.md)
+  — provider schemas, open boundaries, and status behavior.
 - [Admin API — diagnostics and validate endpoints](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/02-admin-api.md)
   — the full endpoint reference.
 - [Plugin Policy (Allowlist / Denylist)](./plugin-policy.md) — the neighboring

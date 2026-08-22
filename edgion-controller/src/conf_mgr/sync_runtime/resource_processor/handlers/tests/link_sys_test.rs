@@ -52,6 +52,7 @@ fn make_redis_link_sys(ns: &str, name: &str, secret_name: &str, secret_ns: Optio
             ..Default::default()
         },
         spec: LinkSysSpec {
+            unknown_fields: Vec::new(),
             config: SystemConfig::Redis(RedisClientConfig {
                 endpoints: vec!["redis://localhost:6379".to_string()],
                 auth: Some(RedisAuth {
@@ -88,6 +89,7 @@ fn make_es_link_sys_apikey(ns: &str, name: &str, secret_name: &str) -> LinkSys {
             ..Default::default()
         },
         spec: LinkSysSpec {
+            unknown_fields: Vec::new(),
             config: SystemConfig::Elasticsearch(ElasticsearchClientConfig {
                 endpoints: vec!["http://localhost:9200".to_string()],
                 auth: Some(ElasticsearchAuth::ApiKey {
@@ -146,10 +148,15 @@ async fn test_redis_auth_happy_path() {
 }
 
 #[tokio::test]
-async fn test_secret_not_found_returns_pending() {
+async fn test_secret_not_found_clears_injected_secret_and_returns_pending() {
     let (ctx, _runtime) = make_ctx(HashMap::new());
     let handler = LinkSysHandler::new();
-    let ls = make_redis_link_sys("default", "my-redis", "missing-secret", None);
+    let mut ls = make_redis_link_sys("default", "my-redis", "missing-secret", None);
+    let (_, injected) = make_secret("default", "injected", &[("password", b"operator-value")]);
+    let SystemConfig::Redis(redis) = &mut ls.spec.config else {
+        panic!("expected Redis");
+    };
+    redis.auth.as_mut().expect("auth").slot.secret = Some(injected);
 
     let result = handler.parse(ls, &ctx).await;
 
@@ -159,7 +166,10 @@ async fn test_secret_not_found_returns_pending() {
                 SystemConfig::Redis(r) => r.auth.as_ref().expect("auth should be present"),
                 _ => panic!("expected Redis"),
             };
-            assert!(auth.slot.secret.is_none(), "secret should be None while pending");
+            assert!(
+                auth.slot.secret.is_none(),
+                "operator-injected or stale Secret must be cleared while resolution is pending"
+            );
             let refs = ctx.secret_ref_manager().get_refs("default/missing-secret");
             let owner = ResourceRef::new(
                 ResourceKind::LinkSys,
@@ -455,6 +465,7 @@ async fn test_no_auth_configured() {
             ..Default::default()
         },
         spec: LinkSysSpec {
+            unknown_fields: Vec::new(),
             config: SystemConfig::Redis(RedisClientConfig {
                 endpoints: vec!["redis://localhost:6379".to_string()],
                 auth: None,
@@ -921,6 +932,7 @@ async fn test_webhook_secret_ref_resolved_into_resolved_secrets() {
             ..Default::default()
         },
         spec: edgion_resources::resources::link_sys::LinkSysSpec {
+            unknown_fields: Vec::new(),
             config: SystemConfig::Webhook(WebhookServiceConfig {
                 conn: ExternalHttpConnection {
                     target: WebhookTarget {
@@ -1002,6 +1014,7 @@ async fn test_webhook_secret_ref_missing_secret_sets_resolved_refs_false() {
             ..Default::default()
         },
         spec: edgion_resources::resources::link_sys::LinkSysSpec {
+            unknown_fields: Vec::new(),
             config: SystemConfig::Webhook(WebhookServiceConfig {
                 conn: ExternalHttpConnection {
                     target: WebhookTarget {
@@ -1080,6 +1093,7 @@ async fn redis_with_san_rejected_phase1() {
             ..Default::default()
         },
         spec: LinkSysSpec {
+            unknown_fields: Vec::new(),
             config: SystemConfig::Redis(RedisClientConfig {
                 endpoints: vec!["redis://localhost:6379".to_string()],
                 tls: Some(TlsConfig {
@@ -1147,6 +1161,7 @@ async fn etcd_with_hostname_rejected_phase1() {
             ..Default::default()
         },
         spec: LinkSysSpec {
+            unknown_fields: Vec::new(),
             config: SystemConfig::Etcd(EtcdClientConfig {
                 endpoints: vec!["https://etcd:2379".to_string()],
                 tls: Some(TlsConfig {
@@ -1206,6 +1221,7 @@ async fn redis_ca_only_no_san_accepted() {
             ..Default::default()
         },
         spec: LinkSysSpec {
+            unknown_fields: Vec::new(),
             config: SystemConfig::Redis(RedisClientConfig {
                 endpoints: vec!["redis://localhost:6379".to_string()],
                 tls: Some(TlsConfig {

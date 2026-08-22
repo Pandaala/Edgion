@@ -925,8 +925,8 @@ verify_metrics_labels() {
 # =============================================================================
 # Verify no resource in the fleet carries an unknown (typo'd) config key.
 #
-# Backed by `GET /api/v1/diagnostics/unknown-fields`
-# (tasks/todo/plugin-config-unknown-field-detection). This is a proof of
+# Backed by `GET /api/v1/diagnostics/unknown-fields`; see
+# docs/en/ops-guide/plugin-config-unknown-fields.md. This is a proof of
 # ABSENCE: if any plugin's config key was dropped by a schema mismatch, every
 # later assertion about that plugin is suspect, so a caller of this function
 # is expected to hard-fail the run rather than continue on a false-green
@@ -2199,9 +2199,7 @@ main() {
     # load, every later assertion about that plugin is suspect -- a GREEN run
     # from here is the dangerous outcome, not a safe one. Fail here, in
     # seconds, rather than after a 20-minute suite that passed for the wrong
-    # reason. See verify_no_unknown_config_fields above and
-    # `tasks/todo/plugin-config-unknown-field-detection/02-implementation.md`
-    # §9.4.
+    # reason. See verify_no_unknown_config_fields above.
     log_section "Pre-flight Check: No Unknown Config Fields"
     if ! verify_no_unknown_config_fields "http://127.0.0.1:12101"; then
         log_error "Unknown config fields present after initial config load -- aborting before Round 1"
@@ -2377,7 +2375,7 @@ main() {
     # scenarios and --with-reload Round 2 apply more resources mid-run, and only
     # a second pass sees those. The registry is cumulative within a run, so this
     # re-reports anything the pre-flight gate already found -- acceptable, and it
-    # keeps the two call sites independent (`02-implementation.md` §9.4).
+    # keeps the two call sites independent.
     log_section "Final Step: No Unknown Config Fields"
     if ! verify_no_unknown_config_fields "http://127.0.0.1:12101"; then
         log_error "Unknown config fields validation FAILED"

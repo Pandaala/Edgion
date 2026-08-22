@@ -1,6 +1,7 @@
 //! Tests for the ingest-capture hook: the `strict_ingest_enabled` gate plus
-//! the hand-written `Deserialize` impls on `EdgionPluginsSpec` /
-//! `EdgionStreamPluginsSpec` that populate `unknown_fields`.
+//! the hand-written `Deserialize` impls on `EdgionPluginsSpec`,
+//! `EdgionStreamPluginsSpec`, `EdgionConfigDataSpec`, and `LinkSysSpec` that
+//! populate `unknown_fields`.
 //!
 //! The gate is process-global (`static AtomicBool`), and `cargo test` runs
 //! every test in this binary concurrently, so every test that flips it MUST
@@ -8,9 +9,10 @@
 //! — otherwise two tests toggling the gate in parallel would race each
 //! other's assertions.
 //!
-//! **Invariant this hook relies on**: every gated ingress (today: the K8s
-//! watcher; Phase 2b adds the Admin API write path and the FS/etcd loaders)
-//! carries an OPERATOR-AUTHORED document. A controller-resolved document
+//! **Invariant this hook relies on**: every gated ingress (the K8s watcher)
+//! carries an OPERATOR-AUTHORED document. Admin API writes and FS/etcd loaders
+//! run the same checker at their raw-document seams without using this gate.
+//! A controller-resolved document
 //! (one carrying a populated `#[schemars(skip)]` field such as
 //! `policy_action` or a plugin's `resolved_*` credential map) travels only
 //! over conf_sync to the gateway, where the gate is always `false`. If a
@@ -27,6 +29,7 @@ use super::{set_strict_ingest, strict_ingest_enabled};
 use crate::resources::edgion_config_data::EdgionConfigDataSpec;
 use crate::resources::edgion_plugins::EdgionPluginsSpec;
 use crate::resources::edgion_stream_plugins::EdgionStreamPluginsSpec;
+use crate::resources::link_sys::{link_sys_spec_schema, LinkSysSpec, SystemConfig};
 
 /// Serializes every test in this module that touches the gate.
 static GATE_LOCK: Mutex<()> = Mutex::new(());
@@ -95,7 +98,7 @@ fn gate_on_reports_exact_path_for_plugin_config_typo() {
 
 // ============================================================
 // Test 3 — gate ON: EdgionStreamPluginsSpec with a typo in a stream plugin
-// config is reported too (R-6: the L4 resource gets the same hook).
+// config is reported too, proving the L4 resource gets the same hook.
 // ============================================================
 
 #[test]
@@ -263,6 +266,84 @@ fn config_data_gate_on_captures_typed_typo_and_skips_serialization() {
 }
 
 #[test]
+fn config_data_url_allow_list_typo_is_advisory_with_gate_off_and_on() {
+    let cases = [
+        (
+            json!({
+                "data": {"type": "RequestAccessUrlAllowList", "config": {"items": [], "itemz": []}}
+            }),
+            "data.config.itemz",
+        ),
+        (
+            json!({
+                "data": {"type": "RequestAccessUrlAllowList", "config": {"items": [{
+                    "name": "health", "hosts": ["api.example.com"], "hostz": [],
+                    "paths": [{"type": "Exact", "value": "/health"}], "allOf": []
+                }]}}
+            }),
+            "data.config.items[0].hostz",
+        ),
+        (
+            json!({
+                "data": {"type": "RequestAccessUrlAllowList", "config": {"items": [{
+                    "name": "health", "hosts": ["api.example.com"],
+                    "paths": [{"type": "Exact", "value": "/health", "valuez": "/ignored"}], "allOf": []
+                }]}}
+            }),
+            "data.config.items[0].paths[0].valuez",
+        ),
+        (
+            json!({
+                "data": {"type": "RequestAccessUrlAllowList", "config": {"items": [{
+                    "name": "health", "hosts": ["api.example.com"],
+                    "paths": [{"type": "Exact", "value": "/health"}],
+                    "allOf": [{"type": "directPeerIpMatch", "ips": ["192.0.2.0/24"], "ipsz": []}]
+                }]}}
+            }),
+            "data.config.items[0].allOf[0].ipsz",
+        ),
+    ];
+
+    for (doc, expected) in cases {
+        {
+            let _guard = GateGuard::set(&GATE_LOCK, false);
+            let spec: EdgionConfigDataSpec =
+                serde_json::from_value(doc.clone()).expect("gate-off typed ConfigData must remain deserializable");
+            assert!(spec.unknown_fields.is_empty());
+        }
+
+        let _guard = GateGuard::set(&GATE_LOCK, true);
+        let spec: EdgionConfigDataSpec =
+            serde_json::from_value(doc).expect("gate-on typed ConfigData must report rather than reject the typo");
+        assert_eq!(spec.unknown_fields, [expected]);
+    }
+}
+
+#[test]
+fn config_data_url_allow_list_keeps_secret_match_strict() {
+    let doc = json!({
+        "data": {"type": "RequestAccessUrlAllowList", "config": {"items": [{
+            "name": "health", "hosts": ["api.example.com"],
+            "paths": [{"type": "Exact", "value": "/health"}],
+            "allOf": [{
+                "type": "secretMatch",
+                "key": {"type": "header", "name": "X-Access-Key"},
+                "secretRef": {"name": "access-secret"},
+                "unexpectedCredentialField": true
+            }]
+        }]}}
+    });
+
+    for gate in [false, true] {
+        let _guard = GateGuard::set(&GATE_LOCK, gate);
+        assert!(
+            serde_json::from_value::<EdgionConfigDataSpec>(doc.clone()).is_err(),
+            "credential/auth sub-structures must remain strict with gate={gate}"
+        );
+    }
+}
+
+#[test]
 fn config_data_misc_is_open_under_gated_ingest() {
     let _guard = GateGuard::set(&GATE_LOCK, true);
     let spec: EdgionConfigDataSpec = serde_json::from_value(json!({
@@ -270,4 +351,90 @@ fn config_data_misc_is_open_under_gated_ingest() {
     }))
     .expect("Misc accepts arbitrary JSON");
     assert!(spec.unknown_fields.is_empty());
+}
+
+#[test]
+fn link_sys_gate_off_and_on_preserve_advisory_semantics() {
+    let doc = json!({
+        "type": "redis",
+        "config": {"endpoints": ["redis://127.0.0.1:6379"], "timeout": {"conect": 10}}
+    });
+
+    {
+        let _guard = GateGuard::set(&GATE_LOCK, false);
+        let spec: LinkSysSpec = serde_json::from_value(doc.clone()).expect("gate-off LinkSys parses");
+        assert!(spec.unknown_fields.is_empty());
+    }
+
+    let _guard = GateGuard::set(&GATE_LOCK, true);
+    let spec: LinkSysSpec = serde_json::from_value(doc).expect("gate-on LinkSys remains accepted");
+    assert_eq!(spec.unknown_fields, ["config.timeout.conect"]);
+    let serialized = serde_json::to_value(&spec).expect("LinkSysSpec serializes");
+    assert!(serialized.get("unknownFields").is_none());
+    assert!(serialized.get("unknown_fields").is_none());
+    fn has_property(value: &serde_json::Value, property: &str) -> bool {
+        match value {
+            serde_json::Value::Object(object) => {
+                object
+                    .get("properties")
+                    .and_then(serde_json::Value::as_object)
+                    .is_some_and(|properties| properties.contains_key(property))
+                    || object.values().any(|child| has_property(child, property))
+            }
+            serde_json::Value::Array(array) => array.iter().any(|child| has_property(child, property)),
+            _ => false,
+        }
+    }
+    assert!(!has_property(link_sys_spec_schema().as_value(), "unknown_fields"));
+    assert!(!has_property(link_sys_spec_schema().as_value(), "unknownFields"));
+}
+
+#[test]
+fn link_sys_strict_credential_boundary_is_unchanged_by_gate() {
+    let doc = json!({
+        "type": "redis",
+        "config": {
+            "endpoints": ["redis://127.0.0.1:6379"],
+            "auth": {"secretRef": {"name": "redis-creds"}, "bogus": true}
+        }
+    });
+
+    for enabled in [false, true] {
+        let _guard = GateGuard::set(&GATE_LOCK, enabled);
+        assert!(
+            serde_json::from_value::<LinkSysSpec>(doc.clone()).is_err(),
+            "strict RedisAuth must reject an unknown credential field with gate={enabled}"
+        );
+    }
+}
+
+#[test]
+fn link_sys_resolved_secret_is_transport_only_and_not_recursed() {
+    let doc = json!({
+        "type": "webhook",
+        "config": {
+            "target": {"kind": "Service", "name": "resolver", "port": 8080},
+            "resolvedSecrets": {"default/token:key": "private-value"}
+        }
+    });
+
+    {
+        let _guard = GateGuard::set(&GATE_LOCK, false);
+        let spec: LinkSysSpec = serde_json::from_value(doc.clone()).expect("transport input parses with gate off");
+        let SystemConfig::Webhook(webhook) = &spec.config else {
+            panic!("expected webhook config");
+        };
+        assert_eq!(
+            webhook
+                .resolved_secrets
+                .as_ref()
+                .and_then(|values| values.0.get("default/token:key"))
+                .map(String::as_str),
+            Some("private-value")
+        );
+    }
+
+    let _guard = GateGuard::set(&GATE_LOCK, true);
+    let spec: LinkSysSpec = serde_json::from_value(doc).expect("gated boundary input still parses");
+    assert_eq!(spec.unknown_fields, ["config.resolvedSecrets"]);
 }

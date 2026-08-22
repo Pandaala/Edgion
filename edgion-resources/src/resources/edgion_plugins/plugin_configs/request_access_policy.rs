@@ -121,7 +121,7 @@ pub struct IpAccessRuleConfig {
 
 /// Inline and referenced IP ranges evaluated as one union.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct IpAccessMatch {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ips: Vec<String>,
@@ -161,7 +161,7 @@ pub struct UrlAccessRuleConfig {
 
 /// One named URL candidate stored in RequestAccessUrlAllowList ConfigData.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct UrlAccessCandidate {
     pub name: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -206,7 +206,7 @@ impl Default for UrlAllowListRefValidation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct AccessPathMatch {
     #[serde(rename = "type")]
     pub match_type: AccessPathMatchType,

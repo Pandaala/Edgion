@@ -142,14 +142,14 @@ pub(crate) fn classify(conditions: &[Condition]) -> Option<(Vec<ConditionRef>, V
     let mut err_list = Vec::new();
     let mut warn_list = Vec::new();
     for c in conditions {
-        // NOTE: `UnknownConfigFields` (tasks/todo/plugin-config-unknown-field-detection)
-        // is deliberately ABSENT from this match, in both severities. It
+        // NOTE: `UnknownConfigFields` is deliberately ABSENT from this match,
+        // in both severities. It
         // reports an operator typo in a document that still syncs to the
         // data plane unchanged — not resource ill-health — so it must not
         // move the `edgion_controller_resource_abnormal` gauge the way
         // `PluginPolicyRestricted` does. The `_ => {}` arm below already
         // ignores it correctly; do not "complete" this match by adding an
-        // arm for it. See `05-issues.md` R-10, and
+        // arm for it. See
         // `status_metrics_test.rs::classify_tests::unknown_config_fields_true_produces_no_series`
         // for the pin.
         match (c.type_.as_str(), c.status.as_str()) {

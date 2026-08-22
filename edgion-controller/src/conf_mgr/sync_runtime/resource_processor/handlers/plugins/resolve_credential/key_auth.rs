@@ -162,6 +162,11 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     if let Some(ref mut plugins) = ep.spec.request_plugins {
         for entry in plugins.iter_mut() {
             if let EdgionPlugin::KeyAuth(ref mut config) = entry.plugin {
+                // This field is Controller-owned transport state. Never trust
+                // a value deserialized from the operator-facing resource, and
+                // do not retain credentials from a previous resolution pass.
+                config.resolved_keys = None;
+
                 let Some(ref groups) = config.secret_groups else {
                     continue;
                 };

@@ -169,9 +169,8 @@ where
     })
 }
 
-/// Report unknown keys in `content`'s `spec`, for the Admin API write path
-/// (item 2 of `tasks/todo/plugin-config-unknown-field-detection/02-implementation.md`
-/// §11 / R-11). This is the fourth ingress that hook covers: the raw body is
+/// Report unknown keys in `content`'s `spec`, for the Admin API write path.
+/// This is the fourth ingress that hook covers: the raw body is
 /// right here at the handler, so no `Value` round-trip hook or gate is
 /// needed — unlike the Kubernetes watcher, this always runs.
 ///
@@ -182,13 +181,14 @@ where
 /// typed resource one line earlier (via `parse_resource_and_update_version`),
 /// so re-parsing it here as `Value` should never fail in practice — but if it
 /// does, this returns an empty list rather than failing the write, matching
-/// the non-fatal contract the FS/etcd loader seam uses (R-2). The write must
-/// never be blocked by this diagnostic (§10 — warn, never reject).
+/// the non-fatal contract the FS/etcd loader seam uses. The write must never
+/// be blocked by this diagnostic: unknown-field detection warns, never rejects.
 pub fn unknown_field_warnings(kind: ResourceKind, content: &str) -> Vec<String> {
     let schema = match kind {
         ResourceKind::EdgionPlugins => edgion_resources::edgion_plugins_spec_schema(),
         ResourceKind::EdgionStreamPlugins => edgion_resources::edgion_stream_plugins_spec_schema(),
         ResourceKind::EdgionConfigData => edgion_resources::edgion_config_data_spec_schema(),
+        ResourceKind::LinkSys => edgion_resources::link_sys_spec_schema(),
         _ => return Vec::new(),
     };
     let Ok(document) = parse_resource::<serde_json::Value>(content) else {

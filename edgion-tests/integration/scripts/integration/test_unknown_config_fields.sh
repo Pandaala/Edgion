@@ -9,7 +9,7 @@
 #   1. apply an EdgionPlugins fixture with `config.denys` (typo for `deny`);
 #      assert the diagnostics endpoint reports exactly
 #      `requestPlugins[0].config.denys`, that the resource is still
-#      `Accepted: True` (warn-not-reject, decision D-4 / 05-issues.md R-12),
+#      `Accepted: True` (the warn-not-reject contract),
 #      and that an `UnknownConfigFields` status condition is present;
 #   2. apply a ForwardAuth fixture with `successStatusCodes` -- a key that no
 #      longer exists, AND one `deny_unknown_fields` structurally cannot catch
@@ -20,14 +20,15 @@
 #   4. apply a typed EdgionConfigData `Selector` with `descripton`; assert it
 #      is reported, then apply a `Misc` payload with arbitrary nested keys and
 #      assert the open escape hatch stays clean;
-#   5. overwrite all four typo fixtures with corrected YAML; assert the diagnostics
+#   5. apply a Redis LinkSys fixture with a nested timeout typo; assert the
+#      diagnostic and advisory-only status behavior;
+#   6. overwrite all five typo fixtures with corrected YAML; assert the diagnostics
 #      endpoint drains to `total: 0` AND the `UnknownConfigFields` condition
 #      is REMOVED from each resource's status (proves the upsert-and-remove
 #      discipline, not just upsert);
-#   6. delete the resources; assert no ghost entries remain;
-#   7. exercise `POST /api/v1/validate/EdgionConfigData` once: a typo'd document
-#      returns `ok: false` with the exact path, and nothing is persisted by
-#      that call (the resource must not appear in the store afterwards).
+#   7. delete the resources; assert no ghost entries remain;
+#   8. exercise the read-only validate endpoint for EdgionConfigData and LinkSys;
+#      each typo returns `ok: false` with the exact path and persists nothing.
 #
 # Uses the FileSystem backend, no gateway, no K8s -- modeled on
 # test_resource_abnormal_metrics.sh.
@@ -79,6 +80,7 @@ FA_NAME="uf-fa"
 SP_NAME="uf-sp"
 CD_NAME="uf-cd"
 MISC_NAME="uf-misc"
+LS_NAME="uf-ls"
 
 CONTROLLER_PID=""
 TEST_PASSED=0
@@ -352,23 +354,39 @@ wait_for_diag_total 4 "after open Misc ConfigData apply"
 MISC_STATUS=$(status_file_for EdgionConfigData "$NS" "$MISC_NAME")
 wait_condition_status "$MISC_STATUS" "UnknownConfigFields" "ABSENT" "uf-misc remains free-form"
 
-log_section "Test 5: corrected YAML drains diagnostics to zero and removes the condition"
+log_section "Test 5: LinkSys nested provider typo reported; Accepted stays True"
+cp "${FIXTURE_DIR}/LinkSys_edgion-test_uf-ls.yaml" "${CONF_WATCH_DIR}/"
+wait_for_diag_total 5 "after LinkSys typo apply"
+assert_item_reported "LinkSys" "$NS" "$LS_NAME" "config.timeout.conect"
+LS_STATUS=$(status_file_for LinkSys "$NS" "$LS_NAME")
+wait_condition_status "$LS_STATUS" "UnknownConfigFields" "True" "uf-ls UnknownConfigFields present"
+ls_accepted=$(condition_status "$LS_STATUS" "Accepted")
+if [ "$ls_accepted" != "True" ]; then
+    log_error "uf-ls Accepted=${ls_accepted}, expected True (warn-not-reject must not affect Accepted)"
+    exit 1
+fi
+log_success "uf-ls Accepted=True (warn-not-reject holds)"
+
+log_section "Test 6: corrected YAML drains diagnostics to zero and removes the condition"
 cp "${FIXTURE_DIR}/EdgionPlugins_edgion-test_uf-ipr.fixed.yaml" "${CONF_WATCH_DIR}/EdgionPlugins_${NS}_${IPR_NAME}.yaml"
 cp "${FIXTURE_DIR}/EdgionPlugins_edgion-test_uf-fa.fixed.yaml" "${CONF_WATCH_DIR}/EdgionPlugins_${NS}_${FA_NAME}.yaml"
 cp "${FIXTURE_DIR}/EdgionStreamPlugins_edgion-test_uf-sp.fixed.yaml" "${CONF_WATCH_DIR}/EdgionStreamPlugins_${NS}_${SP_NAME}.yaml"
 cp "${FIXTURE_DIR}/EdgionConfigData_edgion-test_uf-cd.fixed.yaml" "${CONF_WATCH_DIR}/EdgionConfigData_${NS}_${CD_NAME}.yaml"
-wait_for_diag_total 0 "after all four typo fixtures fixed"
+cp "${FIXTURE_DIR}/LinkSys_edgion-test_uf-ls.fixed.yaml" "${CONF_WATCH_DIR}/LinkSys_${NS}_${LS_NAME}.yaml"
+wait_for_diag_total 0 "after all five typo fixtures fixed"
 wait_condition_status "$IPR_STATUS" "UnknownConfigFields" "ABSENT" "uf-ipr UnknownConfigFields removed"
 wait_condition_status "$FA_STATUS" "UnknownConfigFields" "ABSENT" "uf-fa UnknownConfigFields removed"
 wait_condition_status "$SP_STATUS" "UnknownConfigFields" "ABSENT" "uf-sp UnknownConfigFields removed"
 wait_condition_status "$CD_STATUS" "UnknownConfigFields" "ABSENT" "uf-cd UnknownConfigFields removed"
+wait_condition_status "$LS_STATUS" "UnknownConfigFields" "ABSENT" "uf-ls UnknownConfigFields removed"
 
-log_section "Test 6: delete resources — no ghost entries"
+log_section "Test 7: delete resources — no ghost entries"
 rm -f "${CONF_WATCH_DIR}/EdgionPlugins_${NS}_${IPR_NAME}.yaml"
 rm -f "${CONF_WATCH_DIR}/EdgionPlugins_${NS}_${FA_NAME}.yaml"
 rm -f "${CONF_WATCH_DIR}/EdgionStreamPlugins_${NS}_${SP_NAME}.yaml"
 rm -f "${CONF_WATCH_DIR}/EdgionConfigData_${NS}_${CD_NAME}.yaml"
 rm -f "${CONF_WATCH_DIR}/EdgionConfigData_${NS}_${MISC_NAME}.yaml"
+rm -f "${CONF_WATCH_DIR}/LinkSys_${NS}_${LS_NAME}.yaml"
 wait_for_diag_total 0 "after delete (no ghosts)"
 snapshot_after_delete=$(diag_snapshot)
 if [ "$(echo "$snapshot_after_delete" | wc -l | tr -d ' ')" != "1" ]; then
@@ -378,7 +396,7 @@ if [ "$(echo "$snapshot_after_delete" | wc -l | tr -d ' ')" != "1" ]; then
 fi
 log_success "no ghost entries after delete"
 
-log_section "Test 7: POST /api/v1/validate/EdgionConfigData reports without persisting"
+log_section "Test 8: validate endpoints report without persisting"
 VALIDATE_BODY='{
   "apiVersion": "edgion.io/v1",
   "kind": "EdgionConfigData",
@@ -400,8 +418,10 @@ import json, sys
 doc = json.load(sys.stdin)
 data = doc.get("data") or {}
 ok = data.get("ok")
+check = data.get("unknownFieldCheck")
 fields = data.get("unknownFields") or []
 assert ok is False, f"expected ok=False, got {ok!r}"
+assert check == "performed", f"expected performed, got {check!r}"
 assert fields == ["data.config.descripton"], f"expected exact path, got {fields!r}"
 print("OK: validate reported ok=False with exact path", fields)
 '
@@ -420,6 +440,47 @@ if [ "$final_total" != "0" ]; then
     exit 1
 fi
 log_success "validate call persisted nothing (conf dir and diagnostics registry unchanged)"
+
+LINKSYS_VALIDATE_BODY='{
+  "apiVersion": "edgion.io/v1",
+  "kind": "LinkSys",
+  "metadata": {"name": "uf-ls-validate-only", "namespace": "'"$NS"'"},
+  "spec": {
+    "type": "redis",
+    "config": {"endpoints": [], "timeout": {"conect": 1000}}
+  }
+}'
+linksys_validate_resp=$(curl -sf -m 10 -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -X POST --data "$LINKSYS_VALIDATE_BODY" \
+    "${ADMIN_URL}/api/v1/validate/LinkSys" 2>/dev/null)
+if [ -z "$linksys_validate_resp" ]; then
+    log_error "POST /api/v1/validate/LinkSys did not respond"
+    exit 1
+fi
+echo "$linksys_validate_resp" | python3 -c '
+import json, sys
+doc = json.load(sys.stdin)
+data = doc.get("data") or {}
+ok = data.get("ok")
+check = data.get("unknownFieldCheck")
+fields = data.get("unknownFields") or []
+assert ok is False, f"expected ok=False, got {ok!r}"
+assert check == "performed", f"expected performed, got {check!r}"
+assert fields == ["config.timeout.conect"], f"expected exact path, got {fields!r}"
+print("OK: LinkSys validate reported ok=False with exact path", fields)
+'
+if find "${CONF_WATCH_DIR}" -iname "*uf-ls-validate-only*" | grep -q .; then
+    log_error "LinkSys validate call persisted a file to the conf dir"
+    find "${CONF_WATCH_DIR}" -iname "*uf-ls-validate-only*"
+    exit 1
+fi
+if [ "$(diag_total)" != "0" ]; then
+    log_error "diagnostics total changed after read-only LinkSys validate"
+    diag_snapshot
+    exit 1
+fi
+log_success "LinkSys validate call persisted nothing"
 
 log_section "PASS"
 TEST_PASSED=1

@@ -26,7 +26,7 @@ pub use redis::RedisClientConfig;
 pub use webhook::WebhookServiceConfig;
 
 /// LinkSys defines connections to external systems
-#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(CustomResource, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
     group = "edgion.io",
     version = "v1",
@@ -40,6 +40,52 @@ pub struct LinkSysSpec {
     /// System configuration
     #[serde(flatten)]
     pub config: SystemConfig,
+
+    /// Unrecognized key paths found in the submitted document. Populated only on
+    /// operator-authored ingest paths; never serialized and never exposed in the
+    /// CRD schema.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub unknown_fields: Vec<String>,
+}
+
+/// Deserialize-only mirror of [`LinkSysSpec`]. `unknown_fields` is derived
+/// from the submitted document and therefore is intentionally absent.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LinkSysSpecShadow {
+    #[serde(flatten)]
+    config: SystemConfig,
+}
+
+impl From<LinkSysSpecShadow> for LinkSysSpec {
+    fn from(shadow: LinkSysSpecShadow) -> Self {
+        Self {
+            config: shadow.config,
+            unknown_fields: Vec::new(),
+        }
+    }
+}
+
+/// Cached production schema used by all LinkSys unknown-key checks.
+pub fn link_sys_spec_schema() -> &'static schemars::Schema {
+    static SCHEMA: std::sync::OnceLock<schemars::Schema> = std::sync::OnceLock::new();
+    SCHEMA.get_or_init(|| schemars::schema_for!(LinkSysSpec))
+}
+
+impl<'de> Deserialize<'de> for LinkSysSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if !crate::schema_check::strict_ingest_enabled() {
+            return Ok(LinkSysSpecShadow::deserialize(deserializer)?.into());
+        }
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let unknown = crate::schema_check::unknown_key_paths(&value, link_sys_spec_schema());
+        let mut spec: Self = LinkSysSpecShadow::deserialize(value)
+            .map_err(serde::de::Error::custom)?
+            .into();
+        spec.unknown_fields = unknown;
+        Ok(spec)
+    }
 }
 
 /// System configuration enum

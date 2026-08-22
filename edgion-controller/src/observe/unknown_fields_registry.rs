@@ -1,10 +1,10 @@
 //! Fleet-wide registry of `unknown_fields` findings for `EdgionPlugins`,
-//! `EdgionStreamPlugins`, and `EdgionConfigData`, read live by
+//! `EdgionStreamPlugins`, `EdgionConfigData`, and `LinkSys`, read live by
 //! `GET /api/v1/diagnostics/unknown-fields`
 //! (`api/diagnostics_handlers.rs`).
 //!
-//! `unknown_fields` is `#[serde(skip)]` on the resource specs (deliberately —
-//! see `tasks/todo/plugin-config-unknown-field-detection/05-issues.md` R-3),
+//! `unknown_fields` is `#[serde(skip)]` on the resource specs (deliberately;
+//! see `skills/01-architecture/01-controller/02-admin-api.md`),
 //! so it is invisible through `AdminState::center_list_resources`, which
 //! re-serializes the typed object to JSON. This module reads the typed
 //! `RawStore` directly instead, mirroring
@@ -156,7 +156,7 @@ static TEST_MUTEX: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 /// right after the `RawStore` is wired.
 ///
 /// A no-op for every kind except `EdgionPlugins`, `EdgionStreamPlugins`, and
-/// `EdgionConfigData` — the resources carrying an `unknown_fields` field — so the other
+/// `EdgionConfigData`, and `LinkSys` — the resources carrying an `unknown_fields` field — so the other
 /// ~20 kinds pay only a string compare and never occupy a registry slot.
 pub(crate) fn register_unknown_fields_source<K>(kind: &'static str, store: Arc<dyn RawStore<K>>)
 where
@@ -213,6 +213,24 @@ where
                 }
             }
         }),
+        "LinkSys" => Box::new(move |out: &mut BoundedCollector| {
+            for obj in store.snapshot() {
+                let any: Arc<dyn Any + Send + Sync> = obj;
+                let Ok(link_sys) = any.downcast::<edgion_resources::LinkSys>() else {
+                    continue;
+                };
+                if !link_sys.spec.unknown_fields.is_empty() {
+                    out.push(UnknownFieldsEntry {
+                        kind: "LinkSys",
+                        namespace: bounded_resource_identity(
+                            link_sys.metadata.namespace.as_deref().unwrap_or_default(),
+                        ),
+                        name: bounded_resource_identity(link_sys.metadata.name.as_deref().unwrap_or_default()),
+                        paths: bounded_unknown_field_paths(&link_sys.spec.unknown_fields),
+                    });
+                }
+            }
+        }),
         _ => return,
     };
     // Keyed by `kind`: a reload-time second call for the same kind drops the
@@ -224,8 +242,7 @@ where
 /// Run every registered source, collect findings, sort for determinism, and
 /// cap the result. Returns `(total_before_cap, truncated, items)`.
 ///
-/// Sorting mirrors the walker's own determinism rule
-/// (`schema_check` / `05-issues.md` R-5): output must not depend on
+/// Sorting mirrors the walker's own determinism rule: output must not depend on
 /// `HashMap` iteration order or on `RawStore::snapshot`'s unspecified order.
 pub(crate) fn collect_unknown_fields(cap: usize) -> (usize, bool, Vec<UnknownFieldsEntry>) {
     let mut collector = BoundedCollector::new(cap);
@@ -262,7 +279,7 @@ pub(crate) fn collect_unknown_fields(cap: usize) -> (usize, bool, Vec<UnknownFie
 // both diagnostics and `/metrics` perform the same cheap live scan on demand.
 
 pub(crate) const METRIC_NAME: &str = "edgion_controller_unknown_config_fields";
-pub(crate) const METRIC_HELP: &str = "Resources whose submitted document contains a key the EdgionPlugins, EdgionStreamPlugins, or EdgionConfigData schema does not recognize, aggregated by resource kind. Detailed findings are available from GET /api/v1/diagnostics/unknown-fields. Advisory only; does not affect Accepted or block sync.";
+pub(crate) const METRIC_HELP: &str = "Resources whose submitted document contains a key the EdgionPlugins, EdgionStreamPlugins, EdgionConfigData, or LinkSys schema does not recognize, aggregated by resource kind. Detailed findings are available from GET /api/v1/diagnostics/unknown-fields. Advisory only; does not affect Accepted or block sync.";
 
 /// Render the `edgion_controller_unknown_config_fields` Prometheus text
 /// block: one series per supported kind,
@@ -307,7 +324,7 @@ mod tests {
     use crate::conf_mgr::sync_runtime::resource_processor::LocalRawStore;
     use edgion_resources::{
         EdgionConfigData, EdgionConfigDataSpec, EdgionPlugins, EdgionPluginsSpec, EdgionStreamPlugins,
-        EdgionStreamPluginsSpec,
+        EdgionStreamPluginsSpec, LinkSys, LinkSysSpec,
     };
 
     fn reset() {
@@ -343,6 +360,17 @@ mod tests {
         data.metadata.namespace = Some(ns.to_string());
         data.spec.unknown_fields = paths;
         Arc::new(data)
+    }
+
+    fn link_sys_with_findings(ns: &str, name: &str, paths: Vec<String>) -> Arc<LinkSys> {
+        let spec: LinkSysSpec = serde_json::from_value(serde_json::json!({
+            "type": "redis", "config": {"endpoints": []}
+        }))
+        .expect("minimal LinkSys spec");
+        let mut link_sys = LinkSys::new(name, spec);
+        link_sys.metadata.namespace = Some(ns.to_string());
+        link_sys.spec.unknown_fields = paths;
+        Arc::new(link_sys)
     }
 
     #[test]
@@ -381,14 +409,22 @@ mod tests {
         );
         register_unknown_fields_source::<EdgionConfigData>("EdgionConfigData", config_data_store);
 
+        let link_sys_store = Arc::new(LocalRawStore::<LinkSys>::new());
+        link_sys_store.upsert(
+            "default/redis".into(),
+            link_sys_with_findings("default", "redis", vec!["config.timeout.conect".into()]),
+        );
+        register_unknown_fields_source::<LinkSys>("LinkSys", link_sys_store);
+
         let (total, truncated, items) = collect_unknown_fields(100);
-        assert_eq!(total, 3);
+        assert_eq!(total, 4);
         assert!(!truncated);
-        assert_eq!(items.len(), 3);
+        assert_eq!(items.len(), 4);
         assert_eq!(items[0].kind, "EdgionConfigData");
         assert_eq!(items[0].paths, vec!["data.config.items[0].cidrz".to_string()]);
         assert_eq!(items[1].kind, "EdgionPlugins");
         assert_eq!(items[2].kind, "EdgionStreamPlugins");
+        assert_eq!(items[3].kind, "LinkSys");
     }
 
     #[test]
@@ -585,7 +621,7 @@ mod tests {
             let block = render_unknown_config_fields_metric();
             let expected = concat!(
                 "# HELP edgion_controller_unknown_config_fields ",
-                "Resources whose submitted document contains a key the EdgionPlugins, EdgionStreamPlugins, or EdgionConfigData schema does not recognize, aggregated by resource kind. Detailed findings are available from GET /api/v1/diagnostics/unknown-fields. Advisory only; does not affect Accepted or block sync.\n",
+                "Resources whose submitted document contains a key the EdgionPlugins, EdgionStreamPlugins, EdgionConfigData, or LinkSys schema does not recognize, aggregated by resource kind. Detailed findings are available from GET /api/v1/diagnostics/unknown-fields. Advisory only; does not affect Accepted or block sync.\n",
                 "# TYPE edgion_controller_unknown_config_fields gauge\n",
                 "edgion_controller_unknown_config_fields{kind=\"EdgionPlugins\"} 1\n",
             );
@@ -625,7 +661,7 @@ mod tests {
         }
 
         #[test]
-        fn three_kinds_each_get_their_own_series() {
+        fn four_kinds_each_get_their_own_series() {
             let _guard = TEST_MUTEX.lock();
             reset();
 
@@ -650,12 +686,20 @@ mod tests {
             );
             register_unknown_fields_source::<EdgionConfigData>("EdgionConfigData", config_data_store);
 
+            let link_sys_store = Arc::new(LocalRawStore::<LinkSys>::new());
+            link_sys_store.upsert(
+                "default/redis".into(),
+                link_sys_with_findings("default", "redis", vec!["config.timeout.conect".into()]),
+            );
+            register_unknown_fields_source::<LinkSys>("LinkSys", link_sys_store);
+
             let block = render_unknown_config_fields_metric();
             let samples: Vec<&str> = block.lines().filter(|l| !l.starts_with('#')).collect();
-            assert_eq!(samples.len(), 3, "at most one series per kind: {block}");
+            assert_eq!(samples.len(), 4, "at most one series per kind: {block}");
             assert!(samples[0].starts_with("edgion_controller_unknown_config_fields{kind=\"EdgionConfigData\""));
             assert!(samples[1].starts_with("edgion_controller_unknown_config_fields{kind=\"EdgionPlugins\""));
             assert!(samples[2].starts_with("edgion_controller_unknown_config_fields{kind=\"EdgionStreamPlugins\""));
+            assert!(samples[3].starts_with("edgion_controller_unknown_config_fields{kind=\"LinkSys\""));
         }
 
         #[test]

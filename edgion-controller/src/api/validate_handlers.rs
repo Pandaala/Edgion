@@ -3,8 +3,7 @@
 //! it themselves (a `ValidatingAdmissionWebhook`, a CI check, a GitOps
 //! pre-merge step) instead of relying on the controller, which never rejects
 //! a resource for a schema/config-key mismatch (warn-not-reject policy, see
-//! `tasks/todo/plugin-config-unknown-field-detection/02-implementation.md`
-//! §10 / §11).
+//! `skills/01-architecture/01-controller/02-admin-api.md`).
 //!
 //! Reuses exactly what the Admin API write path already does, minus the
 //! write:
@@ -19,7 +18,7 @@
 //!    deliberate: a validation *query* should answer fully regardless of who
 //!    else validates in production;
 //! 4. the unknown-field walk on the raw document, via
-//!    [`unknown_field_warnings`] (Phase 2b, `api/common.rs`).
+//!    [`unknown_field_warnings`] from the Admin write path (`api/common.rs`).
 //!
 //! `validationErrors` additionally carries `EdgionPlugins::validate_plugins()`
 //! output for that one kind — the same preparse business-rule check the
@@ -84,7 +83,7 @@ pub async fn validate_kind(
     // Steps 2+3: typed parse (no version bump, nothing persisted) then
     // schema validation, per concrete resource type. `update_version: false`
     // is the `parse_resource_and_update_version` contract for a read-only
-    // caller (`02-implementation.md` §11 item 2).
+    // caller.
     let json_value: serde_json::Value = match kind {
         ResourceKind::HTTPRoute => parse_and_serialize::<HTTPRoute>(&content)?,
         ResourceKind::GRPCRoute => parse_and_serialize::<GRPCRoute>(&content)?,
@@ -120,11 +119,12 @@ pub async fn validate_kind(
     // returns an empty list for any kind without a wired schema, so the
     // `unknown_field_check` discriminator is computed independently to keep
     // "checked, clean" distinguishable from "not checked" (the honesty
-    // requirement in `02-implementation.md` §11).
+    // requirement of the public validation response contract).
     let (unknown_field_check, unknown_fields) = match kind {
-        ResourceKind::EdgionPlugins | ResourceKind::EdgionStreamPlugins | ResourceKind::EdgionConfigData => {
-            ("performed", unknown_field_warnings(kind, &content))
-        }
+        ResourceKind::EdgionPlugins
+        | ResourceKind::EdgionStreamPlugins
+        | ResourceKind::EdgionConfigData
+        | ResourceKind::LinkSys => ("performed", unknown_field_warnings(kind, &content)),
         _ => ("unsupported", Vec::new()),
     };
 
@@ -282,6 +282,75 @@ mod tests {
         assert!(misc.ok);
         assert_eq!(misc.unknown_field_check, "performed");
         assert!(misc.unknown_fields.is_empty());
+    }
+
+    #[tokio::test]
+    async fn url_allow_list_nested_typo_reaches_advisory_validation_result() {
+        let (state, _tmp) = make_state().await;
+        let body = Bytes::from(
+            r#"{
+                "apiVersion":"edgion.io/v1","kind":"EdgionConfigData",
+                "metadata":{"name":"urls","namespace":"default"},
+                "spec":{"data":{"type":"RequestAccessUrlAllowList","config":{"items":[{
+                    "name":"health","hosts":["api.example.com"],
+                    "paths":[{"type":"Exact","value":"/health","valuez":"/ignored"}],
+                    "allOf":[]
+                }]}}}
+            }"#,
+        );
+
+        let payload = validate_kind(State(state.clone()), Path("EdgionConfigData".to_string()), body)
+            .await
+            .expect("typed ConfigData typo must reach the advisory validator")
+            .0
+            .data
+            .expect("response data");
+
+        assert!(!payload.ok);
+        assert_eq!(payload.unknown_field_check, "performed");
+        assert_eq!(payload.unknown_fields, ["data.config.items[0].paths[0].valuez"]);
+
+        let clean = Bytes::from(
+            r#"{
+                "apiVersion":"edgion.io/v1","kind":"EdgionConfigData",
+                "metadata":{"name":"urls","namespace":"default"},
+                "spec":{"data":{"type":"RequestAccessUrlAllowList","config":{"items":[{
+                    "name":"health","hosts":["api.example.com"],
+                    "paths":[{"type":"Exact","value":"/health"}],"allOf":[]
+                }]}}}
+            }"#,
+        );
+        let clean = validate_kind(State(state), Path("EdgionConfigData".to_string()), clean)
+            .await
+            .expect("clean typed ConfigData must validate")
+            .0
+            .data
+            .expect("response data");
+        assert!(clean.ok);
+        assert_eq!(clean.unknown_field_check, "performed");
+        assert!(clean.unknown_fields.is_empty());
+    }
+
+    #[tokio::test]
+    async fn link_sys_typo_is_reported_without_persistence() {
+        let (state, tmp) = make_state().await;
+        let body = Bytes::from(
+            r#"{
+                "apiVersion":"edgion.io/v1","kind":"LinkSys",
+                "metadata":{"name":"redis","namespace":"default"},
+                "spec":{"type":"redis","config":{"endpoints":[],"timeout":{"conect":10}}}
+            }"#,
+        );
+        let payload = validate_kind(State(state), Path("LinkSys".to_string()), body)
+            .await
+            .expect("LinkSys validation succeeds")
+            .0
+            .data
+            .expect("response data");
+        assert!(!payload.ok);
+        assert_eq!(payload.unknown_field_check, "performed");
+        assert_eq!(payload.unknown_fields, ["config.timeout.conect"]);
+        assert!(std::fs::read_dir(tmp.path()).expect("read conf dir").next().is_none());
     }
 
     #[tokio::test]

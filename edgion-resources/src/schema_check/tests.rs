@@ -166,7 +166,7 @@ struct FreeFormHolder {
 
 #[test]
 fn free_form_map_config_is_silent() {
-    // Load-bearing: this is the only thing standing between the R-4
+    // Load-bearing: this is the only thing standing between the
     // "properties present, additionalProperties absent => closed" reading
     // and a flood of false positives on every genuinely free-form plugin
     // config (Wasm plugin_config, Dsl bytecode metadata, CtxSet transforms).
@@ -210,6 +210,7 @@ struct Recursive {
 
 use crate::resources::edgion_config_data::{edgion_config_data_spec_schema, EdgionConfigDataSpec};
 use crate::resources::edgion_plugins::plugin_configs::{MAX_JSON_INSTANCE_DEPTH, MAX_JSON_INSTANCE_NODES};
+use crate::resources::link_sys::link_sys_spec_schema;
 
 #[test]
 fn pathologically_deep_document_terminates_and_stays_bounded() {
@@ -458,6 +459,10 @@ fn config_data_typed_variants_report_exact_nested_paths() {
             "data.config.items[0].cidrz",
         ),
         (
+            json!({"data":{"type":"RequestAccessUrlAllowList","config":{"items":[{"name":"health","hosts":["api.example.com"],"paths":[{"type":"Exact","value":"/health","valuez":"/ignored"}],"allOf":[]}]}}}),
+            "data.config.items[0].paths[0].valuez",
+        ),
+        (
             json!({"data":{"type":"Selector","config":{"active":"lockdown","descriptin":"x"}}}),
             "data.config.descriptin",
         ),
@@ -482,6 +487,7 @@ fn config_data_clean_typed_variants_have_no_findings() {
     let cases = [
         json!({"data":{"type":"KeyList","config":{"matchMode":"exact","items":[{"name":"g","items":[{"key":"x"}]}]}}}),
         json!({"data":{"type":"IpList","config":{"items":[{"name":"g","cidrs":["10.0.0.0/8"]}]}}}),
+        json!({"data":{"type":"RequestAccessUrlAllowList","config":{"items":[{"name":"health","hosts":["api.example.com"],"paths":[{"type":"Exact","value":"/health"}],"allOf":[]}]}}}),
         json!({"data":{"type":"Selector","config":{"active":"lockdown","description":"x"}}}),
         json!({"data":{"type":"RegionRouteOverride","config":{"enable":true,"regions":null}}}),
     ];
@@ -537,7 +543,7 @@ fn config_data_generated_schema_keeps_only_misc_open() {
     let branches = schema["$defs"]["ConfigEntry"]["oneOf"]
         .as_array()
         .expect("ConfigEntry must remain an adjacent-tagged oneOf");
-    assert_eq!(branches.len(), 5);
+    assert_eq!(branches.len(), 6);
 
     for branch in branches {
         let variant = branch["properties"]["type"]["const"]
@@ -553,4 +559,58 @@ fn config_data_generated_schema_keeps_only_misc_open() {
             );
         }
     }
+}
+
+#[test]
+fn link_sys_schema_dispatches_all_provider_variants() {
+    for (provider, config) in [
+        ("redis", json!({"endpoints": []})),
+        ("etcd", json!({"endpoints": []})),
+        ("elasticsearch", json!({"endpoints": []})),
+        ("kafka", json!({"brokers": []})),
+        ("webhook", json!({})),
+        ("httpdns", json!({})),
+    ] {
+        let mut value = json!({"type": provider, "config": config});
+        assert!(
+            unknown_key_paths(&value, link_sys_spec_schema()).is_empty(),
+            "clean provider {provider} must not produce findings: {value}"
+        );
+        value["config"]["typo"] = json!(true);
+        assert_eq!(
+            unknown_key_paths(&value, link_sys_spec_schema()),
+            vec!["config.typo".to_string()],
+            "provider {provider} must select its typed config schema"
+        );
+    }
+}
+
+#[test]
+fn link_sys_reports_deep_typo_and_keeps_open_boundaries_quiet() {
+    let redis = json!({
+        "type": "redis",
+        "config": {
+            "endpoints": [],
+            "timeout": {"connect": 10, "conect": 20},
+            "observability": {"metrics": {"labels": {"team": "edge", "arbitrary": "value"}}}
+        }
+    });
+    assert_eq!(
+        unknown_key_paths(&redis, link_sys_spec_schema()),
+        vec!["config.timeout.conect".to_string()]
+    );
+
+    let webhook = json!({
+        "type": "webhook",
+        "config": {
+            "auth": {"legacy": {"anything": true}},
+            "defaultHeaders": {"X-Legacy": {"anything": true}},
+            "requestMethod": {"anything": true},
+            "unknownSibling": true
+        }
+    });
+    assert_eq!(
+        unknown_key_paths(&webhook, link_sys_spec_schema()),
+        vec!["config.unknownSibling".to_string()]
+    );
 }

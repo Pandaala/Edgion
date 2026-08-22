@@ -1,11 +1,11 @@
 //! Corpus sweep: walk every YAML fixture under `edgion-tests/integration/conf/` and run the
 //! `edgion_resources::schema_check` unknown-key walker against every `EdgionPlugins`,
-//! `EdgionStreamPlugins`, and `EdgionConfigData` document's `spec` in both the
+//! `EdgionStreamPlugins`, `EdgionConfigData`, and `LinkSys` document's `spec` in both the
 //! local-integration and Kubernetes configuration corpora.
 //!
-//! This is Phase 3 of `tasks/todo/plugin-config-unknown-field-detection/03-subtasks.md`. It
-//! replaces the throwaway prototype `edgion-resources/tests/tmp_corpus_smoke.rs`, which covered
-//! only `EdgionPlugins`; this test also covers `EdgionStreamPlugins` (`05-issues.md` R-6).
+//! This replaces the throwaway prototype `edgion-resources/tests/tmp_corpus_smoke.rs`, which
+//! covered only `EdgionPlugins`, with the supported-resource corpus guard described in
+//! `docs/en/ops-guide/plugin-config-unknown-fields.md`.
 //!
 //! No stack, no ports, no processes — this is a plain, fast `cargo test`.
 
@@ -14,13 +14,13 @@ use std::path::{Path, PathBuf};
 use edgion_resources::resources::edgion_config_data::edgion_config_data_spec_schema;
 use edgion_resources::resources::edgion_plugins::edgion_plugins_spec_schema;
 use edgion_resources::resources::edgion_stream_plugins::edgion_stream_plugins_spec_schema;
+use edgion_resources::resources::link_sys::link_sys_spec_schema;
 use edgion_resources::schema_check::unknown_key_paths;
 
 /// Path prefixes (relative to `edgion-tests/integration/conf/`) excluded from the sweep, each
 /// with a one-line reason. Reserved for fixtures that are deliberately malformed (negative
-/// tests) — see `05-issues.md` R-8. Phase 6 will add `Diagnostics/UnknownFields/` here for its
-/// negative-test fixtures; keep this list empty otherwise so a new exclusion stays deliberate
-/// and visible in review.
+/// tests). Keep this list empty otherwise so a new exclusion stays deliberate and visible in
+/// review.
 const EXCLUDED_PREFIXES: &[(&str, &str)] = &[
     // Empty by design. Deliberately-malformed fixtures do NOT belong in this
     // corpus at all: run_integration.sh loads the whole tree into a live
@@ -73,17 +73,22 @@ struct SweepResult {
     stream_docs: usize,
     integration_config_data_docs: usize,
     k8s_config_data_docs: usize,
+    integration_link_sys_docs: usize,
+    k8s_link_sys_docs: usize,
 }
 
 fn sweep() -> SweepResult {
     let plugins_schema = edgion_plugins_spec_schema();
     let stream_plugins_schema = edgion_stream_plugins_spec_schema();
     let config_data_schema = edgion_config_data_spec_schema();
+    let link_sys_schema = link_sys_spec_schema();
 
     let mut findings = Vec::new();
     let (mut http_docs, mut stream_docs) = (0usize, 0usize);
     let mut integration_config_data_docs = 0usize;
     let mut k8s_config_data_docs = 0usize;
+    let mut integration_link_sys_docs = 0usize;
+    let mut k8s_link_sys_docs = 0usize;
 
     for (corpus, relative_root) in [("integration/conf", "integration/conf"), ("k8s/conf", "k8s/conf")] {
         let conf_root = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_root);
@@ -136,6 +141,14 @@ fn sweep() -> SweepResult {
                         }
                         config_data_schema
                     }
+                    "LinkSys" => {
+                        if corpus == "integration/conf" {
+                            integration_link_sys_docs += 1;
+                        } else {
+                            k8s_link_sys_docs += 1;
+                        }
+                        link_sys_schema
+                    }
                     _ => continue,
                 };
                 let Some(spec) = value.get("spec") else { continue };
@@ -157,6 +170,8 @@ fn sweep() -> SweepResult {
         stream_docs,
         integration_config_data_docs,
         k8s_config_data_docs,
+        integration_link_sys_docs,
+        k8s_link_sys_docs,
     }
 }
 
@@ -168,6 +183,8 @@ fn conf_corpus_has_no_unknown_plugin_config_fields() {
         stream_docs,
         integration_config_data_docs,
         k8s_config_data_docs,
+        integration_link_sys_docs,
+        k8s_link_sys_docs,
     } = sweep();
 
     // Coverage floors, deliberately far below the real corpus size (300+ HTTP,
@@ -194,6 +211,16 @@ fn conf_corpus_has_no_unknown_plugin_config_fields() {
         "sweep matched no EdgionConfigData documents under k8s/conf — \
          the corpus moved, the kind string changed, or the exclusion list swallowed it"
     );
+    assert!(
+        integration_link_sys_docs >= 20,
+        "sweep matched only {integration_link_sys_docs} LinkSys documents under integration/conf — \
+         the corpus moved, the kind string changed, or the exclusion list swallowed it"
+    );
+    assert!(
+        k8s_link_sys_docs >= 5,
+        "sweep matched only {k8s_link_sys_docs} LinkSys documents under k8s/conf — \
+         the corpus moved, the kind string changed, or the exclusion list swallowed it"
+    );
 
     if findings.is_empty() {
         return;
@@ -210,8 +237,8 @@ fn conf_corpus_has_no_unknown_plugin_config_fields() {
          Each finding is either a stale/renamed key (fix the fixture), a key the fixture's \
          author believed was active (re-check the consuming integration test's expectation), \
          or a genuine schema/capability gap (do NOT invent the field — split into its own task). \
-         See tasks/todo/plugin-config-unknown-field-detection/03-subtasks.md (Phase 3) and \
-         05-issues.md (R-8) for the triage process and the exclusion-list mechanism.",
+         See this test's exclusion list and docs/en/ops-guide/plugin-config-unknown-fields.md \
+         for the triage contract.",
         lines.len(),
         lines.join("\n")
     );

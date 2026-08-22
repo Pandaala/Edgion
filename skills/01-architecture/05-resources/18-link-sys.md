@@ -85,12 +85,21 @@ Unlike the older "pass through directly", the new parse goes through the full **
 
 ### update_status
 
-Handler maintains two Gateway-API-style conditions in tandem:
+Handler maintains two Gateway-API-style validity/reference conditions plus one independent
+advisory condition:
 
 | Condition | True | False reasons |
 |-----------|------|----------------|
 | `Accepted` | spec is valid + `validate_config()` passes | `Invalid` (validation error list) |
 | `ResolvedRefs` | All secretRef / tls.secretRef are `Ok` | `SecretNotFound` / `RefNotPermitted` / `InvalidSecretType` / `MissingKeys` / `DecodeError` |
+
+`UnknownConfigFields=True/UnknownFieldsDetected` is added when the operator-authored document
+contains a key that the generated typed LinkSys schema does not recognize. It is removed after a
+clean reapply and never changes `Accepted`, `ResolvedRefs`, credential resolution, or conf_sync.
+The detector covers all six provider variants. Declared map values and arbitrary-JSON values remain
+open boundaries, while unknown siblings are still reported. The same findings are available through
+the Admin write warning, read-only validate endpoint, fleet diagnostics endpoint, and the bounded
+per-kind Controller metric.
 
 `SecretNotFound` / `RefNotPermitted` are **Pending** semantics (await self-heal); the rest are `Invalid` semantics (await human fix). The Controller automatically requeues based on change events from `SecretRefManager` / `ReferenceGrantStore`; the Handler does not need to retry manually.
 

@@ -303,9 +303,8 @@ impl PluginValidation for JwtAuthConfig {
 
         // 3. Final gate: anonymous or groups required
         let has_groups = self.issuer_groups.as_ref().is_some_and(|v| !v.is_empty());
-        let has_resolved = self.resolved_groups_by_iss.as_ref().is_some_and(|m| !m.is_empty());
-        if self.anonymous.is_none() && !has_groups && !has_resolved {
-            return Some("issuerGroups (or resolvedGroupsByIss) is required when anonymous is not set".to_string());
+        if self.anonymous.is_none() && !has_groups {
+            return Some("issuerGroups is required when anonymous is not set".to_string());
         }
 
         None
@@ -347,6 +346,34 @@ mod tests {
         assert!(
             msg.contains("issuerGroups"),
             "error message should mention issuerGroups, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_resolved_groups_cannot_replace_operator_issuer_groups() {
+        let cfg = JwtAuthConfig {
+            resolved_groups_by_iss: Some(HashMap::from([(
+                "https://injected.example".to_string(),
+                ResolvedJwtIssuerGroup {
+                    group: "injected".to_string(),
+                    algorithm: JwtAlgorithm::HS256,
+                    audiences: None,
+                    credentials: HashMap::from([(
+                        "kid".to_string(),
+                        ResolvedJwtCredential {
+                            key: Some("kid".to_string()),
+                            secret: Some("injected-secret".to_string()),
+                            public_key: None,
+                        },
+                    )]),
+                },
+            )])),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            cfg.validation_error(),
+            Some("issuerGroups is required when anonymous is not set".to_string())
         );
     }
 

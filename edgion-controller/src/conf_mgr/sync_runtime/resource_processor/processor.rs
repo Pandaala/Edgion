@@ -108,6 +108,42 @@ fn status_has_changed(kind: &str, old: &StatusExtractResult, new: &StatusExtract
     }
 }
 
+/// Capture the ingest-only unknown-field sidecar carried by the four resource
+/// kinds that support advisory unknown-field detection.
+///
+/// FileSystem/etcd parsing populates this state before status seeding. Because
+/// the fields are intentionally `#[serde(skip)]`, the generic status merge
+/// below must preserve them explicitly across its serde round trip.
+fn capture_unknown_fields_sidecar<T: 'static>(obj: &T) -> Option<Vec<String>> {
+    let obj = obj as &dyn Any;
+    if let Some(resource) = obj.downcast_ref::<edgion_resources::EdgionPlugins>() {
+        Some(resource.spec.unknown_fields.clone())
+    } else if let Some(resource) = obj.downcast_ref::<edgion_resources::EdgionStreamPlugins>() {
+        Some(resource.spec.unknown_fields.clone())
+    } else if let Some(resource) = obj.downcast_ref::<edgion_resources::EdgionConfigData>() {
+        Some(resource.spec.unknown_fields.clone())
+    } else {
+        obj.downcast_ref::<edgion_resources::LinkSys>()
+            .map(|resource| resource.spec.unknown_fields.clone())
+    }
+}
+
+fn restore_unknown_fields_sidecar<T: 'static>(obj: &mut T, unknown_fields: Option<Vec<String>>) {
+    let Some(unknown_fields) = unknown_fields else {
+        return;
+    };
+    let obj = obj as &mut dyn Any;
+    if let Some(resource) = obj.downcast_mut::<edgion_resources::EdgionPlugins>() {
+        resource.spec.unknown_fields = unknown_fields;
+    } else if let Some(resource) = obj.downcast_mut::<edgion_resources::EdgionStreamPlugins>() {
+        resource.spec.unknown_fields = unknown_fields;
+    } else if let Some(resource) = obj.downcast_mut::<edgion_resources::EdgionConfigData>() {
+        resource.spec.unknown_fields = unknown_fields;
+    } else if let Some(resource) = obj.downcast_mut::<edgion_resources::LinkSys>() {
+        resource.spec.unknown_fields = unknown_fields;
+    }
+}
+
 /// Seed previously persisted status (FileSystem/Etcd `.status` sidecar) back
 /// into the object before `update_status` runs.
 ///
@@ -117,7 +153,7 @@ fn status_has_changed(kind: &str, old: &StatusExtractResult, new: &StatusExtract
 /// the prior conditions to be present in the object (K8s mode gets this for
 /// free from the watch object). Best-effort: on any roundtrip failure the
 /// object is left unchanged (same as the pre-seed behavior).
-fn seed_existing_status<T: Serialize + DeserializeOwned>(obj: &mut T, status_json: &str) {
+fn seed_existing_status<T: Serialize + DeserializeOwned + 'static>(obj: &mut T, status_json: &str) {
     let status = match serde_json::from_str::<serde_json::Value>(status_json) {
         Ok(v) if !v.is_null() => v,
         _ => return,
@@ -135,6 +171,7 @@ fn seed_existing_status<T: Serialize + DeserializeOwned>(obj: &mut T, status_jso
     if is_error_status_sidecar {
         return;
     }
+    let unknown_fields = capture_unknown_fields_sidecar(obj);
     let mut obj_value = match serde_json::to_value(&*obj) {
         Ok(v) => v,
         Err(_) => return,
@@ -144,7 +181,10 @@ fn seed_existing_status<T: Serialize + DeserializeOwned>(obj: &mut T, status_jso
     };
     map.insert("status".to_string(), status);
     match serde_json::from_value::<T>(obj_value) {
-        Ok(seeded) => *obj = seeded,
+        Ok(mut seeded) => {
+            restore_unknown_fields_sidecar(&mut seeded, unknown_fields);
+            *obj = seeded;
+        }
         Err(e) => {
             tracing::debug!(error = %e, "Existing status not seedable into object; conditions start fresh");
         }
@@ -605,10 +645,10 @@ where
         // sidecar) into the object, so update_condition later sees the prior
         // conditions and preserves lastTransitionTime across reconciles.
         // This MUST run before preparse/parse: the seed is a serde roundtrip
-        // that resets `#[serde(skip)]` fields, and parse populates
-        // in-memory-only fields (e.g. route delegation_issues) that
-        // update_status consumes. Here the object is fresh from YAML, so the
-        // roundtrip is lossless.
+        // that resets `#[serde(skip)]` runtime fields. The four ingest-only
+        // unknown-field sidecars are preserved explicitly by
+        // `seed_existing_status`; all other runtime fields are populated only
+        // after this point by preparse/parse.
         if let Some(json) = existing_status_json.as_deref() {
             seed_existing_status(&mut obj, json);
         }
@@ -1154,6 +1194,65 @@ mod tests {
         );
         assert_eq!(status.conditions[0].last_transition_time, "2026-01-01T00:00:00Z");
         assert_eq!(status.conditions[0].observed_generation, Some(2));
+    }
+
+    #[test]
+    fn seed_existing_status_preserves_all_unknown_field_sidecars() {
+        use edgion_resources::resources::edgion_config_data::{
+            ConfigDataVisibility, ConfigEntry, EdgionConfigDataSpec,
+        };
+        use edgion_resources::resources::edgion_stream_plugins::EdgionStreamPluginsSpec;
+        use edgion_resources::resources::link_sys::httpdns::{HttpDnsFallback, HttpDnsResponseFormat};
+        use edgion_resources::resources::link_sys::{HttpDnsResolverConfig, LinkSysSpec, SystemConfig};
+        use edgion_resources::{EdgionConfigData, EdgionPlugins, EdgionStreamPlugins, LinkSys};
+
+        let expected = vec!["config.typo".to_string()];
+        let status = r#"{"conditions":[]}"#;
+
+        let mut plugins = EdgionPlugins::new("plugins", Default::default());
+        plugins.spec.unknown_fields = expected.clone();
+        seed_existing_status(&mut plugins, status);
+        assert_eq!(plugins.spec.unknown_fields, expected);
+
+        let mut stream_plugins = EdgionStreamPlugins::new(
+            "stream-plugins",
+            EdgionStreamPluginsSpec {
+                plugins: None,
+                tls_route_plugins: None,
+                unknown_fields: expected.clone(),
+            },
+        );
+        seed_existing_status(&mut stream_plugins, status);
+        assert_eq!(stream_plugins.spec.unknown_fields, expected);
+
+        let mut config_data = EdgionConfigData::new(
+            "config-data",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: ConfigDataVisibility::Namespace,
+                data: ConfigEntry::Misc(serde_json::json!({})),
+                unknown_fields: expected.clone(),
+            },
+        );
+        seed_existing_status(&mut config_data, status);
+        assert_eq!(config_data.spec.unknown_fields, expected);
+
+        let mut link_sys = LinkSys::new(
+            "link-sys",
+            LinkSysSpec {
+                config: SystemConfig::HttpDns(HttpDnsResolverConfig {
+                    preset: None,
+                    url_template: Some("https://resolver.example/dns?name={domain}".to_string()),
+                    response: HttpDnsResponseFormat::default(),
+                    fallback: HttpDnsFallback::default(),
+                    connection: None,
+                }),
+                unknown_fields: expected.clone(),
+            },
+        );
+        seed_existing_status(&mut link_sys, status);
+        assert_eq!(link_sys.spec.unknown_fields, expected);
     }
 
     #[test]

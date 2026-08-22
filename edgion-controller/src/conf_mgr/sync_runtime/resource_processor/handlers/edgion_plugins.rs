@@ -260,7 +260,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         let _ = super::super::plugin_policy_stamp::stamp_http_entries(ep);
 
         // Unknown-field diagnostic: `spec.unknown_fields` was already
-        // populated at ingest (Phase 2 hook/loader/Admin-API seams), so this
+        // populated by the ingest hook, loader, or Admin API seam, so this
         // is a pure read — no re-walk here. Warn once on the apply path; the
         // status-side UnknownConfigFields condition is stamped in
         // update_status (which has no preparse-local state, per the same
@@ -1019,10 +1019,12 @@ mod tests {
     use edgion_resources::resources::edgion_config_data::{
         ConfigEntry, EdgionConfigDataRef, EdgionConfigDataSpec, RegionRouteOverride,
     };
+    use edgion_resources::resources::edgion_plugins::plugin_configs::KeyAuthSecretGroup;
     use edgion_resources::resources::edgion_plugins::{
         BasicAuthConfig, BasicAuthSecretGroup, CertSourceMode, EdgionPlugin, EdgionPlugins, EdgionPluginsSpec,
-        HeaderCertAuthConfig, HmacAuthConfig, HmacAuthSecretGroup, JweDecryptConfig, OpenidConnectConfig,
-        RegionRouteConfig, RequestFilterEntry,
+        HeaderCertAuthConfig, HmacAuthConfig, HmacAuthSecretGroup, JweDecryptConfig, JwtAlgorithm, JwtAuthConfig,
+        JwtIssuerGroup, KeyAuthConfig, KeyMetadata, OpenidConnectConfig, RegionRouteConfig, RequestFilterEntry,
+        ResolvedJwtCredential, ResolvedJwtIssuerGroup,
     };
     use edgion_resources::resources::gateway::SecretObjectReference;
     use k8s_openapi::api::core::v1::Secret;
@@ -1050,6 +1052,113 @@ mod tests {
             data: Some(data),
             ..Default::default()
         }
+    }
+
+    fn injected_key_auth_config(secret_groups: Option<Vec<KeyAuthSecretGroup>>) -> KeyAuthConfig {
+        KeyAuthConfig {
+            secret_groups,
+            resolved_keys: Some(HashMap::from([(
+                "injected-key".to_string(),
+                KeyMetadata {
+                    headers: HashMap::new(),
+                    group: "injected".to_string(),
+                },
+            )])),
+            ..Default::default()
+        }
+    }
+
+    fn injected_jwt_auth_config(issuer_groups: Option<Vec<JwtIssuerGroup>>) -> JwtAuthConfig {
+        JwtAuthConfig {
+            anonymous: issuer_groups.is_none().then(|| "guest".to_string()),
+            issuer_groups,
+            resolved_groups_by_iss: Some(HashMap::from([(
+                "https://injected.example".to_string(),
+                ResolvedJwtIssuerGroup {
+                    group: "injected".to_string(),
+                    algorithm: JwtAlgorithm::HS256,
+                    audiences: None,
+                    credentials: HashMap::from([(
+                        "injected-kid".to_string(),
+                        ResolvedJwtCredential {
+                            key: Some("injected-kid".to_string()),
+                            secret: Some("injected-secret".to_string()),
+                            public_key: None,
+                        },
+                    )]),
+                },
+            )])),
+            ..Default::default()
+        }
+    }
+
+    fn assert_auth_resolved_fields_cleared(ep: &EdgionPlugins) {
+        let plugins = ep.spec.request_plugins.as_ref().expect("request plugins");
+        match &plugins[0].plugin {
+            EdgionPlugin::KeyAuth(config) => assert!(config.resolved_keys.is_none()),
+            _ => panic!("expected KeyAuth"),
+        }
+        match &plugins[1].plugin {
+            EdgionPlugin::JwtAuth(config) => assert!(config.resolved_groups_by_iss.is_none()),
+            _ => panic!("expected JwtAuth"),
+        }
+    }
+
+    #[tokio::test]
+    async fn parse_clears_injected_auth_credentials_without_source_refs() {
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+        let mut ep = EdgionPlugins::new("injected-auth", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![
+            RequestFilterEntry::new(EdgionPlugin::KeyAuth(injected_key_auth_config(None))),
+            RequestFilterEntry::new(EdgionPlugin::JwtAuth(injected_jwt_auth_config(None))),
+        ]);
+
+        let parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+
+        assert_auth_resolved_fields_cleared(&parsed);
+    }
+
+    #[tokio::test]
+    async fn parse_clears_injected_auth_credentials_when_secrets_are_missing() {
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+        let missing_ref = SecretObjectReference {
+            group: None,
+            kind: None,
+            name: "missing-auth-secret".to_string(),
+            namespace: None,
+        };
+        let mut ep = EdgionPlugins::new("injected-auth", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![
+            RequestFilterEntry::new(EdgionPlugin::KeyAuth(injected_key_auth_config(Some(vec![
+                KeyAuthSecretGroup {
+                    name: "keys".to_string(),
+                    description: None,
+                    secret_refs: vec![missing_ref.clone()],
+                },
+            ])))),
+            RequestFilterEntry::new(EdgionPlugin::JwtAuth(injected_jwt_auth_config(Some(vec![
+                JwtIssuerGroup {
+                    name: "tokens".to_string(),
+                    description: None,
+                    issuers: vec!["https://issuer.example".to_string()],
+                    secret_refs: vec![missing_ref],
+                    algorithm: None,
+                    audiences: None,
+                },
+            ])))),
+        ]);
+
+        let parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+
+        assert_auth_resolved_fields_cleared(&parsed);
     }
 
     fn request_access_policy_config(
@@ -4129,7 +4238,7 @@ mod tests {
             .all(|c| c.type_ != condition_types::PLUGIN_POLICY_RESTRICTED));
     }
 
-    // ── UnknownConfigFields condition (Phase 4) ─────────────────────────────
+    // ── UnknownConfigFields condition ───────────────────────────────────────
 
     #[test]
     fn update_status_sets_unknown_config_fields_condition_with_exact_paths() {

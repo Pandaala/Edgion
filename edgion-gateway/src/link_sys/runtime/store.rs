@@ -838,6 +838,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::Webhook(WebhookServiceConfig {
                     conn: ExternalHttpConnection {
                         target: WebhookTarget {
@@ -994,6 +995,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::Redis(RedisClientConfig {
                     endpoints: vec!["redis://127.0.0.1:6379".to_string()],
                     auth: Some(RedisAuth {
@@ -1206,6 +1208,7 @@ mod tests {
                     ..Default::default()
                 },
                 spec: LinkSysSpec {
+                    unknown_fields: Vec::new(),
                     config: SystemConfig::Webhook(WebhookServiceConfig {
                         conn: ExternalHttpConnection {
                             target: WebhookTarget {

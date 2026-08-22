@@ -132,16 +132,18 @@ where
         }
     };
 
-    // FileSystem/etcd unknown-field diagnostic (Phase 2b of
-    // tasks/todo/plugin-config-unknown-field-detection): the Kubernetes watcher
+    // FileSystem/etcd unknown-field diagnostic: the Kubernetes watcher
     // gets this via the hand-written `Deserialize` impls on `EdgionPluginsSpec`,
-    // `EdgionStreamPluginsSpec`, and `EdgionConfigDataSpec`, gated by
+    // `EdgionStreamPluginsSpec`, `EdgionConfigDataSpec`, and `LinkSysSpec`, gated by
     // `strict_ingest_enabled`. That gate means
     // "Kubernetes ingress" specifically (see its doc comment), so it is NOT
     // consulted here — FileSystem/etcd content is checked unconditionally.
     if matches!(
         kind,
-        ResourceKind::EdgionPlugins | ResourceKind::EdgionStreamPlugins | ResourceKind::EdgionConfigData
+        ResourceKind::EdgionPlugins
+            | ResourceKind::EdgionStreamPlugins
+            | ResourceKind::EdgionConfigData
+            | ResourceKind::LinkSys
     ) {
         populate_unknown_fields_non_fatal(kind, content, &mut parsed);
     }
@@ -157,7 +159,7 @@ fn extract_api_version(content: &str) -> Option<String> {
 /// Populate `spec.unknown_fields` on an already-parsed resource supported by
 /// the unknown-field diagnostic, for the FileSystem/etcd loader seam.
 ///
-/// Non-fatal by design (`05-issues.md` R-2): unlike the Kubernetes hook, this
+/// Non-fatal by design: unlike the Kubernetes hook, this
 /// runs on YAML content that may contain shapes `serde_json::Value` cannot
 /// represent (a non-string map key, `!!binary`, a YAML tag). This diagnostic
 /// must never turn an otherwise-loadable document into a load failure, so any
@@ -167,7 +169,7 @@ fn extract_api_version(content: &str) -> Option<String> {
 /// `K` is generic over every resource kind `parse_resource_content` serves,
 /// so `Any::downcast_mut` is the minimal way to reach the concrete
 /// supported spec fields without adding a trait method to every resource type
-/// for a diagnostic only three kinds need. The
+/// for a diagnostic only four kinds need. The
 /// `K: 'static` bound `parse_resource_content` already carries makes this
 /// sound.
 fn populate_unknown_fields_non_fatal<K: 'static>(kind: ResourceKind, content: &str, parsed: &mut K) {
@@ -228,6 +230,14 @@ fn populate_unknown_fields_non_fatal<K: 'static>(kind: ResourceKind, content: &s
                 config_data.spec.unknown_fields = edgion_resources::schema_check::unknown_key_paths(
                     spec_value,
                     edgion_resources::edgion_config_data_spec_schema(),
+                );
+            }
+        }
+        ResourceKind::LinkSys => {
+            if let Some(link_sys) = (parsed as &mut dyn std::any::Any).downcast_mut::<edgion_resources::LinkSys>() {
+                link_sys.spec.unknown_fields = edgion_resources::schema_check::unknown_key_paths(
+                    spec_value,
+                    edgion_resources::link_sys_spec_schema(),
                 );
             }
         }
@@ -588,15 +598,16 @@ spec:
 }
 
 /// Tests for the FileSystem/etcd unknown-field diagnostic seam in
-/// `parse_resource_content` (Phase 2b of
-/// `tasks/todo/plugin-config-unknown-field-detection`). Unlike the
+/// `parse_resource_content`. Unlike the
 /// Kubernetes hand-written `Deserialize` impls, this path is NOT gated by
 /// `strict_ingest_enabled` — see the comment at its call site above — so
 /// these tests do not need to touch that process-global flag.
 #[cfg(test)]
 mod unknown_fields_seam_tests {
     use super::parse_resource_content;
-    use edgion_resources::prelude_resources::{EdgionConfigData, EdgionPlugins, EdgionStreamPlugins, HTTPRoute};
+    use edgion_resources::prelude_resources::{
+        EdgionConfigData, EdgionPlugins, EdgionStreamPlugins, HTTPRoute, LinkSys,
+    };
 
     const TYPO_PLUGINS: &str = r#"
 apiVersion: edgion.io/v1
@@ -656,6 +667,21 @@ spec:
           cidrz: [10.0.0.0/8]
 "#;
 
+    const TYPO_LINK_SYS: &str = r#"
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: typo-redis
+  namespace: default
+spec:
+  type: redis
+  config:
+    endpoints: [redis://127.0.0.1:6379]
+    timeout:
+      connect: 10
+      conect: 20
+"#;
+
     #[test]
     fn edgion_plugins_typo_populates_unknown_fields_with_exact_path() {
         let parsed: EdgionPlugins = parse_resource_content(TYPO_PLUGINS).expect("well-formed aside from the typo");
@@ -705,17 +731,45 @@ spec:
         assert!(parsed.spec.unknown_fields.is_empty());
     }
 
-    /// R-2's non-fatal guarantee: a document that re-parses as a `serde_yaml::Value`
+    #[test]
+    fn link_sys_typo_populates_unknown_fields_with_exact_path() {
+        let parsed: LinkSys = parse_resource_content(TYPO_LINK_SYS).expect("well-formed aside from the typo");
+        assert_eq!(parsed.spec.unknown_fields, ["config.timeout.conect"]);
+    }
+
+    #[test]
+    fn link_sys_clean_and_open_webhook_fields_have_no_findings() {
+        let clean = TYPO_LINK_SYS.replace("      conect: 20\n", "");
+        let parsed: LinkSys = parse_resource_content(&clean).expect("clean LinkSys must parse");
+        assert!(parsed.spec.unknown_fields.is_empty());
+
+        let webhook = r#"
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata: {name: legacy-webhook, namespace: default}
+spec:
+  type: webhook
+  config:
+    target: {kind: Service, name: resolver, port: 8080}
+    auth: {vendor: {arbitrary: true}}
+    defaultHeaders: {X-Legacy: {arbitrary: true}}
+    requestMethod: {arbitrary: true}
+"#;
+        let parsed: LinkSys = parse_resource_content(webhook).expect("known open fields must parse");
+        assert!(parsed.spec.unknown_fields.is_empty());
+    }
+
+    /// The non-fatal guarantee: a document that re-parses as a `serde_yaml::Value`
     /// but cannot convert to `serde_json::Value` (a non-string mapping key, which
     /// JSON has no representation for) must still load successfully via the normal
     /// typed parse — the diagnostic just skips itself instead of failing the load.
-    /// R-2's non-fatal guarantee, tested directly against the seam helper
+    /// This guarantee is tested directly against the seam helper
     /// rather than through `parse_resource_content`'s full round trip: a
     /// document with a mapping key that is itself a YAML sequence (`? [a, b]`)
     /// parses fine into `serde_yaml::Value` (YAML permits non-scalar keys),
     /// but JSON has no representation for a non-string object key, so
-    /// `serde_json::to_value` fails on it — the exact failure shape R-2 exists
-    /// to guard against.
+    /// `serde_json::to_value` fails on it — the exact failure shape this
+    /// non-fatal seam guards against.
     ///
     /// This cannot be exercised through `parse_resource_content`'s normal
     /// entry point: a struct field's key deserializer requires a string
@@ -726,7 +780,7 @@ spec:
     /// upstream, and the seam's non-fatal skip is defense-in-depth for that
     /// gap rather than something reachable end-to-end today. Calling the
     /// helper directly with an already-parsed clean object isolates exactly
-    /// the behavior R-2 asks for: the check skips itself and leaves the
+    /// the required behavior: the check skips itself and leaves the
     /// object's `unknown_fields` untouched.
     #[test]
     fn json_conversion_failure_is_skipped_and_leaves_object_untouched() {

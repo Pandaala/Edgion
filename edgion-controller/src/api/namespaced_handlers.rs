@@ -132,7 +132,7 @@ pub async fn create_namespaced(
     // In K8s mode: skip validation (K8s API Server validates) and don't update version
     // In non-K8s mode: validate and update resource version
     //
-    // Populated only by the EdgionPlugins/EdgionStreamPlugins/EdgionConfigData arms below
+    // Populated only by the EdgionPlugins/EdgionStreamPlugins/EdgionConfigData/LinkSys arms below
     // (`unknown_field_warnings`); every other kind leaves this empty, so
     // `ApiResponse::warnings` stays absent from the response (see `types.rs`).
     let mut warnings: Vec<String> = Vec::new();
@@ -254,6 +254,18 @@ pub async fn create_namespaced(
         edgion_resources::ResourceKind::LinkSys => {
             let linksys: LinkSys = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &linksys, is_k8s)?;
+            warnings = unknown_field_warnings(kind, &content);
+            if !warnings.is_empty() {
+                tracing::warn!(
+                    component = "unified_api",
+                    event = "unknown_config_fields",
+                    kind = %kind_str,
+                    namespace = %ns,
+                    name = %name,
+                    paths = ?warnings,
+                    "Resource contains keys not recognized by the typed schema"
+                );
+            }
             let json_content = serde_json::to_string(&linksys).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .create_one(kind.as_str(), Some(&ns), &name, json_content)
@@ -419,7 +431,7 @@ pub async fn update_namespaced(
     // In K8s mode: skip validation (K8s API Server validates) and don't update version
     // In non-K8s mode: validate and update resource version
     //
-    // Populated only by the EdgionPlugins/EdgionStreamPlugins/EdgionConfigData arms below
+    // Populated only by the EdgionPlugins/EdgionStreamPlugins/EdgionConfigData/LinkSys arms below
     // (`unknown_field_warnings`); every other kind leaves this empty, so
     // `ApiResponse::warnings` stays absent from the response (see `types.rs`).
     let mut warnings: Vec<String> = Vec::new();
@@ -607,6 +619,18 @@ pub async fn update_namespaced(
         edgion_resources::ResourceKind::LinkSys => {
             let linksys: LinkSys = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &linksys, is_k8s)?;
+            warnings = unknown_field_warnings(kind, &content);
+            if !warnings.is_empty() {
+                tracing::warn!(
+                    component = "unified_api",
+                    event = "unknown_config_fields",
+                    kind = %kind_str,
+                    namespace = %ns,
+                    name = %name,
+                    paths = ?warnings,
+                    "Resource contains keys not recognized by the typed schema"
+                );
+            }
             let json_content = serde_json::to_string(&linksys).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .update_one_if_version(
@@ -1005,10 +1029,8 @@ mod update_identity_tests {
     }
 }
 
-/// Tests for item 2/3 of
-/// `tasks/todo/plugin-config-unknown-field-detection`: the Admin API write
-/// path warns (never rejects) on an unrecognized config key, and surfaces the
-/// finding through `ApiResponse::warnings`.
+/// The Admin API write path warns (never rejects) on an unrecognized config
+/// key and surfaces the finding through `ApiResponse::warnings`.
 #[cfg(test)]
 mod unknown_field_warning_tests {
     use super::update_identity_tests::make_fs_state;
@@ -1032,6 +1054,15 @@ mod unknown_field_warning_tests {
         Bytes::from(format!(
             r#"{{"apiVersion":"edgion.io/v1","kind":"EdgionConfigData","metadata":{{"name":"{name}","namespace":"default"}},"spec":{{"data":{{"type":"IpList","config":{{"items":[{{"name":"office","cidrs":[]{typo_field}}}]}}}}}}}}"#
         ))
+    }
+
+    fn link_sys_body(name: &str, typo: bool) -> Bytes {
+        let typo_field = if typo { r#", "conect": 20"# } else { "" };
+        Bytes::from(
+            r#"{"apiVersion":"edgion.io/v1","kind":"LinkSys","metadata":{"name":"NAME","namespace":"default"},"spec":{"type":"redis","config":{"endpoints":["redis://127.0.0.1:6379"],"timeout":{"connect":10TYPO}}}}"#
+                .replace("NAME", name)
+                .replace("TYPO", typo_field),
+        )
     }
 
     #[tokio::test]
@@ -1157,5 +1188,28 @@ mod unknown_field_warning_tests {
         .await
         .expect("open Misc ConfigData must be accepted");
         assert!(misc.2 .0.warnings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn link_sys_create_and_update_warn_without_rejecting() {
+        let (state, _tmp) = make_fs_state().await;
+        let created = create_namespaced(
+            State(Arc::clone(&state)),
+            Path(("LinkSys".to_string(), "default".to_string())),
+            link_sys_body("redis", true),
+        )
+        .await
+        .expect("LinkSys advisory must not reject create");
+        assert_eq!(created.2 .0.warnings, ["config.timeout.conect"]);
+
+        let updated = update_namespaced(
+            State(state),
+            Path(("LinkSys".to_string(), "default".to_string(), "redis".to_string())),
+            HeaderMap::new(),
+            link_sys_body("redis", true),
+        )
+        .await
+        .expect("LinkSys advisory must not reject update");
+        assert_eq!(updated.0.warnings, ["config.timeout.conect"]);
     }
 }

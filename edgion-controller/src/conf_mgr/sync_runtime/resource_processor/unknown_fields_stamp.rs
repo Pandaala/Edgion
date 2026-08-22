@@ -1,13 +1,12 @@
-//! Status stamping for operator-authored unknown config fields
-//! (`tasks/todo/plugin-config-unknown-field-detection`).
+//! Status stamping for operator-authored unknown config fields.
 //!
 //! Mirrors `plugin_policy_stamp.rs`, which already solves this exact shape:
 //! an Edgion-specific advisory condition, upserted on hits and **removed**
 //! entirely on zero hits. Callers MUST remove the condition themselves when
 //! there are no findings — an upsert-only pipeline wedges otherwise, because
 //! a resource the operator fixed would keep a stale `True` forever. See
-//! `05-issues.md` R-1 for why this is a dedicated condition rather than an
-//! addition to the `Accepted` message.
+//! It remains a dedicated condition rather than changing `Accepted`, because
+//! unknown fields are advisory and do not block synchronization.
 
 use super::status_utils::{condition_reasons, condition_true, condition_types, update_condition};
 use edgion_resources::resources::common::Condition;
@@ -17,7 +16,7 @@ use edgion_resources::resources::common::Condition;
 /// condition message at 32768 characters; this keeps the message small and,
 /// combined with the already-sorted input, deterministic — a
 /// non-deterministic message would churn the `status_changed` comparison
-/// that gates inline status IO (`05-issues.md` R-5).
+/// that gates inline status IO.
 const MAX_LISTED_PATHS: usize = 10;
 
 /// Build the condition message from already-sorted paths: the first

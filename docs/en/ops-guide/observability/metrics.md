@@ -158,7 +158,7 @@ The `edgion_controller_resource_abnormal` snapshot is rebuilt on a timer and cap
 
 `edgion_controller_unknown_config_fields` is a live (not timer-based) scan appended at the
 same `/metrics` seam, rendered fresh on every scrape from `EdgionPlugins`, `EdgionStreamPlugins`,
-and `EdgionConfigData` `spec.unknown_fields`. It emits one count series per affected resource
+`EdgionConfigData`, and `LinkSys` `spec.unknown_fields`. It emits one count series per affected resource
 kind; a healthy fleet emits nothing. Unlike `resource_abnormal`, this gauge is populated in FileSystem
 and etcd conf_center mode too, not Kubernetes-mode only — see
 [Unknown Config Field Detection](../plugin-config-unknown-fields.md) for why.
@@ -338,7 +338,7 @@ histogram_quantile(0.99, sum(rate(edgion_gateway_request_duration_ms_bucket[5m])
 
 **A**: Scrape the Controller `/metrics` and alert on `edgion_controller_resource_abnormal{err!=""}`. Each series identifies one resource by `kind` / `namespace` / `name`, with the failing conditions in the `err` / `warn` labels.
 
-### Q4b: How do I detect config typos in plugin resources or typed `EdgionConfigData` that were silently ignored?
+### Q4b: How do I detect config typos in plugins, typed `EdgionConfigData`, or LinkSys that were silently ignored?
 
 **A**: Alert on `edgion_controller_unknown_config_fields > 0` — one series per affected kind,
 with the value equal to the affected-resource count. Fetch exact resource names and paths from

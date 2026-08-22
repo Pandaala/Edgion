@@ -1,11 +1,11 @@
 //! The schema walker itself. See `mod.rs` for the public entry point.
 //!
-//! Rules (mirrors `01-design.md` §3 / `05-issues.md` R-4, R-5 verbatim):
+//! Rules (the canonical executable specification for this walker):
 //!
 //! 1. Resolve `$ref` against the schema's `$defs`; merge `allOf` branches
 //!    into one allowed-property set. `#[serde(flatten)]` needs NO special
 //!    handling — schemars inlines flattened fields directly into
-//!    `properties` (measured; see `01-design.md` §3).
+//!    `properties` (covered by production-schema regression tests).
 //!
 //!    JSON Schema 2020-12 permits keywords beside `$ref`, and schemars 1.2.1
 //!    uses exactly that for an INTERNALLY-tagged enum branch
@@ -53,7 +53,7 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 // Reused rather than invented: these already bound the depth/width of a
-// plugin config JSON instance elsewhere in this crate (subtask spec item 8).
+// plugin config JSON instance elsewhere in this crate.
 use crate::resources::edgion_plugins::plugin_configs::{MAX_JSON_INSTANCE_DEPTH, MAX_JSON_INSTANCE_NODES};
 
 /// Max `$ref` hops resolved in a single lookup. Every `$ref` chain measured
@@ -114,8 +114,7 @@ fn chain_has_properties_keyword(chain: &[&Value]) -> bool {
 }
 
 /// `additionalProperties` present (as a schema or `true`) anywhere in the
-/// chain => free-form map. `false` alone does not count — see rule 2 /
-/// `05-issues.md` R-4.
+/// chain => free-form map. `false` alone does not count — see rule 2 above.
 fn chain_is_free_form(chain: &[&Value]) -> bool {
     chain.iter().any(|n| {
         n.get("additionalProperties")
@@ -169,7 +168,7 @@ struct ObjectView<'a> {
     /// `true`, e.g. a `HashMap<String, Value>` field) as the free-form
     /// escape hatch. `additionalProperties: false` (schemars' rendering of
     /// `#[serde(deny_unknown_fields)]`) is NOT free-form; it falls through to
-    /// the ordinary closed-set path below. See `05-issues.md` R-4.
+    /// the ordinary closed-set path below. See rule 2 above.
     free_form: bool,
     /// This node describes an object at all (declares `properties` itself,
     /// or a contributing `allOf`/`oneOf`/`anyOf` branch does). If false,
@@ -367,7 +366,7 @@ fn child_path(prefix: &str, key: &str) -> String {
 /// `findings`. `depth` and `node_count` enforce the caps in rule 6; both are
 /// checked on every call so a pathological document (very deep, or very
 /// wide via siblings/array elements) terminates cleanly instead of
-/// panicking or looping unbounded (subtask spec item 8 / test 9).
+/// panicking or looping unbounded.
 pub(super) fn walk(
     value: &Value,
     node: &Value,

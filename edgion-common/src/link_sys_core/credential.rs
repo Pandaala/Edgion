@@ -368,6 +368,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::Redis(RedisClientConfig {
                     endpoints: vec!["redis://localhost:6379".into()],
                     auth,
@@ -511,6 +512,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::Elasticsearch(ElasticsearchClientConfig {
                     auth,
                     ..Default::default()
@@ -601,6 +603,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::Webhook(WebhookServiceConfig {
                     conn: ExternalHttpConnection {
                         target: WebhookTarget {
@@ -653,6 +656,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::HttpDns(HttpDnsResolverConfig {
                     preset: Some(HttpDnsPreset::Aliyun),
                     url_template: None,
@@ -817,6 +821,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::Redis(RedisClientConfig {
                     endpoints: vec!["rediss://localhost:6379".into()],
                     auth: None,
@@ -864,6 +869,7 @@ mod tests {
                 ..Default::default()
             },
             spec: edgion_resources::resources::link_sys::LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::Kafka(KafkaClientConfig {
                     brokers: vec!["broker1:9092".to_string()],
                     sasl,

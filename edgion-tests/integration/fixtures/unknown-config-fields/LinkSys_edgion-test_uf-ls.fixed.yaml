@@ -1,0 +1,12 @@
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: uf-ls
+  namespace: edgion-test
+spec:
+  type: redis
+  config:
+    endpoints:
+      - redis://127.0.0.1:6379
+    timeout:
+      connect: 1000

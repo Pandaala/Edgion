@@ -1,8 +1,8 @@
-# DELIBERATELY MALFORMED (Phase 6 negative test):
+# DELIBERATELY MALFORMED (unknown-field negative test):
 # "denys" is a typo for the real field "deny". This exercises the plain
 # nested-object unknown-key case: the schema walker must report exactly
 # "requestPlugins[0].config.denys", while the resource stays Accepted: True
-# (warn-not-reject, see 05-issues.md R-12) because a valid "allow" entry
+# (the warn-not-reject contract) because a valid "allow" entry
 # keeps IpRestrictionConfig::validation_error satisfied.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins

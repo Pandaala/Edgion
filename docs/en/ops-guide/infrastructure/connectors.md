@@ -415,7 +415,7 @@ spec:
 
 ## Webhook connector
 
-> ⚠️ **Breaking, and silent: `successStatusCodes` has been replaced by `success.statusCodes`.** `successStatusCodes` is no longer a recognized field — `ExternalHttpConnection` is `#[serde(flatten)]`-ed with no `deny_unknown_fields`, so a webhook YAML that still sets `successStatusCodes` is accepted at admission with **no error and no warning**: the field is silently pruned and success falls back to "any 2xx". This is unlike the other migrations in this document (`auth`, `defaultHeaders`, `requestMethod`), which are accepted-with-WARN for one release — there is no such shim here. Audit every webhook LinkSys (and every ForwardAuth plugin, which shares this connection type) for `successStatusCodes` and migrate to the nested `success:` block now; see [Success](#success) below.
+> ⚠️ **Breaking: `successStatusCodes` has been replaced by `success.statusCodes`.** `successStatusCodes` is no longer a recognized runtime field. A webhook YAML that still sets it remains admitted, serde drops the field, and success falls back to "any 2xx". The Controller now reports the exact path through the advisory unknown-field warning, `UnknownConfigFields` condition, diagnostics/metric surfaces, and Admin API write/validate responses; the finding does not change `Accepted` or block sync. Audit every webhook LinkSys (and every ForwardAuth plugin, which shares this connection type) and migrate to the nested `success:` block now; see [Success](#success) below.
 
 A webhook connector lets plugins (ctx-set, key-auth, hmac-auth, and so on) call an external HTTP service for user resolution, permission checks, context enrichment, audit logging, and similar lookups. The connector is the **single source of truth** for the outbound request: it declares the backend (the `name`/`namespace`/`port`/`kind`/`group` fields set directly under `target`), and a `request` block that defines exactly which path, method, query args, headers, and cookies are sent. Consuming plugins can no longer silently reshape the request — they can only feed values into the named slots the webhook author declared, optionally override the path (when allowed), and parse the response. Outbound fields follow an **allow-list** model: nothing is forwarded unless the webhook explicitly names it, so a misbehaving upstream plugin cannot leak headers the operator never intended to expose.
 
@@ -719,7 +719,7 @@ The following combinations are rejected at admission with `Accepted=False`:
 
 > **Removed fields.** `requestMethod`, `auth`, and `defaultHeaders` are deprecated. They are still accepted during a rolling upgrade but ignored at runtime, and the controller logs a WARN when it sees them. They will be removed in the next release — migrate before then. See [Migration from the old schema](#migration-from-the-old-schema).
 >
-> `successStatusCodes` is different: it is not on this deprecation path at all. It is simply unrecognized by the flattened connection struct and is dropped with **no WARN**. See the warning at the top of this section and [Success](#success) below.
+> `successStatusCodes` is different: it is not on this deprecation path and has no runtime compatibility shim. It is ignored, but the Controller reports it through the advisory unknown-field surfaces described above. See [Success](#success) below.
 
 ### Success
 

@@ -17,6 +17,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     accepted_condition, condition_false, condition_types, resolved_refs_condition, update_condition, HandlerContext,
     ProcessResult, ProcessorHandler, ResolvedRefsError, ResourceRef,
 };
+use crate::observe::unknown_fields_registry::bounded_unknown_field_paths;
 use edgion_resources::credentials::SecretMaterialResolver;
 use edgion_resources::prelude_resources::LinkSys;
 use edgion_resources::resources::common::SecretObjectReference;
@@ -120,6 +121,18 @@ fn needs_operator_secret_edit(err: &ResolvedRefsError) -> bool {
 #[async_trait::async_trait]
 impl ProcessorHandler<LinkSys> for LinkSysHandler {
     fn preparse(&self, ls: &mut LinkSys, _ctx: &HandlerContext) -> Vec<String> {
+        if !ls.spec.unknown_fields.is_empty() {
+            let paths = bounded_unknown_field_paths(&ls.spec.unknown_fields);
+            tracing::warn!(
+                component = "conf_mgr",
+                event = "unknown_config_fields_detected",
+                kind = "LinkSys",
+                namespace = %ls.metadata.namespace.as_deref().unwrap_or("default"),
+                name = %ls.metadata.name.as_deref().unwrap_or(""),
+                paths = ?paths,
+                "LinkSys document has keys the typed schema does not recognize; they are ignored and config still syncs"
+            );
+        }
         let mut errors = ls.validate_config();
         // Phase 1 guard: reject outbound TLS subjectAltNames/hostname on LinkSys
         // providers where SAN pinning enforcement is not yet implemented.
@@ -188,7 +201,7 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
         let generation = ls.metadata.generation;
 
         // `ResolvedRefs` is maintained by `parse` (see `apply_resolved_refs_condition`);
-        // this method only owns the `Accepted` condition (spec-level validation).
+        // this method owns `Accepted` and the independent unknown-field advisory.
         let status = ls.status.get_or_insert_with(LinkSysStatus::default);
 
         if validation_errors.is_empty() {
@@ -204,6 +217,83 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
                 ),
             );
         }
+        super::super::unknown_fields_stamp::apply_unknown_fields_condition(
+            &mut status.conditions,
+            &ls.spec.unknown_fields,
+            generation,
+        );
+    }
+}
+
+#[cfg(test)]
+mod unknown_fields_tests {
+    use super::*;
+    use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
+        condition_reasons, condition_true, condition_types,
+    };
+    use std::sync::Arc;
+
+    fn resource(paths: Vec<String>) -> LinkSys {
+        let spec = serde_json::from_value(serde_json::json!({
+            "type": "redis",
+            "config": {"endpoints": ["redis://127.0.0.1:6379"]}
+        }))
+        .expect("minimal LinkSys spec");
+        let mut resource = LinkSys::new("redis", spec);
+        resource.metadata.namespace = Some("default".to_string());
+        resource.metadata.generation = Some(7);
+        resource.spec.unknown_fields = paths;
+        resource
+    }
+
+    #[test]
+    fn update_status_adds_and_clears_advisory_without_disturbing_other_conditions() {
+        let handler = LinkSysHandler::new();
+        let mut resource = resource(vec!["config.timeout.conect".to_string()]);
+        resource
+            .status
+            .get_or_insert_with(LinkSysStatus::default)
+            .conditions
+            .push(resolved_refs_condition(&[], Some(7)));
+        let ctx = HandlerContext::new(
+            None,
+            None,
+            Default::default(),
+            5,
+            20,
+            Arc::new(crate::conf_mgr::ControllerRuntime::default()),
+        );
+
+        handler.update_status(&mut resource, &ctx, &[]);
+        let conditions = &resource.status.as_ref().expect("status").conditions;
+        assert!(conditions.iter().any(|condition| {
+            condition.type_ == condition_types::UNKNOWN_CONFIG_FIELDS
+                && condition.reason == condition_reasons::UNKNOWN_FIELDS_DETECTED
+                && condition.status == "True"
+        }));
+        assert!(conditions
+            .iter()
+            .any(|condition| condition.type_ == condition_types::ACCEPTED && condition.status == "True"));
+        assert!(conditions
+            .iter()
+            .any(|condition| condition.type_ == condition_types::RESOLVED_REFS && condition.status == "True"));
+
+        resource.spec.unknown_fields.clear();
+        resource
+            .status
+            .as_mut()
+            .expect("status")
+            .conditions
+            .push(condition_true("Unrelated", "Stable", "keep", Some(7)));
+        handler.update_status(&mut resource, &ctx, &[]);
+        let conditions = &resource.status.as_ref().expect("status").conditions;
+        assert!(conditions
+            .iter()
+            .all(|condition| condition.type_ != condition_types::UNKNOWN_CONFIG_FIELDS));
+        assert!(conditions
+            .iter()
+            .any(|condition| condition.type_ == condition_types::RESOLVED_REFS && condition.status == "True"));
+        assert!(conditions.iter().any(|condition| condition.type_ == "Unrelated"));
     }
 }
 
@@ -219,6 +309,10 @@ async fn drive_standard<A: AuthSpec, T: TlsSpec>(
 ) -> Vec<ResolvedRefsError> {
     let mut errs = Vec::new();
     if let Some(a) = auth {
+        // `SecretSlot.secret` is Controller-resolved transport state, never
+        // operator input. Clear it before every attempt so a failed lookup or
+        // requeue cannot retain an injected or stale credential.
+        a.slot_mut().secret = None;
         if let Some(e) = a.resolve(ctx, owner).await {
             errs.push(e);
         }

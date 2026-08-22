@@ -370,8 +370,7 @@ pub struct ApiResponse<T> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     /// Non-fatal advisories about the request (e.g. unrecognized config keys
-    /// the schema does not know about — see
-    /// `tasks/todo/plugin-config-unknown-field-detection`). Empty on every
+    /// the schema does not know about). Empty on every
     /// existing call site, so it never appears in the serialized payload
     /// (`skip_serializing_if`) and existing consumers see an unchanged shape.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -390,8 +389,7 @@ impl<T> ApiResponse<T> {
 
     /// Same as [`Self::ok_body`], but attaches non-fatal warnings for the
     /// caller to surface. The write itself already succeeded — this never
-    /// changes `success` or the status code (warn-not-reject policy, see
-    /// `02-implementation.md` §10).
+    /// changes `success` or the status code (warn-not-reject policy).
     pub fn ok_body_with_warnings(data: T, warnings: Vec<String>) -> Self {
         Self {
             success: true,
@@ -502,6 +500,7 @@ mod cache_redact_tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::Webhook(webhook_config),
             },
             status: None,

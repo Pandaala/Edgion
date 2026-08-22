@@ -223,11 +223,11 @@ spec:
 > The old `uri` / `requestMethod` / `auth` / `defaultHeaders` fields and the consumer-side
 > `forwardHeaders` / `pathSuffix` are **removed** (see Migration in that doc).
 >
-> **Breaking, silent:** `successStatusCodes` is likewise gone, replaced by the nested `success`
-> block below — but unlike the fields above, it carries **no WARN-and-ignore shim**. It is simply
-> unrecognized by the flattened `ExternalHttpConnection` (`#[serde(flatten)]`, no
-> `deny_unknown_fields`), so a resource that still sets it is `Accepted=True` with the field
-> silently dropped and success falling back to "any 2xx". **`allowDegradation` (fail-open mode)
+> **Breaking:** `successStatusCodes` is likewise gone, replaced by the nested `success`
+> block below. It has no runtime compatibility shim: serde ignores it and success falls back to
+> "any 2xx". The shared advisory unknown-field detector reports the exact path through warnings,
+> status, diagnostics/metrics, and Admin API responses without changing `Accepted` or blocking
+> sync. **`allowDegradation` (fail-open mode)
 > and `allowDegradationTemplate` have been removed.** Forward auth now always fails closed with
 > `statusOnError` (default 503) when the auth service is unreachable. The webhook connector never
 > used these fields anyway — they are inert when set on a webhook LinkSys.
@@ -358,8 +358,8 @@ spec:
 rolling-upgrade contract; it conflicts with the repository's pre-release
 no-compatibility policy. Do not use or extend these fields. Remove the
 placeholders, warning, and associated tests together when code changes are in
-scope. `successStatusCodes` is already rejected; see the note at the top of this
-section.
+scope. `successStatusCodes` is ignored at runtime but reported by the advisory
+unknown-field detector; see the note at the top of this section.
 
 ### `type: kafka`
 
@@ -395,6 +395,9 @@ status:
     - type: ResolvedRefs          # Whether all secretRef / tls.secretRef have been successfully resolved
       status: "True"
       reason: ResolvedRefs
+    - type: UnknownConfigFields   # Present only when an unrecognized typed config key was submitted
+      status: "True"
+      reason: UnknownFieldsDetected
 ```
 
 **`Accepted`**:
@@ -408,6 +411,14 @@ status:
 - `False/InvalidSecretType` — `Secret.type` is not in the resolver's allowlist (e.g., basic auth received `kubernetes.io/dockerconfigjson`).
 - `False/MissingKeys` — the Secret is missing required keys (e.g., basic missing `password`, apiKey missing `apiKeyId` + `apiKeySecret`).
 - `False/DecodeError` — UTF-8 decoding or JSON parsing of a key failed (only ACME private keys go through JSON validation; LinkSys essentially never hits this).
+
+**`UnknownConfigFields`**:
+- Present as `True/UnknownFieldsDetected` when a typed Redis, Etcd, Elasticsearch, Kafka, Webhook,
+  or HttpDns configuration contains an unrecognized key.
+- Advisory only: it does not change `Accepted` or `ResolvedRefs` and never blocks synchronization.
+- Removed after the resource is reapplied without unknown keys.
+- Declared maps and arbitrary-JSON values are intentionally open below their boundary; an unknown
+  sibling alongside them is still reported.
 
 `kubectl get linksys` directly displays the `Accepted` / `ResolvedRefs` columns.
 

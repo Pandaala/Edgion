@@ -118,8 +118,9 @@ pub struct EdgionPluginsSpec {
 
 /// Deserialize-only mirror of [`EdgionPluginsSpec`], carrying every field
 /// except `unknown_fields` (which is derived by the walk, never present in
-/// the wire document). See `tasks/todo/plugin-config-unknown-field-detection/02-implementation.md`
-/// §4 for why this shadow exists: it lets `EdgionPluginsSpec` keep a derived
+/// the wire document). See
+/// `skills/04-review/architecture/serde-ignored-blind-spots-schema-walk-instead.md`
+/// for why this shadow exists: it lets `EdgionPluginsSpec` keep a derived
 /// `Serialize`/`JsonSchema` while `Deserialize` is hand-written to run the
 /// schema walk before the input is consumed.
 #[derive(Deserialize)]
@@ -157,8 +158,8 @@ impl From<EdgionPluginsSpecShadow> for EdgionPluginsSpec {
 /// (`edgion-controller/src/conf_mgr/conf_center/common.rs`) and the Admin API
 /// write handlers (`edgion-controller/src/api/common.rs`) run the same walk
 /// against this schema outside the Kubernetes-only `strict_ingest_enabled`
-/// gate — see Phase 2b in
-/// `tasks/todo/plugin-config-unknown-field-detection/02-implementation.md` §5 / R-11.
+/// gate. The ingress matrix is documented in
+/// `skills/01-architecture/01-controller/02-admin-api.md`.
 pub fn edgion_plugins_spec_schema() -> &'static schemars::Schema {
     static SCHEMA: std::sync::OnceLock<schemars::Schema> = std::sync::OnceLock::new();
     SCHEMA.get_or_init(|| schemars::schema_for!(EdgionPluginsSpec))

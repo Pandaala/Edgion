@@ -48,7 +48,7 @@ This section is intended for operators, covering Gateway deployment, configurati
 ### Plugin Policy
 
 - [Plugin Policy (Allowlist / Denylist)](./plugin-policy.md): Controller-side plugin allowlist/denylist — restrict which plugin types the Gateway may execute, with block/bypass actions, status reporting, and mandatory upgrade-order warnings.
-- [Unknown Config Field Detection](./plugin-config-unknown-fields.md): Detects unrecognized keys in `EdgionPlugins`, `EdgionStreamPlugins`, and typed `EdgionConfigData` config blocks — warns via log, status condition, and diagnostics endpoint, never blocks; the `POST /api/v1/validate/{kind}` endpoint supports building your own blocking gate.
+- [Unknown Config Field Detection](./plugin-config-unknown-fields.md): Detects unrecognized keys in `EdgionPlugins`, `EdgionStreamPlugins`, typed `EdgionConfigData`, and `LinkSys` config blocks — warns via log, status condition, and diagnostics endpoint, never blocks; the `POST /api/v1/validate/{kind}` endpoint supports building your own blocking gate.
 
 ### Federation
 

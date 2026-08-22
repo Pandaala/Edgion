@@ -642,9 +642,8 @@ pub fn create_admin_router(
             "/api/v1/diagnostics/unknown-fields",
             get(diagnostics_handlers::unknown_fields),
         )
-        // Read-only validation verdict on a submitted (not-yet-applied) document
-        // (`tasks/todo/plugin-config-unknown-field-detection/02-implementation.md`
-        // §11): the building block for an operator's own blocking gate, since the
+        // Read-only validation verdict on a submitted (not-yet-applied) document:
+        // the building block for an operator's own blocking gate, since the
         // controller itself only ever warns.
         .route("/api/v1/validate/{kind}", post(validate_handlers::validate_kind))
         // ConfigServer endpoints (for edgion-cli --target server)

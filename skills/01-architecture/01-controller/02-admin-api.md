@@ -217,7 +217,7 @@ version server-side and must not be touched.
 
 Successful `POST` creates respond with **`201 Created`** and a `Location` header pointing at the new resource. `PUT` updates continue to use `200 OK` with the `ApiResponse::success(...)` body. Successful `DELETE` returns **`204 No Content`** with an empty body. Failed creates still surface as the mapped HTTP error (see "Error Mapping" below) and carry no `Location` header.
 
-**`ApiResponse<T>` carries an optional `warnings` field**: `{ "success": bool, "data": Option<T>, "error": Option<String>, "warnings": Vec<String> }`, with `warnings` omitted from the JSON entirely when empty (`skip_serializing_if = "Vec::is_empty"`) — every pre-existing call site is unaffected. It is populated on `EdgionPlugins`, `EdgionStreamPlugins`, and `EdgionConfigData` writes through this Admin API when the submitted document contains a key the schema does not recognize (the same finding class as `GET /api/v1/diagnostics/unknown-fields` above). This is the **only** ingress with no second chance to report the finding: `create_namespaced` / `update_namespaced` persist a typed round-trip (`serde_json::to_string(&obj)`), which strips unknown keys before they are ever written to storage — the FS loader, etcd loader, and Kubernetes watcher hook that catch the finding at every other ingress never get to see a document that was cleaned before it reached them. The write still succeeds (`success: true`, unaffected status code) — this is advisory, not a rejection. For `EdgionConfigData`, typed variants are checked while `Misc.config` stays deliberately open.
+**`ApiResponse<T>` carries an optional `warnings` field**: `{ "success": bool, "data": Option<T>, "error": Option<String>, "warnings": Vec<String> }`, with `warnings` omitted from the JSON entirely when empty (`skip_serializing_if = "Vec::is_empty"`) — every pre-existing call site is unaffected. It is populated on `EdgionPlugins`, `EdgionStreamPlugins`, `EdgionConfigData`, and `LinkSys` writes through this Admin API when the submitted document contains a key the schema does not recognize (the same finding class as `GET /api/v1/diagnostics/unknown-fields` above). This is the **only** ingress with no second chance to report the finding: `create_namespaced` / `update_namespaced` persist a typed round-trip (`serde_json::to_string(&obj)`), which strips unknown keys before they are ever written to storage — the FS loader, etcd loader, and Kubernetes watcher hook that catch the finding at every other ingress never get to see a document that was cleaned before it reached them. The write still succeeds (`success: true`, unaffected status code) — this is advisory, not a rejection. For `EdgionConfigData`, typed variants are checked while `Misc.config` stays deliberately open. For LinkSys, declared map and arbitrary-JSON values remain open while unknown siblings in typed provider configurations are reported.
 
 ### Cluster-scoped Resource CRUD
 
@@ -267,18 +267,19 @@ Test mode additionally mounts authenticated `/api/v1/debug/store-stats` and
 #### `GET /api/v1/diagnostics/unknown-fields` — unknown config keys, fleet-wide
 
 Answers "did anything applied to this Controller contain a key the schema does not
-recognize?" across `EdgionPlugins`, `EdgionStreamPlugins`, and typed `EdgionConfigData` variants — resources whose
+recognize?" across `EdgionPlugins`, `EdgionStreamPlugins`, typed `EdgionConfigData` variants,
+and LinkSys provider configurations — resources whose
 `config` subtree is preserved by the CRD and therefore not pruned
 by the API server or caught by `deny_unknown_fields` (see
 `skills/00-design-rules.md` and
-`tasks/todo/plugin-config-unknown-field-detection/plugin-config-unknown-field-detection.md`
+`skills/04-review/architecture/serde-ignored-blind-spots-schema-walk-instead.md`
 for the full rationale). Requires the standard Admin API bearer token; no extra scope.
 
 Backed by `observe::unknown_fields_registry`, a keyed registry read from the same typed
 `RawStore` each conf_center mode already wires up for status rendering — not
 `center_list_resources`, since a finding lives in a field the CRD/wire schema deliberately
 never carries (`#[serde(skip)] #[schemars(skip)] unknown_fields: Vec<String>` on
-`EdgionPluginsSpec`, `EdgionStreamPluginsSpec`, or `EdgionConfigDataSpec`).
+`EdgionPluginsSpec`, `EdgionStreamPluginsSpec`, `EdgionConfigDataSpec`, or `LinkSysSpec`).
 
 ```json
 {
@@ -341,8 +342,8 @@ preparse business-rule check the conf_sync apply path runs, minus the DSL VM ini
 (which needs the gateway plugin runtime and cannot run side-effect-free); it stays empty for
 every other kind.
 
-`unknownFieldCheck` is `"performed"` for `EdgionPlugins`, `EdgionStreamPlugins`, and
-`EdgionConfigData`, and `"unsupported"` for every other kind. This discriminator exists so a caller can never misread an empty
+`unknownFieldCheck` is `"performed"` for `EdgionPlugins`, `EdgionStreamPlugins`,
+`EdgionConfigData`, and `LinkSys`, and `"unsupported"` for every other kind. This discriminator exists so a caller can never misread an empty
 `unknownFields: []` as "checked, nothing found" when it actually means "this kind is not
 covered by the walk at all".
 

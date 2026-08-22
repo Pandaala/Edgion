@@ -38,7 +38,7 @@ pub mod condition_types {
     /// are none. Advisory only: the typo'd key is ignored exactly as it was
     /// before this check existed, `Accepted` is untouched, and the config
     /// still syncs to the data plane unchanged — see
-    /// `tasks/todo/plugin-config-unknown-field-detection/05-issues.md` R-1/R-12.
+    /// `skills/00-design-rules.md` (unknown-key detection).
     pub const UNKNOWN_CONFIG_FIELDS: &str = "UnknownConfigFields";
 }
 

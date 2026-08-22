@@ -9,13 +9,12 @@
 //!   from the FileSystem backend's recursive scan.
 //!
 //! * `GET /api/v1/diagnostics/unknown-fields` — fleet-wide list of
-//!   `EdgionPlugins`, `EdgionStreamPlugins`, and `EdgionConfigData` resources
+//!   `EdgionPlugins`, `EdgionStreamPlugins`, `EdgionConfigData`, and `LinkSys` resources
 //!   whose submitted document contained a key the schema does not recognize. See
-//!   `tasks/todo/plugin-config-unknown-field-detection/02-implementation.md`
-//!   §9.2. Backed by `observe::unknown_fields_registry`, not
+//!   `skills/01-architecture/01-controller/02-admin-api.md`. Backed by
+//!   `observe::unknown_fields_registry`, not
 //!   `center_list_resources`, because the finding lives in a
-//!   `#[serde(skip)]` field invisible through the re-serialized listing path
-//!   (`05-issues.md` R-3).
+//!   `#[serde(skip)]` field invisible through the re-serialized listing path.
 //!
 //! All three are live-reads (`nested_ext_ref_usage` / `conf-conflicts`
 //! against `ConfCenter`, `unknown-fields` against the typed `RawStore`
@@ -36,7 +35,7 @@ const MAX_EXAMPLES: usize = 20;
 /// Cap the number of unknown-fields findings returned per call, mirroring
 /// `MAX_EXAMPLES`'s role for `nested_ext_ref_usage`. `total` always reports
 /// the pre-cap count and `truncated` is set honestly rather than silently
-/// dropping entries — see `02-implementation.md` §9.2.
+/// dropping entries.
 const MAX_UNKNOWN_FIELDS_ITEMS: usize = 100;
 
 #[derive(Serialize)]
@@ -204,8 +203,8 @@ pub struct UnknownFieldsResponse {
 ///
 /// Fleet-wide answer to "did anything applied to this controller contain a
 /// key the schema does not recognize?", covering `EdgionPlugins`,
-/// `EdgionStreamPlugins`, and `EdgionConfigData`. Never rejects anything itself
-/// (warn-not-reject, `02-implementation.md` §10) — this is the query surface an
+/// `EdgionStreamPlugins`, `EdgionConfigData`, and `LinkSys`. Never rejects
+/// anything itself (warn-not-reject) — this is the query surface an
 /// operator's own blocking gate (CI, a ValidatingAdmissionWebhook) is meant to
 /// be built on.
 pub async fn unknown_fields(State(_state): State<Arc<AdminState>>) -> Json<ApiResponse<UnknownFieldsResponse>> {

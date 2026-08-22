@@ -168,7 +168,7 @@ Controller 在独立的指标监听器（`:12190`，与 Admin 端口 `:12101` �
 
 ### 未知配置字段告警
 
-`edgion_controller_unknown_config_fields` 是在同一个 `/metrics` 拼接点附加的实时扫描（不是定时快照），每次抓取时都从 `EdgionPlugins`、`EdgionStreamPlugins` 和 `EdgionConfigData` 的 `spec.unknown_fields` 现场重新渲染。每个存在发现的资源类型一个计数序列；健康的集群不产生任何序列。与 `resource_abnormal` 不同，该指标在 FileSystem 和 etcd conf_center 模式下同样会产生数据，而非仅限 Kubernetes 模式——原因见[未知配置字段检测](../plugin-config-unknown-fields.md)。
+`edgion_controller_unknown_config_fields` 是在同一个 `/metrics` 拼接点附加的实时扫描（不是定时快照），每次抓取时都从 `EdgionPlugins`、`EdgionStreamPlugins`、`EdgionConfigData` 和 `LinkSys` 的 `spec.unknown_fields` 现场重新渲染。每个存在发现的资源类型一个计数序列；健康的集群不产生任何序列。与 `resource_abnormal` 不同，该指标在 FileSystem 和 etcd conf_center 模式下同样会产生数据，而非仅限 Kubernetes 模式——原因见[未知配置字段检测](../plugin-config-unknown-fields.md)。
 
 唯一标签是值域有界的 `kind` 枚举。资源名和发现路径只保留在诊断接口、状态条件和 Controller 警告日志中；它们的历史值域无界，因此不会进入 Prometheus 标签。该指标纯属提示性质，从不阻断同步。
 
@@ -336,7 +336,7 @@ histogram_quantile(0.99, sum(rate(edgion_gateway_request_duration_ms_bucket[5m])
 
 **A**：抓取 Controller 的 `/metrics`，并对 `edgion_controller_resource_abnormal{err!=""}` 告警。每个序列通过 `kind` / `namespace` / `name` 标识一个资源，失败条件在 `err` / `warn` 标签中。
 
-### Q4b：如何检测插件资源或类型化 `EdgionConfigData` 中被静默忽略的配置 typo？
+### Q4b：如何检测插件资源、类型化 `EdgionConfigData` 或 LinkSys 中被静默忽略的配置 typo？
 
 **A**：对 `edgion_controller_unknown_config_fields > 0` 告警——每个受影响的资源类型一个序列，值为该类型受影响的资源数。通过 `GET /api/v1/diagnostics/unknown-fields` 获取具体资源名和路径。参见[未知配置字段检测](../plugin-config-unknown-fields.md)；该指标仍然只是提示性的（Controller 从不因此拒绝资源），因此请用它驱动自己的告警或仪表盘，而不是作为阻断闸门。
 

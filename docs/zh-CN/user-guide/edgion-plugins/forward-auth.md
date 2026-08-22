@@ -6,7 +6,7 @@
 
 > ⚠️ **破坏性变更：`successStatusCodes` → `success.statusCodes`。ForwardAuth 现在总是失败关闭，返回 `statusOnError`。**
 >
-> - `successStatusCodes` 已不再是可识别字段。`ForwardAuthConfig` 的连接层配置块（`ExternalHttpConnection`）通过 `#[serde(flatten)]` 展平且未启用 `deny_unknown_fields`，因此仍设置 `successStatusCodes` 的 YAML 会在准入时被**无错误、无告警地接受**——该字段被静默丢弃，成功判定退化为"任意 2xx"。对 ForwardAuth 而言，这意味着**鉴权服务返回的任何 200 响应都会被视为鉴权成功**，即使运营者原本打算把成功范围限制为更窄的状态码集合或某个 body 条件——这是一个既不报准入错误、也不写日志的 fail-open 鉴权缺口。请将每个 ForwardAuth 配置迁移到嵌套的 `success:` 块（详见下文[字段参考](#连接层字段顶层)）。
+> - `successStatusCodes` 已不再是运行时可识别字段。仍设置它的 YAML 会继续被接纳，但 serde 会丢弃该字段，成功判定退化为“任意 2xx”。对 ForwardAuth 而言，这意味着**鉴权服务返回的任何 2xx 响应都会被视为鉴权成功**，即使运营者原本打算限制为更窄的状态码集合或某个 body 条件。Controller 会通过提示性的未知字段 warning、`UnknownConfigFields` 条件、diagnostics/metric，以及 Admin API 写入和 validate 响应报告精确路径；该发现不会改变 `Accepted`，也不会阻断同步。请将每个 ForwardAuth 配置迁移到嵌套的 `success:` 块（详见下文[字段参考](#连接层字段顶层)）。
 > - `allowDegradation`（fail-open 模式）和 `allowDegradationTemplate`（按请求降级）已被移除。ForwardAuth 现在**总是失败关闭**：当鉴权服务不可达或超时时，网关向客户端返回 `statusOnError`（默认 503）。不再支持 fail-open 行为；如需高可用性，请为鉴权服务配置适当的冗余和故障转移。
 
 ## 概述

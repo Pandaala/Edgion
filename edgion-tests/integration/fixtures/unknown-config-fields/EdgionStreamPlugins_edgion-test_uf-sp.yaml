@@ -1,4 +1,4 @@
-# DELIBERATELY MALFORMED (Phase 6 negative test):
+# DELIBERATELY MALFORMED (unknown-field negative test):
 # "denys" is a typo for the real field "deny", covering EdgionStreamPlugins
 # (the sweep in conf_corpus_unknown_fields.rs also walks stream-plugin
 # documents). Expect "plugins[0].config.denys" to be reported.

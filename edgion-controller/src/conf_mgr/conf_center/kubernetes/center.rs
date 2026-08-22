@@ -244,10 +244,10 @@ impl KubernetesCenter {
         config.validate()?;
 
         // Kubernetes ingest always deserializes JSON via `kube` (`serde_json`
-        // under the hood), so the plugin-spec unknown-field walk's `Value`
+        // under the hood), so the supported resource-spec unknown-field walk's `Value`
         // round-trip is lossless here and can never turn a loadable resource
         // into a load failure — see `schema_check::strict_ingest_enabled`
-        // for the full rationale (`05-issues.md` R-2). Set exactly once,
+        // for the full rationale. Set exactly once,
         // before any resource is watched/deserialized off this center.
         edgion_resources::schema_check::set_strict_ingest(true);
 
