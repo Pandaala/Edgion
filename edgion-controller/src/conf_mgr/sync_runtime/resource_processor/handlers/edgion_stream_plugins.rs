@@ -9,6 +9,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_types, EdgionConfigDataStore, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
+use crate::observe::unknown_fields_registry::bounded_unknown_field_paths;
 use edgion_resources::ResourceKind;
 
 use super::config_data_ref_mark::{mark_one_ref, ExpectedEntry};
@@ -197,13 +198,14 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
         // update_status, mirroring PluginPolicyRestricted. Advisory only:
         // this never touches `Accepted` or blocks the resource from syncing.
         if !esp.spec.unknown_fields.is_empty() {
+            let paths = bounded_unknown_field_paths(&esp.spec.unknown_fields);
             tracing::warn!(
                 component = "conf_mgr",
                 event = "unknown_config_fields_detected",
                 kind = "EdgionStreamPlugins",
                 namespace = %esp.metadata.namespace.as_deref().unwrap_or("default"),
                 name = %esp.metadata.name.as_deref().unwrap_or(""),
-                paths = ?esp.spec.unknown_fields,
+                paths = ?paths,
                 "EdgionStreamPlugins document has keys the schema does not recognize; they are ignored, config still syncs unchanged"
             );
         }
@@ -705,6 +707,7 @@ spec:
         let mut ed = EdgionConfigData::new(
             "blocklist",
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
                 visibility: Default::default(), // Namespace
@@ -840,6 +843,7 @@ spec:
         let mut ed = EdgionConfigData::new(
             "l4-blk",
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -886,6 +890,7 @@ spec:
         let mut ed = EdgionConfigData::new(
             "blocklist",
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -944,6 +949,7 @@ spec:
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "g".into(),
@@ -1461,6 +1467,7 @@ spec:
         let mut ed = EdgionConfigData::new(
             "blocklist",
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
                 visibility: Default::default(), // Namespace
@@ -1529,6 +1536,7 @@ spec:
                 enable: false,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "g".into(),

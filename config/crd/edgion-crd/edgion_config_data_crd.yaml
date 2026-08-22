@@ -52,7 +52,7 @@ spec:
                       type: object
                       description: |
                         Variant-specific configuration. Shape depends on `type`:
-                          - KeyList: { matchMode?: "Exact"|"Regex", items: [{ name, description?, items: [{ key, code?, priority?, id?, behavior? }] }] }
+                          - KeyList: { matchMode?: "exact"|"regex", items: [{ name, description?, items: [{ key, code?, priority?, id?, behavior? }] }] }
                           - IpList: { items: [{ name, description?, cidrs: string[] }] }   (grouped CIDRs / bare IPs, v4/v6)
                           - Selector: active-profile selector — { active?: string, description?: string }; referenced via activeProfileRef in EdgionStreamPlugins GlobalConnectionIpRestriction configs. `active` names one of the plugin's git-owned profiles; `active: null`/absent is a no-op (base default). Switches among profiles only — never disables filtering
                           - RegionRouteOverride: all-Optional overlay for RegionRoute — { enable?, active?, regions? }; referenced via overrideRef in EdgionPlugins RegionRoute configs

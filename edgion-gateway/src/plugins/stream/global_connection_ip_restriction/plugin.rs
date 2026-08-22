@@ -229,6 +229,7 @@ mod tests {
         let mut ed = EdgionConfigData::new(
             name,
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable,
                 active: None,
                 visibility: Default::default(),

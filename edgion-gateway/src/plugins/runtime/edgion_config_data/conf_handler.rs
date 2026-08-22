@@ -305,6 +305,7 @@ mod stats_tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "default".into(),
@@ -322,6 +323,7 @@ mod stats_tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::KeyList(KeyListData {
                     match_mode: KeyMatchMode::default(),
                     items: vec![KeyGroup {
@@ -358,6 +360,7 @@ mod stats_tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
                     enable: None,
                     active: None,
@@ -388,6 +391,7 @@ mod stats_tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "office".into(),
@@ -418,6 +422,7 @@ mod stats_tests {
                 enable: false,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "g".into(),
@@ -445,6 +450,7 @@ mod stats_tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData { items: vec![] }),
             };
             let mut ed = EdgionConfigData::new("ip-empty", spec);

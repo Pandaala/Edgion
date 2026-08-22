@@ -208,6 +208,7 @@ struct Recursive {
     pub wide: Vec<Recursive>,
 }
 
+use crate::resources::edgion_config_data::{edgion_config_data_spec_schema, EdgionConfigDataSpec};
 use crate::resources::edgion_plugins::plugin_configs::{MAX_JSON_INSTANCE_DEPTH, MAX_JSON_INSTANCE_NODES};
 
 #[test]
@@ -439,4 +440,117 @@ fn real_schema_internally_tagged_conditions_run_has_zero_findings() {
     });
 
     assert_eq!(unknown_key_paths(&value, &schema), Vec::<String>::new());
+}
+
+// ============================================================
+// EdgionConfigData production-schema boundaries
+// ============================================================
+
+#[test]
+fn config_data_typed_variants_report_exact_nested_paths() {
+    let cases = [
+        (
+            json!({"data":{"type":"KeyList","config":{"matchMode":"exact","items":[{"name":"g","items":[{"key":"x","behaviour":"drop"}]}]}}}),
+            "data.config.items[0].items[0].behaviour",
+        ),
+        (
+            json!({"data":{"type":"IpList","config":{"items":[{"name":"g","cidrs":["10.0.0.0/8"],"cidrz":["10.0.0.0/8"]}]}}}),
+            "data.config.items[0].cidrz",
+        ),
+        (
+            json!({"data":{"type":"Selector","config":{"active":"lockdown","descriptin":"x"}}}),
+            "data.config.descriptin",
+        ),
+        (
+            json!({"data":{"type":"RegionRouteOverride","config":{"enable":true,"regionz":[]}}}),
+            "data.config.regionz",
+        ),
+    ];
+
+    for (value, expected) in cases {
+        serde_json::from_value::<EdgionConfigDataSpec>(value.clone())
+            .expect("a document containing only an advisory typo must remain deserializable");
+        assert_eq!(
+            unknown_key_paths(&value, edgion_config_data_spec_schema()),
+            vec![expected.to_string()]
+        );
+    }
+}
+
+#[test]
+fn config_data_clean_typed_variants_have_no_findings() {
+    let cases = [
+        json!({"data":{"type":"KeyList","config":{"matchMode":"exact","items":[{"name":"g","items":[{"key":"x"}]}]}}}),
+        json!({"data":{"type":"IpList","config":{"items":[{"name":"g","cidrs":["10.0.0.0/8"]}]}}}),
+        json!({"data":{"type":"Selector","config":{"active":"lockdown","description":"x"}}}),
+        json!({"data":{"type":"RegionRouteOverride","config":{"enable":true,"regions":null}}}),
+    ];
+
+    for value in cases {
+        serde_json::from_value::<EdgionConfigDataSpec>(value.clone())
+            .expect("a clean typed config must deserialize through the production type");
+        assert!(
+            unknown_key_paths(&value, edgion_config_data_spec_schema()).is_empty(),
+            "clean typed config must not produce findings: {value}"
+        );
+    }
+}
+
+#[test]
+fn config_data_misc_config_is_open_but_data_siblings_are_not() {
+    let value = json!({
+        "data": {
+            "type": "Misc",
+            "config": {"arbitrary": {"nested": [{"anything": true}]}},
+            "typo": true
+        }
+    });
+    assert_eq!(
+        unknown_key_paths(&value, edgion_config_data_spec_schema()),
+        vec!["data.typo".to_string()]
+    );
+}
+
+#[test]
+fn config_data_envelope_typo_is_reported() {
+    let value = json!({"enabel": true, "data":{"type":"Misc","config":{}}});
+    assert_eq!(
+        unknown_key_paths(&value, edgion_config_data_spec_schema()),
+        vec!["enabel".to_string()]
+    );
+}
+
+#[test]
+fn config_data_missing_or_unknown_discriminator_is_fail_silent_but_serde_rejects() {
+    for value in [
+        json!({"data":{"config":{"typo":true}}}),
+        json!({"data":{"type":"FutureType","config":{"typo":true}}}),
+    ] {
+        assert!(unknown_key_paths(&value, edgion_config_data_spec_schema()).is_empty());
+        assert!(serde_json::from_value::<EdgionConfigDataSpec>(value).is_err());
+    }
+}
+
+#[test]
+fn config_data_generated_schema_keeps_only_misc_open() {
+    let schema = edgion_config_data_spec_schema().as_value();
+    let branches = schema["$defs"]["ConfigEntry"]["oneOf"]
+        .as_array()
+        .expect("ConfigEntry must remain an adjacent-tagged oneOf");
+    assert_eq!(branches.len(), 5);
+
+    for branch in branches {
+        let variant = branch["properties"]["type"]["const"]
+            .as_str()
+            .expect("each ConfigEntry branch must pin its discriminator");
+        let config = &branch["properties"]["config"];
+        if variant == "Misc" {
+            assert_eq!(config, &json!(true), "Misc.config must remain unconstrained");
+        } else {
+            assert!(
+                config.get("$ref").and_then(serde_json::Value::as_str).is_some(),
+                "typed {variant}.config must remain schema-backed, got {config}"
+            );
+        }
+    }
 }

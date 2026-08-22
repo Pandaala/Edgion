@@ -161,19 +161,19 @@ Controller 在独立的指标监听器（`:12190`，与 Admin 端口 `:12101` �
 | `edgion_controller_status_writes_skipped_total` | Counter | `kind` | 语义差异检查后跳过的状态写入次数 |
 | `edgion_controller_unexpected_apply_during_init_total` | Counter | `kind` | 初始化期间收到的 Apply 事件（应保持为 0；非零表示 watcher 流排序异常） |
 | `edgion_controller_resource_abnormal` | Gauge | `kind`、`namespace`、`name`、`err`、`warn` | 至少有一个失败状态条件的每个资源的一个序列。`err` / `warn` 是触发条件的 JSON 数组；该严重级别无条件时为空字符串 |
-| `edgion_controller_unknown_config_fields` | Gauge | `kind`、`namespace`、`name`、`warn` | 提交的 `EdgionPlugins`/`EdgionStreamPlugins` 文档中含有 schema 不识别的字段的每个资源一个序列（仅告警，从不阻断）；`warn` 是发现路径的 JSON 数组，单资源最多 20 条并带有可见的 `(+M more)` 标记，序列总数上限 1000 并附带如实的截断日志。数据来自对 `spec.unknown_fields` 的实时扫描，因此与仅限 Kubernetes 模式的 `resource_abnormal` 不同，FileSystem/etcd 模式下同样会产生该指标 |
+| `edgion_controller_unknown_config_fields` | Gauge | `kind` | 每个存在未知配置字段的资源类型一个序列，值为该类型受影响的资源数（仅告警，从不阻断）。详细资源名与路径仅通过诊断接口、状态和日志提供，不进入 Prometheus 标签。数据来自对 `spec.unknown_fields` 的实时扫描，因此与仅限 Kubernetes 模式的 `resource_abnormal` 不同，FileSystem/etcd 模式下同样会产生该指标 |
 | `edgion_controller_leader_job_alive` | Gauge | `leader_job`（`acme` \| `conf_sync_rotation` \| `dns_resolver`） | Leader-job worker 的存活状态：`1` = 正在运行，`0` = 已停止或死亡。标签刻意使用 `leader_job` 而非 `job`——Prometheus 把 `job` 保留作为 target 标签，在默认 `honor_labels: false` 下会把导出的 `job` 标签重命名为 `exported_job`，从而破坏按文档名称编写的告警 |
 
 `edgion_controller_resource_abnormal` 快照定时重建，默认上限 1000 条，以控制基数。用于对卡在异常状态的资源告警，如 `edgion_controller_resource_abnormal{err!=""}`。
 
 ### 未知配置字段告警
 
-`edgion_controller_unknown_config_fields` 是在同一个 `/metrics` 拼接点附加的实时扫描（不是定时快照），每次抓取时都从 `EdgionPlugins`/`EdgionStreamPlugins` 的 `spec.unknown_fields` 现场重新渲染。每个当前存在发现的资源一个序列；健康的集群不产生任何序列。与 `resource_abnormal` 不同，该指标在 FileSystem 和 etcd conf_center 模式下同样会产生数据，而非仅限 Kubernetes 模式——原因见[未知配置字段检测](../plugin-config-unknown-fields.md)。
+`edgion_controller_unknown_config_fields` 是在同一个 `/metrics` 拼接点附加的实时扫描（不是定时快照），每次抓取时都从 `EdgionPlugins`、`EdgionStreamPlugins` 和 `EdgionConfigData` 的 `spec.unknown_fields` 现场重新渲染。每个存在发现的资源类型一个计数序列；健康的集群不产生任何序列。与 `resource_abnormal` 不同，该指标在 FileSystem 和 etcd conf_center 模式下同样会产生数据，而非仅限 Kubernetes 模式——原因见[未知配置字段检测](../plugin-config-unknown-fields.md)。
 
-`warn` 标签携带发现路径的 JSON 数组——绝不使用逐路径的独立标签——因此基数不会随着一个资源上的拼写错误数量增长；单资源最多列出 20 条（其余以可见的 `(+M more)` 标记概括），整个快照上限 1000 条序列。该指标与它所配合的条件/日志/端点一样纯属提示性质：它从不阻断同步。
+唯一标签是值域有界的 `kind` 枚举。资源名和发现路径只保留在诊断接口、状态条件和 Controller 警告日志中；它们的历史值域无界，因此不会进入 Prometheus 标签。该指标纯属提示性质，从不阻断同步。
 
 ```promql
-edgion_controller_unknown_config_fields{warn!=""}
+edgion_controller_unknown_config_fields > 0
 ```
 
 如果希望 CI/仪表盘捕获 Controller 本身刻意不拒绝的配置 typo，可以对持续非空的结果告警。
@@ -336,9 +336,9 @@ histogram_quantile(0.99, sum(rate(edgion_gateway_request_duration_ms_bucket[5m])
 
 **A**：抓取 Controller 的 `/metrics`，并对 `edgion_controller_resource_abnormal{err!=""}` 告警。每个序列通过 `kind` / `namespace` / `name` 标识一个资源，失败条件在 `err` / `warn` 标签中。
 
-### Q4b：如何检测 `EdgionPlugins`/`EdgionStreamPlugins` 中被静默忽略的配置 typo？
+### Q4b：如何检测插件资源或类型化 `EdgionConfigData` 中被静默忽略的配置 typo？
 
-**A**：对 `edgion_controller_unknown_config_fields{warn!=""}` 告警——每个至少有一个未识别字段的资源一个序列，发现路径在 `warn` 标签中。参见[未知配置字段检测](../plugin-config-unknown-fields.md)；该指标仍然只是提示性的（Controller 从不因此拒绝资源），因此请用它驱动自己的告警或仪表盘，而不是作为阻断闸门。
+**A**：对 `edgion_controller_unknown_config_fields > 0` 告警——每个受影响的资源类型一个序列，值为该类型受影响的资源数。通过 `GET /api/v1/diagnostics/unknown-fields` 获取具体资源名和路径。参见[未知配置字段检测](../plugin-config-unknown-fields.md)；该指标仍然只是提示性的（Controller 从不因此拒绝资源），因此请用它驱动自己的告警或仪表盘，而不是作为阻断闸门。
 
 ### Q5：某个 Gateway 流量一切正常，但我的配置变更在它上面就是不生效，为什么？
 

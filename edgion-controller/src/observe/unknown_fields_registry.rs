@@ -1,5 +1,6 @@
-//! Fleet-wide registry of `unknown_fields` findings for `EdgionPlugins` /
-//! `EdgionStreamPlugins`, read live by `GET /api/v1/diagnostics/unknown-fields`
+//! Fleet-wide registry of `unknown_fields` findings for `EdgionPlugins`,
+//! `EdgionStreamPlugins`, and `EdgionConfigData`, read live by
+//! `GET /api/v1/diagnostics/unknown-fields`
 //! (`api/diagnostics_handlers.rs`).
 //!
 //! `unknown_fields` is `#[serde(skip)]` on the resource specs (deliberately —
@@ -26,15 +27,16 @@
 //! point-in-time question), that a full live scan is cheap and avoids a
 //! second background task plus its own staleness window.
 //!
-//! `K` is generic at the three call sites, so the concrete `EdgionPlugins` /
-//! `EdgionStreamPlugins` type is reached via `Any` downcast — the same idiom
+//! `K` is generic at the three call sites, so the concrete supported type is
+//! reached via `Any` downcast — the same idiom
 //! `conf_mgr::conf_center::common::populate_unknown_fields_non_fatal` uses at
 //! the analogous generic seam (FileSystem/etcd loader).
 
 use parking_lot::Mutex;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, OnceLock};
 
 use crate::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore;
@@ -50,7 +52,91 @@ pub struct UnknownFieldsEntry {
 
 /// Per-kind findings source closure signature: scans one kind's store and
 /// pushes an entry for every resource carrying at least one finding.
-type Source = Box<dyn Fn(&mut Vec<UnknownFieldsEntry>) + Send + Sync>;
+type Source = Box<dyn Fn(&mut BoundedCollector) + Send + Sync>;
+
+/// Maximum number of concrete paths exposed for one resource. The final
+/// element is a deterministic marker when additional paths were omitted.
+pub(crate) const MAX_PATHS_PER_RESOURCE: usize = 20;
+pub(crate) const MAX_UNKNOWN_FIELD_PATH_BYTES: usize = 512;
+
+pub(crate) fn bounded_unknown_field_path(path: &str) -> String {
+    if path.len() <= MAX_UNKNOWN_FIELD_PATH_BYTES {
+        return path.to_string();
+    }
+    // Reserve ample room for the ASCII marker; keeping this fixed avoids a
+    // length-dependent loop while still guaranteeing the final value is
+    // below the byte cap for every usize width.
+    let mut end = MAX_UNKNOWN_FIELD_PATH_BYTES.saturating_sub(32).min(path.len());
+    while !path.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...(+{} bytes)", &path[..end], path.len() - end)
+}
+
+fn bounded_resource_identity(identity: &str) -> String {
+    if identity.len() <= MAX_UNKNOWN_FIELD_PATH_BYTES {
+        return identity.to_string();
+    }
+
+    let digest = hex::encode(Sha256::digest(identity.as_bytes()));
+    let marker = format!("...({} bytes; sha256:{digest})", identity.len());
+    let mut end = MAX_UNKNOWN_FIELD_PATH_BYTES
+        .saturating_sub(marker.len())
+        .min(identity.len());
+    while !identity.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{}", &identity[..end], marker)
+}
+
+pub(crate) fn bounded_unknown_field_paths(paths: &[String]) -> Vec<String> {
+    let shown_len = paths.len().min(MAX_PATHS_PER_RESOURCE);
+    let mut shown: Vec<String> = paths[..shown_len]
+        .iter()
+        .map(|path| bounded_unknown_field_path(path))
+        .collect();
+    if paths.len() > shown_len {
+        shown.push(format!("(+{} more)", paths.len() - shown_len));
+    }
+    shown
+}
+
+struct BoundedCollector {
+    cap: usize,
+    total: usize,
+    by_kind: BTreeMap<&'static str, usize>,
+    items: Vec<UnknownFieldsEntry>,
+}
+
+impl BoundedCollector {
+    fn new(cap: usize) -> Self {
+        Self {
+            cap,
+            total: 0,
+            by_kind: BTreeMap::new(),
+            items: Vec::with_capacity(cap.min(1024)),
+        }
+    }
+
+    fn push(&mut self, entry: UnknownFieldsEntry) {
+        self.total += 1;
+        *self.by_kind.entry(entry.kind).or_default() += 1;
+        if self.cap == 0 {
+            return;
+        }
+        let key = (entry.kind, entry.namespace.as_str(), entry.name.as_str());
+        let index = self
+            .items
+            .binary_search_by(|existing| (existing.kind, existing.namespace.as_str(), existing.name.as_str()).cmp(&key))
+            .unwrap_or_else(|index| index);
+        if self.items.len() < self.cap {
+            self.items.insert(index, entry);
+        } else if index < self.cap {
+            self.items.insert(index, entry);
+            self.items.pop();
+        }
+    }
+}
 
 /// Registered per-kind sources, keyed by kind name so a second registration
 /// for the same kind replaces (never appends to) the first.
@@ -69,15 +155,15 @@ static TEST_MUTEX: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 /// resource_controller call sites as `status_metrics::register_status_renderer`,
 /// right after the `RawStore` is wired.
 ///
-/// A no-op for every kind except `EdgionPlugins` / `EdgionStreamPlugins` —
-/// the only two resources carrying an `unknown_fields` field — so the other
+/// A no-op for every kind except `EdgionPlugins`, `EdgionStreamPlugins`, and
+/// `EdgionConfigData` — the resources carrying an `unknown_fields` field — so the other
 /// ~20 kinds pay only a string compare and never occupy a registry slot.
 pub(crate) fn register_unknown_fields_source<K>(kind: &'static str, store: Arc<dyn RawStore<K>>)
 where
     K: Send + Sync + 'static,
 {
     let source: Source = match kind {
-        "EdgionPlugins" => Box::new(move |out: &mut Vec<UnknownFieldsEntry>| {
+        "EdgionPlugins" => Box::new(move |out: &mut BoundedCollector| {
             for obj in store.snapshot() {
                 let any: Arc<dyn Any + Send + Sync> = obj;
                 let Ok(plugins) = any.downcast::<edgion_resources::EdgionPlugins>() else {
@@ -86,14 +172,14 @@ where
                 if !plugins.spec.unknown_fields.is_empty() {
                     out.push(UnknownFieldsEntry {
                         kind: "EdgionPlugins",
-                        namespace: plugins.metadata.namespace.clone().unwrap_or_default(),
-                        name: plugins.metadata.name.clone().unwrap_or_default(),
-                        paths: plugins.spec.unknown_fields.clone(),
+                        namespace: bounded_resource_identity(plugins.metadata.namespace.as_deref().unwrap_or_default()),
+                        name: bounded_resource_identity(plugins.metadata.name.as_deref().unwrap_or_default()),
+                        paths: bounded_unknown_field_paths(&plugins.spec.unknown_fields),
                     });
                 }
             }
         }),
-        "EdgionStreamPlugins" => Box::new(move |out: &mut Vec<UnknownFieldsEntry>| {
+        "EdgionStreamPlugins" => Box::new(move |out: &mut BoundedCollector| {
             for obj in store.snapshot() {
                 let any: Arc<dyn Any + Send + Sync> = obj;
                 let Ok(plugins) = any.downcast::<edgion_resources::EdgionStreamPlugins>() else {
@@ -102,9 +188,27 @@ where
                 if !plugins.spec.unknown_fields.is_empty() {
                     out.push(UnknownFieldsEntry {
                         kind: "EdgionStreamPlugins",
-                        namespace: plugins.metadata.namespace.clone().unwrap_or_default(),
-                        name: plugins.metadata.name.clone().unwrap_or_default(),
-                        paths: plugins.spec.unknown_fields.clone(),
+                        namespace: bounded_resource_identity(plugins.metadata.namespace.as_deref().unwrap_or_default()),
+                        name: bounded_resource_identity(plugins.metadata.name.as_deref().unwrap_or_default()),
+                        paths: bounded_unknown_field_paths(&plugins.spec.unknown_fields),
+                    });
+                }
+            }
+        }),
+        "EdgionConfigData" => Box::new(move |out: &mut BoundedCollector| {
+            for obj in store.snapshot() {
+                let any: Arc<dyn Any + Send + Sync> = obj;
+                let Ok(config_data) = any.downcast::<edgion_resources::EdgionConfigData>() else {
+                    continue;
+                };
+                if !config_data.spec.unknown_fields.is_empty() {
+                    out.push(UnknownFieldsEntry {
+                        kind: "EdgionConfigData",
+                        namespace: bounded_resource_identity(
+                            config_data.metadata.namespace.as_deref().unwrap_or_default(),
+                        ),
+                        name: bounded_resource_identity(config_data.metadata.name.as_deref().unwrap_or_default()),
+                        paths: bounded_unknown_field_paths(&config_data.spec.unknown_fields),
                     });
                 }
             }
@@ -124,27 +228,23 @@ where
 /// (`schema_check` / `05-issues.md` R-5): output must not depend on
 /// `HashMap` iteration order or on `RawStore::snapshot`'s unspecified order.
 pub(crate) fn collect_unknown_fields(cap: usize) -> (usize, bool, Vec<UnknownFieldsEntry>) {
-    let mut all = Vec::new();
+    let mut collector = BoundedCollector::new(cap);
     {
         let sources = sources_slot().lock();
         for source in sources.values() {
-            source(&mut all);
+            source(&mut collector);
         }
     }
-    all.sort_by(|a, b| {
-        (a.kind, a.namespace.as_str(), a.name.as_str()).cmp(&(b.kind, b.namespace.as_str(), b.name.as_str()))
-    });
-    let total = all.len();
-    let truncated = total > cap;
-    all.truncate(cap);
-    (total, truncated, all)
+    let truncated = collector.total > cap;
+    (collector.total, truncated, collector.items)
 }
 
 // ---------------------------------------------------------------------
 // `edgion_controller_unknown_config_fields` gauge.
 //
-// Deliberately built on top of `collect_unknown_fields` above (the live
-// `spec.unknown_fields` scan), NOT on `status_metrics::classify()`.
+// Deliberately built on the same bounded collector and live
+// `spec.unknown_fields` sources as `collect_unknown_fields` above, NOT on
+// `status_metrics::classify()`.
 // `edgion_controller_resource_abnormal` is derived from resource STATUS
 <<<<<<< Updated upstream
 // CONDITIONS, which per the controller-metrics section of
@@ -155,7 +255,7 @@ pub(crate) fn collect_unknown_fields(cap: usize) -> (usize, bool, Vec<UnknownFie
 >>>>>>> Stashed changes
 // mode the scanner reads pre-processed objects that never carry status
 // conditions at all. Our findings live on `spec.unknown_fields`, which
-// `collect_unknown_fields` reads straight from the typed `RawStore` in ALL
+// the registered sources read straight from the typed `RawStore` in ALL
 // THREE conf_center modes. Routing this metric through `classify()` would
 // silently produce zero coverage in FileSystem/etcd mode — see
 // `status_metrics.rs`'s `classify()` doc comment and the pin test
@@ -163,153 +263,29 @@ pub(crate) fn collect_unknown_fields(cap: usize) -> (usize, bool, Vec<UnknownFie
 // metric must NOT disturb: it is a separate gauge, on purpose.
 //
 // Like `edgion_controller_resource_abnormal`, there is no background loop:
-// `collect_unknown_fields` is already a cheap on-demand scan (used
-// synchronously by the diagnostics handler), so the `/metrics` handler
-// just calls it again at scrape time.
+// both diagnostics and `/metrics` perform the same cheap live scan on demand.
 
 pub(crate) const METRIC_NAME: &str = "edgion_controller_unknown_config_fields";
-pub(crate) const METRIC_HELP: &str = "Resources whose submitted document contains a key the EdgionPlugins/EdgionStreamPlugins schema does not recognize (see GET /api/v1/diagnostics/unknown-fields), aggregated ONE SERIES PER KIND. The value is the number of affected resources of that kind. The `warn` label is the full finding set as a JSON array of {namespace,name,paths}, sorted deterministically, capped at a fixed byte budget with a visible truncation marker object appended when it does not all fit; per-resource `paths` are separately capped with a visible `(+M more)` marker. Emitted ONLY for kinds with at least one finding, so a healthy fleet emits nothing. Advisory only — does not affect Accepted, never blocks a sync.";
-
-/// Byte budget for the whole `warn` label value (the serialized JSON array),
-/// per kind. Chosen in the low kilobytes: large enough that a realistic
-/// number of findings round-trips without truncation in normal operation,
-/// small enough to keep one Prometheus sample line — and the scrape as a
-/// whole, since at most two of these series exist — comfortably bounded
-/// even on a badly misconfigured fleet. Unlike the old per-resource-series
-/// design, cardinality is now fixed at <= 2 series regardless of fleet
-/// size, so this budget is the only remaining unbounded-payload risk and is
-/// enforced by [`render_kind_payload`].
-const LABEL_BYTE_BUDGET: usize = 4096;
-
-/// Cap on how many finding paths are embedded in one resource's `paths`
-/// array before the rest are summarized with a visible `(+M more)` marker.
-/// Mirrors the capping idea in
-/// `resource_processor/unknown_fields_stamp.rs::format_message` — a single
-/// malformed resource can carry up to `MAX_JSON_INSTANCE_NODES` (20000)
-/// findings, and an uncapped per-resource path list would alone be able to
-/// exhaust [`LABEL_BYTE_BUDGET`].
-const MAX_PATHS_PER_RESOURCE: usize = 20;
-
-/// Sanity cap on how many resources `collect_unknown_fields` is asked to
-/// return before per-kind grouping. Effectively "everything" for any
-/// realistic fleet — the real enforcement point is
-/// [`LABEL_BYTE_BUDGET`] inside [`render_kind_payload`], which caps what
-/// actually lands in the label value; this outer cap exists only so a
-/// pathological fleet size can't make the scan itself unbounded.
-const RESOURCE_SCAN_CAP: usize = 100_000;
-
-/// One resource's contribution to a kind's `warn` payload: its `paths` are
-/// capped and visibly marked, exactly like the per-resource label design
-/// this replaced.
-fn capped_paths_value(paths: &[String]) -> Vec<String> {
-    if paths.len() > MAX_PATHS_PER_RESOURCE {
-        let mut shown: Vec<String> = paths[..MAX_PATHS_PER_RESOURCE].to_vec();
-        shown.push(format!("(+{} more)", paths.len() - MAX_PATHS_PER_RESOURCE));
-        shown
-    } else {
-        paths.to_vec()
-    }
-}
-
-/// Build one kind's `warn` label JSON value from its (already
-/// namespace/name-sorted, by `collect_unknown_fields`) entries.
-///
-/// The array holds `{namespace,name,paths}` objects until adding the next
-/// one would exceed [`LABEL_BYTE_BUDGET`]; if any resources are left over,
-/// a trailing sentinel object — `{"truncated":true,"omittedResources":N}` —
-/// is appended so truncation is visible inside the JSON itself rather than
-/// silently dropped. A sentinel object has no `namespace`/`name` fields, so
-/// a consumer can distinguish it from a real finding by shape.
-///
-/// Deterministic: same input always serializes to the identical byte
-/// sequence (entries pre-sorted by the caller, no HashMap iteration here),
-/// so an unchanged fleet does not mint a new label value — and therefore
-/// not a new series identity — on every scrape.
-fn render_kind_payload(kind: &str, entries: &[&UnknownFieldsEntry]) -> String {
-    let mut arr: Vec<serde_json::Value> = Vec::with_capacity(entries.len());
-    let mut included = 0usize;
-    // "[]" baseline plus headroom for the trailing sentinel object, so the
-    // budget check below never has to retroactively evict an already-added
-    // entry to make room for the truncation marker.
-    let sentinel_headroom = 64usize;
-    let mut len_estimate = 2usize;
-    for entry in entries {
-        let obj = serde_json::json!({
-            "namespace": entry.namespace,
-            "name": entry.name,
-            "paths": capped_paths_value(&entry.paths),
-        });
-        let obj_len = serde_json::to_string(&obj).map(|s| s.len()).unwrap_or(0);
-        let projected = len_estimate + obj_len + 1; // +1 for the separating comma
-        if included > 0 && projected + sentinel_headroom > LABEL_BYTE_BUDGET {
-            break;
-        }
-        arr.push(obj);
-        len_estimate = projected;
-        included += 1;
-    }
-    let omitted = entries.len() - included;
-    if omitted > 0 {
-        tracing::error!(
-            component = "unknown_fields_metrics",
-            kind = kind,
-            included = included,
-            omitted = omitted,
-            budget_bytes = LABEL_BYTE_BUDGET,
-            "unknown-config-fields warn payload exceeds byte budget; truncating"
-        );
-        arr.push(serde_json::json!({
-            "truncated": true,
-            "omittedResources": omitted,
-        }));
-    }
-    serde_json::to_string(&arr).unwrap_or_else(|err| {
-        tracing::warn!(
-            component = "unknown_fields_metrics",
-            kind = kind,
-            error = %err,
-            "failed to serialize unknown-fields warn payload; emitting empty array"
-        );
-        "[]".to_string()
-    })
-}
+pub(crate) const METRIC_HELP: &str = "Resources whose submitted document contains a key the EdgionPlugins, EdgionStreamPlugins, or EdgionConfigData schema does not recognize, aggregated by resource kind. Detailed findings are available from GET /api/v1/diagnostics/unknown-fields. Advisory only; does not affect Accepted or block sync.";
 
 /// Render the `edgion_controller_unknown_config_fields` Prometheus text
-/// block: one series per kind (`EdgionPlugins` / `EdgionStreamPlugins`),
+/// block: one series per supported kind,
 /// never per resource. Returns "" when there are no findings anywhere, so
 /// the caller can skip appending entirely (no bare `# HELP`/`# TYPE` with
 /// zero samples).
-///
-/// Only a `warn` payload exists today (this feature is warn-only by
-/// design — it never blocks or rejects); an `err` payload could be added
-/// later as a second label without reshaping the one-series-per-kind
-/// design, so this function deliberately does not emit an empty `err=""`
-/// label just for symmetry with `edgion_controller_resource_abnormal`.
 pub(crate) fn render_unknown_config_fields_metric() -> String {
-    let (total, scan_truncated, items) = collect_unknown_fields(RESOURCE_SCAN_CAP);
-    if items.is_empty() {
+    let mut collector = BoundedCollector::new(0);
+    {
+        let sources = sources_slot().lock();
+        for source in sources.values() {
+            source(&mut collector);
+        }
+    }
+    if collector.total == 0 {
         return String::new();
     }
-    if scan_truncated {
-        tracing::error!(
-            component = "unknown_fields_metrics",
-            total = total,
-            cap = RESOURCE_SCAN_CAP,
-            "unknown-config-fields resource scan exceeds sanity cap; per-kind counts will undercount"
-        );
-    }
 
-    // Group by kind. `items` is already sorted by (kind, namespace, name)
-    // (see `collect_unknown_fields`), and `BTreeMap` iterates keys in
-    // sorted order, so both the kind emission order and each kind's
-    // resource order stay deterministic without a separate sort here.
-    let mut by_kind: std::collections::BTreeMap<&'static str, Vec<&UnknownFieldsEntry>> =
-        std::collections::BTreeMap::new();
-    for entry in &items {
-        by_kind.entry(entry.kind).or_default().push(entry);
-    }
-
-    let mut out = String::with_capacity(256 + by_kind.len() * (LABEL_BYTE_BUDGET + 64));
+    let mut out = String::with_capacity(256 + collector.by_kind.len() * 96);
     out.push_str("# HELP ");
     out.push_str(METRIC_NAME);
     out.push(' ');
@@ -318,15 +294,12 @@ pub(crate) fn render_unknown_config_fields_metric() -> String {
     out.push_str("# TYPE ");
     out.push_str(METRIC_NAME);
     out.push_str(" gauge\n");
-    for (kind, entries) in &by_kind {
-        let warn_json = render_kind_payload(kind, entries);
+    for (kind, count) in collector.by_kind {
         out.push_str(METRIC_NAME);
         out.push_str("{kind=\"");
         out.push_str(kind);
-        out.push_str("\",warn=\"");
-        crate::observe::status_metrics::append_escaped(&mut out, &warn_json);
         out.push_str("\"} ");
-        out.push_str(&entries.len().to_string());
+        out.push_str(&count.to_string());
         out.push('\n');
     }
     out
@@ -336,7 +309,10 @@ pub(crate) fn render_unknown_config_fields_metric() -> String {
 mod tests {
     use super::*;
     use crate::conf_mgr::sync_runtime::resource_processor::LocalRawStore;
-    use edgion_resources::{EdgionPlugins, EdgionPluginsSpec, EdgionStreamPlugins, EdgionStreamPluginsSpec};
+    use edgion_resources::{
+        EdgionConfigData, EdgionConfigDataSpec, EdgionPlugins, EdgionPluginsSpec, EdgionStreamPlugins,
+        EdgionStreamPluginsSpec,
+    };
 
     fn reset() {
         sources_slot().lock().clear();
@@ -362,6 +338,17 @@ mod tests {
         Arc::new(esp)
     }
 
+    fn config_data_with_findings(ns: &str, name: &str, paths: Vec<String>) -> Arc<EdgionConfigData> {
+        let spec: EdgionConfigDataSpec = serde_json::from_value(serde_json::json!({
+            "data": {"type": "Misc", "config": {}}
+        }))
+        .expect("minimal ConfigData spec");
+        let mut data = EdgionConfigData::new(name, spec);
+        data.metadata.namespace = Some(ns.to_string());
+        data.spec.unknown_fields = paths;
+        Arc::new(data)
+    }
+
     #[test]
     fn empty_registry_yields_no_findings() {
         let _guard = TEST_MUTEX.lock();
@@ -373,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn reports_findings_from_both_plugin_kinds() {
+    fn reports_findings_from_all_supported_kinds() {
         let _guard = TEST_MUTEX.lock();
         reset();
 
@@ -391,14 +378,21 @@ mod tests {
         );
         register_unknown_fields_source::<EdgionStreamPlugins>("EdgionStreamPlugins", stream_store);
 
+        let config_data_store = Arc::new(LocalRawStore::<EdgionConfigData>::new());
+        config_data_store.upsert(
+            "default/cidrs".into(),
+            config_data_with_findings("default", "cidrs", vec!["data.config.items[0].cidrz".into()]),
+        );
+        register_unknown_fields_source::<EdgionConfigData>("EdgionConfigData", config_data_store);
+
         let (total, truncated, items) = collect_unknown_fields(100);
-        assert_eq!(total, 2);
+        assert_eq!(total, 3);
         assert!(!truncated);
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].kind, "EdgionPlugins");
-        assert_eq!(items[0].paths, vec!["requestPlugins[0].config.denys".to_string()]);
-        assert_eq!(items[1].kind, "EdgionStreamPlugins");
-        assert_eq!(items[1].paths, vec!["plugins[0].config.typo".to_string()]);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].kind, "EdgionConfigData");
+        assert_eq!(items[0].paths, vec!["data.config.items[0].cidrz".to_string()]);
+        assert_eq!(items[1].kind, "EdgionPlugins");
+        assert_eq!(items[2].kind, "EdgionStreamPlugins");
     }
 
     #[test]
@@ -451,6 +445,83 @@ mod tests {
         assert_eq!(items.len(), 2, "items must honor the cap");
     }
 
+    #[test]
+    fn bounded_retention_keeps_deterministic_first_entries_and_caps_paths() {
+        let _guard = TEST_MUTEX.lock();
+        reset();
+
+        let store = Arc::new(LocalRawStore::<EdgionPlugins>::new());
+        for name in ["z-last", "a-first", "m-middle"] {
+            let paths = (0..(MAX_PATHS_PER_RESOURCE + 3))
+                .map(|i| format!("very.long.path.{i}.{}", "x".repeat(1024)))
+                .collect();
+            store.upsert(format!("default/{name}"), plugins_with_findings("default", name, paths));
+        }
+        register_unknown_fields_source::<EdgionPlugins>("EdgionPlugins", store);
+
+        let (total, truncated, items) = collect_unknown_fields(2);
+        assert_eq!(total, 3);
+        assert!(truncated);
+        assert_eq!(
+            items.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(),
+            ["a-first", "m-middle"]
+        );
+        assert_eq!(items[0].paths.len(), MAX_PATHS_PER_RESOURCE + 1);
+        assert_eq!(items[0].paths[MAX_PATHS_PER_RESOURCE], "(+3 more)");
+        assert!(items[0].paths[..MAX_PATHS_PER_RESOURCE]
+            .iter()
+            .all(|path| path.len() <= MAX_UNKNOWN_FIELD_PATH_BYTES && path.contains("bytes)")));
+    }
+
+    #[test]
+    fn diagnostics_bound_oversized_identity_components() {
+        let _guard = TEST_MUTEX.lock();
+        reset();
+
+        let store = Arc::new(LocalRawStore::<EdgionPlugins>::new());
+        store.upsert(
+            "oversized".into(),
+            plugins_with_findings(&"n".repeat(2048), &"r".repeat(2048), vec!["config.typo".to_string()]),
+        );
+        register_unknown_fields_source::<EdgionPlugins>("EdgionPlugins", store);
+
+        let (_, _, items) = collect_unknown_fields(1);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].namespace.len() <= MAX_UNKNOWN_FIELD_PATH_BYTES);
+        assert!(items[0].name.len() <= MAX_UNKNOWN_FIELD_PATH_BYTES);
+        assert!(items[0].namespace.contains("bytes; sha256:"));
+        assert!(items[0].name.contains("bytes; sha256:"));
+    }
+
+    #[test]
+    fn oversized_identity_ties_are_stably_disambiguated_before_bounded_retention() {
+        let common_prefix = "r".repeat(MAX_UNKNOWN_FIELD_PATH_BYTES + 128);
+        let first = bounded_resource_identity(&format!("{common_prefix}a"));
+        let second = bounded_resource_identity(&format!("{common_prefix}b"));
+        assert_ne!(first, second, "the digest must preserve a stable distinction");
+        assert!(first.len() <= MAX_UNKNOWN_FIELD_PATH_BYTES);
+        assert!(second.len() <= MAX_UNKNOWN_FIELD_PATH_BYTES);
+
+        let entry = |name: String| UnknownFieldsEntry {
+            kind: "EdgionPlugins",
+            namespace: "default".to_string(),
+            name,
+            paths: vec!["config.typo".to_string()],
+        };
+        let expected = first.clone().min(second.clone());
+
+        let mut forward = BoundedCollector::new(1);
+        forward.push(entry(first.clone()));
+        forward.push(entry(second.clone()));
+
+        let mut reverse = BoundedCollector::new(1);
+        reverse.push(entry(second));
+        reverse.push(entry(first));
+
+        assert_eq!(forward.items[0].name, expected);
+        assert_eq!(reverse.items[0].name, expected);
+    }
+
     /// Guards against the conf_center-reload duplication bug (see the module
     /// doc comment): a second `register_unknown_fields_source` call for the
     /// same kind must replace the prior source, not accumulate a duplicate.
@@ -483,35 +554,6 @@ mod tests {
 
     mod metric_rendering {
         use super::*;
-
-        /// Undo Prometheus label-value escaping (`\\` -> `\`, `\"` -> `"`),
-        /// returning the raw JSON string the label carried.
-        fn unescape_label(label_value: &str) -> String {
-            let mut out = String::new();
-            let mut chars = label_value.chars();
-            while let Some(c) = chars.next() {
-                if c == '\\' {
-                    match chars.next() {
-                        Some('\\') => out.push('\\'),
-                        Some('"') => out.push('"'),
-                        Some('n') => out.push('\n'),
-                        Some(other) => out.push(other),
-                        None => {}
-                    }
-                } else {
-                    out.push(c);
-                }
-            }
-            out
-        }
-
-        /// Extract the `warn="..."` label value (still Prometheus-escaped)
-        /// from a rendered series line.
-        fn warn_label_of(line: &str) -> &str {
-            let start = line.find("warn=\"").unwrap() + "warn=\"".len();
-            let end = line.rfind("\"} ").unwrap();
-            &line[start..end]
-        }
 
         #[test]
         fn healthy_fleet_emits_no_series_and_no_block() {
@@ -547,9 +589,9 @@ mod tests {
             let block = render_unknown_config_fields_metric();
             let expected = concat!(
                 "# HELP edgion_controller_unknown_config_fields ",
-                "Resources whose submitted document contains a key the EdgionPlugins/EdgionStreamPlugins schema does not recognize (see GET /api/v1/diagnostics/unknown-fields), aggregated ONE SERIES PER KIND. The value is the number of affected resources of that kind. The `warn` label is the full finding set as a JSON array of {namespace,name,paths}, sorted deterministically, capped at a fixed byte budget with a visible truncation marker object appended when it does not all fit; per-resource `paths` are separately capped with a visible `(+M more)` marker. Emitted ONLY for kinds with at least one finding, so a healthy fleet emits nothing. Advisory only — does not affect Accepted, never blocks a sync.\n",
+                "Resources whose submitted document contains a key the EdgionPlugins, EdgionStreamPlugins, or EdgionConfigData schema does not recognize, aggregated by resource kind. Detailed findings are available from GET /api/v1/diagnostics/unknown-fields. Advisory only; does not affect Accepted or block sync.\n",
                 "# TYPE edgion_controller_unknown_config_fields gauge\n",
-                "edgion_controller_unknown_config_fields{kind=\"EdgionPlugins\",warn=\"[{\\\"name\\\":\\\"demo-bad\\\",\\\"namespace\\\":\\\"default\\\",\\\"paths\\\":[\\\"requestPlugins[0].config.denys\\\"]}]\"} 1\n",
+                "edgion_controller_unknown_config_fields{kind=\"EdgionPlugins\"} 1\n",
             );
             assert_eq!(block, expected);
         }
@@ -580,17 +622,14 @@ mod tests {
                 "value must be the affected-resource count: {line}"
             );
 
-            let unescaped = unescape_label(warn_label_of(line));
-            let parsed: serde_json::Value = serde_json::from_str(&unescaped).expect("warn label must be valid JSON");
-            let arr = parsed.as_array().expect("warn label must be a JSON array");
-            assert_eq!(arr.len(), 2);
-            // Sorted by namespace then name: "demo-bad" before "other-bad".
-            assert_eq!(arr[0]["name"], "demo-bad");
-            assert_eq!(arr[1]["name"], "other-bad");
+            assert!(
+                !line.contains("warn="),
+                "metric must not expose finding data as a label"
+            );
         }
 
         #[test]
-        fn two_kinds_each_get_their_own_series() {
+        fn three_kinds_each_get_their_own_series() {
             let _guard = TEST_MUTEX.lock();
             reset();
 
@@ -608,15 +647,23 @@ mod tests {
             );
             register_unknown_fields_source::<EdgionStreamPlugins>("EdgionStreamPlugins", stream_store);
 
+            let config_data_store = Arc::new(LocalRawStore::<EdgionConfigData>::new());
+            config_data_store.upsert(
+                "default/cidrs".into(),
+                config_data_with_findings("default", "cidrs", vec!["data.config.items[0].cidrz".into()]),
+            );
+            register_unknown_fields_source::<EdgionConfigData>("EdgionConfigData", config_data_store);
+
             let block = render_unknown_config_fields_metric();
             let samples: Vec<&str> = block.lines().filter(|l| !l.starts_with('#')).collect();
-            assert_eq!(samples.len(), 2, "at most one series per kind: {block}");
-            assert!(samples[0].starts_with("edgion_controller_unknown_config_fields{kind=\"EdgionPlugins\""));
-            assert!(samples[1].starts_with("edgion_controller_unknown_config_fields{kind=\"EdgionStreamPlugins\""));
+            assert_eq!(samples.len(), 3, "at most one series per kind: {block}");
+            assert!(samples[0].starts_with("edgion_controller_unknown_config_fields{kind=\"EdgionConfigData\""));
+            assert!(samples[1].starts_with("edgion_controller_unknown_config_fields{kind=\"EdgionPlugins\""));
+            assert!(samples[2].starts_with("edgion_controller_unknown_config_fields{kind=\"EdgionStreamPlugins\""));
         }
 
         #[test]
-        fn quote_and_backslash_in_path_are_escaped() {
+        fn path_content_never_enters_metric_labels() {
             let _guard = TEST_MUTEX.lock();
             reset();
 
@@ -628,12 +675,8 @@ mod tests {
             register_unknown_fields_source::<EdgionPlugins>("EdgionPlugins", store);
 
             let block = render_unknown_config_fields_metric();
-            let line = block.lines().last().unwrap();
-            let unescaped = unescape_label(warn_label_of(line));
-            let parsed: serde_json::Value = serde_json::from_str(&unescaped).expect("warn label must be valid JSON");
-            let paths = parsed[0]["paths"].as_array().expect("paths must be an array");
-            assert_eq!(paths.len(), 1);
-            assert_eq!(paths[0], r#"config."quoted\field""#);
+            assert!(!block.contains("quoted"));
+            assert!(!block.contains("warn="));
         }
 
         #[test]
@@ -649,11 +692,8 @@ mod tests {
             );
             register_unknown_fields_source::<EdgionPlugins>("EdgionPlugins", store);
 
-            let block = render_unknown_config_fields_metric();
-            let line = block.lines().last().unwrap();
-            let unescaped = unescape_label(warn_label_of(line));
-            let parsed: serde_json::Value = serde_json::from_str(&unescaped).expect("warn label must be valid JSON");
-            let paths = parsed[0]["paths"].as_array().expect("paths must be an array");
+            let (_, _, items) = collect_unknown_fields(1);
+            let paths = &items[0].paths;
             assert_eq!(
                 paths.len(),
                 MAX_PATHS_PER_RESOURCE + 1,
@@ -661,18 +701,15 @@ mod tests {
             );
             assert_eq!(paths[MAX_PATHS_PER_RESOURCE], "(+7 more)");
             for (i, p) in many.iter().take(MAX_PATHS_PER_RESOURCE).enumerate() {
-                assert_eq!(paths[i], p.as_str());
+                assert_eq!(&paths[i], p);
             }
         }
 
         #[test]
-        fn resource_count_past_byte_budget_truncates_the_payload_with_visible_marker() {
+        fn metric_reports_true_count_without_retaining_diagnostic_entries() {
             let _guard = TEST_MUTEX.lock();
             reset();
 
-            // Each resource contributes roughly 60-70 bytes of JSON (short
-            // namespace/name, one short path); with a 4096-byte budget this
-            // comfortably overflows well before 1000 resources.
             let resource_count = 200;
             let store = Arc::new(LocalRawStore::<EdgionPlugins>::new());
             for i in 0..resource_count {
@@ -685,30 +722,11 @@ mod tests {
 
             let block = render_unknown_config_fields_metric();
             let line = block.lines().last().unwrap();
-            // The gauge VALUE must report the true affected-resource count,
-            // regardless of how much of the JSON payload was truncated.
             assert!(
                 line.ends_with(&format!("}} {resource_count}")) || line.ends_with(&format!("}} {resource_count}\n")),
                 "value must be the untruncated resource count: {line}"
             );
-
-            let unescaped = unescape_label(warn_label_of(line));
-            let parsed: serde_json::Value = serde_json::from_str(&unescaped).expect("warn label must be valid JSON");
-            let arr = parsed.as_array().expect("warn label must be a JSON array");
-            let last = arr.last().expect("payload must be non-empty");
-            assert_eq!(
-                last["truncated"], true,
-                "a truncated payload must end with a visible {{truncated:true}} marker, got {arr:#?}"
-            );
-            let omitted = last["omittedResources"]
-                .as_u64()
-                .expect("omittedResources must be present");
-            assert_eq!(
-                arr.len() as u64 - 1 + omitted,
-                resource_count as u64,
-                "shown entries + omitted count must equal the true total"
-            );
-            assert!(omitted > 0, "test setup must actually exceed the budget");
+            assert!(!line.contains("warn="));
         }
 
         /// Pin: rendering an unchanged fleet twice must produce byte-identical

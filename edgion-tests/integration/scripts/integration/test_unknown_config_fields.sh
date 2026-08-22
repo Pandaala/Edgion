@@ -17,12 +17,15 @@
 #      assert it is reported;
 #   3. apply an EdgionStreamPlugins fixture with the same `denys` typo;
 #      assert it is reported;
-#   4. overwrite all three with corrected YAML; assert the diagnostics
+#   4. apply a typed EdgionConfigData `Selector` with `descripton`; assert it
+#      is reported, then apply a `Misc` payload with arbitrary nested keys and
+#      assert the open escape hatch stays clean;
+#   5. overwrite all four typo fixtures with corrected YAML; assert the diagnostics
 #      endpoint drains to `total: 0` AND the `UnknownConfigFields` condition
 #      is REMOVED from each resource's status (proves the upsert-and-remove
 #      discipline, not just upsert);
-#   5. delete the resources; assert no ghost entries remain;
-#   6. exercise `POST /api/v1/validate/{kind}` once: a typo'd document
+#   6. delete the resources; assert no ghost entries remain;
+#   7. exercise `POST /api/v1/validate/EdgionConfigData` once: a typo'd document
 #      returns `ok: false` with the exact path, and nothing is persisted by
 #      that call (the resource must not appear in the store afterwards).
 #
@@ -74,6 +77,8 @@ NS="edgion-test"
 IPR_NAME="uf-ipr"
 FA_NAME="uf-fa"
 SP_NAME="uf-sp"
+CD_NAME="uf-cd"
+MISC_NAME="uf-misc"
 
 CONTROLLER_PID=""
 TEST_PASSED=0
@@ -330,19 +335,40 @@ assert_item_reported "EdgionStreamPlugins" "$NS" "$SP_NAME" "plugins[0].config.d
 SP_STATUS=$(status_file_for EdgionStreamPlugins "$NS" "$SP_NAME")
 wait_condition_status "$SP_STATUS" "UnknownConfigFields" "True" "uf-sp UnknownConfigFields present"
 
-log_section "Test 4: corrected YAML drains diagnostics to zero and removes the condition"
+log_section "Test 4: typed EdgionConfigData typo reported; Misc payload remains open"
+cp "${FIXTURE_DIR}/EdgionConfigData_edgion-test_uf-cd.yaml" "${CONF_WATCH_DIR}/"
+wait_for_diag_total 4 "after typed ConfigData typo apply"
+assert_item_reported "EdgionConfigData" "$NS" "$CD_NAME" "data.config.descripton"
+CD_STATUS=$(status_file_for EdgionConfigData "$NS" "$CD_NAME")
+wait_condition_status "$CD_STATUS" "UnknownConfigFields" "True" "uf-cd UnknownConfigFields present"
+cd_accepted=$(condition_status "$CD_STATUS" "Accepted")
+if [ "$cd_accepted" != "True" ]; then
+    log_error "uf-cd Accepted=${cd_accepted}, expected True (warn-not-reject must not affect Accepted)"
+    exit 1
+fi
+
+cp "${FIXTURE_DIR}/EdgionConfigData_edgion-test_uf-misc.yaml" "${CONF_WATCH_DIR}/"
+wait_for_diag_total 4 "after open Misc ConfigData apply"
+MISC_STATUS=$(status_file_for EdgionConfigData "$NS" "$MISC_NAME")
+wait_condition_status "$MISC_STATUS" "UnknownConfigFields" "ABSENT" "uf-misc remains free-form"
+
+log_section "Test 5: corrected YAML drains diagnostics to zero and removes the condition"
 cp "${FIXTURE_DIR}/EdgionPlugins_edgion-test_uf-ipr.fixed.yaml" "${CONF_WATCH_DIR}/EdgionPlugins_${NS}_${IPR_NAME}.yaml"
 cp "${FIXTURE_DIR}/EdgionPlugins_edgion-test_uf-fa.fixed.yaml" "${CONF_WATCH_DIR}/EdgionPlugins_${NS}_${FA_NAME}.yaml"
 cp "${FIXTURE_DIR}/EdgionStreamPlugins_edgion-test_uf-sp.fixed.yaml" "${CONF_WATCH_DIR}/EdgionStreamPlugins_${NS}_${SP_NAME}.yaml"
-wait_for_diag_total 0 "after all three fixtures fixed"
+cp "${FIXTURE_DIR}/EdgionConfigData_edgion-test_uf-cd.fixed.yaml" "${CONF_WATCH_DIR}/EdgionConfigData_${NS}_${CD_NAME}.yaml"
+wait_for_diag_total 0 "after all four typo fixtures fixed"
 wait_condition_status "$IPR_STATUS" "UnknownConfigFields" "ABSENT" "uf-ipr UnknownConfigFields removed"
 wait_condition_status "$FA_STATUS" "UnknownConfigFields" "ABSENT" "uf-fa UnknownConfigFields removed"
 wait_condition_status "$SP_STATUS" "UnknownConfigFields" "ABSENT" "uf-sp UnknownConfigFields removed"
+wait_condition_status "$CD_STATUS" "UnknownConfigFields" "ABSENT" "uf-cd UnknownConfigFields removed"
 
-log_section "Test 5: delete resources — no ghost entries"
+log_section "Test 6: delete resources — no ghost entries"
 rm -f "${CONF_WATCH_DIR}/EdgionPlugins_${NS}_${IPR_NAME}.yaml"
 rm -f "${CONF_WATCH_DIR}/EdgionPlugins_${NS}_${FA_NAME}.yaml"
 rm -f "${CONF_WATCH_DIR}/EdgionStreamPlugins_${NS}_${SP_NAME}.yaml"
+rm -f "${CONF_WATCH_DIR}/EdgionConfigData_${NS}_${CD_NAME}.yaml"
+rm -f "${CONF_WATCH_DIR}/EdgionConfigData_${NS}_${MISC_NAME}.yaml"
 wait_for_diag_total 0 "after delete (no ghosts)"
 snapshot_after_delete=$(diag_snapshot)
 if [ "$(echo "$snapshot_after_delete" | wc -l | tr -d ' ')" != "1" ]; then
@@ -352,23 +378,21 @@ if [ "$(echo "$snapshot_after_delete" | wc -l | tr -d ' ')" != "1" ]; then
 fi
 log_success "no ghost entries after delete"
 
-log_section "Test 6: POST /api/v1/validate/{kind} reports without persisting"
+log_section "Test 7: POST /api/v1/validate/EdgionConfigData reports without persisting"
 VALIDATE_BODY='{
   "apiVersion": "edgion.io/v1",
-  "kind": "EdgionPlugins",
+  "kind": "EdgionConfigData",
   "metadata": {"name": "uf-validate-only", "namespace": "'"$NS"'"},
   "spec": {
-    "requestPlugins": [
-      {"enable": true, "type": "IpRestriction", "config": {"defaultAction": "allow", "denys": []}}
-    ]
+    "data": {"type": "Selector", "config": {"active": "lockdown", "descripton": "typo"}}
   }
 }'
 validate_resp=$(curl -sf -m 10 -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
     -X POST --data "$VALIDATE_BODY" \
-    "${ADMIN_URL}/api/v1/validate/EdgionPlugins" 2>/dev/null)
+    "${ADMIN_URL}/api/v1/validate/EdgionConfigData" 2>/dev/null)
 if [ -z "$validate_resp" ]; then
-    log_error "POST /api/v1/validate/EdgionPlugins did not respond"
+    log_error "POST /api/v1/validate/EdgionConfigData did not respond"
     exit 1
 fi
 echo "$validate_resp" | python3 -c '
@@ -378,7 +402,7 @@ data = doc.get("data") or {}
 ok = data.get("ok")
 fields = data.get("unknownFields") or []
 assert ok is False, f"expected ok=False, got {ok!r}"
-assert fields == ["requestPlugins[0].config.denys"], f"expected exact path, got {fields!r}"
+assert fields == ["data.config.descripton"], f"expected exact path, got {fields!r}"
 print("OK: validate reported ok=False with exact path", fields)
 '
 # Nothing must have been persisted by the validate call: the raw store must

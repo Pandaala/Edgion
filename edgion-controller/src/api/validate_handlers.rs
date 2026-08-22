@@ -55,8 +55,8 @@ use std::sync::Arc;
 pub struct ValidateResponse {
     pub ok: bool,
     /// Whether step 4 (the unknown-field walk) actually ran for this kind.
-    /// `"performed"` for `EdgionPlugins`/`EdgionStreamPlugins`, the only two
-    /// kinds with a spec schema wired up for the walk; `"unsupported"` for
+    /// `"performed"` for resource kinds wired to the advisory schema walk;
+    /// `"unsupported"` for
     /// every other kind. A caller must never read an empty `unknownFields`
     /// as "checked, nothing found" when it actually means "not checked".
     pub unknown_field_check: &'static str,
@@ -122,7 +122,7 @@ pub async fn validate_kind(
     // "checked, clean" distinguishable from "not checked" (the honesty
     // requirement in `02-implementation.md` §11).
     let (unknown_field_check, unknown_fields) = match kind {
-        ResourceKind::EdgionPlugins | ResourceKind::EdgionStreamPlugins => {
+        ResourceKind::EdgionPlugins | ResourceKind::EdgionStreamPlugins | ResourceKind::EdgionConfigData => {
             ("performed", unknown_field_warnings(kind, &content))
         }
         _ => ("unsupported", Vec::new()),
@@ -244,6 +244,44 @@ mod tests {
             entries.next().is_none(),
             "validate must not write anything to the backing store"
         );
+    }
+
+    #[tokio::test]
+    async fn typed_config_data_typo_is_reported_while_misc_remains_open() {
+        let (state, _tmp) = make_state().await;
+        let typed = Bytes::from(
+            r#"{
+                "apiVersion":"edgion.io/v1","kind":"EdgionConfigData",
+                "metadata":{"name":"cidrs","namespace":"default"},
+                "spec":{"data":{"type":"IpList","config":{"items":[{"name":"office","cidrs":[],"cidrz":[]}]}}}
+            }"#,
+        );
+        let typed = validate_kind(State(state.clone()), Path("EdgionConfigData".to_string()), typed)
+            .await
+            .expect("typed ConfigData validation succeeds")
+            .0
+            .data
+            .expect("response data");
+        assert!(!typed.ok);
+        assert_eq!(typed.unknown_field_check, "performed");
+        assert_eq!(typed.unknown_fields, ["data.config.items[0].cidrz"]);
+
+        let misc = Bytes::from(
+            r#"{
+                "apiVersion":"edgion.io/v1","kind":"EdgionConfigData",
+                "metadata":{"name":"vendor","namespace":"default"},
+                "spec":{"data":{"type":"Misc","config":{"vendor":{"arbitrary":[1,2,3]}}}}
+            }"#,
+        );
+        let misc = validate_kind(State(state), Path("EdgionConfigData".to_string()), misc)
+            .await
+            .expect("Misc ConfigData validation succeeds")
+            .0
+            .data
+            .expect("response data");
+        assert!(misc.ok);
+        assert_eq!(misc.unknown_field_check, "performed");
+        assert!(misc.unknown_fields.is_empty());
     }
 
     #[tokio::test]

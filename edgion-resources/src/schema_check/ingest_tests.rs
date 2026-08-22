@@ -24,6 +24,7 @@ use parking_lot::Mutex;
 use serde_json::json;
 
 use super::{set_strict_ingest, strict_ingest_enabled};
+use crate::resources::edgion_config_data::EdgionConfigDataSpec;
 use crate::resources::edgion_plugins::EdgionPluginsSpec;
 use crate::resources::edgion_stream_plugins::EdgionStreamPluginsSpec;
 
@@ -235,4 +236,38 @@ fn unknown_fields_never_serialized() {
         out.get("unknownFields").is_none() && out.get("unknown_fields").is_none(),
         "unknown_fields must never ride the wire: {out}"
     );
+}
+
+#[test]
+fn config_data_gate_off_keeps_fast_path_empty() {
+    let _guard = GateGuard::set(&GATE_LOCK, false);
+    let spec: EdgionConfigDataSpec = serde_json::from_value(json!({
+        "data": {"type": "IpList", "config": {"items": [{"name": "g", "cidrs": [], "cidrz": []}]}}
+    }))
+    .expect("typed serde ignores the misspelled payload field");
+    assert!(spec.unknown_fields.is_empty());
+}
+
+#[test]
+fn config_data_gate_on_captures_typed_typo_and_skips_serialization() {
+    let _guard = GateGuard::set(&GATE_LOCK, true);
+    let spec: EdgionConfigDataSpec = serde_json::from_value(json!({
+        "data": {"type": "IpList", "config": {"items": [{"name": "g", "cidrs": [], "cidrz": []}]}}
+    }))
+    .expect("well-formed aside from the ignored field");
+    assert_eq!(spec.unknown_fields, vec!["data.config.items[0].cidrz"]);
+
+    let serialized = serde_json::to_value(&spec).expect("spec serializes");
+    assert!(serialized.get("unknownFields").is_none());
+    assert!(serialized.get("unknown_fields").is_none());
+}
+
+#[test]
+fn config_data_misc_is_open_under_gated_ingest() {
+    let _guard = GateGuard::set(&GATE_LOCK, true);
+    let spec: EdgionConfigDataSpec = serde_json::from_value(json!({
+        "data": {"type": "Misc", "config": {"vendor": {"arbitrary": [1, 2, 3]}}}
+    }))
+    .expect("Misc accepts arbitrary JSON");
+    assert!(spec.unknown_fields.is_empty());
 }

@@ -157,20 +157,19 @@ The `edgion_controller_resource_abnormal` snapshot is rebuilt on a timer and cap
 ### Unknown config field alert
 
 `edgion_controller_unknown_config_fields` is a live (not timer-based) scan appended at the
-same `/metrics` seam, rendered fresh on every scrape from `EdgionPlugins`/`EdgionStreamPlugins`
-`spec.unknown_fields`. One series per resource that currently has at least one finding; a
-healthy fleet emits nothing. Unlike `resource_abnormal`, this gauge is populated in FileSystem
+same `/metrics` seam, rendered fresh on every scrape from `EdgionPlugins`, `EdgionStreamPlugins`,
+and `EdgionConfigData` `spec.unknown_fields`. It emits one count series per affected resource
+kind; a healthy fleet emits nothing. Unlike `resource_abnormal`, this gauge is populated in FileSystem
 and etcd conf_center mode too, not Kubernetes-mode only — see
 [Unknown Config Field Detection](../plugin-config-unknown-fields.md) for why.
 
-The `warn` label carries a JSON array of finding paths — never separate per-path labels — so
-cardinality never grows with the number of typos on one resource; it is capped at 20 entries
-per resource (a visible `(+M more)` marker covers the rest) and the whole snapshot is capped at
-1000 series. This metric is purely advisory, exactly like the condition/log/endpoint surfaces
-it complements: it never blocks a sync.
+The only label is the bounded `kind` enum. Resource names and finding paths stay in the
+diagnostics endpoint, status condition, and Controller warning log; they are intentionally not
+Prometheus labels because their historical value domain is unbounded. This metric is purely
+advisory and never blocks a sync.
 
 ```promql
-edgion_controller_unknown_config_fields{warn!=""}
+edgion_controller_unknown_config_fields > 0
 ```
 
 Alert on a sustained non-empty result if you want CI/dashboards to catch config typos that the
@@ -339,10 +338,11 @@ histogram_quantile(0.99, sum(rate(edgion_gateway_request_duration_ms_bucket[5m])
 
 **A**: Scrape the Controller `/metrics` and alert on `edgion_controller_resource_abnormal{err!=""}`. Each series identifies one resource by `kind` / `namespace` / `name`, with the failing conditions in the `err` / `warn` labels.
 
-### Q4b: How do I detect config typos in `EdgionPlugins`/`EdgionStreamPlugins` that were silently ignored?
+### Q4b: How do I detect config typos in plugin resources or typed `EdgionConfigData` that were silently ignored?
 
-**A**: Alert on `edgion_controller_unknown_config_fields{warn!=""}` — one series per resource
-with at least one unrecognized key, with the finding paths in the `warn` label. See
+**A**: Alert on `edgion_controller_unknown_config_fields > 0` — one series per affected kind,
+with the value equal to the affected-resource count. Fetch exact resource names and paths from
+`GET /api/v1/diagnostics/unknown-fields`. See
 [Unknown Config Field Detection](../plugin-config-unknown-fields.md); this stays advisory (the
 Controller never rejects the resource because of it), so use the metric to drive your own alert
 or dashboard, not a blocking gate.

@@ -408,6 +408,7 @@ mod tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::Selector(Selector {
                     active: Some("normal".to_string()),
                     description: None,

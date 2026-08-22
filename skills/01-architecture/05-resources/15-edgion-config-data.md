@@ -102,11 +102,28 @@ Envelope (any variant): `enable: bool` (default true), `active: Option<String>`,
 
 | Group | Variant | Shape | Notes |
 |-------|---------|-------|-------|
-| std primitive | `KeyList` | `{ matchMode: Exact\|Regex, items: [KeyGroup] }` | Unified string+regex via `matchMode` |
+| std primitive | `KeyList` | `{ matchMode: exact\|regex, items: [KeyGroup] }` | Unified string+regex via `matchMode` |
 | std primitive | `IpList` | `{ items: [IpGroup] }` | Radix-tree CIDR matcher; consumed by IpRestriction (HTTP/L4/TLS-route) and GCIR per-profile via `allowRefs`/`denyRefs` |
 | selector | `Selector` | `{ active?: string, description?: string }` | Active-profile selector; switches among the consumer's git-owned profiles |
 | first-party overlay | `RegionRouteOverride` | `{ regions?: [...], enable?: bool, active?: string }` | Typed; whole-replace of region table |
 | escape hatch | `Misc` | `x-kubernetes-preserve-unknown-fields` | Third-party / unknown / experimental only |
+
+## Unknown Config Fields
+
+The Controller applies the shared advisory schema walk to the typed `KeyList`, `IpList`,
+`Selector`, and `RegionRouteOverride` payloads. A key that serde would otherwise ignore is
+reported through the `UnknownConfigFields=True` condition, a bounded Controller warning,
+`GET /api/v1/diagnostics/unknown-fields`, Admin write warnings, and
+`POST /api/v1/validate/EdgionConfigData`. It does not change `Accepted` or block conf_sync.
+
+`Misc.config` remains deliberately free-form and is never inspected for unknown keys. The
+openness is scoped to that config node; raw-document ingresses still report unknown siblings
+of `data.config` or unknown fields in the spec envelope. Kubernetes is different because its
+structural CRD prunes unknown `spec`/`data` siblings before the watcher sees the object, so the
+Kubernetes capture guarantee applies only below the preserved `data.config` node.
+
+Findings live in `EdgionConfigDataSpec::unknown_fields`, an in-process-only sidecar marked
+`#[serde(skip)]` and `#[schemars(skip)]`. It is absent from both the CRD and conf_sync wire.
 
 No separate `StringList`/`RegexList` (folded into `KeyList(matchMode)`). No standalone `Switch` variant
 (`enable`/`active` live on the envelope). `Selector` replaced the former `GlobalConnIpRestrictionOverride`
@@ -150,6 +167,7 @@ exposes only "which profile is active" as the hot-swappable surface — see the 
 | `Accepted` | Spec passes preparse validation. For `IpList`, always `True` even when entries are bad (partial-good). |
 | `ResolvedRefs` | EdgionConfigData itself carries no external cross-resource refs; own `ResolvedRefs` is always `True`. Note: `IpList` variants are ref targets — when `allowRefs`/`denyRefs` in IpRestriction (HTTP/L4/TLS-route) or GCIR per-profile fail to resolve an `IpList`, `ResolvedRefs=False` is set on the *referring* EdgionPlugins/EdgionStreamPlugins, not on the `IpList` EdgionConfigData itself. |
 | `PartiallyInvalid` | **`IpList` only**: `status=True`/`reason=RuleInvalid` (with message listing bad entries) when `collect_entry_errors` finds invalid CIDRs, empty groups, duplicate group names, invalid group names, or cross-group duplicate CIDRs (keep-first). `status=False`/`reason=AllRulesValid` when clean. `Accepted` stays `True`; partial-good entries are admitted and the rest still compile. |
+| `UnknownConfigFields` | Present as `True/UnknownFieldsDetected` when a typed payload contains keys the generated schema does not recognize; removed entirely after a clean reapply. Advisory only and independent of `Accepted`. |
 
 ## Gateway-Side Processing
 

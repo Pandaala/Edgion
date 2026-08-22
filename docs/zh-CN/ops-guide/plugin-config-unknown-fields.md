@@ -1,12 +1,17 @@
 # 未知配置字段检测
 
-`EdgionPlugins` 和 `EdgionStreamPlugins` 在 CRD 中把每个插件的 `config` 块建模为
-`x-kubernetes-preserve-unknown-fields`——这是故意的，这样 schema 就不需要了解每个插件的
-config 形状。其结果是：Kubernetes API server 永远不会裁剪掉插件 `config` 块中拼写错误的
+`EdgionPlugins`、`EdgionStreamPlugins`，以及 `EdgionConfigData` 的类型化变体，都把配置放在
+CRD 中保留未知字段的节点下。其结果是：Kubernetes API server 不会裁剪掉这些 `config` 块中拼写错误的
 键，Controller 的 Rust 反序列化就成了唯一还存在的关口。如果没有专门的检查，无法识别的键会
 被静默丢弃：`deny:` 被误写成 `denys:`，会让某个 `IpRestriction` 条目的 deny 列表变成空、
 `Accepted: True`，而任何地方都不会提示这条规则从未被加载。对于安全相关的插件来说，这是
 fail-open（失败即放行），而不是无害的空操作。
+
+对于 `EdgionConfigData`，检测器覆盖 `KeyList`、`IpList`、`Selector` 和
+`RegionRouteOverride` 类型化 payload。`data.type: Misc` 是文档明确声明的自由格式逃生口，因此
+`Misc.config` 下的任意键不会被报告。Kubernetes 会在 Controller 看到对象之前裁剪结构化
+`spec` 和 `data` 层的未知 sibling；FileSystem、etcd、Admin 写入及 validate 这些能读取原始
+文档的入口，还可以报告这些 envelope 键。
 
 本文档是这个检测器的运维指南。
 
@@ -28,7 +33,8 @@ Controller 永远不会因为出现无法识别的配置键而拒绝一个资源
 运维人员可以在四个地方看到发现的问题：
 
 1. **一条 `warn!` 日志**，在资源被 apply 的那一刻由 Controller 打出，携带该资源的
-   namespace/name 以及完整的无法识别键路径列表。
+   namespace/name 以及有界的无法识别键路径摘要：最多 20 条具体路径并附带省略标记，且每条
+   路径最多 512 字节。
 2. **资源自身的 `UnknownConfigFields` 状态条件**：
 
    ```yaml
@@ -46,7 +52,7 @@ Controller 永远不会因为出现无法识别的配置键而拒绝一个资源
    停留在过期的 `True` 状态。
 
 3. **`GET /api/v1/diagnostics/unknown-fields`**——覆盖 Controller 当前持有的每一个
-   `EdgionPlugins` / `EdgionStreamPlugins` 资源的全局汇总视图：
+   `EdgionPlugins`、`EdgionStreamPlugins` 和 `EdgionConfigData` 资源的全局汇总视图：
 
    ```json
    {
@@ -70,7 +76,7 @@ Controller 永远不会因为出现无法识别的配置键而拒绝一个资源
    时 `truncated: true`。
 
 4. **Admin API 写入响应中的 `warnings`**——当你通过 Admin API `POST`/`PUT` 一个
-   `EdgionPlugins` 或 `EdgionStreamPlugins` 文档，且其中含有无法识别的键时，响应会立即携带
+   `EdgionPlugins`、`EdgionStreamPlugins` 或 `EdgionConfigData` 文档，且其中含有无法识别的键时，响应会立即携带
    它：
 
    ```json
@@ -108,8 +114,8 @@ POST /api/v1/validate/EdgionPlugins
 }
 ```
 
-`unknownFieldCheck` 只有对 `EdgionPlugins` 和 `EdgionStreamPlugins` 才是 `"performed"`——
-这是仅有的两个接入了 schema walk 的资源类型——其余所有类型都是 `"unsupported"`。请务必检查
+`unknownFieldCheck` 对 `EdgionPlugins`、`EdgionStreamPlugins` 和 `EdgionConfigData` 是
+`"performed"`，其余所有类型都是 `"unsupported"`。请务必检查
 这个字段，不要想当然地认为空的 `unknownFields` 就意味着"检查过、没发现问题"：对于
 `unsupported` 的类型，它的含义是"根本没有检查"。把这个接口接入你想用来实现阻断的任何关卡
 ——`ValidatingAdmissionWebhook`、GitOps 流水线里的 CI 步骤，或是你自己工具里
@@ -120,6 +126,8 @@ POST /api/v1/validate/EdgionPlugins
 - [EdgionPlugins —— HTTP 插件](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/13-edgion-plugins.md)
   与 [EdgionStreamPlugins —— Stream 插件](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/14-edgion-stream-plugins.md)
   ——`UnknownConfigFields` 条件的上下文说明。
+- [EdgionConfigData](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/05-resources/15-edgion-config-data.md)
+  ——类型化变体、开放的 `Misc` 边界与 Controller 处理流程。
 - [Admin API —— diagnostics 与 validate 接口](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/02-admin-api.md)
   ——完整的接口参考。
 - [插件策略（允许清单 / 拒绝清单）](./plugin-policy.md)——同为插件资源上、面向运维人员可见

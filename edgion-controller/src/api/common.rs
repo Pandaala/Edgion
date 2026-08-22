@@ -175,7 +175,7 @@ where
 /// right here at the handler, so no `Value` round-trip hook or gate is
 /// needed — unlike the Kubernetes watcher, this always runs.
 ///
-/// Only `EdgionPlugins`/`EdgionStreamPlugins` have a schema to check against;
+/// Only resources wired to the advisory checker have a schema to check against;
 /// every other kind returns an empty list immediately.
 ///
 /// Best-effort: the caller already parsed this exact `content` into the
@@ -188,6 +188,7 @@ pub fn unknown_field_warnings(kind: ResourceKind, content: &str) -> Vec<String> 
     let schema = match kind {
         ResourceKind::EdgionPlugins => edgion_resources::edgion_plugins_spec_schema(),
         ResourceKind::EdgionStreamPlugins => edgion_resources::edgion_stream_plugins_spec_schema(),
+        ResourceKind::EdgionConfigData => edgion_resources::edgion_config_data_spec_schema(),
         _ => return Vec::new(),
     };
     let Ok(document) = parse_resource::<serde_json::Value>(content) else {
@@ -196,7 +197,8 @@ pub fn unknown_field_warnings(kind: ResourceKind, content: &str) -> Vec<String> 
     let Some(spec) = document.get("spec") else {
         return Vec::new();
     };
-    edgion_resources::schema_check::unknown_key_paths(spec, schema)
+    let paths = edgion_resources::schema_check::unknown_key_paths(spec, schema);
+    crate::observe::unknown_fields_registry::bounded_unknown_field_paths(&paths)
 }
 
 /// Parse ResourceKind from string (case-insensitive)

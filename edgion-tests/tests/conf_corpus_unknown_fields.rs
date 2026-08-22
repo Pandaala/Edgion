@@ -1,6 +1,7 @@
 //! Corpus sweep: walk every YAML fixture under `edgion-tests/integration/conf/` and run the
-//! `edgion_resources::schema_check` unknown-key walker against every `EdgionPlugins` /
-//! `EdgionStreamPlugins` document's `spec`.
+//! `edgion_resources::schema_check` unknown-key walker against every `EdgionPlugins`,
+//! `EdgionStreamPlugins`, and `EdgionConfigData` document's `spec` in both the
+//! local-integration and Kubernetes configuration corpora.
 //!
 //! This is Phase 3 of `tasks/todo/plugin-config-unknown-field-detection/03-subtasks.md`. It
 //! replaces the throwaway prototype `edgion-resources/tests/tmp_corpus_smoke.rs`, which covered
@@ -10,6 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
+use edgion_resources::resources::edgion_config_data::edgion_config_data_spec_schema;
 use edgion_resources::resources::edgion_plugins::edgion_plugins_spec_schema;
 use edgion_resources::resources::edgion_stream_plugins::edgion_stream_plugins_spec_schema;
 use edgion_resources::schema_check::unknown_key_paths;
@@ -54,6 +56,8 @@ fn collect_yaml_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// One unknown-field finding, with enough context to report and to allow exclusion filtering.
 struct Finding {
+    /// Corpus root (`integration/conf` or `k8s/conf`).
+    corpus: &'static str,
     /// Path relative to the `conf/` root, e.g. `EdgionPlugins/HeaderCertAuth/foo.yaml`.
     rel_path: PathBuf,
     /// Dotted key path within the document's `spec`, e.g. `requestPlugins[0].config.verifyDepth`.
@@ -67,64 +71,82 @@ struct SweepResult {
     findings: Vec<Finding>,
     http_docs: usize,
     stream_docs: usize,
+    integration_config_data_docs: usize,
+    k8s_config_data_docs: usize,
 }
 
 fn sweep() -> SweepResult {
-    let conf_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("integration/conf");
-    assert!(
-        conf_root.is_dir(),
-        "expected integration conf corpus at {}",
-        conf_root.display()
-    );
-
-    let mut files = Vec::new();
-    collect_yaml_files(&conf_root, &mut files);
-    files.sort();
-
     let plugins_schema = edgion_plugins_spec_schema();
     let stream_plugins_schema = edgion_stream_plugins_spec_schema();
+    let config_data_schema = edgion_config_data_spec_schema();
 
     let mut findings = Vec::new();
     let (mut http_docs, mut stream_docs) = (0usize, 0usize);
-    for file in &files {
-        let rel_path = file
-            .strip_prefix(&conf_root)
-            .expect("file was collected under conf_root")
-            .to_path_buf();
-        if is_excluded(&rel_path) {
-            continue;
-        }
+    let mut integration_config_data_docs = 0usize;
+    let mut k8s_config_data_docs = 0usize;
 
-        let text = std::fs::read_to_string(file).unwrap_or_else(|e| panic!("failed to read {}: {e}", file.display()));
+    for (corpus, relative_root) in [("integration/conf", "integration/conf"), ("k8s/conf", "k8s/conf")] {
+        let conf_root = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_root);
+        assert!(
+            conf_root.is_dir(),
+            "expected configuration corpus at {}",
+            conf_root.display()
+        );
 
-        for doc in serde_yaml::Deserializer::from_str(&text) {
-            let value: serde_json::Value = match serde::Deserialize::deserialize(doc) {
-                Ok(v) => v,
-                // Non-resource / non-YAML-object documents (e.g. an empty `---` separator) are
-                // not this sweep's concern.
-                Err(_) => continue,
-            };
-            let Some(kind) = value.get("kind").and_then(|k| k.as_str()) else {
+        let mut files = Vec::new();
+        collect_yaml_files(&conf_root, &mut files);
+        files.sort();
+
+        for file in &files {
+            let rel_path = file
+                .strip_prefix(&conf_root)
+                .expect("file was collected under conf_root")
+                .to_path_buf();
+            if is_excluded(&rel_path) {
                 continue;
-            };
-            let schema = match kind {
-                "EdgionPlugins" => {
-                    http_docs += 1;
-                    plugins_schema
-                }
-                "EdgionStreamPlugins" => {
-                    stream_docs += 1;
-                    stream_plugins_schema
-                }
-                _ => continue,
-            };
-            let Some(spec) = value.get("spec") else { continue };
+            }
 
-            for key_path in unknown_key_paths(spec, schema) {
-                findings.push(Finding {
-                    rel_path: rel_path.clone(),
-                    key_path,
-                });
+            let text =
+                std::fs::read_to_string(file).unwrap_or_else(|e| panic!("failed to read {}: {e}", file.display()));
+
+            for doc in serde_yaml::Deserializer::from_str(&text) {
+                let value: serde_json::Value = match serde::Deserialize::deserialize(doc) {
+                    Ok(v) => v,
+                    // Non-resource / non-YAML-object documents (e.g. an empty `---` separator) are
+                    // not this sweep's concern.
+                    Err(_) => continue,
+                };
+                let Some(kind) = value.get("kind").and_then(|k| k.as_str()) else {
+                    continue;
+                };
+                let schema = match kind {
+                    "EdgionPlugins" => {
+                        http_docs += 1;
+                        plugins_schema
+                    }
+                    "EdgionStreamPlugins" => {
+                        stream_docs += 1;
+                        stream_plugins_schema
+                    }
+                    "EdgionConfigData" => {
+                        if corpus == "integration/conf" {
+                            integration_config_data_docs += 1;
+                        } else {
+                            k8s_config_data_docs += 1;
+                        }
+                        config_data_schema
+                    }
+                    _ => continue,
+                };
+                let Some(spec) = value.get("spec") else { continue };
+
+                for key_path in unknown_key_paths(spec, schema) {
+                    findings.push(Finding {
+                        corpus,
+                        rel_path: rel_path.clone(),
+                        key_path,
+                    });
+                }
             }
         }
     }
@@ -133,6 +155,8 @@ fn sweep() -> SweepResult {
         findings,
         http_docs,
         stream_docs,
+        integration_config_data_docs,
+        k8s_config_data_docs,
     }
 }
 
@@ -142,6 +166,8 @@ fn conf_corpus_has_no_unknown_plugin_config_fields() {
         findings,
         http_docs,
         stream_docs,
+        integration_config_data_docs,
+        k8s_config_data_docs,
     } = sweep();
 
     // Coverage floors, deliberately far below the real corpus size (300+ HTTP,
@@ -158,6 +184,16 @@ fn conf_corpus_has_no_unknown_plugin_config_fields() {
         "sweep matched only {stream_docs} EdgionStreamPlugins documents — the corpus moved, \
          the kind string changed, or the exclusion list swallowed it"
     );
+    assert!(
+        integration_config_data_docs >= 5,
+        "sweep matched only {integration_config_data_docs} EdgionConfigData documents under integration/conf — \
+         the corpus moved, the kind string changed, or the exclusion list swallowed it"
+    );
+    assert!(
+        k8s_config_data_docs >= 1,
+        "sweep matched no EdgionConfigData documents under k8s/conf — \
+         the corpus moved, the kind string changed, or the exclusion list swallowed it"
+    );
 
     if findings.is_empty() {
         return;
@@ -165,7 +201,7 @@ fn conf_corpus_has_no_unknown_plugin_config_fields() {
 
     let mut lines: Vec<String> = findings
         .iter()
-        .map(|f| format!("{}: {}", f.rel_path.display(), f.key_path))
+        .map(|f| format!("{}/{}: {}", f.corpus, f.rel_path.display(), f.key_path))
         .collect();
     lines.sort();
 

@@ -1,13 +1,18 @@
 # Unknown Config Field Detection
 
-`EdgionPlugins` and `EdgionStreamPlugins` model each plugin's `config` block as
-`x-kubernetes-preserve-unknown-fields` in the CRD — deliberately, so the schema does not need
-to know about every plugin's config shape. The consequence is that the Kubernetes API server
-never prunes a mistyped key inside a plugin `config` block, and the Controller's Rust
+`EdgionPlugins`, `EdgionStreamPlugins`, and the typed variants of `EdgionConfigData` carry
+configuration below CRD nodes that preserve unknown fields. The consequence is that the Kubernetes API server
+does not prune a mistyped key inside those `config` blocks, and the Controller's Rust
 deserialization is the only remaining gate. Without a dedicated check, an unrecognized key is
 silently dropped: `deny:` mistyped as `denys:` leaves an `IpRestriction` entry with an empty
 deny list, `Accepted: True`, and nothing anywhere says the rule was never loaded. For a
 security-relevant plugin that is a fail-open, not a harmless no-op.
+
+For `EdgionConfigData`, the detector checks the typed `KeyList`, `IpList`, `Selector`, and
+`RegionRouteOverride` payloads. `data.type: Misc` is the documented free-form escape hatch, so
+arbitrary keys below `Misc.config` are intentionally not reported. Kubernetes prunes unknown
+siblings at the structural `spec` and `data` levels before the Controller sees them; raw-body
+FileSystem, etcd, Admin write, and validate ingresses can additionally report those envelope keys.
 
 This document is the operator guide to the detector that catches it.
 
@@ -31,7 +36,8 @@ run before the Controller ever sees the object.
 An operator can see a finding in four places:
 
 1. **A `warn!` log line** on the Controller, at the moment the resource is applied, carrying
-   the resource's namespace/name and the full list of unrecognized key paths.
+   the resource's namespace/name and a bounded summary of unrecognized key paths: at most 20
+   concrete paths plus an omission marker, with each path capped at 512 bytes.
 2. **The `UnknownConfigFields` status condition** on the resource itself:
 
    ```yaml
@@ -50,7 +56,7 @@ An operator can see a finding in four places:
    fixed; it is never left wedged at a stale `True`.
 
 3. **`GET /api/v1/diagnostics/unknown-fields`** — the fleet-wide answer, across every
-   `EdgionPlugins` / `EdgionStreamPlugins` resource the Controller currently holds:
+   `EdgionPlugins`, `EdgionStreamPlugins`, and `EdgionConfigData` resource the Controller currently holds:
 
    ```json
    {
@@ -73,8 +79,8 @@ An operator can see a finding in four places:
    Requires the standard Admin API bearer token. `total` is the true count before the
    100-item response cap; `truncated: true` when the cap bites.
 
-4. **`warnings` in the Admin API write response** — when you `POST`/`PUT` an `EdgionPlugins`
-   or `EdgionStreamPlugins` document through the Admin API and it contains an unrecognized
+4. **`warnings` in the Admin API write response** — when you `POST`/`PUT` an `EdgionPlugins`,
+   `EdgionStreamPlugins`, or `EdgionConfigData` document through the Admin API and it contains an unrecognized
    key, the response carries it immediately:
 
    ```json
@@ -115,8 +121,8 @@ POST /api/v1/validate/EdgionPlugins
 }
 ```
 
-`unknownFieldCheck` is `"performed"` only for `EdgionPlugins` and `EdgionStreamPlugins` — the
-only two kinds with a wired schema walk — and `"unsupported"` for every other kind. Always
+`unknownFieldCheck` is `"performed"` for `EdgionPlugins`, `EdgionStreamPlugins`, and
+`EdgionConfigData`; it is `"unsupported"` for every other kind. Always
 check this field rather than assuming an empty `unknownFields` means "checked, nothing
 found": for an unsupported kind it means "not checked at all". Wire this endpoint into
 whatever gate you want to enforce blocking with — a `ValidatingAdmissionWebhook`, a CI step
@@ -127,6 +133,8 @@ in your GitOps pipeline, or a pre-`kubectl apply` check in your own tooling.
 - [EdgionPlugins — HTTP Plugins](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/13-edgion-plugins.md)
   and [EdgionStreamPlugins — Stream Plugins](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/14-edgion-stream-plugins.md)
   — the `UnknownConfigFields` condition in context.
+- [EdgionConfigData](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/05-resources/15-edgion-config-data.md)
+  — typed variants, the open `Misc` boundary, and Controller processing.
 - [Admin API — diagnostics and validate endpoints](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/02-admin-api.md)
   — the full endpoint reference.
 - [Plugin Policy (Allowlist / Denylist)](./plugin-policy.md) — the neighboring

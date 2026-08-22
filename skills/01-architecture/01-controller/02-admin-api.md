@@ -217,7 +217,7 @@ version server-side and must not be touched.
 
 Successful `POST` creates respond with **`201 Created`** and a `Location` header pointing at the new resource. `PUT` updates continue to use `200 OK` with the `ApiResponse::success(...)` body. Successful `DELETE` returns **`204 No Content`** with an empty body. Failed creates still surface as the mapped HTTP error (see "Error Mapping" below) and carry no `Location` header.
 
-**`ApiResponse<T>` carries an optional `warnings` field**: `{ "success": bool, "data": Option<T>, "error": Option<String>, "warnings": Vec<String> }`, with `warnings` omitted from the JSON entirely when empty (`skip_serializing_if = "Vec::is_empty"`) — every pre-existing call site is unaffected. It is populated on `EdgionPlugins` / `EdgionStreamPlugins` writes through this Admin API when the submitted document contains a key the schema does not recognize (the same finding class as `GET /api/v1/diagnostics/unknown-fields` above). This is the **only** ingress with no second chance to report the finding: `create_namespaced` / `update_namespaced` persist a typed round-trip (`serde_json::to_string(&obj)`), which strips unknown keys before they are ever written to storage — the FS loader, etcd loader, and Kubernetes watcher hook that catch the finding at every other ingress never get to see a document that was cleaned before it reached them. The write still succeeds (`success: true`, unaffected status code) — this is advisory, not a rejection; see "Policy: warn, never block" on the `EdgionPlugins` / `EdgionStreamPlugins` pages.
+**`ApiResponse<T>` carries an optional `warnings` field**: `{ "success": bool, "data": Option<T>, "error": Option<String>, "warnings": Vec<String> }`, with `warnings` omitted from the JSON entirely when empty (`skip_serializing_if = "Vec::is_empty"`) — every pre-existing call site is unaffected. It is populated on `EdgionPlugins`, `EdgionStreamPlugins`, and `EdgionConfigData` writes through this Admin API when the submitted document contains a key the schema does not recognize (the same finding class as `GET /api/v1/diagnostics/unknown-fields` above). This is the **only** ingress with no second chance to report the finding: `create_namespaced` / `update_namespaced` persist a typed round-trip (`serde_json::to_string(&obj)`), which strips unknown keys before they are ever written to storage — the FS loader, etcd loader, and Kubernetes watcher hook that catch the finding at every other ingress never get to see a document that was cleaned before it reached them. The write still succeeds (`success: true`, unaffected status code) — this is advisory, not a rejection. For `EdgionConfigData`, typed variants are checked while `Misc.config` stays deliberately open.
 
 ### Cluster-scoped Resource CRUD
 
@@ -267,8 +267,8 @@ Test mode additionally mounts authenticated `/api/v1/debug/store-stats` and
 #### `GET /api/v1/diagnostics/unknown-fields` — unknown config keys, fleet-wide
 
 Answers "did anything applied to this Controller contain a key the schema does not
-recognize?" across `EdgionPlugins` and `EdgionStreamPlugins` — the only two resources whose
-plugin `config` subtree is `x-kubernetes-preserve-unknown-fields` and therefore not pruned
+recognize?" across `EdgionPlugins`, `EdgionStreamPlugins`, and typed `EdgionConfigData` variants — resources whose
+`config` subtree is preserved by the CRD and therefore not pruned
 by the API server or caught by `deny_unknown_fields` (see
 `skills/00-design-rules.md` and
 `tasks/todo/plugin-config-unknown-field-detection/plugin-config-unknown-field-detection.md`
@@ -278,7 +278,7 @@ Backed by `observe::unknown_fields_registry`, a keyed registry read from the sam
 `RawStore` each conf_center mode already wires up for status rendering — not
 `center_list_resources`, since a finding lives in a field the CRD/wire schema deliberately
 never carries (`#[serde(skip)] #[schemars(skip)] unknown_fields: Vec<String>` on
-`EdgionPluginsSpec` / `EdgionStreamPluginsSpec`).
+`EdgionPluginsSpec`, `EdgionStreamPluginsSpec`, or `EdgionConfigDataSpec`).
 
 ```json
 {
@@ -300,7 +300,7 @@ never carries (`#[serde(skip)] #[schemars(skip)] unknown_fields: Vec<String>` on
 
 `total` is the pre-cap finding count across the fleet; `items` is capped at 100 entries
 (`truncated: true` when the cap bites, reported honestly rather than silently dropping
-entries). This endpoint never rejects anything itself — it is the query surface an
+entries). Each item's path list is also capped with a visible deterministic marker. This endpoint never rejects anything itself — it is the query surface an
 operator's own blocking gate (CI, a `ValidatingAdmissionWebhook`) is meant to be built on;
 see `POST /api/v1/validate/{kind}` below for the synchronous per-document equivalent.
 
@@ -334,16 +334,15 @@ the write path performs; (2) a typed parse with `update_version: false`; (3) the
 validator, forced on regardless of conf_center mode (a validation *query* should answer
 fully regardless of who else validates in production); (4) the unknown-field schema walk on
 the raw document (`edgion-resources::schema_check::unknown_key_paths`) — the one check no
-other layer performs, because the CRD marks plugin `config`
+other layer performs, because the CRD preserves these `config`
 `x-kubernetes-preserve-unknown-fields`. `validationErrors` additionally carries
 `EdgionPlugins::validate_plugins()` output when `kind == EdgionPlugins` — the same
 preparse business-rule check the conf_sync apply path runs, minus the DSL VM init step
 (which needs the gateway plugin runtime and cannot run side-effect-free); it stays empty for
 every other kind.
 
-`unknownFieldCheck` is `"performed"` only for `EdgionPlugins` / `EdgionStreamPlugins` — the
-only two kinds with a spec schema wired up for the walk — and `"unsupported"` for every
-other kind. This discriminator exists so a caller can never misread an empty
+`unknownFieldCheck` is `"performed"` for `EdgionPlugins`, `EdgionStreamPlugins`, and
+`EdgionConfigData`, and `"unsupported"` for every other kind. This discriminator exists so a caller can never misread an empty
 `unknownFields: []` as "checked, nothing found" when it actually means "this kind is not
 covered by the walk at all".
 

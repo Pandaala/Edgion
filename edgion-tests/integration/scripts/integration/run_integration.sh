@@ -2053,7 +2053,9 @@ main() {
     # reported with the exact path while the resource stays Accepted: True
     # (warn-not-reject); a ForwardAuth `successStatusCodes` fixture is
     # reported (the `#[serde(flatten)]` case `deny_unknown_fields` cannot
-    # catch structurally); an EdgionStreamPlugins typo is reported too;
+    # catch structurally); an EdgionStreamPlugins typo and a typed
+    # EdgionConfigData typo are reported too, while a Misc ConfigData payload
+    # remains intentionally open;
     # corrected YAML drains the diagnostics endpoint to zero AND removes the
     # `UnknownConfigFields` status condition (not just upsert); deletion
     # leaves no ghost entry; and `POST /api/v1/validate/{kind}` reports a

@@ -132,7 +132,7 @@ pub async fn create_namespaced(
     // In K8s mode: skip validation (K8s API Server validates) and don't update version
     // In non-K8s mode: validate and update resource version
     //
-    // Populated only by the EdgionPlugins/EdgionStreamPlugins arms below
+    // Populated only by the EdgionPlugins/EdgionStreamPlugins/EdgionConfigData arms below
     // (`unknown_field_warnings`); every other kind leaves this empty, so
     // `ApiResponse::warnings` stays absent from the response (see `types.rs`).
     let mut warnings: Vec<String> = Vec::new();
@@ -233,6 +233,18 @@ pub async fn create_namespaced(
         edgion_resources::ResourceKind::EdgionConfigData => {
             let metadata: EdgionConfigData = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &metadata, is_k8s)?;
+            warnings = unknown_field_warnings(kind, &content);
+            if !warnings.is_empty() {
+                tracing::warn!(
+                    component = "unified_api",
+                    event = "unknown_config_fields",
+                    kind = %kind_str,
+                    namespace = %ns,
+                    name = %name,
+                    paths = ?warnings,
+                    "Resource contains keys not recognized by the typed schema"
+                );
+            }
             let json_content = serde_json::to_string(&metadata).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .create_one(kind.as_str(), Some(&ns), &name, json_content)
@@ -407,7 +419,7 @@ pub async fn update_namespaced(
     // In K8s mode: skip validation (K8s API Server validates) and don't update version
     // In non-K8s mode: validate and update resource version
     //
-    // Populated only by the EdgionPlugins/EdgionStreamPlugins arms below
+    // Populated only by the EdgionPlugins/EdgionStreamPlugins/EdgionConfigData arms below
     // (`unknown_field_warnings`); every other kind leaves this empty, so
     // `ApiResponse::warnings` stays absent from the response (see `types.rs`).
     let mut warnings: Vec<String> = Vec::new();
@@ -562,6 +574,18 @@ pub async fn update_namespaced(
         edgion_resources::ResourceKind::EdgionConfigData => {
             let metadata: EdgionConfigData = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &metadata, is_k8s)?;
+            warnings = unknown_field_warnings(kind, &content);
+            if !warnings.is_empty() {
+                tracing::warn!(
+                    component = "unified_api",
+                    event = "unknown_config_fields",
+                    kind = %kind_str,
+                    namespace = %ns,
+                    name = %name,
+                    paths = ?warnings,
+                    "Resource contains keys not recognized by the typed schema"
+                );
+            }
             let json_content = serde_json::to_string(&metadata).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             // Serialize this whole-resource replace against the failover
             // read-modify-write on the same EdgionConfigData, which would otherwise
@@ -1003,6 +1027,13 @@ mod unknown_field_warning_tests {
         ))
     }
 
+    fn config_data_body(name: &str, typo: bool) -> Bytes {
+        let typo_field = if typo { r#","cidrz":[]"# } else { "" };
+        Bytes::from(format!(
+            r#"{{"apiVersion":"edgion.io/v1","kind":"EdgionConfigData","metadata":{{"name":"{name}","namespace":"default"}},"spec":{{"data":{{"type":"IpList","config":{{"items":[{{"name":"office","cidrs":[]{typo_field}}}]}}}}}}}}"#
+        ))
+    }
+
     #[tokio::test]
     async fn create_with_typo_is_not_rejected_and_carries_warning() {
         let (state, _tmp) = make_fs_state().await;
@@ -1074,5 +1105,57 @@ mod unknown_field_warning_tests {
 
         let body = result.expect("a typo'd key must warn, never reject the update");
         assert_eq!(body.0.warnings, vec!["requestPlugins[0].config.denys".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn config_data_create_and_update_carry_typed_unknown_field_warning() {
+        let (state, _tmp) = make_fs_state().await;
+        let created = create_namespaced(
+            State(Arc::clone(&state)),
+            Path(("EdgionConfigData".to_string(), "default".to_string())),
+            config_data_body("cidrs", true),
+        )
+        .await
+        .expect("advisory finding must not reject create");
+        assert_eq!(created.2 .0.warnings, ["data.config.items[0].cidrz"]);
+
+        let updated = update_namespaced(
+            State(state),
+            Path((
+                "EdgionConfigData".to_string(),
+                "default".to_string(),
+                "cidrs".to_string(),
+            )),
+            HeaderMap::new(),
+            config_data_body("cidrs", true),
+        )
+        .await
+        .expect("advisory finding must not reject update");
+        assert_eq!(updated.0.warnings, ["data.config.items[0].cidrz"]);
+    }
+
+    #[tokio::test]
+    async fn config_data_clean_typed_and_open_misc_writes_have_no_warnings() {
+        let (state, _tmp) = make_fs_state().await;
+        let clean = create_namespaced(
+            State(Arc::clone(&state)),
+            Path(("EdgionConfigData".to_string(), "default".to_string())),
+            config_data_body("clean-cidrs", false),
+        )
+        .await
+        .expect("clean typed ConfigData must be accepted");
+        assert!(clean.2 .0.warnings.is_empty());
+
+        let misc = Bytes::from(
+            r#"{"apiVersion":"edgion.io/v1","kind":"EdgionConfigData","metadata":{"name":"vendor-data","namespace":"default"},"spec":{"data":{"type":"Misc","config":{"vendor":{"arbitrary":[1,2,3]}}}}}"#,
+        );
+        let misc = create_namespaced(
+            State(state),
+            Path(("EdgionConfigData".to_string(), "default".to_string())),
+            misc,
+        )
+        .await
+        .expect("open Misc ConfigData must be accepted");
+        assert!(misc.2 .0.warnings.is_empty());
     }
 }

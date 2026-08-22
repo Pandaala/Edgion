@@ -16,6 +16,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_types, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
+use crate::observe::unknown_fields_registry::bounded_unknown_field_paths;
 use edgion_resources::prelude_resources::EdgionPlugins;
 use edgion_resources::resources::edgion_config_data::ConfigEntry;
 use edgion_resources::resources::edgion_plugins::{EdgionPlugin, EdgionPluginsStatus};
@@ -356,13 +357,14 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         // pattern as PluginPolicyRestricted). Advisory only: this never
         // touches `Accepted` or blocks the resource from syncing.
         if !ep.spec.unknown_fields.is_empty() {
+            let paths = bounded_unknown_field_paths(&ep.spec.unknown_fields);
             tracing::warn!(
                 component = "conf_mgr",
                 event = "unknown_config_fields_detected",
                 kind = "EdgionPlugins",
                 namespace = %ep.metadata.namespace.as_deref().unwrap_or("default"),
                 name = %ep.metadata.name.as_deref().unwrap_or(""),
-                paths = ?ep.spec.unknown_fields,
+                paths = ?paths,
                 "EdgionPlugins document has keys the schema does not recognize; they are ignored, config still syncs unchanged"
             );
         }
@@ -1792,6 +1794,7 @@ mod tests {
             "default",
             "rr-override",
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -1844,6 +1847,7 @@ mod tests {
                     enable: true,
                     active: None,
                     visibility: Default::default(),
+                    unknown_fields: Vec::new(),
                     data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
                         enable: None,
                         active: None,
@@ -1956,6 +1960,7 @@ mod tests {
             "default",
             "not-a-rr-override",
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -2017,6 +2022,7 @@ mod tests {
             "default",
             "canary-selector",
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -2129,6 +2135,7 @@ mod tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::KeyList(edgion_resources::resources::edgion_config_data::KeyListData {
                     match_mode: edgion_resources::resources::edgion_config_data::KeyMatchMode::default(),
                     items: vec![],
@@ -2199,6 +2206,7 @@ mod tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::Selector(Selector {
                     active: Some("canary".to_string()),
                     description: None,
@@ -2274,6 +2282,7 @@ mod tests {
             "default",
             "blocklist",
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -2367,6 +2376,7 @@ mod tests {
                 enable: false,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "g".into(),
@@ -2423,6 +2433,7 @@ mod tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "g".into(),
@@ -2510,6 +2521,7 @@ mod tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![
                         IpGroup {
@@ -2572,6 +2584,7 @@ mod tests {
             "team-b",
             "blocklist",
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -2628,6 +2641,7 @@ mod tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::Selector(Selector {
                     active: Some("lockdown".to_string()),
                     description: None,
@@ -2692,6 +2706,7 @@ mod tests {
             "team-b",
             "blocklist",
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
                 visibility: Default::default(), // Namespace — requires a grant for cross-ns
@@ -2988,6 +3003,7 @@ mod tests {
             "team-b",
             "blocklist",
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
                 visibility: Default::default(), // Namespace visibility -> cross-ns requires grant
@@ -3052,6 +3068,7 @@ mod tests {
             "team-b",
             "selector-cfg",
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
                 visibility: Default::default(), // Namespace visibility -> cross-ns requires grant
@@ -3126,6 +3143,7 @@ mod tests {
                 enable: false,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::Selector(Selector {
                     active: Some("lockdown".to_string()),
                     description: None,
@@ -3195,6 +3213,7 @@ mod tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "g".into(),

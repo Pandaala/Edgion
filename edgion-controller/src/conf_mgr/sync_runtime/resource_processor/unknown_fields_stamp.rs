@@ -24,11 +24,15 @@ const MAX_LISTED_PATHS: usize = 10;
 /// `MAX_LISTED_PATHS` entries, plus a deterministic `(+M more)` suffix when
 /// truncated.
 fn format_message(paths: &[String]) -> String {
-    if paths.len() <= MAX_LISTED_PATHS {
-        paths.join(", ")
-    } else {
-        let shown = paths[..MAX_LISTED_PATHS].join(", ");
+    let shown = paths[..paths.len().min(MAX_LISTED_PATHS)]
+        .iter()
+        .map(|path| crate::observe::unknown_fields_registry::bounded_unknown_field_path(path))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if paths.len() > MAX_LISTED_PATHS {
         format!("{shown} (+{} more)", paths.len() - MAX_LISTED_PATHS)
+    } else {
+        shown
     }
 }
 
@@ -84,6 +88,14 @@ mod tests {
         let c = unknown_fields_condition(&paths, None).unwrap();
         let expected_shown = paths[..MAX_LISTED_PATHS].join(", ");
         assert_eq!(c.message, format!("{expected_shown} (+3 more)"));
+    }
+
+    #[test]
+    fn message_bounds_individual_paths_without_changing_omitted_count() {
+        let paths: Vec<String> = (0..27).map(|i| format!("path{i}.{}", "é".repeat(600))).collect();
+        let c = unknown_fields_condition(&paths, None).unwrap();
+        assert!(c.message.ends_with("(+17 more)"));
+        assert!(c.message.contains("bytes)"));
     }
 
     #[test]

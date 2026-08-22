@@ -134,11 +134,15 @@ where
 
     // FileSystem/etcd unknown-field diagnostic (Phase 2b of
     // tasks/todo/plugin-config-unknown-field-detection): the Kubernetes watcher
-    // gets this via the hand-written `Deserialize` impls on `EdgionPluginsSpec` /
-    // `EdgionStreamPluginsSpec`, gated by `strict_ingest_enabled`. That gate means
+    // gets this via the hand-written `Deserialize` impls on `EdgionPluginsSpec`,
+    // `EdgionStreamPluginsSpec`, and `EdgionConfigDataSpec`, gated by
+    // `strict_ingest_enabled`. That gate means
     // "Kubernetes ingress" specifically (see its doc comment), so it is NOT
     // consulted here — FileSystem/etcd content is checked unconditionally.
-    if matches!(kind, ResourceKind::EdgionPlugins | ResourceKind::EdgionStreamPlugins) {
+    if matches!(
+        kind,
+        ResourceKind::EdgionPlugins | ResourceKind::EdgionStreamPlugins | ResourceKind::EdgionConfigData
+    ) {
         populate_unknown_fields_non_fatal(kind, content, &mut parsed);
     }
 
@@ -150,8 +154,8 @@ fn extract_api_version(content: &str) -> Option<String> {
     value.get("apiVersion")?.as_str().map(ToString::to_string)
 }
 
-/// Populate `spec.unknown_fields` on an already-parsed `EdgionPlugins` /
-/// `EdgionStreamPlugins` object, for the FileSystem/etcd loader seam.
+/// Populate `spec.unknown_fields` on an already-parsed resource supported by
+/// the unknown-field diagnostic, for the FileSystem/etcd loader seam.
 ///
 /// Non-fatal by design (`05-issues.md` R-2): unlike the Kubernetes hook, this
 /// runs on YAML content that may contain shapes `serde_json::Value` cannot
@@ -162,8 +166,8 @@ fn extract_api_version(content: &str) -> Option<String> {
 ///
 /// `K` is generic over every resource kind `parse_resource_content` serves,
 /// so `Any::downcast_mut` is the minimal way to reach the concrete
-/// `EdgionPlugins`/`EdgionStreamPlugins` spec field without adding a trait
-/// method to every resource type for a diagnostic only two kinds need. The
+/// supported spec fields without adding a trait method to every resource type
+/// for a diagnostic only three kinds need. The
 /// `K: 'static` bound `parse_resource_content` already carries makes this
 /// sound.
 fn populate_unknown_fields_non_fatal<K: 'static>(kind: ResourceKind, content: &str, parsed: &mut K) {
@@ -214,6 +218,16 @@ fn populate_unknown_fields_non_fatal<K: 'static>(kind: ResourceKind, content: &s
                 plugins.spec.unknown_fields = edgion_resources::schema_check::unknown_key_paths(
                     spec_value,
                     edgion_resources::edgion_stream_plugins_spec_schema(),
+                );
+            }
+        }
+        ResourceKind::EdgionConfigData => {
+            if let Some(config_data) =
+                (parsed as &mut dyn std::any::Any).downcast_mut::<edgion_resources::EdgionConfigData>()
+            {
+                config_data.spec.unknown_fields = edgion_resources::schema_check::unknown_key_paths(
+                    spec_value,
+                    edgion_resources::edgion_config_data_spec_schema(),
                 );
             }
         }
@@ -582,7 +596,7 @@ spec:
 #[cfg(test)]
 mod unknown_fields_seam_tests {
     use super::parse_resource_content;
-    use edgion_resources::prelude_resources::{EdgionPlugins, EdgionStreamPlugins, HTTPRoute};
+    use edgion_resources::prelude_resources::{EdgionConfigData, EdgionPlugins, EdgionStreamPlugins, HTTPRoute};
 
     const TYPO_PLUGINS: &str = r#"
 apiVersion: edgion.io/v1
@@ -626,6 +640,22 @@ spec:
         denys: []
 "#;
 
+    const TYPO_CONFIG_DATA: &str = r#"
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: typo-config-data
+  namespace: default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: office
+          cidrs: []
+          cidrz: [10.0.0.0/8]
+"#;
+
     #[test]
     fn edgion_plugins_typo_populates_unknown_fields_with_exact_path() {
         let parsed: EdgionPlugins = parse_resource_content(TYPO_PLUGINS).expect("well-formed aside from the typo");
@@ -652,6 +682,26 @@ spec:
     fn edgion_stream_plugins_clean_document_yields_no_findings() {
         let clean = TYPO_STREAM_PLUGINS.replace("denys", "deny");
         let parsed: EdgionStreamPlugins = parse_resource_content(&clean).expect("clean document must parse");
+        assert!(parsed.spec.unknown_fields.is_empty());
+    }
+
+    #[test]
+    fn edgion_config_data_typo_populates_unknown_fields_with_exact_path() {
+        let parsed: EdgionConfigData =
+            parse_resource_content(TYPO_CONFIG_DATA).expect("well-formed aside from the typo");
+        assert_eq!(
+            parsed.spec.unknown_fields,
+            vec!["data.config.items[0].cidrz".to_string()]
+        );
+    }
+
+    #[test]
+    fn edgion_config_data_misc_payload_remains_open() {
+        let misc = TYPO_CONFIG_DATA.replace(
+            "type: IpList\n    config:\n      items:\n        - name: office\n          cidrs: []\n          cidrz: [10.0.0.0/8]",
+            "type: Misc\n    config:\n      vendor:\n        arbitrary: [1, 2, 3]",
+        );
+        let parsed: EdgionConfigData = parse_resource_content(&misc).expect("Misc must accept arbitrary JSON");
         assert!(parsed.spec.unknown_fields.is_empty());
     }
 
@@ -695,10 +745,10 @@ spec:
         );
     }
 
-    /// A non-plugin kind goes through `parse_resource_content` completely
+    /// An unsupported kind goes through `parse_resource_content` completely
     /// unchanged — no findings machinery is invoked for it.
     #[test]
-    fn non_plugin_kind_is_unaffected() {
+    fn unsupported_kind_is_unaffected() {
         let content = r#"
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute

@@ -68,7 +68,7 @@ pub struct EdgionConfigDataRef {
 
 /// EdgionConfigData is a general-purpose, hot-swappable metadata/overlay primitive
 /// referenced by EdgionPlugins and EdgionStreamPlugins.
-#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(CustomResource, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
     group = "edgion.io",
     version = "v1",
@@ -104,6 +104,60 @@ pub struct EdgionConfigDataSpec {
     /// The data entry. Each EdgionConfigData contains exactly one entry,
     /// discriminated by the `type` tag.
     pub data: ConfigEntry,
+
+    /// Unrecognized key paths found in the submitted document. Populated only on
+    /// operator-authored ingest paths; never serialized and never exposed in the
+    /// CRD schema.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub unknown_fields: Vec<String>,
+}
+
+/// Deserialize-only mirror of [`EdgionConfigDataSpec`]. `unknown_fields` is
+/// derived from the submitted document and therefore is intentionally absent.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EdgionConfigDataSpecShadow {
+    #[serde(default = "default_enable")]
+    enable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active: Option<String>,
+    #[serde(default)]
+    visibility: ConfigDataVisibility,
+    data: ConfigEntry,
+}
+
+impl From<EdgionConfigDataSpecShadow> for EdgionConfigDataSpec {
+    fn from(shadow: EdgionConfigDataSpecShadow) -> Self {
+        Self {
+            enable: shadow.enable,
+            active: shadow.active,
+            visibility: shadow.visibility,
+            data: shadow.data,
+            unknown_fields: Vec::new(),
+        }
+    }
+}
+
+/// Cached production schema used by all EdgionConfigData unknown-key checks.
+pub fn edgion_config_data_spec_schema() -> &'static schemars::Schema {
+    static SCHEMA: std::sync::OnceLock<schemars::Schema> = std::sync::OnceLock::new();
+    SCHEMA.get_or_init(|| schemars::schema_for!(EdgionConfigDataSpec))
+}
+
+impl<'de> Deserialize<'de> for EdgionConfigDataSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if !crate::schema_check::strict_ingest_enabled() {
+            return Ok(EdgionConfigDataSpecShadow::deserialize(deserializer)?.into());
+        }
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let unknown = crate::schema_check::unknown_key_paths(&value, edgion_config_data_spec_schema());
+        let mut spec: Self = EdgionConfigDataSpecShadow::deserialize(value)
+            .map_err(serde::de::Error::custom)?
+            .into();
+        spec.unknown_fields = unknown;
+        Ok(spec)
+    }
 }
 
 /// Status of EdgionConfigData.
@@ -339,6 +393,7 @@ mod tests {
             active: None,
             visibility: ConfigDataVisibility::Namespace,
             data: ConfigEntry::IpList(IpListData { items: items.clone() }),
+            unknown_fields: Vec::new(),
         };
         let ed = EdgionConfigData {
             metadata: ObjectMeta {
@@ -377,6 +432,7 @@ mod tests {
             active: None,
             visibility: ConfigDataVisibility::Namespace,
             data: ConfigEntry::IpList(IpListData { items: items.clone() }),
+            unknown_fields: Vec::new(),
         };
         let ed = EdgionConfigData {
             metadata: ObjectMeta {

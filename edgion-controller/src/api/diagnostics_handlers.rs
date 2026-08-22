@@ -9,8 +9,8 @@
 //!   from the FileSystem backend's recursive scan.
 //!
 //! * `GET /api/v1/diagnostics/unknown-fields` — fleet-wide list of
-//!   `EdgionPlugins` / `EdgionStreamPlugins` resources whose submitted
-//!   document contained a key the schema does not recognize. See
+//!   `EdgionPlugins`, `EdgionStreamPlugins`, and `EdgionConfigData` resources
+//!   whose submitted document contained a key the schema does not recognize. See
 //!   `tasks/todo/plugin-config-unknown-field-detection/02-implementation.md`
 //!   §9.2. Backed by `observe::unknown_fields_registry`, not
 //!   `center_list_resources`, because the finding lives in a
@@ -203,10 +203,11 @@ pub struct UnknownFieldsResponse {
 /// `GET /api/v1/diagnostics/unknown-fields`.
 ///
 /// Fleet-wide answer to "did anything applied to this controller contain a
-/// key the schema does not recognize?", covering both `EdgionPlugins` and
-/// `EdgionStreamPlugins`. Never rejects anything itself (warn-not-reject,
-/// `02-implementation.md` §10) — this is the query surface an operator's own
-/// blocking gate (CI, a ValidatingAdmissionWebhook) is meant to be built on.
+/// key the schema does not recognize?", covering `EdgionPlugins`,
+/// `EdgionStreamPlugins`, and `EdgionConfigData`. Never rejects anything itself
+/// (warn-not-reject, `02-implementation.md` §10) — this is the query surface an
+/// operator's own blocking gate (CI, a ValidatingAdmissionWebhook) is meant to
+/// be built on.
 pub async fn unknown_fields(State(_state): State<Arc<AdminState>>) -> Json<ApiResponse<UnknownFieldsResponse>> {
     let (total, truncated, items) = collect_unknown_fields(MAX_UNKNOWN_FIELDS_ITEMS);
     Json(ApiResponse::ok_body(UnknownFieldsResponse {

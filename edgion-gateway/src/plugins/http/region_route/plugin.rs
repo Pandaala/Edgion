@@ -683,6 +683,7 @@ mod tests {
                 enable: false, // envelope kill-switch
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
                     enable: None,
                     active: None,
@@ -744,6 +745,7 @@ mod tests {
                 enable: true, // envelope enabled — the validation must catch the bad regions
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
                     enable: None,
                     active: None,

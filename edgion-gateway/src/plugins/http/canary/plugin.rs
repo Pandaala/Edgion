@@ -347,6 +347,7 @@ mod tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::Selector(Selector {
                     active: Some("canary".to_string()),
                     description: None,
@@ -370,6 +371,7 @@ mod tests {
                 enable: false, // envelope kill-switch
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::Selector(Selector {
                     active: Some("canary".to_string()),
                     description: None,
@@ -397,6 +399,7 @@ mod tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::Selector(Selector {
                     active: Some("ghost".to_string()),
                     description: None,
@@ -424,6 +427,7 @@ mod tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::Selector(Selector {
                     active: None,
                     description: None,
@@ -457,6 +461,7 @@ mod tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::KeyList(KeyListData {
                     match_mode: KeyMatchMode::Exact,
                     // Wrong variant is the whole point — items list can be empty.

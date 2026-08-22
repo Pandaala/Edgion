@@ -392,6 +392,7 @@ mod tests {
             enable: true,
             active: None,
             visibility: Default::default(),
+            unknown_fields: Vec::new(),
             data: ConfigEntry::IpList(IpListData {
                 items: vec![IpGroup {
                     name: "blocked".into(),
@@ -463,6 +464,7 @@ mod tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "g".into(),

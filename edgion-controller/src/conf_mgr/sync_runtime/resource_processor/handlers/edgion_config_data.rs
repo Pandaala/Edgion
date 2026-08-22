@@ -17,6 +17,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
 use crate::conf_mgr::sync_runtime::resource_processor::{
     EdgionConfigDataStore, HandlerContext, ProcessResult, ProcessorHandler,
 };
+use crate::observe::unknown_fields_registry::bounded_unknown_field_paths;
 use edgion_resources::prelude_resources::EdgionConfigData;
 use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataStatus};
 
@@ -66,6 +67,18 @@ async fn requeue_edgion_config_data_referrers(ed: &EdgionConfigData, ctx: &Handl
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
     fn preparse(&self, ed: &mut EdgionConfigData, _ctx: &HandlerContext) -> Vec<String> {
+        if !ed.spec.unknown_fields.is_empty() {
+            let paths = bounded_unknown_field_paths(&ed.spec.unknown_fields);
+            tracing::warn!(
+                component = "conf_mgr",
+                event = "unknown_config_fields_detected",
+                kind = "EdgionConfigData",
+                namespace = %ed.metadata.namespace.as_deref().unwrap_or("default"),
+                name = %ed.metadata.name.as_deref().unwrap_or(""),
+                paths = ?paths,
+                "EdgionConfigData document has keys the typed schema does not recognize; they are ignored and config still syncs"
+            );
+        }
         ed.validate_pre_parse()
     }
 
@@ -150,12 +163,77 @@ impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
         } else {
             None
         };
-
         let status = ed.status.get_or_insert_with(EdgionConfigDataStatus::default);
         update_condition(&mut status.conditions, accepted);
         update_condition(&mut status.conditions, resolved_refs);
         if let Some(partially_invalid) = partially_invalid {
             update_condition(&mut status.conditions, partially_invalid);
         }
+        super::super::unknown_fields_stamp::apply_unknown_fields_condition(
+            &mut status.conditions,
+            &ed.spec.unknown_fields,
+            generation,
+        );
+    }
+}
+
+#[cfg(test)]
+mod unknown_fields_tests {
+    use super::*;
+    use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
+        condition_reasons, condition_true, condition_types,
+    };
+    use edgion_resources::resources::edgion_config_data::EdgionConfigDataSpec;
+    use std::sync::Arc;
+
+    fn resource(paths: Vec<String>) -> EdgionConfigData {
+        let spec: EdgionConfigDataSpec = serde_json::from_value(serde_json::json!({
+            "data": {"type": "Misc", "config": {}}
+        }))
+        .expect("minimal ConfigData spec");
+        let mut resource = EdgionConfigData::new("config", spec);
+        resource.metadata.namespace = Some("default".to_string());
+        resource.metadata.generation = Some(7);
+        resource.spec.unknown_fields = paths;
+        resource
+    }
+
+    #[test]
+    fn update_status_adds_and_clears_advisory_without_disturbing_other_conditions() {
+        let handler = EdgionConfigDataHandler::new();
+        let mut resource = resource(vec!["data.config.typo".to_string()]);
+        let ctx = HandlerContext::new(
+            None,
+            None,
+            Default::default(),
+            5,
+            20,
+            Arc::new(crate::conf_mgr::ControllerRuntime::default()),
+        );
+
+        handler.update_status(&mut resource, &ctx, &[]);
+        let conditions = &resource.status.as_ref().expect("status").conditions;
+        assert!(conditions.iter().any(|condition| {
+            condition.type_ == condition_types::UNKNOWN_CONFIG_FIELDS
+                && condition.reason == condition_reasons::UNKNOWN_FIELDS_DETECTED
+                && condition.status == "True"
+        }));
+        assert!(conditions
+            .iter()
+            .any(|condition| condition.type_ == condition_types::ACCEPTED && condition.status == "True"));
+
+        resource.spec.unknown_fields.clear();
+        resource
+            .status
+            .as_mut()
+            .expect("status")
+            .conditions
+            .push(condition_true("Unrelated", "Stable", "keep", Some(7)));
+        handler.update_status(&mut resource, &ctx, &[]);
+        let conditions = &resource.status.as_ref().expect("status").conditions;
+        assert!(conditions
+            .iter()
+            .all(|condition| condition.type_ != condition_types::UNKNOWN_CONFIG_FIELDS));
+        assert!(conditions.iter().any(|condition| condition.type_ == "Unrelated"));
     }
 }
