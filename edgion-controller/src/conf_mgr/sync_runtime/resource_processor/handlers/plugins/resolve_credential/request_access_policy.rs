@@ -74,7 +74,7 @@ fn resolve_conditions(
                 resolve_secret_match(condition, owner_namespace, resource_ref, ctx);
             }
             AccessCondition::HmacAuth(config) => {
-                hmac::resolve_config(config, owner_namespace, resource_ref, ctx);
+                hmac::resolve_config(config, hmac::MetadataPolicy::Ignore, owner_namespace, resource_ref, ctx);
             }
             AccessCondition::KeyExist(_)
             | AccessCondition::KeyMatch(_)

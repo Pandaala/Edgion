@@ -4,13 +4,8 @@
 // - 06_HTTPRoute_default_hmac-auth-grouped.yaml             # Route for grouped test
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use chrono::Utc;
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use crate::suites::edgion_plugins::hmac_test_utils::build_hmac_headers;
 use std::time::Instant;
-
-type HmacSha256 = Hmac<Sha256>;
 
 pub struct HmacAuthTestSuite;
 
@@ -25,40 +20,6 @@ const GROUPED_SECRET_PARTNER_A: &[u8] = b"partner-a-secret-key-at-least-32-bytes
 const GROUPED_USER_PARTNER_B: &str = "partner-b-user";
 const GROUPED_SECRET_PARTNER_B: &[u8] = b"partner-b-secret-key-at-least-32-bytes-long-padding";
 
-fn build_signing_string(method: &str, path: &str, query: Option<&str>, host: &str, date: &str) -> String {
-    let mut request_target = path.to_string();
-    if let Some(q) = query {
-        if !q.is_empty() {
-            request_target.push('?');
-            request_target.push_str(q);
-        }
-    }
-
-    format!(
-        "@request-target: {} {}\nhost: {}\ndate: {}",
-        method.to_ascii_lowercase(),
-        request_target,
-        host,
-        date
-    )
-}
-
-fn build_signature(secret: &[u8], signing_string: &str) -> String {
-    let mut mac = HmacSha256::new_from_slice(secret).expect("valid HMAC key");
-    mac.update(signing_string.as_bytes());
-    STANDARD.encode(mac.finalize().into_bytes())
-}
-
-fn build_authorization(username: &str, secret: &[u8], method: &str, path: &str, host: &str, date: &str) -> String {
-    let signing = build_signing_string(method, path, None, host, date);
-    let signature = build_signature(secret, &signing);
-
-    format!(
-        r#"hmac username="{}", algorithm="hmac-sha256", headers="@request-target host date", signature="{}""#,
-        username, signature
-    )
-}
-
 impl HmacAuthTestSuite {
     fn test_valid_signature_returns_200() -> TestCase {
         TestCase::new(
@@ -67,16 +28,16 @@ impl HmacAuthTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let date = Utc::now().to_rfc2822();
-                    let auth = build_authorization(VALID_USERNAME, VALID_SECRET, "GET", "/health", TEST_HOST, &date);
+                    let signed =
+                        build_hmac_headers(VALID_USERNAME, VALID_SECRET, "GET", "/health", None, TEST_HOST, None);
                     let url = format!("{}/health", ctx.http_url());
 
                     let request = ctx
                         .http_client
                         .get(&url)
                         .header("host", TEST_HOST)
-                        .header("date", date)
-                        .header("authorization", auth);
+                        .header("date", signed.date)
+                        .header("authorization", signed.authorization);
 
                     match request.send().await {
                         Ok(response) => {
@@ -134,16 +95,16 @@ impl HmacAuthTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let date = Utc::now().to_rfc2822();
-                    let auth = build_authorization(VALID_USERNAME, BAD_SECRET, "GET", "/health", TEST_HOST, &date);
+                    let signed =
+                        build_hmac_headers(VALID_USERNAME, BAD_SECRET, "GET", "/health", None, TEST_HOST, None);
                     let url = format!("{}/health", ctx.http_url());
 
                     let request = ctx
                         .http_client
                         .get(&url)
                         .header("host", TEST_HOST)
-                        .header("date", date)
-                        .header("authorization", auth);
+                        .header("date", signed.date)
+                        .header("authorization", signed.authorization);
 
                     match request.send().await {
                         Ok(response) => {
@@ -171,16 +132,16 @@ impl HmacAuthTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let date = Utc::now().to_rfc2822();
-                    let auth = build_authorization(VALID_USERNAME, VALID_SECRET, "GET", "/headers", TEST_HOST, &date);
+                    let signed =
+                        build_hmac_headers(VALID_USERNAME, VALID_SECRET, "GET", "/headers", None, TEST_HOST, None);
                     let url = format!("{}/headers", ctx.http_url());
 
                     let request = ctx
                         .http_client
                         .get(&url)
                         .header("host", TEST_HOST)
-                        .header("date", date)
-                        .header("authorization", auth);
+                        .header("date", signed.date)
+                        .header("authorization", signed.authorization);
 
                     match request.send().await {
                         Ok(response) => {
@@ -223,16 +184,16 @@ impl HmacAuthTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let date = Utc::now().to_rfc2822();
-                    let auth = build_authorization(VALID_USERNAME, VALID_SECRET, "GET", "/headers", TEST_HOST, &date);
+                    let signed =
+                        build_hmac_headers(VALID_USERNAME, VALID_SECRET, "GET", "/headers", None, TEST_HOST, None);
                     let url = format!("{}/headers", ctx.http_url());
 
                     let request = ctx
                         .http_client
                         .get(&url)
                         .header("host", TEST_HOST)
-                        .header("date", date)
-                        .header("authorization", auth);
+                        .header("date", signed.date)
+                        .header("authorization", signed.authorization);
 
                     match request.send().await {
                         Ok(response) => {
@@ -311,21 +272,21 @@ impl HmacAuthTestSuite {
                     let start = Instant::now();
                     let client = &ctx.http_client;
                     let url = format!("{}/health", ctx.http_url());
-                    let date = Utc::now().to_rfc2822();
-                    let auth = build_authorization(
+                    let signed = build_hmac_headers(
                         GROUPED_USER_PARTNER_A,
                         GROUPED_SECRET_PARTNER_A,
                         "GET",
                         "/health",
+                        None,
                         GROUPED_HOST,
-                        &date,
+                        None,
                     );
 
                     let result = client
                         .get(&url)
                         .header("host", GROUPED_HOST)
-                        .header("date", &date)
-                        .header("Authorization", auth)
+                        .header("date", signed.date)
+                        .header("Authorization", signed.authorization)
                         .send()
                         .await;
 
@@ -357,21 +318,21 @@ impl HmacAuthTestSuite {
                     let start = Instant::now();
                     let client = &ctx.http_client;
                     let url = format!("{}/health", ctx.http_url());
-                    let date = Utc::now().to_rfc2822();
-                    let auth = build_authorization(
+                    let signed = build_hmac_headers(
                         GROUPED_USER_PARTNER_B,
                         GROUPED_SECRET_PARTNER_B,
                         "GET",
                         "/health",
+                        None,
                         GROUPED_HOST,
-                        &date,
+                        None,
                     );
 
                     let result = client
                         .get(&url)
                         .header("host", GROUPED_HOST)
-                        .header("date", &date)
-                        .header("Authorization", auth)
+                        .header("date", signed.date)
+                        .header("Authorization", signed.authorization)
                         .send()
                         .await;
 

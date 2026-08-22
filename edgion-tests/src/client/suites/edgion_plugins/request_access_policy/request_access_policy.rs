@@ -16,10 +16,46 @@
 //   HTTPRoute_edgion-test_gac.yaml
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::suites::edgion_plugins::hmac_test_utils::build_hmac_headers;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 pub struct RequestAccessPolicyTestSuite;
+
+const HMAC_HOST: &str = "gac-hmac.example.com";
+const HMAC_USERNAME: &str = "policy-user";
+const HMAC_SECRET: &[u8] = b"policy-hmac-secret-key-must-be-at-least-32-bytes";
+const BAD_HMAC_SECRET: &[u8] = b"policy-hmac-wrong-secret-key-must-also-be-long";
+
+async fn send_hmac_request(
+    ctx: &TestContext,
+    method: &str,
+    path: &str,
+    signing_body: Option<&[u8]>,
+    request_body: Option<&[u8]>,
+    secret: &[u8],
+    fallback: bool,
+) -> reqwest::Result<reqwest::Response> {
+    let signed = build_hmac_headers(HMAC_USERNAME, secret, method, path, None, HMAC_HOST, signing_body);
+    let url = format!("{}{path}", ctx.http_url());
+    let method = reqwest::Method::from_bytes(method.as_bytes()).expect("static HTTP method");
+    let mut request = ctx
+        .http_client
+        .request(method, url)
+        .header("host", HMAC_HOST)
+        .header("date", signed.date)
+        .header("authorization", signed.authorization);
+    if let Some(digest) = signed.digest {
+        request = request.header("digest", digest);
+    }
+    if fallback {
+        request = request.header("X-Hmac-Fallback", "allow");
+    }
+    if let Some(body) = request_body {
+        request = request.body(body.to_vec());
+    }
+    request.send().await
+}
 
 // ---- Access-log deserialization types (mirrors plugin_condition/conditions.rs) ----
 
@@ -340,6 +376,168 @@ impl RequestAccessPolicyTestSuite {
             },
         )
     }
+
+    fn test_hmac_valid_and_invalid_policy_outcomes() -> TestCase {
+        TestCase::new(
+            "hmac_valid_and_invalid_policy_outcomes",
+            "Nested HMAC accepts a valid signature and maps invalid or missing auth to policy 403",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let valid = send_hmac_request(&ctx, "GET", "/health", None, None, HMAC_SECRET, false).await;
+                    let invalid = send_hmac_request(&ctx, "GET", "/health", None, None, BAD_HMAC_SECRET, false).await;
+                    let missing = ctx
+                        .http_client
+                        .get(format!("{}/health", ctx.http_url()))
+                        .header("host", HMAC_HOST)
+                        .send()
+                        .await;
+                    match (valid, invalid, missing) {
+                        (Ok(valid), Ok(invalid), Ok(missing))
+                            if valid.status().as_u16() == 200
+                                && invalid.status().as_u16() == 403
+                                && missing.status().as_u16() == 403 =>
+                        {
+                            TestResult::passed(start.elapsed())
+                        }
+                        (Ok(valid), Ok(invalid), Ok(missing)) => TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected valid/invalid/missing = 200/403/403, got {}/{}/{}",
+                                valid.status(),
+                                invalid.status(),
+                                missing.status()
+                            ),
+                        ),
+                        (valid, invalid, missing) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Request failure: valid={valid:?}, invalid={invalid:?}, missing={missing:?}"),
+                        ),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_hmac_invalid_signature_allows_explicit_sibling_fallback() -> TestCase {
+        TestCase::new(
+            "hmac_invalid_signature_allows_explicit_sibling_fallback",
+            "Invalid HMAC is a non-match, so an explicit sibling rule can authorize",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match send_hmac_request(&ctx, "GET", "/fallback", None, None, BAD_HMAC_SECRET, true).await {
+                        Ok(response) if response.status().as_u16() == 200 => TestResult::passed(start.elapsed()),
+                        Ok(response) => {
+                            TestResult::failed(start.elapsed(), format!("Expected 200, got {}", response.status()))
+                        }
+                        Err(error) => TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_hmac_policy_does_not_apply_standalone_header_mutations() -> TestCase {
+        TestCase::new(
+            "hmac_policy_does_not_apply_standalone_header_mutations",
+            "Policy HMAC preserves Authorization and ignores credential metadata headers",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match send_hmac_request(&ctx, "GET", "/headers", None, None, HMAC_SECRET, false).await {
+                        Ok(response) if response.status().as_u16() == 200 => {
+                            let body = response.text().await.unwrap_or_default().to_ascii_lowercase();
+                            let authorization_preserved = body.contains("authorization");
+                            let metadata_absent =
+                                !body.contains("x-policy-metadata") && !body.contains("should-not-forward");
+                            if authorization_preserved && metadata_absent {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Unexpected upstream headers: authorization_preserved={authorization_preserved}, metadata_absent={metadata_absent}, body={body}"
+                                    ),
+                                )
+                            }
+                        }
+                        Ok(response) => {
+                            TestResult::failed(start.elapsed(), format!("Expected 200, got {}", response.status()))
+                        }
+                        Err(error) => TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_hmac_body_digest_and_forwardable_fallback() -> TestCase {
+        TestCase::new(
+            "hmac_body_digest_and_forwardable_fallback",
+            "Policy HMAC validates Digest, denies a mismatch, and preserves the body for sibling fallback",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let original = b"signed-policy-body";
+                    let tampered = b"tampered-policy-body";
+                    let valid = send_hmac_request(
+                        &ctx,
+                        "POST",
+                        "/echo",
+                        Some(original),
+                        Some(original),
+                        HMAC_SECRET,
+                        false,
+                    )
+                    .await;
+                    let denied = send_hmac_request(
+                        &ctx,
+                        "POST",
+                        "/echo",
+                        Some(original),
+                        Some(tampered),
+                        HMAC_SECRET,
+                        false,
+                    )
+                    .await;
+                    let fallback =
+                        send_hmac_request(&ctx, "POST", "/echo", Some(original), Some(tampered), HMAC_SECRET, true)
+                            .await;
+                    match (valid, denied, fallback) {
+                        (Ok(valid), Ok(denied), Ok(fallback))
+                            if valid.status().as_u16() == 200
+                                && denied.status().as_u16() == 403
+                                && fallback.status().as_u16() == 200 =>
+                        {
+                            let body = fallback.text().await.unwrap_or_default();
+                            if body.contains("tampered-policy-body") {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Fallback did not forward the captured body: {body}"),
+                                )
+                            }
+                        }
+                        (Ok(valid), Ok(denied), Ok(fallback)) => TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected valid/denied/fallback = 200/403/200, got {}/{}/{}",
+                                valid.status(),
+                                denied.status(),
+                                fallback.status()
+                            ),
+                        ),
+                        (valid, denied, fallback) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Request failure: valid={valid:?}, denied={denied:?}, fallback={fallback:?}"),
+                        ),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for RequestAccessPolicyTestSuite {
@@ -357,6 +555,11 @@ impl TestSuite for RequestAccessPolicyTestSuite {
             // Access-log decision assertions
             Self::test_access_log_allow_decision(),
             Self::test_access_log_deny_decision(),
+            // Nested HMAC: Controller Secret binding -> conf_sync -> Gateway policy evaluation.
+            Self::test_hmac_valid_and_invalid_policy_outcomes(),
+            Self::test_hmac_invalid_signature_allows_explicit_sibling_fallback(),
+            Self::test_hmac_policy_does_not_apply_standalone_header_mutations(),
+            Self::test_hmac_body_digest_and_forwardable_fallback(),
         ]
     }
 }

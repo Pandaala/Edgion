@@ -64,6 +64,23 @@ pub(crate) fn over_plugin_limit_len(requirement: &BodyRequirement, body_len: u64
     plugin_limit_bytes(requirement).and_then(|limit| (body_len > limit).then_some(BodyReadError::TooLarge { limit }))
 }
 
+/// Record the canonical access-status signal for a body read failure.
+///
+/// `NotBuffered` is intentionally excluded because the read adapter records
+/// the more precise refusal status when it rejects the request class.
+pub(crate) fn record_body_read_error_status(session: &mut dyn PluginSession, err: &BodyReadError) {
+    let status = match err {
+        BodyReadError::TooLarge { .. } | BodyReadError::BufferLimitExceeded { .. } => EdgionStatus::BodyReadTooLarge,
+        BodyReadError::Timeout => EdgionStatus::BodyReadTimeout,
+        BodyReadError::Incomplete => EdgionStatus::BodyReadAborted,
+        BodyReadError::StorageFailure => EdgionStatus::BodyCaptureStorageFailed,
+        BodyReadError::GenerationConflict => EdgionStatus::BodyMutationConflict,
+        BodyReadError::Unimplemented => EdgionStatus::BodyReadUnimplemented,
+        BodyReadError::NotBuffered => return,
+    };
+    session.add_error(status);
+}
+
 /// Wrapper that force-buffers the request body before running the inner filter.
 pub struct BodyGatedRequestFilter {
     inner: Box<dyn RequestFilter>,
@@ -209,7 +226,7 @@ pub(crate) fn body_read_failure_result(
     }
 
     if matches!(err, BodyReadError::BufferLimitExceeded { .. }) {
-        session.add_error(EdgionStatus::BodyReadTooLarge);
+        record_body_read_error_status(session, err);
         log.push_err("body-buffer-limit");
         return PluginRunningResult::ErrResponse {
             status: 413,
@@ -223,7 +240,7 @@ pub(crate) fn body_read_failure_result(
         // impossible — same reasoning as the physical cap above. Recorded
         // under its own status (not `BodyReadAborted`) because this is an
         // infrastructure fault (e.g. full disk), not a client abort.
-        session.add_error(EdgionStatus::BodyCaptureStorageFailed);
+        record_body_read_error_status(session, err);
         log.push_err("body-storage-failed");
         return PluginRunningResult::ErrResponse {
             status: 500,
@@ -233,17 +250,7 @@ pub(crate) fn body_read_failure_result(
 
     // R17: a read failure is alertable too, and only `ctx.add_error` reaches the
     // access log — a `PluginLog` line alone stays inside a nested per-plugin array.
-    session.add_error(match err {
-        BodyReadError::TooLarge { .. } => EdgionStatus::BodyReadTooLarge,
-        BodyReadError::BufferLimitExceeded { .. } => EdgionStatus::BodyReadTooLarge,
-        BodyReadError::Timeout => EdgionStatus::BodyReadTimeout,
-        BodyReadError::Incomplete => EdgionStatus::BodyReadAborted,
-        BodyReadError::Unimplemented => EdgionStatus::BodyReadUnimplemented,
-        // Handled above; unreachable.
-        BodyReadError::NotBuffered => EdgionStatus::BodyRefusedStage,
-        BodyReadError::StorageFailure => EdgionStatus::BodyCaptureStorageFailed,
-        BodyReadError::GenerationConflict => EdgionStatus::BodyMutationConflict,
-    });
+    record_body_read_error_status(session, err);
 
     match requirement.on_read_failure {
         BodyReadFailureMode::FailClose => {

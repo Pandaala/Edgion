@@ -264,7 +264,7 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 ### Current scenario set
 
 > Source of truth is `edgion-tests/src/client/dynamic/registry.rs` (`all()`); run
-> `--list-dynamic-scenarios` for the live list. As of this writing it registers 27 scenarios. The
+> `--list-dynamic-scenarios` for the live list. As of this writing it registers 28 scenarios. The
 > table below highlights the common and protocol-lifecycle scenarios rather than duplicating the
 > complete registry.
 
@@ -275,6 +275,7 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 | `BasicAuthDynamic` | `EdgionPlugins/BasicAuth/DynamicTest` | `secretRefs` list shrinks; bob credentials removed → 401 |
 | `BasicAuthDynamicGrouped` | `EdgionPlugins/BasicAuth/DynamicTest` | Grouped BasicAuth variant (`updates_grouped/`) |
 | `RateLimitDynamic` | `EdgionPlugins/RateLimit/DynamicTest` | `onMissingKey` switched from Allow to Deny |
+| `RequestAccessPolicyHmacDynamic` | `EdgionPlugins/RequestAccessPolicy/DynamicTest` | Nested HMAC credentials rotate through a Secret update; old signatures stop matching and new signatures start matching without a restart |
 | `ObservedGenHighFreq` | `Status/ObservedGeneration/HighFrequency/DynamicTest` | 10 rapid Gateway spec changes; `observedGeneration` catches up to the final generation |
 | `BtlspRefFlap` | `Status/BackendTLSPolicy/RefFlap/DynamicTest` | BackendTLSPolicy CA ConfigMap ref flaps good→missing→good; `Accepted`/`ResolvedRefs` track it |
 | `PmdRefFlap` | `EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest` | EdgionPlugins `overrideRef` flaps good→missing→good; `ResolvedRefs` tracks it (`False`/`InvalidEdgionConfigDataRef` while missing) |

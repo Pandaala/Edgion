@@ -20,6 +20,7 @@ pub fn all() -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::basic_auth_dynamic::SCENARIO,
         crate::dynamic::scenarios::basic_auth_dynamic::GROUPED_SCENARIO,
         crate::dynamic::scenarios::rate_limit_dynamic::SCENARIO,
+        crate::dynamic::scenarios::request_access_policy_hmac_dynamic::SCENARIO,
         crate::dynamic::scenarios::route_delegation_dynamic::SCENARIO,
         crate::dynamic::scenarios::grpc_route_delegation_dynamic::SCENARIO,
         crate::dynamic::scenarios::observed_gen_high_freq::SCENARIO,

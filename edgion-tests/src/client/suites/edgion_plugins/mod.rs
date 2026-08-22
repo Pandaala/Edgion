@@ -31,6 +31,7 @@ mod global_plugins_snapshot;
 mod guardrail;
 mod header_cert_auth;
 mod hmac_auth;
+mod hmac_test_utils;
 mod ip_restriction;
 mod ip_restriction_partial_good;
 mod ip_restriction_refs;
@@ -122,7 +123,10 @@ pub use rate_limit::{RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTes
 pub use rate_limit_redis::RateLimitRedisTestSuite;
 pub use real_ip::RealIpPluginTestSuite;
 pub use region_route::RegionRouteTestSuite;
-pub use request_access_policy::RequestAccessPolicyTestSuite;
+pub use request_access_policy::{
+    RequestAccessPolicyHmacDynamicInitialTestSuite, RequestAccessPolicyHmacDynamicUpdatedTestSuite,
+    RequestAccessPolicyTestSuite,
+};
 pub use request_mirror::RequestMirrorTestSuite;
 pub use request_restriction::RequestRestrictionTestSuite;
 pub use resolved_refs::ResolvedRefsTestSuite;

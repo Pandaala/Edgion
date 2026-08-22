@@ -753,7 +753,12 @@ impl PluginRuntime {
                         // its requirement so it can complete cheap authentication
                         // before capturing and hashing the request body.
                         let gated: Box<dyn RequestFilter> = match body_req {
-                            Some(req) if !matches!(&entry.plugin, EdgionPlugin::HmacAuth(_)) => {
+                            Some(req)
+                                if !matches!(
+                                    &entry.plugin,
+                                    EdgionPlugin::HmacAuth(_) | EdgionPlugin::RequestAccessPolicy(_)
+                                ) =>
+                            {
                                 Box::new(BodyGatedRequestFilter::new(filter, req))
                             }
                             None => filter,
@@ -1355,7 +1360,7 @@ impl PluginRuntime {
             EdgionPlugin::Csrf(config) => CreateResult::Ok(Some(Box::new(Csrf::new(config)))),
             EdgionPlugin::IpRestriction(config) => CreateResult::Ok(Some(IpRestriction::create(config, namespace))),
             EdgionPlugin::RequestAccessPolicy(config) => {
-                CreateResult::Ok(Some(RequestAccessPolicy::create(config, namespace)))
+                CreateResult::Ok(Some(RequestAccessPolicy::create(config, namespace, body_requirement)))
             }
             EdgionPlugin::GeoIpLocation(config) => CreateResult::Ok(Some(GeoIpLocation::create(config))),
             EdgionPlugin::Canary(config) => CreateResult::Ok(Some(Canary::create(config, namespace))),
@@ -2145,7 +2150,10 @@ mod tests {
         use edgion_resources::resources::HmacAuthConfig;
 
         let cfg = HmacAuthConfig {
-            validate_request_body: true,
+            match_config: edgion_resources::resources::HmacMatchConfig {
+                validate_request_body: true,
+                ..Default::default()
+            },
             anonymous: Some("anon".to_string()),
             ..Default::default()
         };

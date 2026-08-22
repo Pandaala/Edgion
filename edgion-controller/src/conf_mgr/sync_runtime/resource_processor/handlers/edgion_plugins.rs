@@ -1310,16 +1310,19 @@ mod tests {
         let mut ep = EdgionPlugins::new("hmac-plugins", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
         ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::HmacAuth(HmacAuthConfig {
-            secret_groups: Some(vec![HmacAuthSecretGroup {
-                name: "default".to_string(),
-                description: None,
-                secret_refs: vec![SecretObjectReference {
-                    group: None,
-                    kind: None,
-                    name: "hmac-credentials".to_string(),
-                    namespace: None,
-                }],
-            }]),
+            match_config: edgion_resources::resources::edgion_plugins::HmacMatchConfig {
+                secret_groups: Some(vec![HmacAuthSecretGroup {
+                    name: "default".to_string(),
+                    description: None,
+                    secret_refs: vec![SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "hmac-credentials".to_string(),
+                        namespace: None,
+                    }],
+                }]),
+                ..Default::default()
+            },
             upstream_header_fields: vec!["X-Consumer-Username".to_string()],
             ..Default::default()
         }))]);
@@ -3026,6 +3029,140 @@ mod tests {
             .expect("expected resolved secret values");
         assert!(resolved.contains(&"s3cr3t-TOKEN".to_string()));
         assert_eq!(ctx.secret_ref_manager().get_refs("default/cf-origin-secret").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn request_access_policy_hmac_ignores_credential_metadata() {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{AccessCondition, HmacMatchConfig};
+
+        let credentials_yaml = r#"
+- username: alice
+  secret: alice-secret-32-bytes-0123456789abcd
+  headers:
+    X-Consumer-Username: alice
+"#;
+        let mut secrets = HashMap::new();
+        secrets.insert(
+            "default/hmac-credentials".to_string(),
+            build_secret("default", "hmac-credentials", "credentials.yaml", credentials_yaml),
+        );
+        let (ctx, _runtime) = make_ctx_with_secrets(secrets);
+        let condition = AccessCondition::HmacAuth(HmacMatchConfig {
+            secret_groups: Some(vec![HmacAuthSecretGroup {
+                name: "default".to_string(),
+                description: None,
+                secret_refs: vec![SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "hmac-credentials".to_string(),
+                    namespace: None,
+                }],
+            }]),
+            ..Default::default()
+        });
+        let cfg = request_access_policy_config(None, Some(condition));
+
+        let mut ep = EdgionPlugins::new("origin-lockdown", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".into());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestAccessPolicy(cfg))]);
+
+        let parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
+            EdgionPlugin::RequestAccessPolicy(config) => config,
+            _ => panic!("unexpected plugin type"),
+        };
+        let AccessCondition::HmacAuth(config) = first_request_access_policy_condition(config) else {
+            panic!("unexpected condition type")
+        };
+        let credential = config
+            .resolved_credentials
+            .as_ref()
+            .and_then(|credentials| credentials.get("alice"))
+            .expect("expected resolved credential");
+        assert!(credential.headers.is_empty());
+        assert_eq!(credential.secret, b"alice-secret-32-bytes-0123456789abcd");
+    }
+
+    #[tokio::test]
+    async fn request_access_policy_hmac_reresolution_replaces_stale_credentials() {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{AccessCondition, HmacMatchConfig};
+
+        let secret_ref = SecretObjectReference {
+            group: None,
+            kind: None,
+            name: "hmac-credentials".to_string(),
+            namespace: None,
+        };
+        let condition = AccessCondition::HmacAuth(HmacMatchConfig {
+            secret_groups: Some(vec![HmacAuthSecretGroup {
+                name: "default".to_string(),
+                description: None,
+                secret_refs: vec![secret_ref],
+            }]),
+            ..Default::default()
+        });
+        let cfg = request_access_policy_config(None, Some(condition));
+        let mut ep = EdgionPlugins::new("origin-lockdown", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".into());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestAccessPolicy(cfg))]);
+
+        let first_secret = build_secret(
+            "default",
+            "hmac-credentials",
+            "credentials.yaml",
+            "- username: alice\n  secret: alice-secret-32-bytes-0123456789abcd\n",
+        );
+        let (ctx, runtime) =
+            make_ctx_with_secrets(HashMap::from([("default/hmac-credentials".to_string(), first_secret)]));
+        let first = match EdgionPluginsHandler.parse(ep.clone(), &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        let first_config = match &first.spec.request_plugins.as_ref().unwrap()[0].plugin {
+            EdgionPlugin::RequestAccessPolicy(config) => config,
+            _ => panic!("unexpected plugin type"),
+        };
+        let AccessCondition::HmacAuth(first_hmac) = first_request_access_policy_condition(first_config) else {
+            panic!("unexpected condition type")
+        };
+        assert!(first_hmac
+            .resolved_credentials
+            .as_ref()
+            .is_some_and(|credentials| credentials.contains_key("alice")));
+
+        let rotated_secret = build_secret(
+            "default",
+            "hmac-credentials",
+            "credentials.yaml",
+            "- username: bob\n  secret: bob-secret-32-bytes-0123456789abcde\n",
+        );
+        runtime.secret_store.replace_all(HashMap::from([(
+            "default/hmac-credentials".to_string(),
+            rotated_secret,
+        )]));
+        let second = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        let second_config = match &second.spec.request_plugins.as_ref().unwrap()[0].plugin {
+            EdgionPlugin::RequestAccessPolicy(config) => config,
+            _ => panic!("unexpected plugin type"),
+        };
+        let AccessCondition::HmacAuth(second_hmac) = first_request_access_policy_condition(second_config) else {
+            panic!("unexpected condition type")
+        };
+        let credentials = second_hmac
+            .resolved_credentials
+            .as_ref()
+            .expect("expected rotated credentials");
+        assert!(!credentials.contains_key("alice"));
+        assert_eq!(
+            credentials.get("bob").map(|credential| credential.secret.as_slice()),
+            Some(b"bob-secret-32-bytes-0123456789abcde".as_slice())
+        );
     }
 
     #[tokio::test]

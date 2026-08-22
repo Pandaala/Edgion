@@ -1,16 +1,12 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use crate::suites::edgion_plugins::hmac_test_utils::build_hmac_headers;
 use bytes::Bytes;
-use chrono::Utc;
-use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use std::future::poll_fn;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::{sleep, Duration};
-
-type HmacSha256 = Hmac<Sha256>;
 
 pub struct BodyPluginsTestSuite;
 
@@ -19,17 +15,16 @@ fn echo_body(text: &str) -> Option<&str> {
 }
 
 fn hmac_headers(host: &str, path: &str, body: &[u8]) -> (String, String, String) {
-    let digest = format!("SHA-256={}", STANDARD.encode(Sha256::digest(body)));
-    let date = Utc::now().to_rfc2822();
-    let signing = format!("@request-target: post {path}\nhost: {host}\ndate: {date}\ndigest: {digest}");
-    let mut mac = HmacSha256::new_from_slice(b"body-hmac-secret-key-must-be-at-least-32-bytes")
-        .expect("static HMAC key is valid");
-    mac.update(signing.as_bytes());
-    let signature = STANDARD.encode(mac.finalize().into_bytes());
-    let authorization = format!(
-        "hmac username=\"body-user\", algorithm=\"hmac-sha256\", headers=\"@request-target host date digest\", signature=\"{signature}\""
+    let signed = build_hmac_headers(
+        "body-user",
+        b"body-hmac-secret-key-must-be-at-least-32-bytes",
+        "POST",
+        path,
+        None,
+        host,
+        Some(body),
     );
-    (date, digest, authorization)
+    (signed.date, signed.digest.expect("body digest"), signed.authorization)
 }
 
 async fn wasm_request_body_counters(ctx: &TestContext) -> Result<(u64, u64, u64), String> {

@@ -16,6 +16,24 @@ Controller 会把一条完整 IP 规则中的内联 IP 与所有有效 `ipRefs` 
 
 `allOf` 支持 `keyExist`、`keyMatch`、`secretMatch`、`directPeerIpMatch`、`remoteIpMatch` 和 `hmacAuth`。Secret/HMAC 在 Controller 解析，管理配置输出中的敏感值会被脱敏。
 
+### HMAC 条件
+
+`hmacAuth` 条件复用独立 `HmacAuth` 插件的凭据加载和签名校验，但只负责匹配。它支持 `secretGroups`、`algorithms`、`clockSkew`、`enforceHeaders`、`validateRequestBody`、`minSecretLength`、`secretField` 和 `usernameField`。`anonymous`、`realm`、`authFailureDelayMs`、`hideCredentials`、`upstreamHeaderFields` 等独立插件行为字段会被拒绝。
+
+```yaml
+allOf:
+  - type: hmacAuth
+    secretGroups:
+      - name: vendors
+        secretRefs:
+          - name: vendor-hmac-credentials
+    algorithms: [hmac-sha256]
+    enforceHeaders: [date, "@request-target"]
+    validateRequestBody: true
+```
+
+签名缺失或无效、凭据未知、请求体摘要不匹配时，该条件判定为不匹配，同一 `anyOfRules` group 中的其他规则仍可继续授权。请求体捕获或存储失败可能导致没有可继续转发的请求体，因此会通过网关统一的 body 错误响应终止整个策略，不会回退到同组其他规则。策略条件不会注入凭据 metadata header。
+
 ## 示例
 
 ```yaml

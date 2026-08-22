@@ -97,7 +97,7 @@ pub use guardrail::{
     GUARDRAIL_MAX_REQUEST_BYTES, GUARDRAIL_MAX_WINDOW_BYTES,
 };
 pub use header_cert_auth::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderCertAuthConfig, UpstreamHeaderConfig};
-pub use hmac_auth::{HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup, HmacCredential};
+pub use hmac_auth::{HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup, HmacCredential, HmacMatchConfig};
 pub use ip_restriction::{DefaultAction, IpRestrictionConfig, IpSource};
 pub use json_schema_validation::{
     bounded_structured_body_validation_errors, parse_json_instance, profile_json_value, CompiledJsonSchema,

@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::hmac_auth::HmacAuthConfig;
+use super::hmac_auth::HmacMatchConfig;
 use crate::common::KeyGet;
 use crate::matcher::ip_cidr_helpers::{build_grouped_matcher, build_grouped_matcher_partial};
 use crate::matcher::ip_radix_tree::IpRadixMatcher;
@@ -229,7 +229,7 @@ pub enum AccessCondition {
     SecretMatch(SecretMatchCondition),
     DirectPeerIpMatch(IpAccessMatch),
     RemoteIpMatch(IpAccessMatch),
-    HmacAuth(HmacAuthConfig),
+    HmacAuth(HmacMatchConfig),
 }
 
 /// Exact match against Controller-resolved Secret values.
@@ -523,17 +523,8 @@ fn validate_condition(condition: &mut AccessCondition) -> Result<(), String> {
             config.validate_and_init()
         }
         AccessCondition::HmacAuth(config) => {
-            if config.anonymous.is_some() {
-                return Err("hmacAuth condition cannot allow anonymous requests".to_string());
-            }
-            if config.secret_groups.as_ref().is_none_or(Vec::is_empty) {
+            if !config.has_credentials_source() {
                 return Err("hmacAuth condition requires at least one secret group".to_string());
-            }
-            if config.hide_credentials || !config.upstream_header_fields.is_empty() {
-                return Err("hmacAuth condition cannot mutate request headers".to_string());
-            }
-            if config.auth_failure_delay_ms != 0 {
-                return Err("hmacAuth condition cannot configure an authentication failure delay".to_string());
             }
             config.detect_validation_error().map_or(Ok(()), Err)
         }
@@ -634,6 +625,59 @@ mod tests {
         assert!(yaml.contains("anyOfRules:"), "{yaml}");
         assert!(yaml.contains("type: remoteIp"), "{yaml}");
         assert!(!yaml.contains("sourceMatch:"), "{yaml}");
+    }
+
+    #[test]
+    fn hmac_match_condition_rejects_standalone_only_fields() {
+        for field in [
+            "anonymous: guest",
+            "realm: edge",
+            "authFailureDelayMs: 1",
+            "hideCredentials: true",
+            "upstreamHeaderFields: [X-Consumer]",
+        ] {
+            let yaml = format!("type: hmacAuth\n{field}\n");
+            assert!(
+                serde_yaml::from_str::<AccessCondition>(&yaml).is_err(),
+                "accepted: {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn hmac_match_condition_redacts_admin_output_and_round_trips_conf_sync() {
+        let condition = AccessCondition::HmacAuth(HmacMatchConfig {
+            resolved_credentials: Some(HashMap::from([(
+                "alice".to_string(),
+                crate::resources::edgion_plugins::plugin_configs::HmacCredential {
+                    secret: b"policy-conf-sync-secret".to_vec(),
+                    headers: HashMap::new(),
+                    group: "default".to_string(),
+                },
+            )])),
+            ..Default::default()
+        });
+
+        let admin_json = {
+            let _guard = crate::redact::AdminRedactGuard::new();
+            serde_json::to_string(&condition).unwrap()
+        };
+        assert!(!admin_json.contains("policy-conf-sync-secret"), "{admin_json}");
+        assert!(admin_json.contains("[redacted]"), "{admin_json}");
+
+        let wire = serde_json::to_vec(&condition).unwrap();
+        let decoded: AccessCondition = serde_json::from_slice(&wire).unwrap();
+        let AccessCondition::HmacAuth(config) = decoded else {
+            panic!("unexpected condition type")
+        };
+        assert_eq!(
+            config
+                .resolved_credentials
+                .as_ref()
+                .and_then(|credentials| credentials.get("alice"))
+                .map(|credential| credential.secret.as_slice()),
+            Some(b"policy-conf-sync-secret".as_slice())
+        );
     }
 
     #[test]

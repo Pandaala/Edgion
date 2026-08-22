@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet};
 use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_secret, FetchOutcome, PendingReason};
 use crate::conf_mgr::sync_runtime::resource_processor::{format_secret_key, HandlerContext, ResourceRef};
 use edgion_resources::prelude_resources::EdgionPlugins;
-use edgion_resources::resources::edgion_plugins::plugin_configs::HmacAuthConfig;
 use edgion_resources::resources::edgion_plugins::plugin_configs::HmacCredential;
+use edgion_resources::resources::edgion_plugins::plugin_configs::HmacMatchConfig;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 
 /// Pure helper for first-wins duplicate-username detection.
@@ -37,7 +37,8 @@ fn first_wins_insert(
 /// entries that successfully insert.
 #[allow(clippy::too_many_arguments)]
 fn resolve_group(
-    config: &edgion_resources::resources::edgion_plugins::plugin_configs::HmacAuthConfig,
+    config: &HmacMatchConfig,
+    metadata_whitelist: &HashSet<&str>,
     group_name: &str,
     secret_refs: &[edgion_resources::resources::gateway::SecretObjectReference],
     all_credentials: &mut HashMap<String, HmacCredential>,
@@ -46,7 +47,6 @@ fn resolve_group(
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    let whitelist: HashSet<&str> = config.upstream_header_fields.iter().map(|s| s.as_str()).collect();
     // Hoist YAML keys out of the per-entry loop to avoid cloning config strings
     // for every credential entry.
     let username_key = serde_yaml::Value::String(config.username_field.clone());
@@ -172,7 +172,7 @@ fn resolve_group(
                     let Some(header_name) = k.as_str() else {
                         continue;
                     };
-                    if !whitelist.contains(header_name) {
+                    if !metadata_whitelist.contains(header_name) {
                         continue;
                     }
                     let header_value = if let Some(value) = v.as_str() {
@@ -249,7 +249,8 @@ fn resolve_group(
 
 /// Resolve HMAC credentials from Secrets and register references to SecretRefManager.
 pub(super) fn resolve_config(
-    config: &mut HmacAuthConfig,
+    config: &mut HmacMatchConfig,
+    metadata_policy: MetadataPolicy<'_>,
     ep_namespace: Option<&String>,
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
@@ -260,9 +261,14 @@ pub(super) fn resolve_config(
     };
     let mut all_credentials: HashMap<String, HmacCredential> = HashMap::new();
     let mut seen: HashMap<String, String> = HashMap::new();
+    let metadata_whitelist: HashSet<&str> = match metadata_policy {
+        MetadataPolicy::Allow(fields) => fields.iter().map(String::as_str).collect(),
+        MetadataPolicy::Ignore => HashSet::new(),
+    };
     for group in &groups {
         resolve_group(
             config,
+            &metadata_whitelist,
             &group.name,
             &group.secret_refs,
             &mut all_credentials,
@@ -288,6 +294,12 @@ pub(super) fn resolve_config(
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum MetadataPolicy<'a> {
+    Allow(&'a [String]),
+    Ignore,
+}
+
 /// Resolve top-level HMAC plugin credentials.
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     ep: &mut EdgionPlugins,
@@ -297,7 +309,14 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     if let Some(ref mut plugins) = ep.spec.request_plugins {
         for entry in plugins.iter_mut() {
             if let EdgionPlugin::HmacAuth(ref mut config) = entry.plugin {
-                resolve_config(config, ep.metadata.namespace.as_ref(), resource_ref, ctx);
+                let fields = config.upstream_header_fields.clone();
+                resolve_config(
+                    &mut config.match_config,
+                    MetadataPolicy::Allow(&fields),
+                    ep.metadata.namespace.as_ref(),
+                    resource_ref,
+                    ctx,
+                );
             }
         }
     }

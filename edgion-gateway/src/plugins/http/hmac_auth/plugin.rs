@@ -19,12 +19,17 @@ use sha2::Digest;
 use sha2::{Sha256, Sha384, Sha512};
 
 use crate::plugins::http::common::auth_common::{apply_auth_failure_delay, send_gateway_auth_error_response};
-use crate::plugins::runtime::body_gate::{body_read_failure_result, over_plugin_limit_len};
+use crate::plugins::runtime::body_gate::{
+    body_read_failure_result, over_plugin_limit_len, record_body_read_error_status,
+};
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::{BodyRequirement, HmacAlgorithm, HmacAuthConfig, HmacCredential};
+use edgion_resources::resources::edgion_plugins::{
+    BodyRequirement, HmacAlgorithm, HmacAuthConfig, HmacCredential, HmacMatchConfig,
+};
+#[cfg(test)]
 use edgion_resources::EdgionStatus;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -44,8 +49,144 @@ struct HmacAuthParams {
 pub struct HmacAuth {
     name: String,
     config: HmacAuthConfig,
+    verifier: HmacVerifier,
+}
+
+pub(crate) struct HmacVerifier {
+    algorithms: Vec<HmacAlgorithm>,
+    clock_skew: u64,
+    enforce_headers: Option<Vec<String>>,
+    validate_request_body: bool,
     credentials: Arc<HashMap<String, HmacCredential>>,
     body_requirement: BodyRequirement,
+}
+
+pub(crate) enum HmacVerifyOutcome {
+    Verified { username: String },
+    NoMatch(HmacVerifyFailure),
+    CaptureFailure(BodyReadError),
+    LogicalBodyLimit(BodyReadError),
+    DigestReadFailure(BodyReadError),
+}
+
+pub(crate) enum HmacVerifyFailure {
+    MissingAuth,
+    NoCredentials,
+    BadFormat,
+    AlgorithmNotAllowed,
+    UnknownCredential,
+    MissingSignedDate,
+    BadTimestamp(&'static str),
+    MissingRequiredHeader(String),
+    MissingSignedHeader(&'static str),
+    BadSignature,
+    DigestNotSigned,
+    BadDigest(&'static str),
+}
+
+enum BodyDigestError {
+    Invalid(&'static str),
+    Read(BodyReadError),
+}
+
+impl HmacVerifier {
+    pub(crate) fn new(config: &HmacMatchConfig, body_requirement: Option<BodyRequirement>) -> Self {
+        let intrinsic = config.validate_request_body.then(BodyRequirement::fail_close);
+        let body_requirement =
+            BodyRequirement::resolve(body_requirement, intrinsic).unwrap_or_else(BodyRequirement::fail_close);
+        Self {
+            algorithms: config.algorithms.clone(),
+            clock_skew: config.clock_skew,
+            enforce_headers: config.enforce_headers.clone(),
+            validate_request_body: config.validate_request_body,
+            credentials: Arc::new(config.resolved_credentials.clone().unwrap_or_default()),
+            body_requirement,
+        }
+    }
+
+    pub(crate) fn body_requirement(&self) -> &BodyRequirement {
+        &self.body_requirement
+    }
+
+    fn credential(&self, username: &str) -> Option<&HmacCredential> {
+        self.credentials.get(username)
+    }
+
+    pub(crate) async fn verify(&self, session: &mut dyn PluginSession) -> HmacVerifyOutcome {
+        let Some(auth_header) = session
+            .header_value("authorization")
+            .or_else(|| session.header_value("proxy-authorization"))
+        else {
+            return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::MissingAuth);
+        };
+        if self.credentials.is_empty() {
+            return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::NoCredentials);
+        }
+        let Ok(params) = HmacAuth::parse_authorization(&auth_header) else {
+            return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::BadFormat);
+        };
+        if !self.algorithms.contains(&params.algorithm) {
+            return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::AlgorithmNotAllowed);
+        }
+        let Some(credential) = self.credentials.get(&params.username) else {
+            return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::UnknownCredential);
+        };
+        let Some(signed_date) = params
+            .headers
+            .iter()
+            .find(|header| header.as_str() == "x-date")
+            .or_else(|| params.headers.iter().find(|header| header.as_str() == "date"))
+        else {
+            return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::MissingSignedDate);
+        };
+        if let Err(message) = HmacAuth::validate_clock_skew(session, self.clock_skew, signed_date) {
+            return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::BadTimestamp(message));
+        }
+        if let Some(required) = &self.enforce_headers {
+            let signed: HashSet<&str> = params.headers.iter().map(String::as_str).collect();
+            if let Some(header) = required
+                .iter()
+                .find(|header| !signed.contains(header.to_ascii_lowercase().as_str()))
+            {
+                return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::MissingRequiredHeader(format!(
+                    "Missing required signed header: {header}"
+                )));
+            }
+        }
+        let signing_string = match HmacAuth::build_signing_string(session, &params.headers) {
+            Ok(value) => value,
+            Err(message) => return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::MissingSignedHeader(message)),
+        };
+        if !HmacAuth::verify_signature(params.algorithm, &credential.secret, &signing_string, &params.signature) {
+            return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::BadSignature);
+        }
+        if self.validate_request_body {
+            if !params.headers.iter().any(|header| header == "digest") {
+                return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::DigestNotSigned);
+            }
+            let expected = match HmacAuth::expected_body_digest(session) {
+                Ok(value) => value,
+                Err(message) => return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::BadDigest(message)),
+            };
+            let body_len = match session.ensure_request_body(None).await {
+                Ok(len) => len,
+                Err(error) => return HmacVerifyOutcome::CaptureFailure(error),
+            };
+            if let Some(error) = over_plugin_limit_len(&self.body_requirement, body_len) {
+                return HmacVerifyOutcome::LogicalBodyLimit(error);
+            }
+            match HmacAuth::verify_body_digest_expected(session, &expected).await {
+                Ok(()) => {}
+                Err(BodyDigestError::Invalid(message)) => {
+                    return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::BadDigest(message));
+                }
+                Err(BodyDigestError::Read(error)) => return HmacVerifyOutcome::DigestReadFailure(error),
+            }
+        }
+        HmacVerifyOutcome::Verified {
+            username: params.username,
+        }
+    }
 }
 
 impl HmacAuth {
@@ -60,21 +201,12 @@ impl HmacAuth {
     }
 
     fn with_body_requirement(config: &HmacAuthConfig, body_requirement: Option<BodyRequirement>) -> Self {
-        let intrinsic = config.validate_request_body.then(BodyRequirement::fail_close);
-        let body_requirement =
-            BodyRequirement::resolve(body_requirement, intrinsic).unwrap_or_else(BodyRequirement::fail_close);
+        let verifier = HmacVerifier::new(&config.match_config, body_requirement);
         Self {
             name: "HmacAuth".to_string(),
             config: config.clone(),
-            credentials: Arc::new(config.resolved_credentials.clone().unwrap_or_default()),
-            body_requirement,
+            verifier,
         }
-    }
-
-    fn extract_auth_header(&self, session: &dyn PluginSession) -> Option<String> {
-        session
-            .header_value("authorization")
-            .or_else(|| session.header_value("proxy-authorization"))
     }
 
     async fn reject(
@@ -216,21 +348,6 @@ impl HmacAuth {
         })
     }
 
-    fn validate_enforce_headers(&self, signed_headers: &[String]) -> Result<(), String> {
-        let Some(required) = &self.config.enforce_headers else {
-            return Ok(());
-        };
-
-        let signed_set: HashSet<&str> = signed_headers.iter().map(|s| s.as_str()).collect();
-        for required_header in required {
-            let required_lower = required_header.to_ascii_lowercase();
-            if !signed_set.contains(required_lower.as_str()) {
-                return Err(format!("Missing required signed header: {}", required_header));
-            }
-        }
-        Ok(())
-    }
-
     /// Build signing string from request according to signed headers list.
     fn build_signing_string(session: &dyn PluginSession, headers_list: &[String]) -> Result<String, &'static str> {
         let mut lines = Vec::with_capacity(headers_list.len());
@@ -335,30 +452,24 @@ impl HmacAuth {
     #[cfg(test)]
     async fn verify_body_digest(session: &mut dyn PluginSession) -> Result<(), &'static str> {
         let expected = Self::expected_body_digest(session)?;
-        Self::verify_body_digest_expected(session, &expected).await
+        match Self::verify_body_digest_expected(session, &expected).await {
+            Ok(()) => Ok(()),
+            Err(BodyDigestError::Invalid(message)) => Err(message),
+            Err(BodyDigestError::Read(error)) => {
+                record_body_read_error_status(session, &error);
+                Err("request body unavailable")
+            }
+        }
     }
 
-    async fn verify_body_digest_expected(session: &mut dyn PluginSession, expected: &str) -> Result<(), &'static str> {
-        let body_hash = match session.request_body_sha256().await {
-            Ok(hash) => hash,
-            Err(err) => {
-                match err {
-                    BodyReadError::BufferLimitExceeded { .. } => session.add_error(EdgionStatus::BodyReadTooLarge),
-                    BodyReadError::TooLarge { .. } => session.add_error(EdgionStatus::BodyReadTooLarge),
-                    BodyReadError::Timeout => session.add_error(EdgionStatus::BodyReadTimeout),
-                    BodyReadError::Incomplete => session.add_error(EdgionStatus::BodyReadAborted),
-                    BodyReadError::StorageFailure => session.add_error(EdgionStatus::BodyCaptureStorageFailed),
-                    BodyReadError::GenerationConflict => session.add_error(EdgionStatus::BodyMutationConflict),
-                    BodyReadError::Unimplemented => session.add_error(EdgionStatus::BodyReadUnimplemented),
-                    // Already recorded on ctx by the read adapter.
-                    BodyReadError::NotBuffered => {}
-                }
-                return Err("request body unavailable");
-            }
-        };
+    async fn verify_body_digest_expected(
+        session: &mut dyn PluginSession,
+        expected: &str,
+    ) -> Result<(), BodyDigestError> {
+        let body_hash = session.request_body_sha256().await.map_err(BodyDigestError::Read)?;
         let computed = STANDARD.encode(body_hash);
         if computed != expected {
-            return Err("Body digest mismatch");
+            return Err(BodyDigestError::Invalid("Body digest mismatch"));
         }
         Ok(())
     }
@@ -391,13 +502,6 @@ impl HmacAuth {
             return Err("Unsupported Digest algorithm");
         }
         Ok(expected.trim())
-    }
-
-    fn signed_date_header<'a>(&self, signed_headers: &'a [String]) -> Option<&'a str> {
-        if let Some(name) = signed_headers.iter().find(|h| h.as_str() == "x-date") {
-            return Some(name.as_str());
-        }
-        signed_headers.iter().find(|h| h.as_str() == "date").map(|h| h.as_str())
     }
 
     /// Validate Date/X-Date clock skew.
@@ -442,60 +546,6 @@ impl HmacAuth {
         let _ = session.remove_request_header("proxy-authorization");
         let _ = session.remove_request_header("signature");
     }
-
-    /// Verify an HMAC condition without emitting a response or mutating request
-    /// headers. RequestAccessPolicy uses this because another `anyOf` branch may
-    /// still authorize the request after this condition does not match.
-    pub(crate) async fn matches_policy(&self, session: &mut dyn PluginSession) -> bool {
-        let Some(auth_header) = self.extract_auth_header(session) else {
-            return false;
-        };
-        if self.credentials.is_empty() {
-            return false;
-        }
-        let Ok(params) = Self::parse_authorization(&auth_header) else {
-            return false;
-        };
-        if !self.config.algorithms.contains(&params.algorithm) {
-            return false;
-        }
-        let Some(credential) = self.credentials.get(&params.username) else {
-            return false;
-        };
-        let Some(signed_date) = self.signed_date_header(&params.headers) else {
-            return false;
-        };
-        if Self::validate_clock_skew(session, self.config.clock_skew, signed_date).is_err()
-            || self.validate_enforce_headers(&params.headers).is_err()
-        {
-            return false;
-        }
-        let Ok(signing_string) = Self::build_signing_string(session, &params.headers) else {
-            return false;
-        };
-        if !Self::verify_signature(params.algorithm, &credential.secret, &signing_string, &params.signature) {
-            return false;
-        }
-        if self.config.validate_request_body {
-            if !params.headers.iter().any(|header| header == "digest") {
-                return false;
-            }
-            let Ok(expected_digest) = Self::expected_body_digest(session) else {
-                return false;
-            };
-            let Ok(body_len) = session.ensure_request_body(None).await else {
-                return false;
-            };
-            if over_plugin_limit_len(&self.body_requirement, body_len).is_some()
-                || Self::verify_body_digest_expected(session, &expected_digest)
-                    .await
-                    .is_err()
-            {
-                return false;
-            }
-        }
-        true
-    }
 }
 
 #[async_trait]
@@ -510,9 +560,18 @@ impl RequestFilter for HmacAuth {
     // and streaming digest verification run fail-closed.
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        let auth_header = match self.extract_auth_header(session) {
-            Some(value) => value,
-            None => {
+        let username = match self.verifier.verify(session).await {
+            HmacVerifyOutcome::Verified { username } => username,
+            HmacVerifyOutcome::CaptureFailure(error) | HmacVerifyOutcome::LogicalBodyLimit(error) => {
+                return body_read_failure_result(session, self.verifier.body_requirement(), plugin_log, &error);
+            }
+            HmacVerifyOutcome::DigestReadFailure(error) => {
+                record_body_read_error_status(session, &error);
+                return self
+                    .reject(session, plugin_log, 401, "request body unavailable", "Deny body digest")
+                    .await;
+            }
+            HmacVerifyOutcome::NoMatch(HmacVerifyFailure::MissingAuth) => {
                 if let Some(anonymous) = &self.config.anonymous {
                     self.set_anonymous_headers(session, anonymous);
                     plugin_log.push("Allow anonymous");
@@ -528,143 +587,60 @@ impl RequestFilter for HmacAuth {
                     )
                     .await;
             }
-        };
-
-        if self.credentials.is_empty() {
-            plugin_log.push_err("no creds configured");
-            apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
-            let _ = send_gateway_auth_error_response(
-                session,
-                500,
-                "hmac",
-                &self.config.realm,
-                None,
-                "No credentials configured",
-            )
-            .await;
-            return PluginRunningResult::ErrTerminateRequest;
-        }
-
-        let params = match Self::parse_authorization(&auth_header) {
-            Ok(v) => v,
-            Err(_) => {
-                return self
-                    .reject(
-                        session,
-                        plugin_log,
-                        401,
-                        "Invalid HMAC authorization format",
-                        "Deny bad format",
-                    )
-                    .await;
-            }
-        };
-
-        if !self.config.algorithms.contains(&params.algorithm) {
-            return self
-                .reject(session, plugin_log, 401, "Algorithm not allowed", "Deny bad algorithm")
+            HmacVerifyOutcome::NoMatch(HmacVerifyFailure::NoCredentials) => {
+                plugin_log.push_err("no creds configured");
+                apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
+                let _ = send_gateway_auth_error_response(
+                    session,
+                    500,
+                    "hmac",
+                    &self.config.realm,
+                    None,
+                    "No credentials configured",
+                )
                 .await;
-        }
-
-        let credential = match self.credentials.get(&params.username) {
-            Some(v) => v,
-            None => {
-                return self
-                    .reject(session, plugin_log, 401, "Invalid credentials", "Deny missing key")
-                    .await;
+                return PluginRunningResult::ErrTerminateRequest;
             }
-        };
-
-        let signed_date = match self.signed_date_header(&params.headers) {
-            Some(name) => name,
-            None => {
-                return self
-                    .reject(
-                        session,
-                        plugin_log,
-                        401,
+            HmacVerifyOutcome::NoMatch(failure) => {
+                let (message, log_code) = match failure {
+                    HmacVerifyFailure::BadFormat => ("Invalid HMAC authorization format", "Deny bad format"),
+                    HmacVerifyFailure::AlgorithmNotAllowed => ("Algorithm not allowed", "Deny bad algorithm"),
+                    HmacVerifyFailure::UnknownCredential => ("Invalid credentials", "Deny missing key"),
+                    HmacVerifyFailure::MissingSignedDate => (
                         "Missing required signed header: date or x-date",
                         "Deny missing date signed",
-                    )
-                    .await;
-            }
-        };
-        if let Err(message) = Self::validate_clock_skew(session, self.config.clock_skew, signed_date) {
-            return self
-                .reject(session, plugin_log, 401, message, "Deny bad timestamp")
-                .await;
-        }
-
-        if let Err(message) = self.validate_enforce_headers(&params.headers) {
-            return self
-                .reject(session, plugin_log, 401, &message, "Deny missing required header")
-                .await;
-        }
-
-        let signing_string = match Self::build_signing_string(session, &params.headers) {
-            Ok(v) => v,
-            Err(message) => {
-                return self
-                    .reject(session, plugin_log, 401, message, "Deny missing header")
-                    .await;
-            }
-        };
-
-        if !Self::verify_signature(params.algorithm, &credential.secret, &signing_string, &params.signature) {
-            return self
-                .reject(session, plugin_log, 401, "Invalid signature", "Deny bad signature")
-                .await;
-        }
-
-        // Body integrity. The signature authenticates the `Digest` header only if
-        // `digest` is in the signed-headers list — otherwise an attacker could
-        // swap the body, recompute `Digest`, and keep the original signature. So
-        // require `digest` to be signed BEFORE trusting it against the body.
-        // (Kong's hmac-auth enforces the same.)
-        if self.config.validate_request_body {
-            if !params.headers.iter().any(|h| h == "digest") {
-                return self
-                    .reject(
-                        session,
-                        plugin_log,
-                        401,
-                        "Missing required signed header: digest",
-                        "Deny digest not signed",
-                    )
-                    .await;
-            }
-
-            let expected_digest = match Self::expected_body_digest(session) {
-                Ok(expected) => expected,
-                Err(message) => {
-                    return self.reject(session, plugin_log, 401, message, "Deny body digest").await;
-                }
-            };
-
-            let requirement = &self.body_requirement;
-            let capture = session.ensure_request_body(None).await;
-            match capture {
-                Ok(body_len) => {
-                    if let Some(err) = over_plugin_limit_len(requirement, body_len) {
-                        return body_read_failure_result(session, requirement, plugin_log, &err);
+                    ),
+                    HmacVerifyFailure::BadTimestamp(message) => (message, "Deny bad timestamp"),
+                    HmacVerifyFailure::MissingRequiredHeader(message) => {
+                        return self
+                            .reject(session, plugin_log, 401, &message, "Deny missing required header")
+                            .await;
                     }
-                }
-                Err(err) => {
-                    return body_read_failure_result(session, requirement, plugin_log, &err);
-                }
+                    HmacVerifyFailure::MissingSignedHeader(message) => (message, "Deny missing header"),
+                    HmacVerifyFailure::BadSignature => ("Invalid signature", "Deny bad signature"),
+                    HmacVerifyFailure::DigestNotSigned => {
+                        ("Missing required signed header: digest", "Deny digest not signed")
+                    }
+                    HmacVerifyFailure::BadDigest(message) => (message, "Deny body digest"),
+                    HmacVerifyFailure::MissingAuth => ("Missing Authorization header", "Deny missing auth"),
+                    HmacVerifyFailure::NoCredentials => ("No credentials configured", "no creds configured"),
+                };
+                return self.reject(session, plugin_log, 401, message, log_code).await;
             }
-
-            if let Err(message) = Self::verify_body_digest_expected(session, &expected_digest).await {
-                return self.reject(session, plugin_log, 401, message, "Deny body digest").await;
-            }
-        }
-
+        };
+        let Some(credential) = self.verifier.credential(&username) else {
+            plugin_log.push_err("credential disappeared");
+            return PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None,
+            };
+        };
         self.set_upstream_headers(session, credential);
         self.hide_credentials(session);
 
         plugin_log.push_fmt(
             "OK group={} user {}",
-            la![credential.group.as_str(), sensitive(&params.username)],
+            la![credential.group.as_str(), sensitive(&username)],
         );
         PluginRunningResult::GoodNext
     }
@@ -677,8 +653,11 @@ mod tests {
 
     fn create_plugin() -> HmacAuth {
         let mut config = HmacAuthConfig {
-            clock_skew: 600,
-            enforce_headers: Some(vec!["@request-target".to_string()]),
+            match_config: HmacMatchConfig {
+                clock_skew: 600,
+                enforce_headers: Some(vec!["@request-target".to_string()]),
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -810,7 +789,10 @@ mod tests {
     fn test_body_requirement_declared_only_when_validate_body() {
         use edgion_resources::resources::edgion_plugins::EdgionPlugin;
         let base = HmacAuthConfig {
-            resolved_credentials: Some(HashMap::new()),
+            match_config: HmacMatchConfig {
+                resolved_credentials: Some(HashMap::new()),
+                ..Default::default()
+            },
             ..Default::default()
         };
         use edgion_resources::resources::edgion_plugins::BodyStage;
@@ -820,7 +802,10 @@ mod tests {
         assert!(!EdgionPlugin::HmacAuth(base.clone()).accepts_body(BodyStage::Request));
 
         let with_body = HmacAuthConfig {
-            validate_request_body: true,
+            match_config: HmacMatchConfig {
+                validate_request_body: true,
+                ..base.match_config.clone()
+            },
             ..base
         };
         // request-only plugin: consumes at the request stage
@@ -967,8 +952,11 @@ mod tests {
 
     fn plugin_validate_body() -> HmacAuth {
         let mut config = HmacAuthConfig {
-            clock_skew: 600,
-            validate_request_body: true,
+            match_config: HmacMatchConfig {
+                clock_skew: 600,
+                validate_request_body: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut credentials = HashMap::new();
@@ -1038,7 +1026,7 @@ mod tests {
     async fn validate_body_enforces_plugin_limit_after_capture() {
         let body = b"12345";
         let mut plugin = plugin_validate_body();
-        plugin.body_requirement.max_body_size = Some("4".to_string());
+        plugin.verifier.body_requirement.max_body_size = Some("4".to_string());
         let mut session = signed_session(&["@request-target", "date", "digest"], Some(&body_digest(body)), body);
         session
             .expect_ensure_request_body()

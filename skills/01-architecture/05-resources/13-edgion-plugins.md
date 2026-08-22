@@ -26,7 +26,7 @@ The EdgionPluginsHandler parse stage performs extensive Secret-reference resolut
 2. **BasicAuth Secret resolution**: iterate `secret_refs`, read username/password from each Secret, populate `resolved_users`
 3. **JwtAuth Secret resolution**: iterate `secret_refs`, read JWT signing keys from each Secret (supports RSA/EC/HMAC/EdDSA algorithms), parse public-key metadata (KeyMetadata), populate `resolved_credentials`
 4. **JweAuth Secret resolution**: similar to JwtAuth, parse JWE encryption keys
-5. **HmacAuth Secret resolution**: read HMAC credentials (access_key + secret_key) from each Secret, populate `resolved_credentials`
+5. **HMAC Secret resolution**: one resolver consumes the canonical `HmacMatchConfig` for both standalone `HmacAuth` and nested `RequestAccessPolicy.hmacAuth`, reads credentials from each Secret, and populates `resolved_credentials`. Standalone resolution retains only metadata headers named by `upstreamHeaderFields`; policy resolution discards credential metadata because matching must not mutate the request.
 6. **KeyAuth Secret resolution**: read API keys from each Secret, populate `resolved_keys`
 7. **OIDC Secret resolution**: read client_secret and session_secret from the Secret
 8. **CertAuth certificate resolution**: based on `cert_source` mode (Inline/Secret/SecretCa), read the CA certificate from a Secret

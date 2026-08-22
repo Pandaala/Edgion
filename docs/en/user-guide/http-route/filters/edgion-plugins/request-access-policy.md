@@ -18,6 +18,24 @@ Inline IPs and all usable `ipRefs` in one complete IP rule are expanded by the C
 
 Supported `allOf` conditions are `keyExist`, `keyMatch`, `secretMatch`, `directPeerIpMatch`, `remoteIpMatch`, and `hmacAuth`. Secret and HMAC material is resolved by the Controller and redacted from admin configuration output.
 
+### HMAC condition
+
+The `hmacAuth` condition reuses the same credential loading and signature verification as the standalone `HmacAuth` plugin, but it is match-only. It accepts `secretGroups`, `algorithms`, `clockSkew`, `enforceHeaders`, `validateRequestBody`, `minSecretLength`, `secretField`, and `usernameField`. Standalone behavior fields such as `anonymous`, `realm`, `authFailureDelayMs`, `hideCredentials`, and `upstreamHeaderFields` are rejected.
+
+```yaml
+allOf:
+  - type: hmacAuth
+    secretGroups:
+      - name: vendors
+        secretRefs:
+          - name: vendor-hmac-credentials
+    algorithms: [hmac-sha256]
+    enforceHeaders: [date, "@request-target"]
+    validateRequestBody: true
+```
+
+A missing or invalid signature, an unknown credential, or a body-digest mismatch makes this condition not match. Another rule in the same `anyOfRules` group may still authorize the request. Body capture or storage failures that may leave no forwardable request body terminate policy evaluation through the gateway's canonical body-error response; they never fall through to a sibling rule. Credential metadata headers are ignored because a policy condition must not mutate the request.
+
 ## Example
 
 ```yaml

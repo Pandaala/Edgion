@@ -1,0 +1,28 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: gac-hmac-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RequestAccessPolicy
+      config:
+        defaultProfile: lockdown
+        profiles:
+          lockdown:
+            requiredRuleGroups:
+              - name: signed
+                anyOfRules:
+                  - name: hmac
+                    type: directPeerIp
+                    config:
+                      ips: ["127.0.0.0/8"]
+                      allOf:
+                        - type: hmacAuth
+                          secretGroups:
+                            - name: dynamic
+                              secretRefs:
+                                - name: gac-hmac-dynamic
+                                  namespace: edgion-default
+                          algorithms: [hmac-sha256]
+                          enforceHeaders: ["@request-target", host, date]

@@ -849,7 +849,10 @@ mod compile_plugins_tests {
         fn hmac_body_consumer() -> EdgionPlugin {
             use edgion_resources::resources::edgion_plugins::HmacAuthConfig;
             EdgionPlugin::HmacAuth(HmacAuthConfig {
-                validate_request_body: true,
+                match_config: edgion_resources::resources::edgion_plugins::HmacMatchConfig {
+                    validate_request_body: true,
+                    ..Default::default()
+                },
                 anonymous: Some("anon".to_string()),
                 ..Default::default()
             })

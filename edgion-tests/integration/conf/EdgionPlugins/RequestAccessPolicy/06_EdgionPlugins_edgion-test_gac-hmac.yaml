@@ -1,0 +1,62 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: gac-hmac
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestAccessPolicy
+      config:
+        defaultProfile: lockdown
+        status: 403
+        message: "HMAC policy did not match"
+        profiles:
+          lockdown:
+            requiredRuleGroups:
+              - name: signed-or-explicit-fallback
+                anyOfRules:
+                  - name: signed-header-request
+                    type: url
+                    config:
+                      hosts: [gac-hmac.example.com]
+                      paths:
+                        - {type: Exact, value: /health}
+                        - {type: Exact, value: /headers}
+                        - {type: Exact, value: /fallback}
+                      allOf:
+                        - type: hmacAuth
+                          secretGroups:
+                            - name: policy
+                              secretRefs:
+                                - name: gac-hmac-credentials
+                                  namespace: edgion-test
+                          algorithms: [hmac-sha256]
+                          enforceHeaders: ["@request-target", host, date]
+                  - name: signed-body-request
+                    type: url
+                    config:
+                      hosts: [gac-hmac.example.com]
+                      paths:
+                        - {type: Exact, value: /echo}
+                      allOf:
+                        - type: hmacAuth
+                          secretGroups:
+                            - name: policy
+                              secretRefs:
+                                - name: gac-hmac-credentials
+                                  namespace: edgion-test
+                          algorithms: [hmac-sha256]
+                          enforceHeaders: ["@request-target", host, date, digest]
+                          validateRequestBody: true
+                  - name: explicit-fallback
+                    type: url
+                    config:
+                      hosts: [gac-hmac.example.com]
+                      paths:
+                        - {type: Exact, value: /fallback}
+                        - {type: Exact, value: /echo}
+                      allOf:
+                        - type: keyMatch
+                          key: {type: header, name: X-Hmac-Fallback}
+                          value: "allow"

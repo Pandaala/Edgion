@@ -703,7 +703,10 @@ mod tests {
     fn bad_body_max_size_on_consuming_plugin_is_flagged() {
         use crate::resources::edgion_plugins::{BodyRequirement, HmacAuthConfig};
         let cfg = HmacAuthConfig {
-            validate_request_body: true,
+            match_config: crate::resources::edgion_plugins::HmacMatchConfig {
+                validate_request_body: true,
+                ..Default::default()
+            },
             anonymous: Some("anon".to_string()),
             ..Default::default()
         };
@@ -723,7 +726,10 @@ mod tests {
     fn valid_body_on_consuming_plugin_has_no_error() {
         use crate::resources::edgion_plugins::{BodyRequirement, HmacAuthConfig};
         let cfg = HmacAuthConfig {
-            validate_request_body: true,
+            match_config: crate::resources::edgion_plugins::HmacMatchConfig {
+                validate_request_body: true,
+                ..Default::default()
+            },
             anonymous: Some("anon".to_string()),
             ..Default::default()
         };
