@@ -117,6 +117,25 @@ fi
 # Shared helpers
 # =============================================================================
 
+# Keep every isolated process directory on the repository's filesystem. A bare
+# `mktemp -d` uses the host's system TMPDIR (for example `/private/var/folders`
+# on macOS), which may have different free space from the integration workspace.
+# That is correctness-significant here: the LocalFile access-log sink sheds at
+# its disk-usage threshold, while Phases 2 and 3 assert on the resulting file.
+TEST_WORK_ROOT=""
+
+init_test_work_root() {
+    local work_base="${REPO_ROOT}/tmp/integration_testing"
+    mkdir -p "$work_base"
+    TEST_WORK_ROOT=$(mktemp -d "${work_base}/geoip_db_states.XXXXXX")
+    echo "INFO: GeoIP database-state work directory: ${TEST_WORK_ROOT}"
+}
+
+new_test_dir() {
+    local label="$1"
+    mktemp -d "${TEST_WORK_ROOT}/${label}.XXXXXX"
+}
+
 # The gateway's LocalFile access-log sink sheds to unhealthy — and then silently
 # drops every access-log entry — once the log volume reaches
 # `disk_usage_threshold_percent` (product default 90, see
@@ -306,7 +325,7 @@ TCP_BACKEND_PID=""
 UPDATE_SERVER_PID=""
 
 start_backends() {
-    SCRATCH_DIR=$(mktemp -d)
+    SCRATCH_DIR=$(new_test_dir "backends")
 
     cat > "${SCRATCH_DIR}/http_backend.py" <<'PY'
 import http.server, socketserver, sys
@@ -452,7 +471,7 @@ CTRL_TMPDIR=""
 CTRL_PID=""
 
 start_controller() {
-    CTRL_TMPDIR=$(mktemp -d)
+    CTRL_TMPDIR=$(new_test_dir "controller")
     local CONFIG_DIR="${CTRL_TMPDIR}/config"
     local LOG_DIR="${CTRL_TMPDIR}/logs"
     local CONF_DIR="${CTRL_TMPDIR}/conf"
@@ -951,7 +970,7 @@ ACCESS_LOG=""
 
 start_gateway() {
     local label="$1" geoip_fn="$2"
-    GW_TMPDIR=$(mktemp -d)
+    GW_TMPDIR=$(new_test_dir "gateway-${label}")
     local LOG_DIR="${GW_TMPDIR}/logs"
     mkdir -p "$LOG_DIR"
     GW_LOG="$LOG_DIR/gateway.log"
@@ -1041,6 +1060,7 @@ cleanup() {
     [ -n "$TCP_BACKEND_PID" ] && wait "$TCP_BACKEND_PID" 2>/dev/null || true
     [ -n "$UPDATE_SERVER_PID" ] && wait "$UPDATE_SERVER_PID" 2>/dev/null || true
     [ -n "$SCRATCH_DIR" ] && rm -rf "$SCRATCH_DIR" || true
+    [ -n "$TEST_WORK_ROOT" ] && rm -rf "$TEST_WORK_ROOT" || true
 }
 trap cleanup EXIT
 
@@ -1274,7 +1294,8 @@ run_phase4() {
 # Entry point
 # =============================================================================
 main() {
-    precheck_disk_space "$REPO_ROOT" || exit 2
+    init_test_work_root
+    precheck_disk_space "$TEST_WORK_ROOT" || exit 2
     start_backends
     start_controller
     run_phase1
