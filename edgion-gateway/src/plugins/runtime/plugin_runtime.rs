@@ -11,6 +11,7 @@ use crate::runtime::server::http_to_grpc_status;
 use crate::EdgionHttpContext;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::filters::PluginRunningResult::ErrTerminateRequest;
+use edgion_resources::http_origin::ExactCorsOriginSet;
 use edgion_resources::resources::edgion_plugins::CorsConfig;
 use edgion_resources::resources::http_route::MirrorTuning;
 use edgion_resources::resources::{
@@ -78,6 +79,13 @@ use crate::plugins::runtime::gateway_api_filters::{
     RequestRedirectFilter, ResponseHeaderModifierFilter, URLRewriteFilter,
 };
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct McpCorsEvidence {
+    pub(crate) provider_count: usize,
+    pub(crate) exact_origins: ExactCorsOriginSet,
+    pub(crate) terminal_preflight_owner: bool,
+}
+
 pub struct PluginRuntime {
     /// Plugins for request stage (async)
     request_plugins: Vec<Box<dyn RequestFilter>>,
@@ -102,6 +110,10 @@ pub struct PluginRuntime {
     /// `EdgionPlugins` update rebuilds this runtime, producing a new Arc that
     /// the plugin store swaps in atomically.
     cors_config: Option<Arc<CorsConfig>>,
+    /// MCP-only exact Origin evidence compiled from active Cors entries.
+    mcp_cors_evidence: McpCorsEvidence,
+    /// Conservative fact: an active request entry may replace upstream selection.
+    may_override_upstream: bool,
     /// Names of plugins whose config failed `validation_error()` while building
     /// this runtime. Such plugins are NOT constructed (an invalid config must
     /// never run in the request path). `seal_fail_closed` consumes this list to
@@ -219,6 +231,8 @@ impl PluginRuntime {
             upstream_response_async_plugins: vec![],
             ext_ref_keys: Vec::new(),
             cors_config: None,
+            mcp_cors_evidence: McpCorsEvidence::default(),
+            may_override_upstream: false,
             invalid_plugins: InvalidPlugins::default(),
             policy_blocks: Vec::new(),
             policy_bypassed: Vec::new(),
@@ -289,6 +303,14 @@ impl PluginRuntime {
     /// underlying `CorsConfig` is not deep-cloned per call.
     pub fn cors_config_arc(&self) -> Option<Arc<CorsConfig>> {
         self.cors_config.clone()
+    }
+
+    pub(crate) fn mcp_cors_evidence(&self) -> &McpCorsEvidence {
+        &self.mcp_cors_evidence
+    }
+
+    pub(crate) fn may_override_upstream(&self) -> bool {
+        self.may_override_upstream
     }
 
     /// Build a runtime for a route rule. Assigns ExtensionRef indices for the
@@ -570,6 +592,26 @@ impl PluginRuntime {
                     errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, error));
                     self.invalid_plugins.record(&entry.plugin);
                     continue;
+                }
+
+                if Self::plugin_may_override_upstream(&entry.plugin) {
+                    self.may_override_upstream = true;
+                }
+
+                if let EdgionPlugin::Cors(cfg) = &entry.plugin {
+                    self.mcp_cors_evidence.provider_count = self.mcp_cors_evidence.provider_count.saturating_add(1);
+                    let conditional = entry.conditions.as_ref().is_some_and(|conditions| {
+                        conditions.skip.as_ref().is_some_and(|items| !items.is_empty())
+                            || conditions.run.as_ref().is_some_and(|items| !items.is_empty())
+                    });
+                    if !conditional {
+                        self.mcp_cors_evidence
+                            .exact_origins
+                            .extend_configured_literals(cfg.allow_origins.split(',').map(str::trim));
+                        if !cfg.preflight_continue {
+                            self.mcp_cors_evidence.terminal_preflight_owner = true;
+                        }
+                    }
                 }
 
                 // Cache the first enabled CORS config so the global preflight
@@ -1686,6 +1728,17 @@ impl PluginRuntime {
 
     fn add_request_filter(&mut self, filter: Box<dyn RequestFilter>) {
         self.request_plugins.push(filter);
+    }
+
+    fn plugin_may_override_upstream(plugin: &EdgionPlugin) -> bool {
+        matches!(
+            plugin,
+            EdgionPlugin::DynamicInternalUpstream(_)
+                | EdgionPlugin::DynamicExternalUpstream(_)
+                | EdgionPlugin::DirectEndpoint(_)
+                | EdgionPlugin::RegionRoute(_)
+                | EdgionPlugin::Canary(_)
+        )
     }
 
     fn add_upstream_response_filter(&mut self, filter: Box<dyn UpstreamResponseFilter>) {
@@ -3155,5 +3208,142 @@ mod ext_ref_index_tests {
             1,
             "LBPolicy* kinds are no longer special-cased; an ExtensionRefFilter is built like any other kind"
         );
+    }
+}
+
+#[cfg(test)]
+mod mcp_runtime_fact_tests {
+    use super::*;
+    use edgion_resources::resources::edgion_plugins::conditions::{Condition, PluginConditions, ProbabilityCondition};
+    use edgion_resources::resources::edgion_plugins::plugin_configs::{CanaryConfig, DynUpstreamTarget};
+    use edgion_resources::resources::{
+        DirectEndpointConfig, DynUpstreamOnInvalid, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig,
+        RegionRouteConfig,
+    };
+
+    #[test]
+    fn every_current_upstream_override_variant_declares_the_fact() {
+        let plugins = [
+            EdgionPlugin::DynamicInternalUpstream(DynamicInternalUpstreamConfig::default()),
+            EdgionPlugin::DynamicExternalUpstream(DynamicExternalUpstreamConfig::default()),
+            EdgionPlugin::DirectEndpoint(DirectEndpointConfig::default()),
+            EdgionPlugin::RegionRoute(RegionRouteConfig::default()),
+            EdgionPlugin::Canary(CanaryConfig {
+                enable: false,
+                active_profile: "base".to_string(),
+                profiles: std::collections::HashMap::from([(
+                    "base".to_string(),
+                    DynUpstreamTarget {
+                        name: "backend".to_string(),
+                        namespace: None,
+                    },
+                )]),
+                active_profile_ref: None,
+                on_invalid: DynUpstreamOnInvalid::default(),
+            }),
+        ];
+        assert!(plugins.iter().all(PluginRuntime::plugin_may_override_upstream));
+        assert!(!PluginRuntime::plugin_may_override_upstream(&EdgionPlugin::Cors(
+            CorsConfig::default()
+        )));
+    }
+
+    #[test]
+    fn mcp_override_composition_checks_every_pre_backend_scope() {
+        let clean = PluginRuntime::new();
+        let mut override_runtime = PluginRuntime::new();
+        override_runtime.may_override_upstream = true;
+        let override_runtime = Arc::new(override_runtime);
+        let mut route_override = PluginRuntime::new();
+        route_override.may_override_upstream = true;
+
+        assert!(crate::mcp::request::has_upstream_override(
+            &[],
+            &[],
+            &route_override,
+            &[]
+        ));
+
+        assert!(crate::mcp::request::has_upstream_override(
+            &[Arc::clone(&override_runtime)],
+            &[],
+            &clean,
+            &[]
+        ));
+        assert!(crate::mcp::request::has_upstream_override(
+            &[],
+            &[Arc::clone(&override_runtime)],
+            &clean,
+            &[]
+        ));
+        assert!(crate::mcp::request::has_upstream_override(
+            &[],
+            &[],
+            &clean,
+            &[Some(override_runtime)]
+        ));
+        assert!(!crate::mcp::request::has_upstream_override(&[], &[], &clean, &[None]));
+    }
+
+    #[test]
+    fn cors_evidence_counts_providers_and_excludes_conditional_literals() {
+        let mut exact = RequestFilterEntry::new(EdgionPlugin::Cors(CorsConfig {
+            allow_origins: "https://a.example, https://b.example, *, *.example.com".to_string(),
+            allow_origins_by_regex: Some(vec!["^https://regex[.]example$".to_string()]),
+            ..CorsConfig::default()
+        }));
+        exact.enable = true;
+
+        let mut conditional = RequestFilterEntry::new(EdgionPlugin::Cors(CorsConfig {
+            allow_origins: "https://conditional.example".to_string(),
+            ..CorsConfig::default()
+        }));
+        conditional.conditions = Some(PluginConditions {
+            run: Some(vec![Condition::Probability(ProbabilityCondition {
+                ratio: 1.0,
+                key: None,
+            })]),
+            skip: None,
+        });
+
+        let mut runtime = PluginRuntime::new();
+        assert!(runtime
+            .add_from_request_filters(&[exact, conditional], "default", "default/test")
+            .is_empty());
+        let evidence = runtime.mcp_cors_evidence();
+        assert_eq!(evidence.provider_count, 2);
+        assert_eq!(
+            evidence.exact_origins.iter().collect::<Vec<_>>(),
+            vec!["https://a.example", "https://b.example"]
+        );
+        assert!(evidence.terminal_preflight_owner);
+    }
+
+    #[test]
+    fn policy_stamped_and_disabled_cors_are_not_providers() {
+        use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+
+        let mut disabled = RequestFilterEntry::new(EdgionPlugin::Cors(CorsConfig::default()));
+        disabled.enable = false;
+        let mut bypassed = RequestFilterEntry::new(EdgionPlugin::Cors(CorsConfig::default()));
+        bypassed.policy_action = Some(PluginPolicyAction::Bypass);
+        let mut runtime = PluginRuntime::new();
+        runtime.add_from_request_filters(&[disabled, bypassed], "default", "default/test");
+        assert_eq!(runtime.mcp_cors_evidence().provider_count, 0);
+    }
+
+    #[test]
+    fn forwarding_preflight_is_a_provider_without_a_terminal_owner() {
+        let entry = RequestFilterEntry::new(EdgionPlugin::Cors(CorsConfig {
+            allow_origins: "https://app.example".to_string(),
+            preflight_continue: true,
+            ..CorsConfig::default()
+        }));
+        let mut runtime = PluginRuntime::new();
+        assert!(runtime
+            .add_from_request_filters(&[entry], "default", "default/test")
+            .is_empty());
+        assert_eq!(runtime.mcp_cors_evidence().provider_count, 1);
+        assert!(!runtime.mcp_cors_evidence().terminal_preflight_owner);
     }
 }

@@ -65,7 +65,9 @@ pub fn error_while_proxy(
     // not an upstream failure. Skip body-size accounting and outlier-detection
     // failure recording, and leave the error non-retryable.
     if ctx.local_reply_written {
-        return e.more_context(format!("Peer: {}", peer));
+        let mut e = e.more_context(format!("Peer: {}", peer));
+        ctx.force_mcp_no_replay(&mut e.retry);
+        return e;
     }
 
     if let Some(upstream) = ctx.get_current_upstream_mut() {
@@ -82,7 +84,7 @@ pub fn error_while_proxy(
             ctx.selected_backend
                 .as_ref()
                 .and_then(crate::backends::SelectedHttpBackend::routed),
-            Some(crate::backends::SelectedLogicalBackend::A2a(_))
+            Some(crate::backends::SelectedLogicalBackend::A2a(_) | crate::backends::SelectedLogicalBackend::Mcp(_))
         ) {
             if let Some(upstream) = ctx.get_current_upstream() {
                 if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
@@ -103,6 +105,11 @@ pub fn error_while_proxy(
     // §4.6). The proxy also suppresses such retries on its side; this keeps
     // the local decision (and its logging) consistent.
     let buffer_ok = !session.as_ref().retry_buffer_truncated() && !ctx.request_body_stream_active;
+
+    if ctx.force_mcp_no_replay(&mut e.retry) {
+        ctx.retry_on_status = false;
+        return e;
+    }
 
     if ctx.ai_attempt_plan.is_some() {
         // A status retry was decided and transitioned exactly once in the

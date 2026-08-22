@@ -137,7 +137,7 @@ pub fn upstream_response_filter(
         ctx.selected_backend
             .as_ref()
             .and_then(crate::backends::SelectedHttpBackend::routed),
-        Some(crate::backends::SelectedLogicalBackend::A2a(_))
+        Some(crate::backends::SelectedLogicalBackend::A2a(_) | crate::backends::SelectedLogicalBackend::Mcp(_))
     ) {
         if let Some(upstream) = ctx.get_current_upstream() {
             if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
@@ -150,7 +150,9 @@ pub fn upstream_response_filter(
         }
     }
 
-    if ctx.ai_attempt_plan.is_some() {
+    if ctx.mcp_no_replay() {
+        ctx.retry_on_status = false;
+    } else if ctx.ai_attempt_plan.is_some() {
         let wants_retry = status_code != 101
             && ctx
                 .route_unit

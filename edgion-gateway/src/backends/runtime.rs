@@ -164,6 +164,8 @@ pub struct SelectedMcpBackend {
     logical: LogicalBackendHandle,
     pub backend: Arc<RuntimeMcpBackend>,
     pub backend_snapshot_generation: u64,
+    pub traffic_policy_snapshot_generation: u64,
+    pub tls_policy_snapshot_generation: u64,
     pub effective_policy: Option<Arc<EffectiveBackendTrafficPolicy>>,
     pub backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
 }
@@ -221,6 +223,8 @@ impl SelectedMcpBackend {
             logical,
             backend,
             backend_snapshot_generation: backend_snapshot.generation(),
+            traffic_policy_snapshot_generation: traffic_policy_snapshot.generation(),
+            tls_policy_snapshot_generation: tls_policy_snapshot.generation(),
             effective_policy,
             backend_tls_policy,
         })
@@ -236,6 +240,11 @@ impl fmt::Debug for SelectedMcpBackend {
         f.debug_struct("SelectedMcpBackend")
             .field("logical", &self.logical)
             .field("backend_snapshot_generation", &self.backend_snapshot_generation)
+            .field(
+                "traffic_policy_snapshot_generation",
+                &self.traffic_policy_snapshot_generation,
+            )
+            .field("tls_policy_snapshot_generation", &self.tls_policy_snapshot_generation)
             .field("effective_policy", &self.effective_policy.is_some())
             .field("backend_tls_policy", &self.backend_tls_policy.is_some())
             .finish()
@@ -305,6 +314,7 @@ pub enum SelectedLogicalBackend {
     Service(SelectedServiceBackend),
     Ai(SelectedAiBackend),
     A2a(SelectedA2aBackend),
+    Mcp(SelectedMcpBackend),
 }
 
 impl SelectedLogicalBackend {
@@ -314,6 +324,7 @@ impl SelectedLogicalBackend {
             Self::Service(selected) => selected.logical(),
             Self::Ai(selected) => selected.logical(),
             Self::A2a(selected) => selected.logical(),
+            Self::Mcp(selected) => selected.logical(),
         }
     }
 
@@ -542,16 +553,23 @@ mod tests {
             "backend-ns/other-tools-tls".to_string(),
             unrelated_tls,
         )]));
+        let traffic_snapshot = traffic_store.snapshot();
+        let tls_snapshot = tls_store.snapshot();
         let selected = SelectedMcpBackend::from_snapshot(
             LogicalBackendHandle::new(compiled_edgion_backend("tools", 4, Some(7))),
             &snapshot,
-            &traffic_store.snapshot(),
-            &tls_store.snapshot(),
+            &traffic_snapshot,
+            &tls_snapshot,
         )
         .expect("selected MCP proof");
         assert_eq!(selected.logical().slot(), 4);
         assert_eq!(selected.logical().declared_weight(), 7);
         assert_eq!(selected.backend_snapshot_generation, snapshot.generation());
+        assert_eq!(
+            selected.traffic_policy_snapshot_generation,
+            traffic_snapshot.generation()
+        );
+        assert_eq!(selected.tls_policy_snapshot_generation, tls_snapshot.generation());
         assert_eq!(
             selected.logical().policy_target_key(),
             Some(PolicyTargetKey {
@@ -564,6 +582,25 @@ mod tests {
             selected.backend_tls_policy.is_none(),
             "same-class TLS policy for another EdgionBackend must not attach"
         );
+
+        let mut plan = crate::mcp::request::test_plan_for_proof(crate::mcp::request::McpRouteProof {
+            backend: Arc::clone(&selected.backend),
+            backend_snapshot: snapshot.clone(),
+            traffic_policy_snapshot: traffic_snapshot.clone(),
+            tls_policy_snapshot: tls_snapshot.clone(),
+        });
+        assert!(plan.selected().is_none());
+        plan.bind_selected(selected.clone())
+            .expect("first bind must publish the selected proof");
+        assert!(
+            plan.bind_selected(selected.clone()).is_err(),
+            "selection transition must be exact once"
+        );
+        let mut ctx = crate::EdgionHttpContext::new();
+        ctx.selected_backend = Some(crate::backends::SelectedHttpBackend::Routed(
+            crate::backends::SelectedLogicalBackend::Mcp(selected),
+        ));
+        assert!(plan.selected_matches_context(&ctx));
 
         let mut http_spec = https_spec.clone();
         let http_mcp = http_spec.mcp.as_mut().expect("MCP spec");

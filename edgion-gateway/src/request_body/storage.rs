@@ -1292,25 +1292,31 @@ fn read_at_most_with(
 }
 
 async fn read_disk_body(file: Arc<File>, len: u64) -> BodyReadResult {
-    let len = usize::try_from(len).map_err(|_| BodyReadError::Incomplete)?;
-    tokio::task::spawn_blocking(move || {
-        let mut body = vec![0; len];
-        let mut filled = 0usize;
-        while filled < body.len() {
-            let read = file.read_at(&mut body[filled..], filled as u64)?;
-            if read == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "request body spill file ended before captured length",
-                ));
+    let len = usize::try_from(len).map_err(|_| BodyReadError::StorageFailure)?;
+    finish_disk_read(
+        tokio::task::spawn_blocking(move || {
+            let mut body = vec![0; len];
+            let mut filled = 0usize;
+            while filled < body.len() {
+                let read = file.read_at(&mut body[filled..], filled as u64)?;
+                if read == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "request body spill file ended before captured length",
+                    ));
+                }
+                filled += read;
             }
-            filled += read;
-        }
-        Ok::<_, io::Error>(Bytes::from(body))
-    })
-    .await
-    .map_err(|_| BodyReadError::Incomplete)?
-    .map_err(|_| BodyReadError::Incomplete)
+            Ok::<_, io::Error>(Bytes::from(body))
+        })
+        .await,
+    )
+}
+
+fn finish_disk_read(result: Result<io::Result<Bytes>, tokio::task::JoinError>) -> BodyReadResult {
+    result
+        .map_err(|_| BodyReadError::StorageFailure)?
+        .map_err(|_| BodyReadError::StorageFailure)
 }
 
 #[cfg(test)]
@@ -1318,6 +1324,18 @@ mod tests {
     use super::*;
     use std::future::{poll_fn, Future};
     use std::task::Poll;
+
+    #[tokio::test]
+    async fn disk_read_and_join_failures_are_storage_failures() {
+        let empty = NamedTempFile::new().expect("temp file");
+        assert_eq!(
+            read_disk_body(Arc::new(empty.reopen().expect("reopen")), 1).await,
+            Err(BodyReadError::StorageFailure)
+        );
+
+        let join = tokio::task::spawn_blocking(|| -> io::Result<Bytes> { panic!("intentional join failure") }).await;
+        assert_eq!(finish_disk_read(join), Err(BodyReadError::StorageFailure));
+    }
 
     async fn capture(storage: &mut BodyStorage, chunks: &[&[u8]]) {
         for chunk in chunks {

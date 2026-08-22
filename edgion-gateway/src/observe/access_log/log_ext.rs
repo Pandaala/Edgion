@@ -134,6 +134,10 @@ static DEFAULT_UNMASKED: LazyLock<UnmaskedKeys> = LazyLock::new(UnmaskedKeys::de
 pub fn collect(edgion_http: &EdgionHttpProxy, session: &Session, ctx: &EdgionHttpContext) -> LogExt {
     let mut ext = LogExt::default();
 
+    if ctx.mcp_log_redaction_required() {
+        return ext;
+    }
+
     // Borrow the store rather than cloning its `Arc` (an atomic RMW pair) — every
     // request reaches this point, and the common case is the fast path just below,
     // which must cost a single relaxed atomic load and nothing more.

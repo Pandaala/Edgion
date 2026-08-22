@@ -280,7 +280,7 @@ impl<'a> PingoraSessionAdapter<'a> {
         );
         self.inner
             .set_request_body_buffer(Box::new(storage))
-            .map_err(|_| BodyReadError::Incomplete)?;
+            .map_err(|_| body_buffer_install_error())?;
 
         let mut captured = 0u64;
         loop {
@@ -566,6 +566,10 @@ impl<'a> PingoraSessionAdapter<'a> {
 
         params
     }
+}
+
+fn body_buffer_install_error() -> BodyReadError {
+    BodyReadError::StorageFailure
 }
 
 /// Outcome of the request-side body admission predicate. Kept pure and
@@ -2021,6 +2025,11 @@ mod route_meta_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_body_buffer_install_failure_is_storage_failure() {
+        assert_eq!(body_buffer_install_error(), BodyReadError::StorageFailure);
+    }
 
     #[test]
     fn cookie_value_finds_named_cookie_among_others() {

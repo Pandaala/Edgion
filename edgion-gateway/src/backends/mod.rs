@@ -23,6 +23,7 @@ pub use outlier_detection::{get_outlier_detection_store, FailureClass};
 pub use panic_threshold::{
     configure_lb_panic_default, get_lb_panic_default, get_panic_threshold_store, panic_floor, resolve_panic_threshold,
 };
+use policy::backend_traffic::EffectiveBackendTrafficPolicy;
 
 pub use gateway_backend_tls_store::{get_global_gateway_backend_tls_store, GatewayBackendTlsStore};
 pub use health::{get_health_check_manager, get_health_status_store};
@@ -133,6 +134,35 @@ fn selected_a2a_service_input(selected: &SelectedA2aBackend) -> Result<ServicePe
     })
 }
 
+fn selected_mcp_service_input(selected: &SelectedMcpBackend) -> Result<ServicePeerInput, EdgionStatus> {
+    mcp_service_input(
+        &selected.backend.target,
+        selected.backend_tls_policy.clone(),
+        selected.effective_policy.as_deref(),
+    )
+}
+
+fn mcp_service_input(
+    target: &crate::ai::RuntimeMcpTarget,
+    backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
+    effective_policy: Option<&EffectiveBackendTrafficPolicy>,
+) -> Result<ServicePeerInput, EdgionStatus> {
+    let crate::ai::RuntimeMcpTarget::Service {
+        namespace, name, port, ..
+    } = target
+    else {
+        return Err(EdgionStatus::UpstreamNotBackendRefs);
+    };
+    Ok(ServicePeerInput {
+        port: Some(i32::from(*port)),
+        backend_tls_policy,
+        service_key: format!("{namespace}/{name}"),
+        service_type: ServiceBackendKind::Service,
+        lb_policy: effective_policy.and_then(|policy| policy.load_balancer.clone()),
+        inherit_service_state: false,
+    })
+}
+
 /// Internal: try to get peer, returns Result with EdgionStatus on error
 pub(crate) async fn try_get_peer(
     ctx: &mut EdgionHttpContext,
@@ -174,6 +204,7 @@ pub(crate) async fn try_get_peer(
                 selected_http_service_input(selected, ctx.backend_context.as_ref())?
             }
             SelectedLogicalBackend::A2a(selected) => selected_a2a_service_input(selected)?,
+            SelectedLogicalBackend::Mcp(selected) => selected_mcp_service_input(selected)?,
             SelectedLogicalBackend::Ai(_) => return Err(EdgionStatus::UpstreamNotBackendRefs),
         }
     } else {
@@ -214,7 +245,7 @@ pub(crate) async fn try_get_peer(
     let backend_app_protocol = if inherit_service_state {
         detected_app_protocol
     } else {
-        a2a_backend_app_protocol(detected_app_protocol)
+        logical_backend_app_protocol(detected_app_protocol)
     };
 
     match service_type {
@@ -447,7 +478,7 @@ pub(crate) async fn try_get_peer(
     }
 }
 
-fn a2a_backend_app_protocol(protocol: Option<BackendAppProtocol>) -> Option<BackendAppProtocol> {
+fn logical_backend_app_protocol(protocol: Option<BackendAppProtocol>) -> Option<BackendAppProtocol> {
     match protocol {
         Some(BackendAppProtocol::WebSocket) => None,
         protocol => protocol,
@@ -760,10 +791,29 @@ mod selected_service_input_tests {
     #[test]
     fn a2a_preserves_h2c_but_never_activates_websocket_transport() {
         assert_eq!(
-            a2a_backend_app_protocol(Some(BackendAppProtocol::H2c)),
+            logical_backend_app_protocol(Some(BackendAppProtocol::H2c)),
             Some(BackendAppProtocol::H2c)
         );
-        assert_eq!(a2a_backend_app_protocol(Some(BackendAppProtocol::WebSocket)), None);
-        assert_eq!(a2a_backend_app_protocol(None), None);
+        assert_eq!(logical_backend_app_protocol(Some(BackendAppProtocol::WebSocket)), None);
+        assert_eq!(logical_backend_app_protocol(None), None);
+    }
+
+    #[test]
+    fn mcp_service_uses_endpoint_discovery_without_wrapped_service_policy_state() {
+        let target = crate::ai::RuntimeMcpTarget::Service {
+            namespace: "tools".to_string(),
+            name: "mcp-service".to_string(),
+            port: 9090,
+            path: "/mcp".to_string(),
+        };
+
+        let input = mcp_service_input(&target, None, None).unwrap();
+
+        assert_eq!(input.port, Some(9090));
+        assert_eq!(input.service_key, "tools/mcp-service");
+        assert_eq!(input.service_type, ServiceBackendKind::Service);
+        assert!(!input.inherit_service_state);
+        assert!(input.lb_policy.is_none());
+        assert!(input.backend_tls_policy.is_none());
     }
 }

@@ -1,10 +1,13 @@
 //! Access log entry definition
 
+use crate::ctx::BackendSource;
 use crate::geoip::GeoLookup;
 use crate::observe::access_log::log_ext::LogExt;
 use crate::plugins::StageLogs;
 use crate::routes::grpc::GrpcMatchInfo;
-use crate::{ai::GenAiSummary, BackendContext, EdgionHttpContext, MatchInfo, RequestInfo};
+use crate::{
+    ai::GenAiSummary, BackendContext, BackendTlsInfo, EdgionHttpContext, MatchInfo, RequestInfo, Rsc, UpstreamInfo,
+};
 use edgion_resources::EdgionStatus;
 use serde::Serialize;
 
@@ -135,6 +138,102 @@ pub enum RouteMatchInfo<'a> {
 }
 
 #[derive(Serialize)]
+pub struct AccessBackendContext<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<BackendSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rsc: Option<&'a Rsc>,
+    upstreams: Vec<AccessUpstreamInfo<'a>>,
+}
+
+#[derive(Serialize)]
+struct AccessUpstreamInfo<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ip: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ct: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ht: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bt: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    et: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wpt: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body_size: Option<usize>,
+    #[serde(skip_serializing_if = "is_empty")]
+    err: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lb_policy: Option<&'a edgion_resources::resources::lb_policy::ParsedLBPolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tls: Option<AccessBackendTlsInfo<'a>>,
+}
+
+#[derive(Serialize)]
+struct AccessBackendTlsInfo<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sni: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    handshake_ok: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protocol: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cipher: Option<&'a str>,
+}
+
+impl<'a> AccessBackendContext<'a> {
+    fn new(context: &'a BackendContext, redact_endpoint: bool) -> Self {
+        Self {
+            source: context.source,
+            rsc: context.rsc.as_ref(),
+            upstreams: context
+                .upstreams
+                .iter()
+                .map(|upstream| AccessUpstreamInfo::new(upstream, redact_endpoint))
+                .collect(),
+        }
+    }
+}
+
+impl<'a> AccessUpstreamInfo<'a> {
+    fn new(upstream: &'a UpstreamInfo, redact_endpoint: bool) -> Self {
+        Self {
+            ip: (!redact_endpoint).then_some(upstream.ip.as_deref()).flatten(),
+            port: (!redact_endpoint).then_some(upstream.port).flatten(),
+            status: upstream.status,
+            ct: upstream.ct,
+            ht: upstream.ht,
+            bt: upstream.bt,
+            et: upstream.et,
+            wpt: upstream.wpt,
+            response_body_size: upstream.response_body_size,
+            err: &upstream.err,
+            lb_policy: upstream.lb_policy.as_ref(),
+            tls: upstream
+                .tls
+                .as_ref()
+                .map(|tls| AccessBackendTlsInfo::new(tls, redact_endpoint)),
+        }
+    }
+}
+
+impl<'a> AccessBackendTlsInfo<'a> {
+    fn new(tls: &'a BackendTlsInfo, redact_endpoint: bool) -> Self {
+        Self {
+            sni: (!redact_endpoint).then_some(tls.sni.as_deref()).flatten(),
+            handshake_ok: tls.handshake_ok,
+            protocol: tls.protocol.as_deref(),
+            cipher: tls.cipher.as_deref(),
+        }
+    }
+}
+
+#[derive(Serialize)]
 pub struct AccessLogEntry<'a> {
     #[serde(rename = "ts")]
     pub timestamp: i64,
@@ -159,7 +258,7 @@ pub struct AccessLogEntry<'a> {
     #[serde(skip_serializing_if = "is_empty")]
     pub errors: &'a [EdgionStatus],
 
-    pub backend_context: Option<&'a BackendContext>,
+    pub backend_context: Option<AccessBackendContext<'a>>,
 
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     pub stage_logs: &'a [StageLogs],
@@ -208,7 +307,9 @@ impl<'a> AccessLogEntry<'a> {
                 .map(|gru| RouteMatchInfo::Grpc(&gru.matched_info))
         };
 
-        let request_uri = if crate::cli::config::get_access_log_options().include_raw_uri
+        let mcp = ctx.mcp_log_redaction_required();
+        let request_uri = if !mcp
+            && crate::cli::config::get_access_log_options().include_raw_uri
             && !ctx.request_info.entry_raw_path.is_empty()
         {
             Some(ctx.request_uri())
@@ -227,10 +328,13 @@ impl<'a> AccessLogEntry<'a> {
             match_info,
             info: &ctx.info,
             errors: &ctx.edgion_status,
-            backend_context: ctx.backend_context.as_ref(),
+            backend_context: ctx
+                .backend_context
+                .as_ref()
+                .map(|context| AccessBackendContext::new(context, mcp)),
             stage_logs: &ctx.stage_logs,
             conn_est: None,
-            upstream_authority: ctx.upstream_authority.as_deref(),
+            upstream_authority: (!mcp).then_some(ctx.upstream_authority.as_deref()).flatten(),
             genai: ctx.genai_summary.as_ref(),
             geo,
             ext: LogExt::default(),
@@ -377,5 +481,48 @@ mod tests {
         ctx.upstream_authority = Some("tenant-a.sandbox.internal".to_string());
         let json = AccessLogEntry::from_context(&ctx).to_json();
         assert!(json.contains("tenant-a.sandbox.internal"), "got: {json}");
+    }
+
+    #[test]
+    fn mcp_access_log_omits_endpoint_identity_but_keeps_attempt_outcome() {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.mcp_route_recognized = true;
+        ctx.request_info.entry_raw_path = "/mcp".to_string();
+        ctx.request_info.entry_raw_query = Some("private=sentinel-query".to_string());
+        ctx.upstream_authority = Some("sentinel-authority.example".to_string());
+        ctx.init_backend_context(
+            crate::Rsc::new("EdgionBackend", "tenant", "mcp-server"),
+            "tenant/upstream".to_string(),
+            crate::backends::ServiceBackendKind::Service,
+            Some(0),
+        );
+        ctx.push_upstream(Some("203.0.113.77".to_string()), Some(8443));
+        let upstream = ctx.get_current_upstream_mut().unwrap();
+        upstream.status = Some(503);
+        upstream.ct = Some(9);
+        upstream.tls = Some(crate::BackendTlsInfo {
+            sni: Some("sentinel-sni.example".to_string()),
+            handshake_ok: Some(false),
+            protocol: Some("TLSv1.3".to_string()),
+            cipher: None,
+        });
+
+        let entry = AccessLogEntry::from_context(&ctx);
+        assert!(entry.request_uri.is_none());
+        let json = entry.to_json();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let attempt = &value["backend_context"]["upstreams"][0];
+        assert!(attempt.get("ip").is_none(), "got: {json}");
+        assert!(attempt.get("port").is_none(), "got: {json}");
+        assert!(attempt["tls"].get("sni").is_none(), "got: {json}");
+        assert!(value.get("upstream_authority").is_none(), "got: {json}");
+        assert!(!json.contains("203.0.113.77"), "got: {json}");
+        assert!(!json.contains("sentinel-sni"), "got: {json}");
+        assert!(!json.contains("sentinel-authority"), "got: {json}");
+        assert!(!json.contains("sentinel-query"), "got: {json}");
+        assert!(json.contains(r#""status":503"#), "got: {json}");
+        assert!(json.contains(r#""ct":9"#), "got: {json}");
+        assert!(json.contains("TLSv1.3"), "got: {json}");
+        assert!(json.contains(r#""handshake_ok":false"#), "got: {json}");
     }
 }

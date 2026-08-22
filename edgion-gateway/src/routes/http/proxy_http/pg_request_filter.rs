@@ -124,6 +124,19 @@ pub async fn request_filter(
         }
     }
 
+    // Capture HTTPRoute ExtensionRefs before preflight so preflight ownership
+    // and every later plugin stage observe one request-coherent generation.
+    // GRPCRoute keeps its existing post-preflight capture timing.
+    if ctx.route_unit.is_some() && ctx.resolved_route_ext_refs.is_none() {
+        let plugin_store = get_global_plugin_store();
+        let keys = ctx
+            .route_unit
+            .as_ref()
+            .map(|unit| unit.plugin_runtime.ext_ref_keys())
+            .unwrap_or_default();
+        ctx.resolved_route_ext_refs = Some(Arc::new(resolve_route_ext_refs(&plugin_store, keys)));
+    }
+
     // Step 1.5: Handle preflight requests (before plugin execution)
     if edgion_http.preflight_handler.is_preflight(session) {
         // If route has a native CORS filter (type: CORS), skip this preflight handler.
@@ -139,8 +152,13 @@ pub async fn request_filter(
             // Get CORS config dynamically from matched route's EdgionPlugins
             // This ensures we always get the latest config even if EdgionPlugin is updated
             let cors_config = if let Some(ref route_unit) = ctx.route_unit {
-                let namespace = &route_unit.matched_info.rsc.ns;
-                extract_cors_config_from_route_filters(&route_unit.rule.filters, namespace)
+                extract_cors_config_from_route_filters(
+                    &route_unit.rule.filters,
+                    ctx.resolved_route_ext_refs
+                        .as_deref()
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
+                )
             } else if let Some(_grpc_route_unit) = &ctx.grpc_route_unit {
                 // gRPC routes don't have CORS config yet, so None
                 None
@@ -687,11 +705,18 @@ mod tests {
                 }),
             },
         ]);
-        let expected = Arc::new(CorsConfig::default());
+        let mut runtime = crate::plugins::runtime::PluginRuntime::new();
+        runtime.add_from_request_filters(
+            &[edgion_resources::resources::RequestFilterEntry::new(
+                edgion_resources::resources::EdgionPlugin::Cors(CorsConfig::default()),
+            )],
+            "default",
+            "default/cors",
+        );
+        let runtime = Arc::new(runtime);
+        let expected = runtime.cors_config_arc().expect("Cors config must be cached");
 
-        let actual = extract_cors_config_from_route_filters_with(&filters, "default", |key| {
-            (key == "default/cors").then(|| Arc::clone(&expected))
-        });
+        let actual = extract_cors_config_from_route_filters(&filters, &[Some(runtime)]);
 
         assert!(actual.is_some_and(|config| Arc::ptr_eq(&config, &expected)));
     }
@@ -845,20 +870,10 @@ mod protocol_detection_tests {
 /// path avoids deep-cloning the full `CorsConfig` per request.
 fn extract_cors_config_from_route_filters(
     filters: &Option<Vec<HTTPRouteFilter>>,
-    namespace: &str,
-) -> Option<Arc<CorsConfig>> {
-    let store = get_global_plugin_store();
-    extract_cors_config_from_route_filters_with(filters, namespace, |key| {
-        store.with_plugin(key, |c| c.plugin_runtime.cors_config_arc()).flatten()
-    })
-}
-
-fn extract_cors_config_from_route_filters_with(
-    filters: &Option<Vec<HTTPRouteFilter>>,
-    namespace: &str,
-    lookup: impl Fn(&str) -> Option<Arc<CorsConfig>>,
+    resolved: &[Option<Arc<crate::plugins::runtime::PluginRuntime>>],
 ) -> Option<Arc<CorsConfig>> {
     let filters = filters.as_ref()?;
+    let mut extension_index = 0;
 
     for filter in filters {
         if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
@@ -868,14 +883,15 @@ fn extract_cors_config_from_route_filters_with(
         let Some(ext_ref) = filter.extension_ref.as_ref() else {
             continue;
         };
+        let runtime = resolved.get(extension_index).and_then(Option::as_ref);
+        extension_index += 1;
 
         // Check if it's EdgionPlugins
         if ext_ref.kind != "EdgionPlugins" || (!ext_ref.group.is_empty() && ext_ref.group != "edgion.io") {
             continue;
         }
 
-        let key = format!("{}/{}", namespace, ext_ref.name);
-        let cors = lookup(&key);
+        let cors = runtime.and_then(|runtime| runtime.cors_config_arc());
         if cors.is_some() {
             return cors;
         }

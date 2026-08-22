@@ -49,11 +49,16 @@ pub async fn upstream_request_filter(
 
     sync_body_framing_headers(upstream_request, ctx)?;
 
-    // This is the final owned-header mutation. It intentionally runs after
-    // gRPC deadline, authority, framing, and every request-plugin stage so a
-    // configured RemoteIp header remains authoritative even when its name
-    // overlaps another locally managed header.
+    // Publish the configured forwarded identity before MCP reconstructs its
+    // protected protocol and credential headers. The configurable RemoteIp
+    // header name may overlap an MCP-owned name; MCP must win that conflict.
     finalize_forwarded_headers(&ctx.remote_ip_header, upstream_request, ctx);
+
+    // This is the final owned-header mutation. It intentionally runs after
+    // every request plugin and all other local header writers so neither a
+    // client/plugin value nor a conflicting RemoteIp header can replace the
+    // pinned MCP protocol headers or selected backend credential.
+    apply_mcp_request_headers(upstream_request, ctx)?;
 
     // All fallible local header/framing preparation has succeeded. Crossing
     // the boundary here keeps a local preparation failure pre-dispatch.
@@ -70,6 +75,63 @@ pub async fn upstream_request_filter(
     // reads.
     ctx.request_info.in_request_body_stage = false;
 
+    Ok(())
+}
+
+fn apply_mcp_request_headers(
+    upstream_request: &mut RequestHeader,
+    ctx: &mut EdgionHttpContext,
+) -> pingora_core::Result<()> {
+    let Some(plan) = ctx.mcp_request_plan.as_ref() else {
+        return Ok(());
+    };
+    if !plan.body_generation_matches(ctx) || !plan.selected_matches_context(ctx) {
+        ctx.add_error(edgion_resources::EdgionStatus::UpstreamNotBackendRefs);
+        return Err(pingora_core::Error::new(pingora_core::ErrorType::InternalError));
+    }
+
+    let bearer = plan
+        .selected()
+        .and_then(|selected| selected.backend.bearer.as_ref())
+        .map(|bearer| bearer.authorization_header_value());
+    rewrite_mcp_owned_headers(upstream_request, plan, bearer)?;
+    Ok(())
+}
+
+fn rewrite_mcp_owned_headers(
+    upstream_request: &mut RequestHeader,
+    plan: &crate::mcp::request::McpRequestPlan,
+    bearer: Option<http::HeaderValue>,
+) -> pingora_core::Result<()> {
+    let owned = upstream_request
+        .headers
+        .keys()
+        .filter(|name| name.as_str().starts_with("mcp-"))
+        .cloned()
+        .collect::<Vec<_>>();
+    for name in owned {
+        upstream_request.remove_header(&name);
+    }
+    for name in ["authorization", "cookie", "mcp-session-id", "last-event-id"] {
+        upstream_request.remove_header(name);
+    }
+
+    upstream_request.set_method(http::Method::POST);
+    upstream_request.insert_header("content-type", "application/json")?;
+    upstream_request.insert_header("accept", "application/json, text/event-stream")?;
+    upstream_request.insert_header("mcp-protocol-version", crate::mcp::request::MCP_PROTOCOL_VERSION)?;
+    upstream_request.insert_header("mcp-method", plan.method.as_wire_name())?;
+    if let Some(name) = &plan.name_header {
+        upstream_request.headers.insert("mcp-name", name.clone());
+    }
+    for header in &plan.passthrough_param_headers {
+        upstream_request
+            .headers
+            .append(header.name.clone(), header.value.clone());
+    }
+    if let Some(bearer) = bearer {
+        upstream_request.headers.insert(http::header::AUTHORIZATION, bearer);
+    }
     Ok(())
 }
 
@@ -171,6 +233,85 @@ mod authority_tests {
 
         assert_eq!(req.headers.get("x-forwarded-for").unwrap(), "198.51.100.8, 10.0.0.5");
         assert_eq!(req.headers.get(&name).unwrap(), "203.0.113.9");
+    }
+}
+
+#[cfg(test)]
+mod mcp_header_tests {
+    use super::{finalize_forwarded_headers, rewrite_mcp_owned_headers};
+
+    #[test]
+    fn pinned_mcp_headers_replace_plugin_and_client_mutations() {
+        let plan = crate::mcp::request::test_unselected_plan();
+        let mut request = pingora_http::RequestHeader::build("POST", b"/rewritten", None).unwrap();
+        request.insert_header("authorization", "Bearer downstream").unwrap();
+        request.insert_header("cookie", "session=client").unwrap();
+        request.insert_header("mcp-session-id", "legacy").unwrap();
+        request.insert_header("last-event-id", "resume").unwrap();
+        request.insert_header("mcp-protocol-version", "wrong").unwrap();
+        request.insert_header("mcp-method", "server/discover").unwrap();
+        request.insert_header("mcp-name", "changed").unwrap();
+        request.insert_header("mcp-injected", "bad").unwrap();
+        request.insert_header("mcp-param-region", "changed").unwrap();
+        request.insert_header("content-type", "text/plain").unwrap();
+        request.insert_header("accept", "*/*").unwrap();
+        request.set_method(http::Method::DELETE);
+
+        rewrite_mcp_owned_headers(&mut request, &plan, None).unwrap();
+
+        assert!(!request.headers.contains_key("authorization"));
+        assert!(!request.headers.contains_key("cookie"));
+        assert!(!request.headers.contains_key("mcp-session-id"));
+        assert!(!request.headers.contains_key("last-event-id"));
+        assert!(!request.headers.contains_key("mcp-injected"));
+        assert_eq!(request.headers.get("mcp-protocol-version").unwrap(), "2026-07-28");
+        assert_eq!(request.headers.get("mcp-method").unwrap(), "tools/call");
+        assert_eq!(request.headers.get("mcp-name").unwrap(), "weather");
+        assert_eq!(request.method, http::Method::POST);
+        assert_eq!(request.headers.get("content-type").unwrap(), "application/json");
+        assert_eq!(
+            request.headers.get("accept").unwrap(),
+            "application/json, text/event-stream"
+        );
+        assert_eq!(request.headers.get("mcp-param-region").unwrap(), "west");
+        assert_eq!(request.headers.get("mcp-param-zone").unwrap(), "east");
+    }
+
+    #[test]
+    fn injected_bearer_remains_sensitive_and_replaces_downstream_value() {
+        let plan = crate::mcp::request::test_unselected_plan();
+        let mut request = pingora_http::RequestHeader::build("POST", b"/", None).unwrap();
+        request.insert_header("authorization", "Bearer downstream").unwrap();
+        let mut bearer = http::HeaderValue::from_static("Bearer upstream");
+        bearer.set_sensitive(true);
+
+        rewrite_mcp_owned_headers(&mut request, &plan, Some(bearer)).unwrap();
+
+        let value = request.headers.get("authorization").unwrap();
+        assert_eq!(value, "Bearer upstream");
+        assert!(value.is_sensitive());
+    }
+
+    #[test]
+    fn mcp_reconstruction_wins_conflicting_remote_ip_header_names() {
+        let plan = crate::mcp::request::test_unselected_plan();
+        let mut request = pingora_http::RequestHeader::build("POST", b"/", None).unwrap();
+        let mut ctx = crate::EdgionHttpContext::default();
+        ctx.request_info.remote_ip = "203.0.113.9".to_string();
+
+        let authorization = http::HeaderName::from_static("authorization");
+        finalize_forwarded_headers(&authorization, &mut request, &ctx);
+        let mut bearer = http::HeaderValue::from_static("Bearer upstream");
+        bearer.set_sensitive(true);
+        rewrite_mcp_owned_headers(&mut request, &plan, Some(bearer)).unwrap();
+        assert_eq!(request.headers.get("authorization").unwrap(), "Bearer upstream");
+        assert!(request.headers.get("authorization").unwrap().is_sensitive());
+
+        let method = http::HeaderName::from_static("mcp-method");
+        finalize_forwarded_headers(&method, &mut request, &ctx);
+        rewrite_mcp_owned_headers(&mut request, &plan, None).unwrap();
+        assert_eq!(request.headers.get("mcp-method").unwrap(), "tools/call");
+        assert!(!request.headers.contains_key("authorization"));
     }
 }
 
