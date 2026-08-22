@@ -442,6 +442,60 @@ impl HmacAuth {
         let _ = session.remove_request_header("proxy-authorization");
         let _ = session.remove_request_header("signature");
     }
+
+    /// Verify an HMAC condition without emitting a response or mutating request
+    /// headers. RequestAccessPolicy uses this because another `anyOf` branch may
+    /// still authorize the request after this condition does not match.
+    pub(crate) async fn matches_policy(&self, session: &mut dyn PluginSession) -> bool {
+        let Some(auth_header) = self.extract_auth_header(session) else {
+            return false;
+        };
+        if self.credentials.is_empty() {
+            return false;
+        }
+        let Ok(params) = Self::parse_authorization(&auth_header) else {
+            return false;
+        };
+        if !self.config.algorithms.contains(&params.algorithm) {
+            return false;
+        }
+        let Some(credential) = self.credentials.get(&params.username) else {
+            return false;
+        };
+        let Some(signed_date) = self.signed_date_header(&params.headers) else {
+            return false;
+        };
+        if Self::validate_clock_skew(session, self.config.clock_skew, signed_date).is_err()
+            || self.validate_enforce_headers(&params.headers).is_err()
+        {
+            return false;
+        }
+        let Ok(signing_string) = Self::build_signing_string(session, &params.headers) else {
+            return false;
+        };
+        if !Self::verify_signature(params.algorithm, &credential.secret, &signing_string, &params.signature) {
+            return false;
+        }
+        if self.config.validate_request_body {
+            if !params.headers.iter().any(|header| header == "digest") {
+                return false;
+            }
+            let Ok(expected_digest) = Self::expected_body_digest(session) else {
+                return false;
+            };
+            let Ok(body_len) = session.ensure_request_body(None).await else {
+                return false;
+            };
+            if over_plugin_limit_len(&self.body_requirement, body_len).is_some()
+                || Self::verify_body_digest_expected(session, &expected_digest)
+                    .await
+                    .is_err()
+            {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 #[async_trait]

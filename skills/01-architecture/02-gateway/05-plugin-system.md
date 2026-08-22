@@ -118,7 +118,7 @@ The schema enum `EdgionPlugin` in
 `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs` is the authoritative inventory.
 Do not rely on a hard-coded total: adding or removing an enum variant must be reflected in the
 gateway creation factory and stage support. The current inventory includes Gateway API filters and
-custom plugins such as FaultInjection, TraceContext, ExtProc, GlobalAccessControl, Canary, and Wasm.
+custom plugins such as FaultInjection, TraceContext, ExtProc, RequestAccessPolicy, Canary, and Wasm.
 The category tables below are a conceptual guide, not an exhaustive registry.
 
 ### Authentication (8)

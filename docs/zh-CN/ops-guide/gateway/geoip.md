@@ -176,7 +176,7 @@ spec:
 会被拒绝（见下文）。
 
 **把地理判定和其他规则组合在一起，是"链式编排"而不是"内嵌"。** `GeoIpLocation` 不携带 IP
-白名单或请求头/正文谓词，`IpRestriction`/`RequestRestriction`/`GlobalAccessControl`/
+白名单或请求头/正文谓词，`IpRestriction`/`RequestRestriction`/`RequestAccessPolicy`/
 `GlobalConnectionIpRestriction` 也不携带地理谓词。"拦截这个国家，除非源 IP 在办公室白名单里"
 这种需求，是通过把 `GeoIpLocation` 和 IP 插件作为同一个插件列表上**独立的、有顺序的条目**来表达
 的：

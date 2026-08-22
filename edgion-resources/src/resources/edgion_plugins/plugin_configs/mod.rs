@@ -20,7 +20,6 @@ mod form_json_transform;
 mod forward_auth;
 pub mod geo_rule;
 mod geoip_location;
-mod global_access_control;
 mod guardrail;
 mod header_cert_auth;
 mod hmac_auth;
@@ -39,6 +38,7 @@ mod rate_limit;
 mod rate_limit_redis;
 mod real_ip;
 mod region_route;
+mod request_access_policy;
 mod request_body_buffer;
 mod request_match;
 mod request_mirror;
@@ -92,7 +92,6 @@ pub use form_json_transform::{FormJsonDirection, FormJsonTransformConfig};
 pub use forward_auth::{ForwardAuthConfig, ForwardAuthDecision};
 pub use geo_rule::{GeoDimFacts, GeoRule, GeoRuleContext, GeoRuleGroup, GeoRuleKey, GeoRuleSource};
 pub use geoip_location::{GeoDecision, GeoIpLocationConfig};
-pub use global_access_control::{AllowOutcome, AllowProfile, AllowRuleGroup, GlobalAccessControlConfig};
 pub use guardrail::{
     GuardrailConfig, GUARDRAIL_MAX_CONCURRENT, GUARDRAIL_MAX_OVERLAP_BYTES, GUARDRAIL_MAX_REPLACEMENT_BYTES,
     GUARDRAIL_MAX_REQUEST_BYTES, GUARDRAIL_MAX_WINDOW_BYTES,
@@ -124,6 +123,11 @@ pub use rate_limit_redis::{OnRedisFailure, RateLimitAlgorithm, RateLimitPolicy, 
 pub use real_ip::RealIpConfig;
 pub use region_route::{
     HashAlgorithm, HashCalcConfig, RegionDef, RegionRouteConfig, RouteByKeyConfMatchMeta, RouteRule,
+};
+pub use request_access_policy::{
+    AccessCondition, AccessConditionGroup, AccessIpSet, AccessPathMatch, AccessPathMatchType, AccessUrlMatch,
+    IpFirstRule, IpSourceMatch, RequestAccessPolicyConfig, RequestAccessProfile, SecretMatchCondition, SourceOperator,
+    SourceRules, UrlFirstRule,
 };
 pub use request_body_buffer::RequestBodyBufferConfig;
 pub use request_match::{OnMissing, RestrictionRule, RestrictionSource, SanType};

@@ -194,7 +194,7 @@ is rejected at L4 (see below).
 
 **Combining geo with other rules is chaining, not embedding.** `GeoIpLocation` carries no
 IP-allowlist or header/body predicates, and `IpRestriction`/`RequestRestriction`/
-`GlobalAccessControl`/`GlobalConnectionIpRestriction` carry no geo predicates. "Block this
+`RequestAccessPolicy`/`GlobalConnectionIpRestriction` carry no geo predicates. "Block this
 country unless the source IP is on the office allowlist" is expressed by placing `GeoIpLocation`
 and the IP plugin as **separate, ordered entries** on the same plugin list:
 

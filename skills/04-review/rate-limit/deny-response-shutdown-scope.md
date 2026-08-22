@@ -23,7 +23,7 @@ Fix suggestions of the form "`RateLimit`/`RateLimitRedis` also hand-roll
 
 **1. The rule is by plugin class, not by "who writes their own response"**
 
-Access-control denials (`IpRestriction`, `GlobalAccessControl`, `RequestRestriction`) express a
+Access-control denials (`IpRestriction`, the former `GlobalAccessControl`, `RequestRestriction`) express a
 *persistent* verdict about the client: the same connection would be denied on every subsequent
 request. Tearing the HTTP/1.x connection down is consistent with that verdict and matches the
 `plugins-http-F014` precedent, which routed `ip_restriction` and `ldap_auth` through the shared

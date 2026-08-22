@@ -146,8 +146,13 @@ pub(crate) fn collect_unknown_fields(cap: usize) -> (usize, bool, Vec<UnknownFie
 // Deliberately built on top of `collect_unknown_fields` above (the live
 // `spec.unknown_fields` scan), NOT on `status_metrics::classify()`.
 // `edgion_controller_resource_abnormal` is derived from resource STATUS
+<<<<<<< Updated upstream
 // CONDITIONS, which per the controller-metrics section of
 // `docs/zh-CN/ops-guide/plugin-policy.md` makes that gauge Kubernetes-mode only: in FileSystem/etcd
+=======
+// CONDITIONS, which per `docs/zh-CN/ops-guide/plugin-policy.md` ("Controller
+// "Controller metrics" section) makes that gauge Kubernetes-mode only: in FileSystem/etcd
+>>>>>>> Stashed changes
 // mode the scanner reads pre-processed objects that never carry status
 // conditions at all. Our findings live on `spec.unknown_fields`, which
 // `collect_unknown_fields` reads straight from the typed `RawStore` in ALL

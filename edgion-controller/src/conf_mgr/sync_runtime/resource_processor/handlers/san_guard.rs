@@ -232,7 +232,7 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
                         | EdgionPlugin::Dsl(_)
                         | EdgionPlugin::RegionRoute(_)
                         | EdgionPlugin::TraceContext(_)
-                        | EdgionPlugin::GlobalAccessControl(_)
+                        | EdgionPlugin::RequestAccessPolicy(_)
                         | EdgionPlugin::Canary(_)
                         | EdgionPlugin::GeoIpLocation(_)
                         | EdgionPlugin::Wasm(_) => {}

@@ -217,7 +217,7 @@ Full analysis and the decision to keep it that way:
 | Direction | Mechanism |
 |-----------|-----------|
 | EdgionConfigData ← EdgionPlugins | `overrideRef` in `RegionRouteConfig` → `RegionRouteOverride`; EP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
-| EdgionConfigData ← EdgionPlugins | `GlobalAccessControl.activeProfileRef` → `Selector`; EP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
+| EdgionConfigData ← EdgionPlugins | `RequestAccessPolicy.activeProfileRef` → `Selector`, and its nested IP sets → `IpList`; EP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
 | EdgionConfigData ← EdgionStreamPlugins | `activeProfileRef` in `GlobalConnectionIpRestrictionConfig` → `Selector`; ESP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
 | EdgionConfigData ← {EdgionPlugins, EdgionStreamPlugins} | `allowRefs`/`denyRefs` in IpRestriction (HTTP/L4/TLS-route) or GCIR per-profile `ProfileRules` → `IpList`; referrer `ResolvedRefs` reflects resolution (missing/disabled/wrong-type → `ResolvedRefs=False`; cross-ns without grant/visibility → `RefNotPermitted`) |
 | EdgionConfigData → {EdgionPlugins, EdgionStreamPlugins} | `EdgionConfigDataRefManager` requeue on change/delete |
@@ -229,7 +229,7 @@ Full analysis and the decision to keep it that way:
 
 Cross-namespace EdgionConfigData references — all ref types: `allowRefs`/`denyRefs` (IpList),
 `overrideRef` (RegionRouteOverride), `activeProfileRef` (Selector, including
-`GlobalAccessControl.activeProfileRef`) — are gated by two complementary controls.
+`RequestAccessPolicy.activeProfileRef`) — are gated by two complementary controls.
 
 ### Mechanism
 

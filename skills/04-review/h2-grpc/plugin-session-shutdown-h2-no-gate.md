@@ -56,7 +56,7 @@ All five callers of `PluginSession::shutdown()` write an END_STREAM body immedia
 
 - `plugins/http/common/auth_common.rs::send_gateway_auth_error_response`
 - `plugins/http/common/auth_common.rs::send_gateway_plain_error_response`
-  (the deny paths of `IpRestriction` / `GlobalAccessControl`, i.e. the ones the finding named)
+  (the deny paths of `IpRestriction` / the former `GlobalAccessControl`, i.e. the ones the finding named)
 - `plugins/http/forward_auth/plugin.rs`
 - `plugins/http/all_endpoint_status/plugin.rs`
 - `plugins/http/openid_connect/callback.rs::send_plain_error`

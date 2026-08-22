@@ -39,6 +39,90 @@ impl Default for EdgionPluginsHandler {
     }
 }
 
+fn visit_policy_ip_refs(
+    config: &edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessPolicyConfig,
+    mut visit: impl FnMut(&edgion_resources::resources::edgion_config_data::EdgionConfigDataRef),
+) {
+    use edgion_resources::resources::edgion_plugins::plugin_configs::AccessCondition;
+    for profile in config.profiles.values() {
+        for source in [
+            profile.source_match.direct_peer_ip.as_ref(),
+            profile.source_match.remote_ip.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for rule in &source.ip_rules {
+                for reference in &rule.ips.refs {
+                    visit(reference);
+                }
+                for group in rule.any_of.iter().flatten() {
+                    for condition in &group.all_of {
+                        if let AccessCondition::IpMatch(ips) = condition {
+                            for reference in &ips.refs {
+                                visit(reference);
+                            }
+                        }
+                    }
+                }
+            }
+            for rule in &source.url_rules {
+                for group in rule.any_of.iter().flatten() {
+                    for condition in &group.all_of {
+                        if let AccessCondition::IpMatch(ips) = condition {
+                            for reference in &ips.refs {
+                                visit(reference);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn visit_policy_ip_refs_mut(
+    config: &mut edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessPolicyConfig,
+    mut visit: impl FnMut(&mut edgion_resources::resources::edgion_config_data::EdgionConfigDataRef),
+) {
+    use edgion_resources::resources::edgion_plugins::plugin_configs::AccessCondition;
+    for profile in config.profiles.values_mut() {
+        for source in [
+            profile.source_match.direct_peer_ip.as_mut(),
+            profile.source_match.remote_ip.as_mut(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for rule in &mut source.ip_rules {
+                for reference in &mut rule.ips.refs {
+                    visit(reference);
+                }
+                for group in rule.any_of.iter_mut().flatten() {
+                    for condition in &mut group.all_of {
+                        if let AccessCondition::IpMatch(ips) = condition {
+                            for reference in &mut ips.refs {
+                                visit(reference);
+                            }
+                        }
+                    }
+                }
+            }
+            for rule in &mut source.url_rules {
+                for group in rule.any_of.iter_mut().flatten() {
+                    for condition in &mut group.all_of {
+                        if let AccessCondition::IpMatch(ips) = condition {
+                            for reference in &mut ips.refs {
+                                visit(reference);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ============================================================================
 // RegionRoute overrideRef helpers
 // ============================================================================
@@ -84,24 +168,31 @@ impl EdgionPluginsHandler {
         };
         let mut keys = Vec::new();
         for e in plugins {
-            if let EdgionPlugin::IpRestriction(ref config) = e.plugin {
-                for r in config
-                    .allow_refs
-                    .iter()
-                    .flatten()
-                    .chain(config.deny_refs.iter().flatten())
-                {
-                    let rns = r.namespace.as_deref().unwrap_or(ns);
-                    keys.push(format!("{}/{}", rns, r.name));
+            match &e.plugin {
+                EdgionPlugin::IpRestriction(config) => {
+                    for r in config
+                        .allow_refs
+                        .iter()
+                        .flatten()
+                        .chain(config.deny_refs.iter().flatten())
+                    {
+                        let rns = r.namespace.as_deref().unwrap_or(ns);
+                        keys.push(format!("{}/{}", rns, r.name));
+                    }
                 }
+                EdgionPlugin::RequestAccessPolicy(config) => visit_policy_ip_refs(config, |reference| {
+                    let ref_ns = reference.namespace.as_deref().unwrap_or(ns);
+                    keys.push(format!("{}/{}", ref_ns, reference.name));
+                }),
+                _ => {}
             }
         }
         keys
     }
 
-    /// Collect "namespace/name" keys for every `GlobalAccessControl` plugin's
+    /// Collect "namespace/name" keys for every `RequestAccessPolicy` plugin's
     /// `active_profile_ref` in `request_plugins`. Namespace defaults to the EP namespace.
-    /// Mirrors `get_region_route_override_keys` for the GAC ref site.
+    /// Mirrors `get_region_route_override_keys` for the policy ref site.
     fn get_active_profile_ref_keys(ep: &EdgionPlugins) -> Vec<String> {
         let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
         let Some(plugins) = &ep.spec.request_plugins else {
@@ -110,7 +201,7 @@ impl EdgionPluginsHandler {
         plugins
             .iter()
             .filter_map(|e| {
-                if let EdgionPlugin::GlobalAccessControl(ref config) = e.plugin {
+                if let EdgionPlugin::RequestAccessPolicy(ref config) = e.plugin {
                     config.active_profile_ref.as_ref().map(|r| {
                         let ref_ns = r.namespace.as_deref().unwrap_or(ns);
                         format!("{}/{}", ref_ns, r.name)
@@ -174,10 +265,13 @@ impl EdgionPluginsHandler {
                         mark_one_ref(r, &from_ns, "EdgionPlugins", ExpectedEntry::IpList, ctx);
                     }
                 }
-                EdgionPlugin::GlobalAccessControl(config) => {
+                EdgionPlugin::RequestAccessPolicy(config) => {
                     if let Some(r) = config.active_profile_ref.as_mut() {
                         mark_one_ref(r, &from_ns, "EdgionPlugins", ExpectedEntry::Selector, ctx);
                     }
+                    visit_policy_ip_refs_mut(config, |reference| {
+                        mark_one_ref(reference, &from_ns, "EdgionPlugins", ExpectedEntry::IpList, ctx);
+                    });
                 }
                 EdgionPlugin::Canary(config) => {
                     if let Some(r) = config.active_profile_ref.as_mut() {
@@ -299,7 +393,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         cred::resolve_ext_proc(&mut ep, &resource_ref, ctx);
         cred::resolve_ldap_auth(&mut ep, &resource_ref, ctx);
         cred::resolve_csrf(&mut ep, &resource_ref, ctx);
-        cred::resolve_global_access_control(&mut ep, &resource_ref, ctx);
+        cred::resolve_request_access_policy(&mut ep, &resource_ref, ctx);
         cred::resolve_forward_auth(&mut ep, &resource_ref, ctx).await;
         cred::resolve_guardrail(&mut ep, &resource_ref, ctx).await;
         cred::resolve_ai_guard(&mut ep, &resource_ref, ctx).await;
@@ -328,10 +422,12 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
                 .add_ref(ip_list_key, ep_key.clone());
         }
 
-        // Register requeue watcher: EP → EdgionConfigData(GlobalAccessControl activeProfileRef).
+        // Register requeue watcher: EP → EdgionConfigData(RequestAccessPolicy activeProfileRef).
         // Closes a pre-existing gap: active_profile_ref was not tracked before Task 6.
-        for gac_key in Self::get_active_profile_ref_keys(&ep) {
-            ctx.runtime().edgion_config_data_refs.add_ref(gac_key, ep_key.clone());
+        for policy_key in Self::get_active_profile_ref_keys(&ep) {
+            ctx.runtime()
+                .edgion_config_data_refs
+                .add_ref(policy_key, ep_key.clone());
         }
 
         // Register requeue watcher: EP → EdgionConfigData(Canary activeProfileRef).
@@ -812,47 +908,54 @@ pub fn resolve_ip_list_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<Res
         return vec![];
     };
     let mut errors = Vec::new();
+    let mut check_ref = |r: &edgion_resources::resources::edgion_config_data::EdgionConfigDataRef| {
+        let rns = r.namespace.as_deref().unwrap_or(ns);
+        if r.ref_denied.is_some() {
+            errors.push(ResolvedRefsError::RefNotPermitted {
+                from_namespace: ns.to_string(),
+                from_kind: "EdgionPlugins",
+                target_namespace: rns.to_string(),
+                target_name: r.name.clone(),
+            });
+        } else {
+            let target = ctx.runtime().edgion_config_data_store.get(Some(rns), &r.name);
+            let resolved = target
+                .as_ref()
+                .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::IpList(_)));
+            if !resolved {
+                errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
+                    namespace: rns.to_string(),
+                    name: r.name.clone(),
+                    expected_type: "IpList".to_string(),
+                });
+            }
+        }
+    };
     for entry in plugins {
-        if let EdgionPlugin::IpRestriction(ref config) = entry.plugin {
-            for r in config
-                .allow_refs
-                .iter()
-                .flatten()
-                .chain(config.deny_refs.iter().flatten())
-            {
-                let rns = r.namespace.as_deref().unwrap_or(ns);
-                if r.ref_denied.is_some() {
-                    errors.push(ResolvedRefsError::RefNotPermitted {
-                        from_namespace: ns.to_string(),
-                        from_kind: "EdgionPlugins",
-                        target_namespace: rns.to_string(),
-                        target_name: r.name.clone(),
-                    });
-                } else {
-                    let target = ctx.runtime().edgion_config_data_store.get(Some(rns), &r.name);
-                    let resolved = target
-                        .as_ref()
-                        .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::IpList(_)));
-                    if !resolved {
-                        errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
-                            namespace: rns.to_string(),
-                            name: r.name.clone(),
-                            expected_type: "IpList".to_string(),
-                        });
-                    }
+        match &entry.plugin {
+            EdgionPlugin::IpRestriction(config) => {
+                for reference in config
+                    .allow_refs
+                    .iter()
+                    .flatten()
+                    .chain(config.deny_refs.iter().flatten())
+                {
+                    check_ref(reference);
                 }
             }
+            EdgionPlugin::RequestAccessPolicy(config) => visit_policy_ip_refs(config, &mut check_ref),
+            _ => {}
         }
     }
     errors
 }
 
-/// Check each `GlobalAccessControl` plugin's `active_profile_ref` against the EdgionConfigData
+/// Check each `RequestAccessPolicy` plugin's `active_profile_ref` against the EdgionConfigData
 /// store. Returns one `RefNotPermitted` error when `ref_denied` is set (cross-namespace denial),
 /// or one `EdgionConfigDataNotFound { expected_type: "Selector" }` per missing or wrong-type
 /// reference. Mutually exclusive per ref via else-branch to avoid a TOCTOU double-message.
 ///
-/// This is a net-new resolver — `GlobalAccessControl.active_profile_ref` (the 7th ref site)
+/// This is a net-new resolver — `RequestAccessPolicy.active_profile_ref` (the 7th ref site)
 /// had no status reporting before Task 5.
 pub fn resolve_active_profile_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
     let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
@@ -861,7 +964,7 @@ pub fn resolve_active_profile_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> 
     };
     let mut errors = Vec::new();
     for entry in plugins {
-        if let EdgionPlugin::GlobalAccessControl(ref config) = entry.plugin {
+        if let EdgionPlugin::RequestAccessPolicy(ref config) = entry.plugin {
             if let Some(ref r) = config.active_profile_ref {
                 let rns = r.namespace.as_deref().unwrap_or(ns);
                 if r.ref_denied.is_some() {
@@ -893,7 +996,7 @@ pub fn resolve_active_profile_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> 
 /// Check each `Canary` plugin's `active_profile_ref` against the EdgionConfigData
 /// store. Returns one `RefNotPermitted` error when `ref_denied` is set (cross-namespace
 /// denial), or one `EdgionConfigDataNotFound { expected_type: "Selector" }` per missing
-/// or wrong-type reference. Mirrors `resolve_active_profile_refs` (GlobalAccessControl).
+/// or wrong-type reference. Mirrors `resolve_active_profile_refs` (RequestAccessPolicy).
 pub fn resolve_canary_active_profile_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
     let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
     let Some(plugins) = &ep.spec.request_plugins else {
@@ -1010,6 +1113,56 @@ mod tests {
             },
             data: Some(data),
             ..Default::default()
+        }
+    }
+
+    fn request_access_policy_config(
+        active_profile_ref: Option<EdgionConfigDataRef>,
+        condition: Option<edgion_resources::resources::edgion_plugins::plugin_configs::AccessCondition>,
+    ) -> edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessPolicyConfig {
+        use edgion_resources::resources::edgion_config_data::IpGroup;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{
+            AccessConditionGroup, AccessIpSet, IpFirstRule, IpSourceMatch, RequestAccessProfile, SourceOperator,
+            SourceRules,
+        };
+        use edgion_resources::resources::edgion_plugins::DefaultAction;
+
+        let any_of = condition.map(|condition| {
+            vec![AccessConditionGroup {
+                all_of: vec![condition],
+            }]
+        });
+        edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessPolicyConfig {
+            default_profile: "lockdown".to_string(),
+            profiles: HashMap::from([(
+                "lockdown".to_string(),
+                RequestAccessProfile {
+                    default_action: DefaultAction::Deny,
+                    source_match: IpSourceMatch {
+                        operator: SourceOperator::Any,
+                        direct_peer_ip: Some(SourceRules {
+                            ip_rules: vec![IpFirstRule {
+                                name: Some("test".to_string()),
+                                ips: AccessIpSet {
+                                    inline: vec![IpGroup {
+                                        name: "all".to_string(),
+                                        description: None,
+                                        cidrs: vec!["0.0.0.0/0".to_string(), "::/0".to_string()],
+                                    }],
+                                    ..Default::default()
+                                },
+                                any_of,
+                            }],
+                            url_rules: vec![],
+                        }),
+                        remote_ip: None,
+                    },
+                },
+            )]),
+            active_profile_ref,
+            status: 403,
+            message: None,
+            description: None,
         }
     }
 
@@ -2031,7 +2184,7 @@ mod tests {
 
     #[tokio::test]
     async fn cross_ns_canary_ref_registered_for_grant_revalidation() {
-        // Verify the Canary active_profile_ref cross-ns gap is closed the same way as GAC's
+        // Verify Canary cross-namespace profile selectors use the same reference machinery.
         // (Task 6, Step 3): both the same-resource requeue loop and the cross_mgr loop in
         // parse() must register the ref, otherwise a ReferenceGrant change in the target
         // namespace would silently fail to requeue this EdgionPlugins.
@@ -2404,7 +2557,7 @@ mod tests {
         );
     }
 
-    // ===== GlobalAccessControl SecretRef resolution (restored; see Plan 3) =====
+    // ===== RequestAccessPolicy SecretRef resolution (restored; see Plan 3) =====
 
     // ── Task 6: cross_ns_ref_mgr registration tests ─────────────────────────
 
@@ -2463,13 +2616,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cross_ns_gac_ref_registered_for_grant_revalidation() {
-        // Verify the GAC active_profile_ref cross-ns gap is also closed (Task 6 Step 3a).
+    async fn cross_ns_request_access_policy_ref_registered_for_grant_revalidation() {
+        // Verify the policy active_profile_ref cross-namespace registration.
         use edgion_resources::resources::edgion_config_data::{EdgionConfigDataSpec, Selector};
-        use edgion_resources::resources::edgion_plugins::plugin_configs::{
-            AllowProfile, AllowRuleGroup, GlobalAccessControlConfig,
-        };
-        use edgion_resources::resources::edgion_plugins::{DefaultAction, IpSource};
         use edgion_resources::ResourceKind;
 
         let selector_ed = build_edgion_config_data(
@@ -2490,35 +2639,25 @@ mod tests {
         ed_map.insert("shared-ns/gac-selector".to_string(), selector_ed);
         runtime.edgion_config_data_store.replace_all(ed_map);
 
-        let cfg = GlobalAccessControlConfig {
-            enable: true,
-            active_profile: "lockdown".into(),
-            profiles: HashMap::from([(
-                "lockdown".to_string(),
-                AllowProfile {
-                    default_action: DefaultAction::Deny,
-                    rule_groups: vec![AllowRuleGroup {
-                        name: None,
-                        ip: None,
-                        rules: vec![],
-                        ip_matcher: None,
-                    }],
-                },
-            )]),
-            description: None,
-            active_profile_ref: Some(EdgionConfigDataRef {
+        let cfg = request_access_policy_config(
+            Some(EdgionConfigDataRef {
                 name: "gac-selector".into(),
                 namespace: Some("shared-ns".into()),
                 ..Default::default()
             }),
+<<<<<<< Updated upstream
             status: 403,
             message: None,
             ip_source: IpSource::DirectPeerIp,
         };
+=======
+            None,
+        );
+>>>>>>> Stashed changes
 
         let mut ep = EdgionPlugins::new("gac-ep", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("team-a".to_string());
-        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::GlobalAccessControl(cfg))]);
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestAccessPolicy(cfg))]);
 
         let handler = EdgionPluginsHandler::new();
         let _ = handler.parse(ep, &ctx).await;
@@ -2527,16 +2666,16 @@ mod tests {
         let refs = runtime.cross_ns_ref_mgr.get_refs("shared-ns");
         assert!(
             refs.iter().any(|rr| rr.kind == ResourceKind::EdgionPlugins),
-            "GAC active_profile_ref cross-ns must register EP in cross_ns_ref_mgr; got: {:?}",
+            "RequestAccessPolicy active_profile_ref must register EP in cross_ns_ref_mgr; got: {:?}",
             refs
         );
 
-        // edgion_config_data_refs must also track GAC (the pre-existing gap is now closed).
+        // edgion_config_data_refs must also track RequestAccessPolicy.
         let ep_key = "EdgionPlugins:team-a/gac-ep";
         let cd_refs = runtime.edgion_config_data_refs.get_refs("shared-ns/gac-selector");
         assert!(
             cd_refs.contains(&ep_key.to_string()),
-            "GAC active_profile_ref must be registered in edgion_config_data_refs; got: {:?}",
+            "RequestAccessPolicy active_profile_ref must be registered in edgion_config_data_refs; got: {:?}",
             cd_refs
         );
     }
@@ -2616,13 +2755,13 @@ mod tests {
     #[test]
     fn ep_ref_bearing_variants_are_classified() {
         // Exhaustive match: a new ref-bearing variant forces an update here.
-        // Only RegionRoute, IpRestriction, GlobalAccessControl, and Canary carry
+        // Only RegionRoute, IpRestriction, RequestAccessPolicy, and Canary carry
         // EdgionConfigData refs; everything else must map to false.
         fn carries_config_data_ref(p: &EdgionPlugin) -> bool {
             match p {
                 EdgionPlugin::RegionRoute(_)
                 | EdgionPlugin::IpRestriction(_)
-                | EdgionPlugin::GlobalAccessControl(_)
+                | EdgionPlugin::RequestAccessPolicy(_)
                 | EdgionPlugin::Canary(_) => true,
                 EdgionPlugin::RequestHeaderModifier(_)
                 | EdgionPlugin::AiProxy(_)
@@ -2673,11 +2812,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn global_access_control_resolves_secret_values() {
-        use edgion_resources::resources::edgion_plugins::plugin_configs::{
-            AllowProfile, AllowRuleGroup, GlobalAccessControlConfig, RestrictionRule, RestrictionSource,
-        };
-        use edgion_resources::resources::edgion_plugins::{DefaultAction, IpSource};
+    async fn request_access_policy_resolves_secret_values() {
+        use edgion_resources::common::KeyGet;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{AccessCondition, SecretMatchCondition};
 
         let mut secrets = HashMap::new();
         secrets.insert(
@@ -2686,14 +2823,16 @@ mod tests {
         );
         let (ctx, _rt) = make_ctx_with_secrets(secrets);
 
-        let rule = RestrictionRule {
-            source: RestrictionSource::Header,
-            key: Some("X-CF-Secret".into()),
-            secret_ref: Some(SecretObjectReference {
+        let condition = AccessCondition::SecretMatch(SecretMatchCondition {
+            key: KeyGet::Header {
+                name: "X-CF-Secret".into(),
+            },
+            secret_ref: SecretObjectReference {
                 name: "cf-origin-secret".into(),
                 group: None,
                 kind: None,
                 namespace: None,
+<<<<<<< Updated upstream
             }),
             ..Default::default()
         };
@@ -2718,21 +2857,40 @@ mod tests {
             message: None,
             ip_source: IpSource::DirectPeerIp,
         };
+=======
+            },
+            resolved_values: None,
+        });
+        let cfg = request_access_policy_config(None, Some(condition));
+>>>>>>> Stashed changes
 
         let mut ep = EdgionPlugins::new("origin-lockdown", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".into());
-        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::GlobalAccessControl(cfg))]);
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestAccessPolicy(cfg))]);
 
         let parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
         };
         let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
-            EdgionPlugin::GlobalAccessControl(c) => c,
+            EdgionPlugin::RequestAccessPolicy(c) => c,
             _ => panic!("unexpected plugin type"),
         };
-        let resolved = config.profiles["lockdown"].rule_groups[0].rules[0]
-            .resolved_secret_values
+        let condition = &config.profiles["lockdown"]
+            .source_match
+            .direct_peer_ip
+            .as_ref()
+            .unwrap()
+            .ip_rules[0]
+            .any_of
+            .as_ref()
+            .unwrap()[0]
+            .all_of[0];
+        let AccessCondition::SecretMatch(condition) = condition else {
+            panic!("unexpected condition type")
+        };
+        let resolved = condition
+            .resolved_values
             .as_ref()
             .expect("expected resolved secret values");
         assert!(resolved.contains(&"s3cr3t-TOKEN".to_string()));
@@ -2740,14 +2898,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn global_access_control_no_secret_leaves_values_none() {
-        use edgion_resources::resources::edgion_plugins::plugin_configs::{
-            AllowProfile, AllowRuleGroup, GlobalAccessControlConfig, RestrictionRule, RestrictionSource,
-        };
-        use edgion_resources::resources::edgion_plugins::{DefaultAction, IpSource};
+    async fn request_access_policy_no_secret_leaves_values_none() {
+        use edgion_resources::common::KeyGet;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{AccessCondition, SecretMatchCondition};
 
         let (ctx, _rt) = make_ctx_with_secrets(HashMap::new());
 
+<<<<<<< Updated upstream
         let rule = RestrictionRule {
             source: RestrictionSource::Header,
             key: Some("X-CF-Secret".into()),
@@ -2775,22 +2932,48 @@ mod tests {
             message: None,
             ip_source: IpSource::DirectPeerIp,
         };
+=======
+        let condition = AccessCondition::SecretMatch(SecretMatchCondition {
+            key: KeyGet::Header {
+                name: "X-CF-Secret".into(),
+            },
+            secret_ref: SecretObjectReference {
+                name: "missing-secret".into(),
+                group: None,
+                kind: None,
+                namespace: None,
+            },
+            resolved_values: None,
+        });
+        let cfg = request_access_policy_config(None, Some(condition));
+>>>>>>> Stashed changes
 
         let mut ep = EdgionPlugins::new("p", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".into());
-        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::GlobalAccessControl(cfg))]);
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestAccessPolicy(cfg))]);
 
         let parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
         };
         let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
-            EdgionPlugin::GlobalAccessControl(c) => c,
+            EdgionPlugin::RequestAccessPolicy(c) => c,
             _ => panic!("unexpected plugin type"),
         };
-        assert!(config.profiles["lockdown"].rule_groups[0].rules[0]
-            .resolved_secret_values
-            .is_none());
+        let condition = &config.profiles["lockdown"]
+            .source_match
+            .direct_peer_ip
+            .as_ref()
+            .unwrap()
+            .ip_rules[0]
+            .any_of
+            .as_ref()
+            .unwrap()[0]
+            .all_of[0];
+        let AccessCondition::SecretMatch(condition) = condition else {
+            panic!("unexpected condition type")
+        };
+        assert!(condition.resolved_values.is_none());
     }
 
     // ── RefNotPermitted status reporting tests (Task 5) ─────────────────────
@@ -2861,12 +3044,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gac_denied_active_profile_ref_reports_ref_not_permitted() {
+    async fn request_access_policy_denied_active_profile_ref_reports_ref_not_permitted() {
         use edgion_resources::resources::edgion_config_data::{EdgionConfigDataSpec, Selector};
-        use edgion_resources::resources::edgion_plugins::plugin_configs::{
-            AllowProfile, AllowRuleGroup, GlobalAccessControlConfig,
-        };
-        use edgion_resources::resources::edgion_plugins::{DefaultAction, IpSource};
 
         // Seed a Selector EdgionConfigData in team-b (cross-namespace target, right type).
         let selector_ed = build_edgion_config_data(
@@ -2887,35 +3066,25 @@ mod tests {
         ed_map.insert("team-b/selector-cfg".to_string(), selector_ed);
         runtime.edgion_config_data_store.replace_all(ed_map);
 
-        let cfg = GlobalAccessControlConfig {
-            enable: true,
-            active_profile: "lockdown".into(),
-            profiles: HashMap::from([(
-                "lockdown".to_string(),
-                AllowProfile {
-                    default_action: DefaultAction::Deny,
-                    rule_groups: vec![AllowRuleGroup {
-                        name: None,
-                        ip: None,
-                        rules: vec![],
-                        ip_matcher: None,
-                    }],
-                },
-            )]),
-            description: None,
-            active_profile_ref: Some(EdgionConfigDataRef {
+        let cfg = request_access_policy_config(
+            Some(EdgionConfigDataRef {
                 name: "selector-cfg".into(),
                 namespace: Some("team-b".into()),
                 ..Default::default()
             }),
+<<<<<<< Updated upstream
             status: 403,
             message: None,
             ip_source: IpSource::DirectPeerIp,
         };
+=======
+            None,
+        );
+>>>>>>> Stashed changes
 
         let mut ep = EdgionPlugins::new("gac-ep", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("team-a".to_string());
-        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::GlobalAccessControl(cfg))]);
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestAccessPolicy(cfg))]);
 
         let handler = EdgionPluginsHandler::new();
         let mut parsed = match handler.parse(ep, &ctx).await {
@@ -2938,17 +3107,13 @@ mod tests {
         assert_eq!(cond.status, "False");
         assert_eq!(
             cond.reason, "RefNotPermitted",
-            "denied cross-ns GAC active_profile_ref must yield reason RefNotPermitted"
+            "denied RequestAccessPolicy active_profile_ref must yield reason RefNotPermitted"
         );
     }
 
     #[tokio::test]
     async fn disabled_selector_active_profile_ref_reports_not_found() {
         use edgion_resources::resources::edgion_config_data::{EdgionConfigDataSpec, Selector};
-        use edgion_resources::resources::edgion_plugins::plugin_configs::{
-            AllowProfile, AllowRuleGroup, GlobalAccessControlConfig,
-        };
-        use edgion_resources::resources::edgion_plugins::{DefaultAction, IpSource};
 
         // Seed a Selector EdgionConfigData with enable: false in the same namespace.
         // Same-namespace refs are never denied by ReferenceGrant logic, so ref_denied stays None.
@@ -2972,35 +3137,25 @@ mod tests {
         ed_map.insert("default/disabled-selector".to_string(), selector_ed);
         runtime.edgion_config_data_store.replace_all(ed_map);
 
-        let cfg = GlobalAccessControlConfig {
-            enable: true,
-            active_profile: "lockdown".into(),
-            profiles: HashMap::from([(
-                "lockdown".to_string(),
-                AllowProfile {
-                    default_action: DefaultAction::Deny,
-                    rule_groups: vec![AllowRuleGroup {
-                        name: None,
-                        ip: None,
-                        rules: vec![],
-                        ip_matcher: None,
-                    }],
-                },
-            )]),
-            description: None,
-            active_profile_ref: Some(EdgionConfigDataRef {
+        let cfg = request_access_policy_config(
+            Some(EdgionConfigDataRef {
                 name: "disabled-selector".into(),
                 namespace: None,
                 ..Default::default()
             }),
+<<<<<<< Updated upstream
             status: 403,
             message: None,
             ip_source: IpSource::DirectPeerIp,
         };
+=======
+            None,
+        );
+>>>>>>> Stashed changes
 
         let mut ep = EdgionPlugins::new("gac-disabled-ep", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
-        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::GlobalAccessControl(cfg))]);
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestAccessPolicy(cfg))]);
 
         let handler = EdgionPluginsHandler::new();
         let mut parsed = match handler.parse(ep, &ctx).await {
@@ -3090,27 +3245,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn global_access_control_missing_secret_clears_stale_values() {
-        use edgion_resources::resources::edgion_plugins::plugin_configs::{
-            AllowProfile, AllowRuleGroup, GlobalAccessControlConfig, RestrictionRule, RestrictionSource,
-        };
-        use edgion_resources::resources::edgion_plugins::{DefaultAction, IpSource};
+    async fn request_access_policy_missing_secret_clears_stale_values() {
+        use edgion_resources::common::KeyGet;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{AccessCondition, SecretMatchCondition};
 
         let (ctx, _rt) = make_ctx_with_secrets(HashMap::new());
 
-        let mut rule = RestrictionRule {
-            source: RestrictionSource::Header,
-            key: Some("X-CF-Secret".into()),
-            secret_ref: Some(SecretObjectReference {
+        let condition = AccessCondition::SecretMatch(SecretMatchCondition {
+            key: KeyGet::Header {
+                name: "X-CF-Secret".into(),
+            },
+            secret_ref: SecretObjectReference {
                 name: "cf-origin-secret".into(),
                 group: None,
                 kind: None,
                 namespace: None,
-            }),
-            ..Default::default()
-        };
-        rule.resolved_secret_values = Some(vec!["OLD-TOKEN".into()]);
+            },
+            resolved_values: Some(vec!["OLD-TOKEN".into()]),
+        });
 
+<<<<<<< Updated upstream
         let cfg = GlobalAccessControlConfig {
             enable: true,
             active_profile: "lockdown".into(),
@@ -3132,22 +3286,36 @@ mod tests {
             message: None,
             ip_source: IpSource::DirectPeerIp,
         };
+=======
+        let cfg = request_access_policy_config(None, Some(condition));
+>>>>>>> Stashed changes
 
         let mut ep = EdgionPlugins::new("p", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".into());
-        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::GlobalAccessControl(cfg))]);
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestAccessPolicy(cfg))]);
 
         let parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
         };
         let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
-            EdgionPlugin::GlobalAccessControl(c) => c,
+            EdgionPlugin::RequestAccessPolicy(c) => c,
             _ => panic!("unexpected plugin type"),
         };
-        assert!(config.profiles["lockdown"].rule_groups[0].rules[0]
-            .resolved_secret_values
-            .is_none());
+        let condition = &config.profiles["lockdown"]
+            .source_match
+            .direct_peer_ip
+            .as_ref()
+            .unwrap()
+            .ip_rules[0]
+            .any_of
+            .as_ref()
+            .unwrap()[0]
+            .all_of[0];
+        let AccessCondition::SecretMatch(condition) = condition else {
+            panic!("unexpected condition type")
+        };
+        assert!(condition.resolved_values.is_none());
     }
 
     #[tokio::test]

@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_secret, FetchOutcome, PendingReason};
 use crate::conf_mgr::sync_runtime::resource_processor::{format_secret_key, HandlerContext, ResourceRef};
 use edgion_resources::prelude_resources::EdgionPlugins;
+use edgion_resources::resources::edgion_plugins::plugin_configs::HmacAuthConfig;
 use edgion_resources::resources::edgion_plugins::plugin_configs::HmacCredential;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 
@@ -247,6 +248,47 @@ fn resolve_group(
 }
 
 /// Resolve HMAC credentials from Secrets and register references to SecretRefManager.
+pub(super) fn resolve_config(
+    config: &mut HmacAuthConfig,
+    ep_namespace: Option<&String>,
+    resource_ref: &ResourceRef,
+    ctx: &HandlerContext,
+) {
+    config.resolved_credentials = None;
+    let Some(groups) = config.secret_groups.clone() else {
+        return;
+    };
+    let mut all_credentials: HashMap<String, HmacCredential> = HashMap::new();
+    let mut seen: HashMap<String, String> = HashMap::new();
+    for group in &groups {
+        resolve_group(
+            config,
+            &group.name,
+            &group.secret_refs,
+            &mut all_credentials,
+            &mut seen,
+            ep_namespace,
+            resource_ref,
+            ctx,
+        );
+    }
+    if !all_credentials.is_empty() {
+        tracing::info!(
+            edgion_plugins = %resource_ref.key(),
+            credential_count = all_credentials.len(),
+            group_count = groups.len(),
+            "HmacAuth: Resolved credentials from Secret groups"
+        );
+        config.resolved_credentials = Some(all_credentials);
+    } else {
+        tracing::warn!(
+            edgion_plugins = %resource_ref.key(),
+            "HmacAuth: No credentials resolved from Secret groups"
+        );
+    }
+}
+
+/// Resolve top-level HMAC plugin credentials.
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     ep: &mut EdgionPlugins,
     resource_ref: &ResourceRef,
@@ -255,42 +297,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     if let Some(ref mut plugins) = ep.spec.request_plugins {
         for entry in plugins.iter_mut() {
             if let EdgionPlugin::HmacAuth(ref mut config) = entry.plugin {
-                config.resolved_credentials = None;
-
-                let Some(ref groups) = config.secret_groups else {
-                    continue;
-                };
-
-                let mut all_credentials: HashMap<String, HmacCredential> = HashMap::new();
-                let mut seen: HashMap<String, String> = HashMap::new();
-
-                for g in groups {
-                    resolve_group(
-                        config,
-                        &g.name,
-                        &g.secret_refs,
-                        &mut all_credentials,
-                        &mut seen,
-                        ep.metadata.namespace.as_ref(),
-                        resource_ref,
-                        ctx,
-                    );
-                }
-
-                if !all_credentials.is_empty() {
-                    tracing::info!(
-                        edgion_plugins = %resource_ref.key(),
-                        credential_count = all_credentials.len(),
-                        group_count = groups.len(),
-                        "HmacAuth: Resolved credentials from Secret groups"
-                    );
-                    config.resolved_credentials = Some(all_credentials);
-                } else {
-                    tracing::warn!(
-                        edgion_plugins = %resource_ref.key(),
-                        "HmacAuth: No credentials resolved from Secret groups"
-                    );
-                }
+                resolve_config(config, ep.metadata.namespace.as_ref(), resource_ref, ctx);
             }
         }
     }

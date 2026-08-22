@@ -672,7 +672,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "EdgionConfigDataManaged" | "edgionconfigdatamanaged" | "data-managed" => {
                 "EdgionPlugins/EdgionConfigDataManaged".to_string()
             }
-            "global-access-control" | "globalaccesscontrol" | "gac" => "EdgionPlugins/GlobalAccessControl".to_string(),
+            "global-access-control" | "globalaccesscontrol" | "gac" => "EdgionPlugins/RequestAccessPolicy".to_string(),
             "global-connection-ip-restriction" | "globalconnectioniprestriction" | "gcir" => {
                 "EdgionPlugins/GlobalConnectionIpRestriction".to_string()
             }
@@ -842,7 +842,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/DynamicExternalUpstream" => "EdgionPlugins",
         "EdgionPlugins/RegionRoute" => "EdgionPlugins",
         "EdgionPlugins/EdgionConfigDataManaged" => "EdgionPlugins",
-        "EdgionPlugins/GlobalAccessControl" => "EdgionPlugins",
+        "EdgionPlugins/RequestAccessPolicy" => "EdgionPlugins",
         "EdgionPlugins/Canary" => "EdgionPlugins",
         "EdgionPlugins/GlobalConnectionIpRestriction" => "EdgionPlugins",
         "EdgionPlugins/GlobalPluginsSnapshot" => "EdgionPlugins",
@@ -1727,12 +1727,12 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::RequestRestrictionTestSuite));
         }
-        "EdgionPlugins/GlobalAccessControl" => {
+        "EdgionPlugins/RequestAccessPolicy" => {
             if !gateway {
-                eprintln!("Error: GlobalAccessControl tests require --gateway flag");
+                eprintln!("Error: RequestAccessPolicy tests require --gateway flag");
                 std::process::exit(1);
             }
-            runner.add_suite(Box::new(suites::GlobalAccessControlTestSuite));
+            runner.add_suite(Box::new(suites::RequestAccessPolicyTestSuite));
         }
         "EdgionPlugins/Canary" => {
             if !gateway {

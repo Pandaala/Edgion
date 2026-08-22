@@ -236,7 +236,7 @@ not in-process checks.
 - **Canon**: `edgion-resources/src/matcher/ip_radix_tree/` (+
   `edgion-resources/src/matcher/ip_cidr_helpers.rs`).
 - **Consumers**: http/stream ip_restriction, global_connection_ip_restriction,
-  tls_route IP restriction, global_access_control, real-IP trusted-proxy
+  tls_route IP restriction, request_access_policy, real-IP trusted-proxy
   matching, edgion_config_data.
 - **Rule**: IP allow/deny matching MUST use the radix tree; no linear
   `Vec<IpNet>` scans, no second matcher.

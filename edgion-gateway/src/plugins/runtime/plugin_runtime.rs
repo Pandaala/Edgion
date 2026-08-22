@@ -49,7 +49,6 @@ use crate::plugins::http::fault_injection::FaultInjection;
 use crate::plugins::http::form_json_transform::FormJsonTransform;
 use crate::plugins::http::forward_auth::ForwardAuth;
 use crate::plugins::http::geoip_location::GeoIpLocation;
-use crate::plugins::http::global_access_control::GlobalAccessControl;
 use crate::plugins::http::guardrail::Guardrail;
 use crate::plugins::http::header_cert_auth::HeaderCertAuth;
 use crate::plugins::http::hmac_auth::HmacAuth;
@@ -66,6 +65,7 @@ use crate::plugins::http::rate_limit::RateLimit;
 use crate::plugins::http::rate_limit_redis::RateLimitRedis;
 use crate::plugins::http::real_ip::RealIp;
 use crate::plugins::http::region_route::RegionRoute;
+use crate::plugins::http::request_access_policy::RequestAccessPolicy;
 use crate::plugins::http::request_body_buffer::RequestBodyBuffer;
 use crate::plugins::http::request_mirror::RequestMirrorPlugin;
 use crate::plugins::http::request_restriction::RequestRestriction;
@@ -1354,8 +1354,8 @@ impl PluginRuntime {
             EdgionPlugin::Cors(config) => CreateResult::Ok(Some(Box::new(Cors::new(config)))),
             EdgionPlugin::Csrf(config) => CreateResult::Ok(Some(Box::new(Csrf::new(config)))),
             EdgionPlugin::IpRestriction(config) => CreateResult::Ok(Some(IpRestriction::create(config, namespace))),
-            EdgionPlugin::GlobalAccessControl(config) => {
-                CreateResult::Ok(Some(GlobalAccessControl::create(config, namespace)))
+            EdgionPlugin::RequestAccessPolicy(config) => {
+                CreateResult::Ok(Some(RequestAccessPolicy::create(config, namespace)))
             }
             EdgionPlugin::GeoIpLocation(config) => CreateResult::Ok(Some(GeoIpLocation::create(config))),
             EdgionPlugin::Canary(config) => CreateResult::Ok(Some(Canary::create(config, namespace))),
@@ -1470,7 +1470,7 @@ impl PluginRuntime {
             | EdgionPlugin::Guardrail(_)
             | EdgionPlugin::AiGuard(_)
             | EdgionPlugin::RegionRoute(_)
-            | EdgionPlugin::GlobalAccessControl(_)
+            | EdgionPlugin::RequestAccessPolicy(_)
             | EdgionPlugin::GeoIpLocation(_)
             | EdgionPlugin::Canary(_) => CreateResult::WrongStage,
         }
@@ -1530,7 +1530,7 @@ impl PluginRuntime {
             | EdgionPlugin::Dsl(_)
             | EdgionPlugin::RegionRoute(_)
             | EdgionPlugin::TraceContext(_)
-            | EdgionPlugin::GlobalAccessControl(_)
+            | EdgionPlugin::RequestAccessPolicy(_)
             | EdgionPlugin::Canary(_)
             | EdgionPlugin::AiGuard(_)
             | EdgionPlugin::GeoIpLocation(_)
@@ -1588,7 +1588,7 @@ impl PluginRuntime {
             | EdgionPlugin::Guardrail(_)
             | EdgionPlugin::AiGuard(_)
             | EdgionPlugin::RegionRoute(_)
-            | EdgionPlugin::GlobalAccessControl(_)
+            | EdgionPlugin::RequestAccessPolicy(_)
             | EdgionPlugin::Canary(_)
             | EdgionPlugin::GeoIpLocation(_)
             | EdgionPlugin::Dsl(_) => CreateResult::WrongStage,
@@ -1607,7 +1607,7 @@ impl PluginRuntime {
             EdgionPlugin::Cors(_) => "Cors",
             EdgionPlugin::Csrf(_) => "Csrf",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
-            EdgionPlugin::GlobalAccessControl(_) => "GlobalAccessControl",
+            EdgionPlugin::RequestAccessPolicy(_) => "RequestAccessPolicy",
             EdgionPlugin::GeoIpLocation(_) => "GeoIpLocation",
             EdgionPlugin::Canary(_) => "Canary",
             EdgionPlugin::JwtAuth(_) => "JwtAuth",

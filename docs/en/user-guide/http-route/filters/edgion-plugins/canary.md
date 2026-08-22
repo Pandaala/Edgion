@@ -262,6 +262,6 @@ curl -H "Host: canary-test.example.com" http://<gateway>/  # upstream sees X-Can
 ## Related Docs
 
 - [Dynamic Upstream](./dynamic-upstream.md) — per-request upstream selection driven by request metadata
-- [Global Access Control](./global-access-control.md) — the plugin Canary's Selector fail-to-base logic mirrors
+- [Request Access Policy](./request-access-policy.md) — another plugin that supports Selector-based profiles
 - [Backend Weight](../../backends/weight.md) — percentage-based traffic splitting
 - [Filters Overview](../overview.md)

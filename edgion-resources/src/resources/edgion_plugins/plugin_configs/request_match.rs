@@ -1,9 +1,7 @@
 //! Shared request-attribute match primitives.
 //!
-//! These predicate types are shared by the `request_restriction` plugin and the
-//! `global_access_control` plugin so their header/cookie/query/path/method/referer
-//! matching semantics cannot drift. The grouping/polarity types (`RuleGroup`,
-//! `RestrictionMode`, `RequestRestrictionConfig`) stay in `request_restriction`.
+//! These predicate types are owned by `request_restriction`. RequestAccessPolicy
+//! uses the canonical `KeyGet`/`KeyMatchCondition` condition model instead.
 
 use regex::Regex;
 use schemars::JsonSchema;
@@ -65,23 +63,6 @@ pub struct RestrictionRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub compiled_regex: Option<Regex>,
-
-    /// Reference to a K8s Secret supplying expected match value(s). Resolved by the
-    /// controller into `resolved_secret_values`. Use for credential-bearing headers
-    /// (e.g. a CDN-injected origin secret) so the value is not stored inline in the CR.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret_ref: Option<crate::resources::gateway::SecretObjectReference>,
-
-    /// Controller-resolved expected value(s) from `secret_ref`. Runtime-only:
-    /// hidden from the CRD schema and redacted on the admin API, but shipped to the
-    /// gateway via conf_sync. Matched as exact, case-sensitive (secrets are never folded).
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::redact::redact_opt::serialize"
-    )]
-    #[schemars(skip)]
-    pub resolved_secret_values: Option<Vec<String>>,
 }
 
 /// Data source for a restriction predicate.
@@ -156,8 +137,6 @@ impl Default for RestrictionRule {
             san_type: None,
             values_set: None,
             compiled_regex: None,
-            secret_ref: None,
-            resolved_secret_values: None,
         }
     }
 }
@@ -253,13 +232,6 @@ impl RestrictionRule {
             }
         }
 
-        if let Some(secrets) = &self.resolved_secret_values {
-            // Exact, case-sensitive: a credential must match byte-for-byte.
-            if secrets.iter().any(|s| s == value) {
-                return true;
-            }
-        }
-
         false
     }
 
@@ -333,11 +305,10 @@ impl RestrictionRule {
                 rule_name
             ));
         }
-        // A secret_ref supplies the match set at resolution time, so it counts as a match source.
-        let has_match = self.values.is_some() || self.regex.is_some() || self.secret_ref.is_some();
+        let has_match = self.values.is_some() || self.regex.is_some();
         if !has_match && self.on_missing != OnMissing::Match {
             return Some(format!(
-                "rule '{}': at least one of 'values', 'regex', or 'secretRef' must be specified (unless onMissing is Match)",
+                "rule '{}': at least one of 'values' or 'regex' must be specified (unless onMissing is Match)",
                 rule_name
             ));
         }
@@ -570,41 +541,6 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(r.evaluate(None), Some(true));
-    }
-
-    #[test]
-    fn matches_resolved_secret_values_exact_case_sensitive() {
-        let mut r = RestrictionRule {
-            source: RestrictionSource::Header,
-            key: Some("X-CF-Secret".into()),
-            ..Default::default()
-        };
-        // Simulate controller resolution.
-        r.resolved_secret_values = Some(vec!["s3cr3t-TOKEN".into()]);
-        r.compile().unwrap();
-        assert_eq!(r.evaluate(Some("s3cr3t-TOKEN")), Some(true));
-        // Secrets are matched case-sensitively, never folded.
-        assert_eq!(r.evaluate(Some("s3cr3t-token")), Some(false));
-        assert_eq!(r.evaluate(Some("nope")), Some(false));
-    }
-
-    #[test]
-    fn secret_ref_only_rule_is_field_valid() {
-        // A rule with only secret_ref (no inline values/regex) must pass field validation;
-        // the expected value arrives at resolution time.
-        use crate::resources::gateway::SecretObjectReference;
-        let r = RestrictionRule {
-            source: RestrictionSource::Header,
-            key: Some("X-CF-Secret".into()),
-            secret_ref: Some(SecretObjectReference {
-                name: "cf-origin-secret".into(),
-                group: None,
-                kind: None,
-                namespace: None,
-            }),
-            ..Default::default()
-        };
-        assert_eq!(r.field_error(), None);
     }
 
     #[test]

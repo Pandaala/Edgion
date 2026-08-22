@@ -215,7 +215,7 @@ spec:
                           - ExtProc
                           - Guardrail
                           - AiGuard
-                          - GlobalAccessControl
+                          - RequestAccessPolicy
                           - GeoIpLocation
                           - Canary
                           - Wasm

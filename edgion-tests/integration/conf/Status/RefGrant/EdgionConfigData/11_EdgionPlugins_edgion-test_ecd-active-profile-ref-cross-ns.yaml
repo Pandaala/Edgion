@@ -1,4 +1,4 @@
-# EdgionPlugins in edgion-test: GlobalAccessControl with a cross-ns activeProfileRef.
+# EdgionPlugins in edgion-test: RequestAccessPolicy with a cross-ns activeProfileRef.
 #
 # activeProfileRef points to 'ecd-active-selector' in edgion-default (type: Selector).
 # No ReferenceGrant exists in edgion-default granting access from edgion-test.
@@ -6,8 +6,7 @@
 # Expected controller status: ResolvedRefs=False(RefNotPermitted).
 # Scenario I-2b (active_profile_ref_no_grant_ref_not_permitted) uses this resource.
 #
-# Data-plane behavior when ref_denied: fail-to-base (active_profile field is used).
-# That behavior is verified by Task 7 gateway unit tests, not here.
+# Data-plane behavior when ref_denied is fail-closed.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -16,14 +15,19 @@ metadata:
 spec:
   requestPlugins:
     - enable: true
-      type: GlobalAccessControl
+      type: RequestAccessPolicy
       config:
-        enable: true
-        activeProfile: "normal"
+        defaultProfile: "normal"
         profiles:
           normal:
-            defaultAction: allow
-            ruleGroups: []
+            defaultAction: deny
+            sourceMatch:
+              directPeerIp:
+                ipRules:
+                  - ips:
+                      inline:
+                        - name: internal
+                          cidrs: ["10.0.0.0/8"]
         activeProfileRef:
           name: ecd-active-selector
           namespace: edgion-default

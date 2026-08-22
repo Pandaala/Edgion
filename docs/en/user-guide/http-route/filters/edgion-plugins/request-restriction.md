@@ -118,7 +118,7 @@ In addition to request attributes, the plugin can match on **post-authentication
 - Values are read from the **verified** JWT claims stored in the request context by an upstream auth plugin: `jwt_auth` writes `jwt_claims`, `openid_connect` writes `oidc_claims`. Lookup precedence is `jwt_claims` then `oidc_claims`: whichever blob is present is used in full — there is no per-claim fallback to the other blob.
 - **Plugin-chain ordering requirement.** The authenticating plugin (`jwt_auth` or `openid_connect`) must run **earlier in the chain** with `store_claims_in_ctx: true`. Otherwise no claims are in context and the `JwtClaim` source is always **missing** (→ `onMissing`).
 
-> **Out of scope: source IP / CIDR.** This plugin does not match on client IP or CIDR — use `IpRestriction` or `GlobalAccessControl` for that. For the same reason `sanType` deliberately omits `IP`.
+> **Out of scope: source IP / CIDR.** This plugin does not match on client IP or CIDR — use `IpRestriction` or `RequestAccessPolicy` for that. For the same reason `sanType` deliberately omits `IP`.
 
 ### Matching Methods
 

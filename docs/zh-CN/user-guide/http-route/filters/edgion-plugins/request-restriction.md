@@ -129,7 +129,7 @@
 - 取值来自上游认证插件写入请求上下文的**已验证** JWT claim：`jwt_auth` 写入 `jwt_claims`，`openid_connect` 写入 `oidc_claims`。查找优先级为先 `jwt_claims` 后 `oidc_claims`：存在哪一块就整块使用，不会对单个 claim 回退到另一块。
 - **插件链顺序要求。** 认证插件（`jwt_auth` 或 `openid_connect`）必须在链中**更早执行**且设置 `store_claims_in_ctx: true`；否则上下文中没有 claim，`JwtClaim` 数据源始终**缺失**（→ `onMissing`）。
 
-> **超出范围：源 IP / CIDR。** 本插件不匹配客户端 IP 或 CIDR——请改用 `IpRestriction` 或 `GlobalAccessControl`。出于同样原因，`sanType` 有意不提供 `IP`。
+> **超出范围：源 IP / CIDR。** 本插件不匹配客户端 IP 或 CIDR——请改用 `IpRestriction` 或 `RequestAccessPolicy`。出于同样原因，`sanType` 有意不提供 `IP`。
 
 ### 匹配方式说明
 

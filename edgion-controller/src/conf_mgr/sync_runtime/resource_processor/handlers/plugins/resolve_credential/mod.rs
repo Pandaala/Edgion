@@ -13,7 +13,6 @@ mod basic_auth;
 mod csrf;
 mod ext_proc;
 mod forward_auth;
-mod global_access_control;
 mod guardrail;
 mod header_cert_auth;
 mod hmac;
@@ -22,6 +21,7 @@ mod jwt;
 mod key_auth;
 mod ldap_auth;
 mod openid_connect;
+mod request_access_policy;
 mod wasm;
 
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use ai_guard::resolve as resolve_ai_guard;
@@ -29,7 +29,6 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use basic_au
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use csrf::resolve as resolve_csrf;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use ext_proc::resolve as resolve_ext_proc;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use forward_auth::resolve as resolve_forward_auth;
-pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use global_access_control::resolve as resolve_global_access_control;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use guardrail::resolve as resolve_guardrail;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use header_cert_auth::resolve as resolve_header_cert_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use hmac::resolve as resolve_hmac;
@@ -38,6 +37,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use jwt::res
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use key_auth::resolve as resolve_key_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use ldap_auth::resolve as resolve_ldap_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use openid_connect::resolve as resolve_openid_connect;
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use request_access_policy::resolve as resolve_request_access_policy;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use wasm::resolve as resolve_wasm;
 
 /// Read a UTF-8 value from a Secret's `data` map. Returns the first non-empty

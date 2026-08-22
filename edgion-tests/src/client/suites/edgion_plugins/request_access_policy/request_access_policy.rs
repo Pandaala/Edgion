@@ -1,14 +1,14 @@
-// GlobalAccessControl Plugin Test Suite
+// RequestAccessPolicy Plugin Test Suite
 //
 // Covers:
 // - Composite allow: client IP in 127.0.0.0/8 AND correct secret header => 200
 // - Deny when secret header is missing => 403
 // - Deny when secret header has a wrong value => 403
 // - Deny when client IP is outside the configured CIDR (10.0.0.0/8) even with correct header => 403
-// - Access-log decision assertion: allow path records "allow:group=cloudflare"
+// - Access-log decision assertion: allow path records the IP source and rule
 // - Access-log decision assertion: deny path records "deny:no-match"
 //
-// Required conf files (edgion-tests/integration/conf/EdgionPlugins/GlobalAccessControl/):
+// Required conf files (edgion-tests/integration/conf/EdgionPlugins/RequestAccessPolicy/):
 //   01_Secret_edgion-test_gac-origin-secret.yaml
 //   02_EdgionConfigData_edgion-test_gac-selector.yaml
 //   03_EdgionPlugins_edgion-test_gac-lockdown.yaml
@@ -19,7 +19,7 @@ use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
-pub struct GlobalAccessControlTestSuite;
+pub struct RequestAccessPolicyTestSuite;
 
 // ---- Access-log deserialization types (mirrors plugin_condition/conditions.rs) ----
 
@@ -52,7 +52,7 @@ struct PluginLog {
     log: Vec<String>,
 }
 
-impl GlobalAccessControlTestSuite {
+impl RequestAccessPolicyTestSuite {
     // ==================== 1. Allow: in-CIDR AND correct secret ====================
     fn test_allow_in_cidr_and_secret() -> TestCase {
         TestCase::new(
@@ -191,11 +191,11 @@ impl GlobalAccessControlTestSuite {
         )
     }
 
-    // ==================== 5. Access log: allow path records "allow:group=cloudflare" ====================
+    // ==================== 5. Access log: allow path records source and rule ====================
     fn test_access_log_allow_decision() -> TestCase {
         TestCase::new(
             "access_log_allow_decision",
-            "Access log: allow path records allow:group=cloudflare",
+            "Access log: allow path records allow:directPeerIp:cloudflare",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -224,25 +224,25 @@ impl GlobalAccessControlTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => match serde_json::from_value::<AccessLog>(entry.data) {
                                     Ok(access_log) => {
-                                        let gac_log = access_log
+                                        let policy_log = access_log
                                             .stage_logs
                                             .iter()
                                             .flat_map(|stage| &stage.edgion_plugins)
                                             .flat_map(|ep| &ep.logs)
-                                            .find(|log| log.name == "GlobalAccessControl");
+                                            .find(|log| log.name == "RequestAccessPolicy");
 
-                                        match gac_log {
+                                        match policy_log {
                                             Some(log) => {
-                                                if log.log.iter().any(|l| l.contains("allow:group=cloudflare")) {
+                                                if log.log.iter().any(|l| l.contains("allow:directPeerIp:cloudflare")) {
                                                     TestResult::passed_with_message(
                                                         start.elapsed(),
-                                                        "Access log contains allow:group=cloudflare".to_string(),
+                                                        "Access log contains allow:directPeerIp:cloudflare".to_string(),
                                                     )
                                                 } else {
                                                     TestResult::failed(
                                                         start.elapsed(),
                                                         format!(
-                                                            "Expected allow:group=cloudflare in log, got: {:?}",
+                                                            "Expected allow:directPeerIp:cloudflare in log, got: {:?}",
                                                             log.log
                                                         ),
                                                     )
@@ -250,7 +250,7 @@ impl GlobalAccessControlTestSuite {
                                             }
                                             None => TestResult::failed(
                                                 start.elapsed(),
-                                                "GlobalAccessControl plugin log not found in edgion_plugins"
+                                                "RequestAccessPolicy plugin log not found in edgion_plugins"
                                                     .to_string(),
                                             ),
                                         }
@@ -302,14 +302,14 @@ impl GlobalAccessControlTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => match serde_json::from_value::<AccessLog>(entry.data) {
                                     Ok(access_log) => {
-                                        let gac_log = access_log
+                                        let policy_log = access_log
                                             .stage_logs
                                             .iter()
                                             .flat_map(|stage| &stage.edgion_plugins)
                                             .flat_map(|ep| &ep.logs)
-                                            .find(|log| log.name == "GlobalAccessControl");
+                                            .find(|log| log.name == "RequestAccessPolicy");
 
-                                        match gac_log {
+                                        match policy_log {
                                             Some(log) => {
                                                 if log.log.iter().any(|l| l.contains("deny:no-match")) {
                                                     TestResult::passed_with_message(
@@ -325,7 +325,7 @@ impl GlobalAccessControlTestSuite {
                                             }
                                             None => TestResult::failed(
                                                 start.elapsed(),
-                                                "GlobalAccessControl plugin log not found in edgion_plugins"
+                                                "RequestAccessPolicy plugin log not found in edgion_plugins"
                                                     .to_string(),
                                             ),
                                         }
@@ -345,9 +345,9 @@ impl GlobalAccessControlTestSuite {
     }
 }
 
-impl TestSuite for GlobalAccessControlTestSuite {
+impl TestSuite for RequestAccessPolicyTestSuite {
     fn name(&self) -> &str {
-        "GlobalAccessControl Plugin Tests"
+        "RequestAccessPolicy Plugin Tests"
     }
 
     fn test_cases(&self) -> Vec<TestCase> {

@@ -21,7 +21,7 @@ Edgion 提供的 HTTP Route 级别插件，通过 `EdgionPlugins` CRD 配置。
 | [forward-auth.md](forward-auth.md) | 外部认证委托 |
 | [form-json-transform.md](form-json-transform.md) | 在扁平 Form URL 编码与 JSON 之间转换有界请求体 |
 | [ext-proc.md](ext-proc.md) | 经 gRPC 的外部处理（兼容 Envoy ext_proc） |
-| [global-access-control.md](global-access-control.md) | CDN 回源锁定：IP-CIDR + 密钥 header 复合放行规则，支持 profile 热切换 |
+| [request-access-policy.md](request-access-policy.md) | 七层 host/path/IP 访问策略，支持 Secret/HMAC 条件和 profile 热切换 |
 | [header-cert-auth.md](header-cert-auth.md) | 请求头/证书认证 |
 | [hmac-auth.md](hmac-auth.md) | HMAC 签名验证 |
 | [ip-restriction.md](ip-restriction.md) | IP 黑白名单 |

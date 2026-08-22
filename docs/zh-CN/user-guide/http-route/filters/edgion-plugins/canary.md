@@ -262,6 +262,6 @@ curl -H "Host: canary-test.example.com" http://<gateway>/  # 上游会看到 X-C
 ## 相关文档
 
 - [Dynamic Upstream](./dynamic-upstream.md) —— 由请求元数据驱动的按请求上游选择
-- [Global Access Control](./global-access-control.md) —— Canary 的 Selector fail-to-base 逻辑与其保持一致
+- [请求访问策略](./request-access-policy.md) —— 另一个支持 Selector profile 的插件
 - [后端权重](../../backends/weight.md) —— 基于百分比的流量拆分
 - [过滤器总览](../overview.md)

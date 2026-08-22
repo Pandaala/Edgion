@@ -22,7 +22,7 @@ HTTP Route-level plugins provided by Edgion, configured via the `EdgionPlugins` 
 | [forward-auth.md](forward-auth.md) | External authentication delegation |
 | [form-json-transform.md](form-json-transform.md) | Convert bounded request bodies between flat form URL encoding and JSON |
 | [ext-proc.md](ext-proc.md) | External processing over gRPC (Envoy ext_proc compatible) |
-| [global-access-control.md](global-access-control.md) | CDN/origin lockdown: composite IP-CIDR + secret-header allow-list with profile hot-swap |
+| [request-access-policy.md](request-access-policy.md) | L7 host/path/IP access policies with Secret/HMAC conditions and profile hot-swap |
 | [guardrail.md](guardrail.md) | Bounded unary Pass/Replace/Reject decisions for canonical semantic AI SSE windows |
 | [header-cert-auth.md](header-cert-auth.md) | Header/certificate authentication |
 | [hmac-auth.md](hmac-auth.md) | HMAC signature verification |

@@ -1,8 +1,8 @@
 //! Shared per-source value extraction for the restriction match engine.
 //!
-//! Both `request_restriction` and `global_access_control` build their candidate
-//! match values through `extract_rule_values`, so the request-attribute and
-//! identity source semantics cannot drift between the two plugins.
+//! `request_restriction` builds its candidate match values through
+//! `extract_rule_values`; the implementation stays centralized here so each
+//! request-identity source has one extraction path.
 
 use crate::plugins::http::common::resolve_claim_path;
 use crate::plugins::runtime::PluginSession;

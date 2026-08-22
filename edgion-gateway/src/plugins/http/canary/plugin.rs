@@ -1,10 +1,10 @@
 //! Canary runtime plugin (L7 request stage).
 //!
 //! Resolves the active profile via the Selector EdgionConfigData store
-//! (fail-to-base, mirrors GlobalAccessControl::resolve_active_profile_name
+//! (fail-to-base, mirrors RequestAccessPolicy::resolve_active_profile_name
 //! exactly, including the ref_denied filter), then jumps 100% of the
 //! request's traffic to that profile's backendRef. Unlike
-//! GlobalAccessControl (which fails OPEN on an unresolvable profile), an
+//! RequestAccessPolicy (which fails OPEN on an unresolvable profile), an
 //! invalid *resolved backend* (not present in the route's backendRefs)
 //! follows the configured `on_invalid` behavior (Reject default / Fallback).
 
@@ -22,7 +22,7 @@ use edgion_resources::HTTPBackendRefKind;
 /// `activeProfileRef`. Returns `None` when no ref is configured OR the ref
 /// was denied by the controller (cross-namespace, no ReferenceGrant) — both
 /// cases must fall back to the base `active_profile`, so they collapse to
-/// the same `None` (mirrors `GlobalAccessControl::create` exactly). Extracted
+/// the same `None` (mirrors `RequestAccessPolicy::create` exactly). Extracted
 /// as a free function so this security-relevant gate (a denied ref must
 /// never resolve to a live store key — cross-namespace authorization bypass
 /// otherwise) is directly unit-testable without downcasting the
@@ -43,7 +43,7 @@ pub struct Canary {
     /// reload). `None` when no selector is configured OR the ref was
     /// denied by the controller (cross-namespace, no ReferenceGrant) —
     /// both cases must use the base `active_profile`, so they collapse to
-    /// the same `None` (mirrors `GlobalAccessControl::create` exactly).
+    /// the same `None` (mirrors `RequestAccessPolicy::create` exactly).
     active_profile_ref_key: Option<String>,
 }
 
@@ -120,8 +120,7 @@ impl RequestFilter for Canary {
             // Unreachable post-validation: resolve_active_profile_name only
             // ever returns a name present in `profiles` (checked inline
             // above) or the parse-time-validated `active_profile`. Fail
-            // open if this invariant ever breaks, mirroring
-            // GlobalAccessControl's "profile missing: fail-open" arm.
+            // open if this Canary invariant ever breaks.
             log.push_err("profile missing: fail-open");
             return PluginRunningResult::GoodNext;
         };
@@ -480,7 +479,7 @@ mod tests {
     /// A denied (`ref_denied: Some`) `active_profile_ref` must not be resolved
     /// as a store key — `resolve_active_profile_ref_key` (the exact function
     /// `Canary::create()` calls to build `active_profile_ref_key`) must apply
-    /// the `.filter(|r| r.ref_denied.is_none())` gate `GlobalAccessControl::create`
+    /// the `.filter(|r| r.ref_denied.is_none())` gate `RequestAccessPolicy::create`
     /// applies too, otherwise a cross-namespace ref the controller explicitly
     /// denied would still take effect at runtime. Unlike a test that hand-builds
     /// a separate `Canary` struct, this calls the very function `create()` uses,

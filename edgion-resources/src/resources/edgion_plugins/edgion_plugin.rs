@@ -9,10 +9,10 @@ use super::plugin_configs::{
     A2aGatewayConfig, AiGuardConfig, AiProxyConfig, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig,
     CanaryConfig, CorsConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig,
     DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig,
-    FormJsonTransformConfig, ForwardAuthConfig, GeoIpLocationConfig, GlobalAccessControlConfig, GuardrailConfig,
-    HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig,
-    JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig,
-    RateLimitRedisConfig, RealIpConfig, RegionRouteConfig, RequestBodyBufferConfig, RequestMirrorPluginConfig,
+    FormJsonTransformConfig, ForwardAuthConfig, GeoIpLocationConfig, GuardrailConfig, HeaderCertAuthConfig,
+    HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig,
+    LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig,
+    RealIpConfig, RegionRouteConfig, RequestAccessPolicyConfig, RequestBodyBufferConfig, RequestMirrorPluginConfig,
     RequestRestrictionConfig, ResponseRewriteConfig, TraceContextConfig, WasmConfig, DEFAULT_INSTANCE_MAX_BYTES,
 };
 use crate::resources::http_route::{HTTPHeaderFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter};
@@ -121,8 +121,8 @@ pub enum EdgionPlugin {
     Guardrail(GuardrailConfig),
     /// Request-side prompt guarding over canonical LLM message spans.
     AiGuard(AiGuardConfig),
-    /// GlobalAccessControl filter (L7 allow-list: IP/CIDR and header/cookie/... composite, OR groups)
-    GlobalAccessControl(GlobalAccessControlConfig),
+    /// L7 access policy with DirectPeerIp/RemoteIp branches and IP-first/URL-first rules.
+    RequestAccessPolicy(RequestAccessPolicyConfig),
     /// GeoIpLocation filter (resolve peer geo; optional deny/allow rule groups over IP/country/continent/city/subdivision)
     GeoIpLocation(GeoIpLocationConfig),
     /// Canary filter (100% traffic to one named backend, switchable via a Selector EdgionConfigData)
@@ -162,6 +162,9 @@ impl EdgionPlugin {
             // HMAC consumes the REQUEST body only, and only when Digest
             // verification is on. Never at the response stage.
             HmacAuth(cfg) if cfg.validate_request_body && stage == BodyStage::Request => {
+                Some(BodyRequirement::fail_close())
+            }
+            RequestAccessPolicy(cfg) if cfg.validates_request_body() && stage == BodyStage::Request => {
                 Some(BodyRequirement::fail_close())
             }
             ForwardAuth(cfg) if cfg.forward_body && stage == BodyStage::Request => Some(BodyRequirement::fail_close()),
@@ -260,7 +263,7 @@ impl EdgionPlugin {
             | Guardrail(_)
             | AiGuard(_)
             | Dsl(_)
-            | GlobalAccessControl(_)
+            | RequestAccessPolicy(_)
             | Canary(_)
             | GeoIpLocation(_)
             | Wasm(_) => None,
@@ -326,7 +329,7 @@ impl EdgionPlugin {
             EdgionPlugin::ExtProc(_) => "ExtProc",
             EdgionPlugin::Guardrail(_) => "Guardrail",
             EdgionPlugin::AiGuard(_) => "AiGuard",
-            EdgionPlugin::GlobalAccessControl(_) => "GlobalAccessControl",
+            EdgionPlugin::RequestAccessPolicy(_) => "RequestAccessPolicy",
             EdgionPlugin::GeoIpLocation(_) => "GeoIpLocation",
             EdgionPlugin::Canary(_) => "Canary",
             EdgionPlugin::Wasm(_) => "Wasm",
@@ -393,7 +396,7 @@ impl EdgionPlugin {
             | EdgionPlugin::TraceContext(_)
             | EdgionPlugin::Guardrail(_)
             | EdgionPlugin::AiGuard(_)
-            | EdgionPlugin::GlobalAccessControl(_)
+            | EdgionPlugin::RequestAccessPolicy(_)
             | EdgionPlugin::GeoIpLocation(_) => &[],
         }
     }
@@ -450,7 +453,7 @@ impl EdgionPlugin {
             | EdgionPlugin::TraceContext(_)
             | EdgionPlugin::Guardrail(_)
             | EdgionPlugin::AiGuard(_)
-            | EdgionPlugin::GlobalAccessControl(_)
+            | EdgionPlugin::RequestAccessPolicy(_)
             | EdgionPlugin::GeoIpLocation(_) => "",
         }
     }
@@ -539,7 +542,7 @@ impl EdgionPlugin {
             | EdgionPlugin::ExtProc(_)
             | EdgionPlugin::Guardrail(_)
             | EdgionPlugin::AiGuard(_)
-            | EdgionPlugin::GlobalAccessControl(_)
+            | EdgionPlugin::RequestAccessPolicy(_)
             | EdgionPlugin::Canary(_)
             | EdgionPlugin::GeoIpLocation(_)
             | EdgionPlugin::Wasm(_) => Vec::new(),
@@ -591,7 +594,7 @@ impl EdgionPlugin {
             EdgionPlugin::ExtProc(c) => c.validation_error(),
             EdgionPlugin::Guardrail(c) => c.validation_error(),
             EdgionPlugin::AiGuard(c) => c.validation_error(),
-            EdgionPlugin::GlobalAccessControl(c) => c.validation_error(),
+            EdgionPlugin::RequestAccessPolicy(c) => c.validation_error(),
             EdgionPlugin::GeoIpLocation(c) => c.validation_error(),
             EdgionPlugin::Canary(c) => c.validation_error(),
             EdgionPlugin::Wasm(c) => c.validation_error(),
@@ -707,47 +710,77 @@ mod ai_proxy_variant_tests {
 }
 
 #[cfg(test)]
-mod global_access_control_variant_tests {
+mod request_access_policy_variant_tests {
     use super::*;
-    use crate::resources::edgion_plugins::plugin_configs::GlobalAccessControlConfig;
+    use crate::resources::edgion_plugins::plugin_configs::RequestAccessPolicyConfig;
 
     #[test]
     fn type_name_and_tag_roundtrip() {
         let json = serde_json::json!({
-            "type": "GlobalAccessControl",
+            "type": "RequestAccessPolicy",
             "config": {
-                "enable": true,
-                "activeProfile": "normal",
-                "profiles": { "normal": { "defaultAction": "allow", "ruleGroups": [] } }
+                "defaultProfile": "normal",
+                "profiles": {
+                    "normal": {
+                        "defaultAction": "deny",
+                        "sourceMatch": {
+                            "directPeerIp": {
+                                "ipRules": [{
+                                    "ips": { "inline": [{ "name": "internal", "cidrs": ["10.0.0.0/8"] }] }
+                                }]
+                            }
+                        }
+                    }
+                }
             }
         });
         let p: EdgionPlugin = serde_json::from_value(json).unwrap();
-        assert_eq!(p.type_name(), "GlobalAccessControl");
-        assert!(matches!(p, EdgionPlugin::GlobalAccessControl(_)));
+        assert_eq!(p.type_name(), "RequestAccessPolicy");
+        assert!(matches!(p, EdgionPlugin::RequestAccessPolicy(_)));
         // validation_error delegates to the config.
         assert!(p.validation_error().is_none());
     }
 
     #[test]
-    fn validation_error_surfaces_bad_active_profile() {
-        let cfg = GlobalAccessControlConfig {
-            enable: true,
-            active_profile: "ghost".into(),
+    fn validation_error_surfaces_bad_default_profile() {
+        let cfg = RequestAccessPolicyConfig {
+            default_profile: "ghost".into(),
             profiles: std::collections::HashMap::from([(
                 "normal".to_string(),
-                crate::resources::edgion_plugins::plugin_configs::AllowProfile {
-                    default_action: crate::resources::edgion_plugins::plugin_configs::DefaultAction::Allow,
-                    rule_groups: vec![],
+                crate::resources::edgion_plugins::plugin_configs::RequestAccessProfile {
+                    default_action: crate::resources::edgion_plugins::plugin_configs::DefaultAction::Deny,
+                    source_match: crate::resources::edgion_plugins::plugin_configs::IpSourceMatch {
+                        operator: crate::resources::edgion_plugins::plugin_configs::SourceOperator::Any,
+                        direct_peer_ip: Some(crate::resources::edgion_plugins::plugin_configs::SourceRules {
+                            ip_rules: vec![crate::resources::edgion_plugins::plugin_configs::IpFirstRule {
+                                name: None,
+                                ips: crate::resources::edgion_plugins::plugin_configs::AccessIpSet {
+                                    inline: vec![crate::resources::edgion_config_data::IpGroup {
+                                        name: "internal".to_string(),
+                                        description: None,
+                                        cidrs: vec!["10.0.0.0/8".to_string()],
+                                    }],
+                                    ..Default::default()
+                                },
+                                any_of: None,
+                            }],
+                            url_rules: vec![],
+                        }),
+                        remote_ip: None,
+                    },
                 },
             )]),
             description: None,
             active_profile_ref: None,
             status: 403,
             message: None,
+<<<<<<< Updated upstream
             ip_source: crate::resources::edgion_plugins::plugin_configs::IpSource::DirectPeerIp,
+=======
+>>>>>>> Stashed changes
         };
-        let p = EdgionPlugin::GlobalAccessControl(cfg);
-        assert!(p.validation_error().unwrap().contains("activeProfile"));
+        let p = EdgionPlugin::RequestAccessPolicy(cfg);
+        assert!(p.validation_error().unwrap().contains("defaultProfile"));
     }
 }
 
