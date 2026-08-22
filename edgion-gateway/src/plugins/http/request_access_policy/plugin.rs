@@ -284,8 +284,8 @@ impl RuntimeProfile {
     }
 
     async fn allows(&self, session: &mut dyn PluginSession) -> Option<String> {
-        let direct_ip = session.client_addr().parse::<IpAddr>().ok();
-        let remote_ip = session.remote_addr().parse::<IpAddr>().ok();
+        let direct_ip = session.direct_peer_ip().parse::<IpAddr>().ok();
+        let remote_ip = session.remote_ip().parse::<IpAddr>().ok();
         match self.operator {
             SourceOperator::Any => {
                 if let Some(source) = &self.direct_peer_ip {
@@ -478,8 +478,8 @@ profiles:
         );
         let plugin = RequestAccessPolicy::create(&config, "default");
         let mut session = MockPluginSession::new();
-        session.expect_client_addr().return_const("192.0.2.10".to_string());
-        session.expect_remote_addr().return_const("198.51.100.10".to_string());
+        session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
+        session.expect_remote_ip().return_const("198.51.100.10".to_string());
         session
             .expect_key_get_local()
             .returning(|_| Some("expected".to_string()));
@@ -518,8 +518,8 @@ profiles:
         );
         let plugin = RequestAccessPolicy::create(&config, "default");
         let mut session = MockPluginSession::new();
-        session.expect_client_addr().return_const("203.0.113.8".to_string());
-        session.expect_remote_addr().return_const("198.51.100.10".to_string());
+        session.expect_direct_peer_ip().return_const("203.0.113.8".to_string());
+        session.expect_remote_ip().return_const("198.51.100.10".to_string());
         session
             .expect_get_path()
             .return_const("/callbacks/acme/events".to_string());
@@ -561,8 +561,8 @@ profiles:
         );
         let plugin = RequestAccessPolicy::create(&config, "default");
         let mut session = MockPluginSession::new();
-        session.expect_client_addr().return_const("192.0.2.10".to_string());
-        session.expect_remote_addr().return_const("198.51.100.10".to_string());
+        session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
+        session.expect_remote_ip().return_const("198.51.100.10".to_string());
         let mut log = PluginLog::new("RequestAccessPolicy");
         assert_eq!(
             plugin.run_request(&mut session, &mut log).await,

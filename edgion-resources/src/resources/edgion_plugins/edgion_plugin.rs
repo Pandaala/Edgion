@@ -774,10 +774,6 @@ mod request_access_policy_variant_tests {
             active_profile_ref: None,
             status: 403,
             message: None,
-<<<<<<< Updated upstream
-            ip_source: crate::resources::edgion_plugins::plugin_configs::IpSource::DirectPeerIp,
-=======
->>>>>>> Stashed changes
         };
         let p = EdgionPlugin::RequestAccessPolicy(cfg);
         assert!(p.validation_error().unwrap().contains("defaultProfile"));

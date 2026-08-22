@@ -2659,15 +2659,8 @@ mod tests {
                 namespace: Some("shared-ns".into()),
                 ..Default::default()
             }),
-<<<<<<< Updated upstream
-            status: 403,
-            message: None,
-            ip_source: IpSource::DirectPeerIp,
-        };
-=======
             None,
         );
->>>>>>> Stashed changes
 
         let mut ep = EdgionPlugins::new("gac-ep", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("team-a".to_string());
@@ -2847,37 +2840,10 @@ mod tests {
                 group: None,
                 kind: None,
                 namespace: None,
-<<<<<<< Updated upstream
-            }),
-            ..Default::default()
-        };
-        let cfg = GlobalAccessControlConfig {
-            enable: true,
-            active_profile: "lockdown".into(),
-            profiles: HashMap::from([(
-                "lockdown".to_string(),
-                AllowProfile {
-                    default_action: DefaultAction::Deny,
-                    rule_groups: vec![AllowRuleGroup {
-                        name: Some("cloudflare".into()),
-                        ip: None,
-                        rules: vec![rule],
-                        ip_matcher: None,
-                    }],
-                },
-            )]),
-            description: None,
-            active_profile_ref: None,
-            status: 403,
-            message: None,
-            ip_source: IpSource::DirectPeerIp,
-        };
-=======
             },
             resolved_values: None,
         });
         let cfg = request_access_policy_config(None, Some(condition));
->>>>>>> Stashed changes
 
         let mut ep = EdgionPlugins::new("origin-lockdown", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".into());
@@ -2919,35 +2885,6 @@ mod tests {
 
         let (ctx, _rt) = make_ctx_with_secrets(HashMap::new());
 
-<<<<<<< Updated upstream
-        let rule = RestrictionRule {
-            source: RestrictionSource::Header,
-            key: Some("X-CF-Secret".into()),
-            values: Some(vec!["inline".into()]),
-            ..Default::default()
-        };
-        let cfg = GlobalAccessControlConfig {
-            enable: true,
-            active_profile: "lockdown".into(),
-            profiles: HashMap::from([(
-                "lockdown".to_string(),
-                AllowProfile {
-                    default_action: DefaultAction::Deny,
-                    rule_groups: vec![AllowRuleGroup {
-                        name: Some("g".into()),
-                        ip: None,
-                        rules: vec![rule],
-                        ip_matcher: None,
-                    }],
-                },
-            )]),
-            description: None,
-            active_profile_ref: None,
-            status: 403,
-            message: None,
-            ip_source: IpSource::DirectPeerIp,
-        };
-=======
         let condition = AccessCondition::SecretMatch(SecretMatchCondition {
             key: KeyGet::Header {
                 name: "X-CF-Secret".into(),
@@ -2961,7 +2898,6 @@ mod tests {
             resolved_values: None,
         });
         let cfg = request_access_policy_config(None, Some(condition));
->>>>>>> Stashed changes
 
         let mut ep = EdgionPlugins::new("p", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".into());
@@ -3089,15 +3025,8 @@ mod tests {
                 namespace: Some("team-b".into()),
                 ..Default::default()
             }),
-<<<<<<< Updated upstream
-            status: 403,
-            message: None,
-            ip_source: IpSource::DirectPeerIp,
-        };
-=======
             None,
         );
->>>>>>> Stashed changes
 
         let mut ep = EdgionPlugins::new("gac-ep", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("team-a".to_string());
@@ -3161,15 +3090,8 @@ mod tests {
                 namespace: None,
                 ..Default::default()
             }),
-<<<<<<< Updated upstream
-            status: 403,
-            message: None,
-            ip_source: IpSource::DirectPeerIp,
-        };
-=======
             None,
         );
->>>>>>> Stashed changes
 
         let mut ep = EdgionPlugins::new("gac-disabled-ep", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
@@ -3283,31 +3205,7 @@ mod tests {
             resolved_values: Some(vec!["OLD-TOKEN".into()]),
         });
 
-<<<<<<< Updated upstream
-        let cfg = GlobalAccessControlConfig {
-            enable: true,
-            active_profile: "lockdown".into(),
-            profiles: HashMap::from([(
-                "lockdown".to_string(),
-                AllowProfile {
-                    default_action: DefaultAction::Deny,
-                    rule_groups: vec![AllowRuleGroup {
-                        name: Some("cloudflare".into()),
-                        ip: None,
-                        rules: vec![rule],
-                        ip_matcher: None,
-                    }],
-                },
-            )]),
-            description: None,
-            active_profile_ref: None,
-            status: 403,
-            message: None,
-            ip_source: IpSource::DirectPeerIp,
-        };
-=======
         let cfg = request_access_policy_config(None, Some(condition));
->>>>>>> Stashed changes
 
         let mut ep = EdgionPlugins::new("p", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".into());
