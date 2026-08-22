@@ -16,7 +16,6 @@ spec:
         attribute: "uid"
         headerType: "ldap"
         realm: "LDAP STARTTLS Test"
-        cacheTtl: 0
         timeout: 5000
         tls:
           validation:

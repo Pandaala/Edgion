@@ -6,6 +6,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+pub const MAX_LRU_CACHE_CAPACITY: usize = 65_536;
+pub const MAX_LRU_CACHE_SHARDS: usize = 64;
+
 /// Reusable LRU cache configuration.
 ///
 /// ## YAML example (inside a plugin config)
@@ -15,9 +18,10 @@ use serde::{Deserialize, Serialize};
 ///   shards: 8
 /// ```
 ///
-/// Both fields default to `0`, which means "use the global
-/// `lru_cache.default_capacity` / `lru_cache.default_shards`".
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+/// When both fields are zero, the plugin inherits the global LRU defaults. A
+/// positive capacity with zero shards selects one shard. Shards cannot be
+/// overridden without also setting capacity.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct LruCacheConfig {
     /// LRU cache capacity (number of entries).
@@ -26,14 +30,26 @@ pub struct LruCacheConfig {
     pub capacity: usize,
 
     /// Number of cache shards to reduce lock contention under high concurrency.
-    /// Default: 0 (uses global `lru_cache.default_shards`).
+    /// Default: 0 (one shard when capacity is explicit; otherwise inherit).
     #[serde(default)]
     pub shards: usize,
 }
 
-impl Default for LruCacheConfig {
-    fn default() -> Self {
-        Self { capacity: 0, shards: 0 }
+impl LruCacheConfig {
+    pub fn validation_error(&self) -> Option<&'static str> {
+        if self.capacity == 0 && self.shards > 0 {
+            return Some("lruCache.capacity is required when shards is configured");
+        }
+        if self.capacity > MAX_LRU_CACHE_CAPACITY {
+            return Some("lruCache.capacity exceeds the safety ceiling");
+        }
+        if self.shards > MAX_LRU_CACHE_SHARDS {
+            return Some("lruCache.shards exceeds the safety ceiling");
+        }
+        if self.capacity > 0 && self.shards > self.capacity {
+            return Some("lruCache.shards must not exceed capacity");
+        }
+        None
     }
 }
 
@@ -67,5 +83,21 @@ mod tests {
         let cfg: LruCacheConfig = serde_json::from_str(r#"{"capacity": 2048, "shards": 4}"#).unwrap();
         assert_eq!(cfg.capacity, 2048);
         assert_eq!(cfg.shards, 4);
+    }
+
+    #[test]
+    fn validation_rejects_unsafe_limits() {
+        assert_eq!(
+            LruCacheConfig {
+                capacity: MAX_LRU_CACHE_CAPACITY + 1,
+                shards: 0,
+            }
+            .validation_error(),
+            Some("lruCache.capacity exceeds the safety ceiling")
+        );
+        assert_eq!(
+            LruCacheConfig { capacity: 4, shards: 5 }.validation_error(),
+            Some("lruCache.shards must not exceed capacity")
+        );
     }
 }

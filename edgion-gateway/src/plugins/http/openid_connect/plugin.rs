@@ -20,13 +20,16 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::Mutex;
 
 use super::error::{map_jwt_decode_error_typed, OidcVerifyError};
 use super::jwks_provider::{DiscoveryDoc, DiscoveryValidator, JwksProvider, JwksProviderConfig, JwksProviderError};
 use super::jwt_common::{resolve_algorithm_policy, select_jwk, validate_token_alg, JwkSelectError};
-use crate::cache::ShardedLruCache;
-use crate::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
+use super::refresh_flight_registry::RefreshFlightRegistry;
+use crate::cache::{LogicalWeight, ShardedLruCache, TinyUfoTtlCache};
+use crate::cli::config::{
+    get_default_lru_cache_capacity, get_default_lru_cache_shards, get_refresh_singleflight_max_registered_keys,
+    resolve_lru_cache_limits, resolve_tiny_ufo_ttl_cache_limits,
+};
 use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
 use crate::plugins::http::common::auth_common::{
     send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers, Claims,
@@ -231,6 +234,13 @@ struct AccessTokenCacheEntry {
     token: String,
 }
 
+impl crate::cache::tiny_ufo::sealed::Sealed for IntrospectionCacheEntry {}
+impl LogicalWeight for IntrospectionCacheEntry {
+    fn logical_weight(&self) -> usize {
+        self.claims.logical_weight()
+    }
+}
+
 /// OpenID Connect request filter plugin.
 pub struct OpenidConnect {
     name: String,
@@ -243,23 +253,19 @@ pub struct OpenidConnect {
     /// the secure default client if the resolver/gate rejects the config.
     pub(super) client: Arc<reqwest::Client>,
     pub(super) jwks_provider: Arc<JwksProvider<DiscoveryDocument>>,
-    introspection_cache: Arc<ShardedLruCache<String, IntrospectionCacheEntry>>,
-    access_token_cache: Arc<ShardedLruCache<String, AccessTokenCacheEntry>>,
-    // Per-key async mutex for the refresh singleflight critical section. Held across `await`,
-    // so the value type must be `tokio::sync::Mutex`. LRU semantics give bounded memory and
-    // age-based eviction. Two non-fatal degradations vs. an atomic `entry().or_insert_with()`:
-    // (1) a TOCTOU between get/insert can briefly produce two locks for the same key, and
-    // (2) LRU eviction can orphan a lock while a waiter is still parked on it. Both collapse
-    // to at most one extra refresh round-trip for that key — the post-lock
-    // `try_get_recent_refresh_result` check still de-dupes whenever the leader's result has
-    // landed before the racing waiter finishes its lock acquire; the worst case is leader
-    // and racing task both completing a refresh in parallel. No session-state corruption.
-    refresh_singleflight_locks: Arc<ShardedLruCache<String, Arc<Mutex<()>>>>,
-    refresh_singleflight_results: Arc<ShardedLruCache<String, OidcSessionCookie>>,
+    introspection_cache: TinyUfoTtlCache<String, IntrospectionCacheEntry>,
+    access_token_cache: ShardedLruCache<String, AccessTokenCacheEntry>,
+    refresh_singleflight: RefreshFlightRegistry,
+    refresh_singleflight_results: ShardedLruCache<String, OidcSessionCookie>,
 }
 
 impl OpenidConnect {
+    #[cfg(test)]
     pub fn new(config: &OpenidConnectConfig, plugin_namespace: String) -> Self {
+        Self::try_new(config, plugin_namespace).expect("test OIDC configuration must build")
+    }
+
+    pub fn try_new(config: &OpenidConnectConfig, plugin_namespace: String) -> Result<Self, String> {
         // Normalize request-path-matched config fields at construction time so that
         // config-side and request-side paths inhabit the same normalized space.
         // See docs/superpowers/specs/2026-04-26-uri-normalization-design.md §3.5.
@@ -288,27 +294,10 @@ impl OpenidConnect {
         };
         let callback_path = normalize_config_path(&raw_callback_path, path_cfg);
 
-        // Extract cache parameters before config is moved into Self.
-        let introspection_capacity = if config.introspection.lru_cache.capacity == 0 {
-            get_default_lru_cache_capacity()
-        } else {
-            config.introspection.lru_cache.capacity
-        };
-        let introspection_shards = if config.introspection.lru_cache.shards > 0 {
-            config.introspection.lru_cache.shards
-        } else {
-            get_default_lru_cache_shards()
-        };
-        let access_token_capacity = if config.access_token.lru_cache.capacity == 0 {
-            get_default_lru_cache_capacity()
-        } else {
-            config.access_token.lru_cache.capacity
-        };
-        let access_token_shards = if config.access_token.lru_cache.shards > 0 {
-            config.access_token.lru_cache.shards
-        } else {
-            get_default_lru_cache_shards()
-        };
+        let introspection_limits = resolve_tiny_ufo_ttl_cache_limits(&config.introspection.tiny_ufo_ttl_cache)?;
+        let (access_token_capacity, access_token_shards) = resolve_lru_cache_limits(&config.access_token.lru_cache)?;
+        let shared_lru_capacity = get_default_lru_cache_capacity();
+        let shared_lru_shards = get_default_lru_cache_shards();
 
         // Build the per-instance outbound client before the jwks_provider block so the
         // client Arc can be cloned into both the provider and stored on Self.
@@ -438,24 +427,18 @@ impl OpenidConnect {
             );
         }
 
-        Self {
+        Ok(Self {
             name: "OpenidConnect".to_string(),
             config,
             callback_path,
             plugin_namespace,
             client: outbound_client,
             jwks_provider,
-            introspection_cache: Arc::new(ShardedLruCache::new(introspection_capacity, introspection_shards)),
-            access_token_cache: Arc::new(ShardedLruCache::new(access_token_capacity, access_token_shards)),
-            refresh_singleflight_locks: Arc::new(ShardedLruCache::new(
-                get_default_lru_cache_capacity(),
-                get_default_lru_cache_shards(),
-            )),
-            refresh_singleflight_results: Arc::new(ShardedLruCache::new(
-                get_default_lru_cache_capacity(),
-                get_default_lru_cache_shards(),
-            )),
-        }
+            introspection_cache: TinyUfoTtlCache::new(introspection_limits).map_err(|e| e.to_string())?,
+            access_token_cache: ShardedLruCache::new(access_token_capacity, access_token_shards),
+            refresh_singleflight: RefreshFlightRegistry::new(get_refresh_singleflight_max_registered_keys())?,
+            refresh_singleflight_results: ShardedLruCache::new(shared_lru_capacity, shared_lru_shards),
+        })
     }
 }
 

@@ -20,22 +20,20 @@ LDAP Auth 插件用于将网关认证委托给企业 LDAP/AD 目录服务。插�
 - 支持自定义认证方案名（`headerType`，如 `ldap` / `basic`）
 - 支持匿名降级（`anonymous`）
 - 支持隐藏凭证头（`hideCredentials`）
-- 支持认证成功缓存（`cacheTtl`）
 - 支持 LDAPS / StartTLS（通过 `ldaps` / `startTls`）
 
 ## 工作流程
 
 1. 读取请求头：先读 `Proxy-Authorization`，再读 `Authorization`
 2. 解析格式：`{headerType} base64(username:password)`
-3. 可选缓存命中：命中则直接放行
-4. 构建 Bind DN：
+3. 构建 Bind DN：
    - 默认：`{attribute}={username},{baseDn}`
    - 模板：`bindDnTemplate` 替换 `{username}`
    - `{username}` 作为 DN 属性值，按 RFC 4514 转义（`, + " \ < > ; =` 等
      特殊字符、开头的 `#`、首尾空格都会被转成 `\HH` 十六进制形式）。因此该
      模板只能描述 DN，不能用作 search filter 模板。
-5. LDAP Simple Bind 校验
-6. 成功后注入上游头并继续转发
+4. LDAP Simple Bind 校验
+5. 成功后注入上游头并继续转发
 
 ## 配置参数
 
@@ -53,7 +51,6 @@ LDAP Auth 插件用于将网关认证委托给企业 LDAP/AD 目录服务。插�
 | `hideCredentials` | Boolean | `false` | 是否移除认证头再转发 |
 | `anonymous` | String | 无 | 匿名用户名（配置后无凭证可放行） |
 | `realm` | String | `API Gateway` | `WWW-Authenticate` realm |
-| `cacheTtl` | Integer | `60` | 认证缓存 TTL（秒），`0` 表示禁用缓存 |
 | `timeout` | Integer | `10000` | LDAP 超时（毫秒） |
 | `keepalive` | Integer | `60000` | 保留字段 |
 | `credentialIdentifierHeader` | String | `X-Credential-Identifier` | 认证用户名透传头 |
@@ -79,6 +76,8 @@ spec:
         attribute: "uid"
         timeout: 3000
 ```
+
+LDAP 认证结果不缓存。每个带凭证的请求都会由权威 LDAP 服务校验。
 
 ## 使用 `headerType: basic` 示例
 
@@ -143,12 +142,10 @@ spec:
 - 生产环境优先使用 `ldaps: true` 或 `startTls: true`
 - 保持 `verify: true`（默认值）；`verify: false` 由运维人员负责，仅应用于测试环境
 - 开启 `hideCredentials: true`，避免凭证透传到上游
-- 设置合理 `cacheTtl`（如 60~300 秒）平衡性能与凭证撤销生效时间
 - 在 LDAP 服务器侧启用账户锁定与防爆破策略
+- 叠加 `RateLimit` 插件，并按受保护请求速率规划 LDAP 服务容量
 
-> **可接受的权衡——缓存命中时延。** 命中缓存的凭证比未命中（需完整 LDAP bind）返回更快。该时延差异仅暴露*缓存状态*（某个完整的 `(username, password)` 是否近期被认证过）；凭证有效性本就由 `200`/`401` 状态码体现，且触发命中的前提是攻击者已掌握完整且有效的凭证。不在命中路径上添加抖动延时——那会拖慢每个合法的已认证请求。若必须隐藏缓存成员信息，可设置 `cacheTtl: 0` 关闭缓存，并叠加 `RateLimit` 插件限制探测频率。
-
-> **可接受的权衡——每请求新建 LDAP 连接。** 每个缓存未命中的鉴权请求都会向 LDAP 服务器新建一条 TCP（必要时附带 TLS）连接，执行 `simple_bind` 后立即 `unbind`。当前实现不引入连接池，原因是 LDAP `simple_bind` 是"会话级重绑定"——一次成功 bind 会改变该 TCP 连接在整个会话期内的认证身份；天真复用连接的池化方案带有跨用户身份泄漏风险，严格弱于它本想缓解的临时端口压力。在高并发部署中，请保持 `cacheTtl` 非零（建议 60~300 秒），让稳态流量被进程内缓存吸收，并叠加 `RateLimit` 限制缓存未命中突发。设置 `cacheTtl: 0` 意味着**每个**请求都会新建一条 LDAP 连接，只有在 LDAP 服务器自身按此负载规划时才应这样配置。
+> **可接受的权衡——每请求新建 LDAP 连接。** 每次认证都会新建一条 TCP（必要时附带 TLS）连接，执行 `simple_bind` 后立即 `unbind`。当前实现不引入连接池，因为 LDAP `simple_bind` 会改变连接的认证身份；不安全的跨用户复用比连接开销更危险。
 
 ## 相关文档
 

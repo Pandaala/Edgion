@@ -14,8 +14,8 @@ use super::lru::{CacheStats, LocalLruCache};
 /// ## Configuration
 ///
 /// - `shard_count = 0` or `1`: sharding disabled (single shard, same as `LocalLruCache`)
-/// - `shard_count > 1`: entries are spread across N shards, each with
-///   `ceil(capacity / shard_count)` slots (minimum 1 per shard)
+/// - `shard_count > 1`: entries are spread across N shards using
+///   quotient/remainder capacities whose sum is exactly `capacity`
 #[derive(Debug)]
 pub struct ShardedLruCache<K, V> {
     shards: Vec<LocalLruCache<K, V>>,
@@ -34,10 +34,16 @@ where
         assert!(capacity > 0, "ShardedLruCache capacity must be greater than 0");
 
         let effective_shards = shard_count.max(1);
-        let per_shard = (capacity + effective_shards - 1) / effective_shards; // ceil division
-        let per_shard = per_shard.max(1);
+        assert!(
+            effective_shards <= capacity,
+            "ShardedLruCache shard count must not exceed capacity"
+        );
+        let base_capacity = capacity / effective_shards;
+        let remainder = capacity % effective_shards;
 
-        let shards = (0..effective_shards).map(|_| LocalLruCache::new(per_shard)).collect();
+        let shards = (0..effective_shards)
+            .map(|index| LocalLruCache::new(base_capacity + usize::from(index < remainder)))
+            .collect();
 
         Self { shards }
     }
@@ -185,19 +191,15 @@ mod tests {
     }
 
     #[test]
-    fn test_capacity_ceil_division() {
-        // 10 entries across 3 shards => 4+4+4 = 12 total capacity (ceil)
+    fn test_capacity_is_exact_across_uneven_shards() {
         let cache: ShardedLruCache<String, i32> = ShardedLruCache::new(10, 3);
         assert_eq!(cache.shard_count(), 3);
-        assert!(cache.capacity() >= 10);
+        assert_eq!(cache.capacity(), 10);
     }
 
     #[test]
-    fn test_small_capacity_with_many_shards() {
-        // 2 entries across 8 shards => each shard gets 1 (minimum)
-        let cache: ShardedLruCache<String, i32> = ShardedLruCache::new(2, 8);
-        assert_eq!(cache.shard_count(), 8);
-        // Each shard has at least 1 slot
-        assert!(cache.capacity() >= 8);
+    #[should_panic(expected = "shard count must not exceed capacity")]
+    fn test_shards_cannot_exceed_capacity() {
+        let _: ShardedLruCache<String, i32> = ShardedLruCache::new(2, 8);
     }
 }

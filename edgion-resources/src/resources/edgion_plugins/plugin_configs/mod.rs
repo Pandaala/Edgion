@@ -44,6 +44,7 @@ mod request_match;
 mod request_mirror;
 mod request_restriction;
 mod response_rewrite;
+mod tiny_ufo_ttl_cache_config;
 mod trace_context;
 mod wasm;
 mod wasm_oci;
@@ -110,7 +111,7 @@ pub use jwt_auth::{JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup, ResolvedJwtCrede
 pub use key_auth::{KeyAuthConfig, KeyAuthSecretGroup, KeyMetadata};
 pub use ldap_auth::LdapAuthConfig;
 pub use linksys_ref::LinkSysRef;
-pub use lru_cache_config::LruCacheConfig;
+pub use lru_cache_config::{LruCacheConfig, MAX_LRU_CACHE_CAPACITY, MAX_LRU_CACHE_SHARDS};
 pub use mock::MockConfig;
 pub use openid_connect::{EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode};
 pub use proxy_rewrite::{
@@ -136,6 +137,10 @@ pub use request_match::{OnMissing, RestrictionRule, RestrictionSource, SanType};
 pub use request_mirror::RequestMirrorPluginConfig;
 pub use request_restriction::{RequestRestrictionConfig, RestrictionMode, RuleGroup};
 pub use response_rewrite::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig};
+pub use tiny_ufo_ttl_cache_config::{
+    validate_tiny_ufo_effective_limits, TinyUfoTtlCacheConfig, MAX_TINY_UFO_CACHE_ENTRIES, MAX_TINY_UFO_LOGICAL_BYTES,
+    TINY_UFO_WEIGHT_UNIT_BYTES,
+};
 pub use trace_context::TraceContextConfig;
 pub use wasm::{
     normalize_callout_origin, normalize_callout_origin_quiet, WasmAuthHeaderSecretRef, WasmConfig, WasmFetchRetry,

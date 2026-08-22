@@ -111,6 +111,17 @@ rate_limit:
   max_estimator_slots_k: 1024     # CMS maximum precision cap
   gateway_instance_count: 1       # Cluster rate limiting: instance count (static fallback when no Controller push)
 
+# ─── OIDC introspection TinyUFO limits ────────────────────────────
+
+tiny_ufo_ttl_cache:
+  default_max_entries: 1024
+  default_max_logical_bytes: 4MiB
+
+# LRU defaults, including OIDC access-token caching.
+lru_cache:
+  default_capacity: 1024
+  default_shards: 0
+
 # ─── Log redaction (replace by default) ────────────────────────────
 
 access_log_sensitive:
@@ -376,6 +387,24 @@ rate_limit:
   max_estimator_slots_k: 1024
   gateway_instance_count: 3   # Running 3 Gateway replicas
 ```
+
+### OIDC Introspection TinyUFO Limits
+
+```yaml
+tiny_ufo_ttl_cache:
+  default_max_entries: 1024
+  default_max_logical_bytes: 4MiB
+```
+
+These process defaults apply when OIDC introspection omits its
+`tinyUfoTtlCache` override. An override must set `maxEntries` and
+`maxLogicalBytes` together. The total logical budget controls TinyUFO record
+weights for one cache instance and is not an exact allocator or RSS limit;
+enforce the Gateway process hard limit with Kubernetes/cgroup memory limits.
+OIDC access-token caching uses the independent `lru_cache` defaults. LDAP
+authentication is never cached.
+Absolute safety ceilings are 65,536 cache entries, 4,194,304 TinyUFO weight
+units (256 MiB of 64-byte logical units). These ceilings are not defaults.
 
 ### Redacting Sensitive Fields in Access Logs
 

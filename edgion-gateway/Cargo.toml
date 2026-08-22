@@ -132,6 +132,7 @@ pingora-limits.workspace = true
 pingora-load-balancing.workspace = true
 pingora-proxy.workspace = true
 pingora-ketama.workspace = true
+tinyufo.workspace = true
 etcd-client.workspace = true
 fred.workspace = true
 

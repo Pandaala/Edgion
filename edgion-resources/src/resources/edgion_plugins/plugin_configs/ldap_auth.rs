@@ -1,6 +1,5 @@
 //! LDAP Auth plugin configuration
 
-use super::lru_cache_config::LruCacheConfig;
 use crate::resources::common::OutboundTlsLocal;
 use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
@@ -86,16 +85,7 @@ pub struct LdapAuthConfig {
     #[serde(default = "default_realm")]
     pub realm: String,
 
-    // === Performance & Caching ===
-    /// Authentication result cache TTL in seconds. 0 disables cache.
-    #[serde(default = "default_cache_ttl")]
-    pub cache_ttl: u64,
-
-    /// LRU cache configuration (capacity and sharding).
-    /// Omit or set fields to 0 to use global defaults.
-    #[serde(default)]
-    pub lru_cache: LruCacheConfig,
-
+    // === Connection Behavior ===
     /// LDAP connect/bind timeout in milliseconds
     #[serde(default = "default_timeout")]
     pub timeout: u64,
@@ -124,10 +114,6 @@ fn default_header_type() -> String {
 
 fn default_realm() -> String {
     "API Gateway".to_string()
-}
-
-fn default_cache_ttl() -> u64 {
-    60
 }
 
 fn default_timeout() -> u64 {
@@ -164,8 +150,6 @@ impl Default for LdapAuthConfig {
             auth_failure_delay_ms: 0,
             anonymous: None,
             realm: default_realm(),
-            cache_ttl: default_cache_ttl(),
-            lru_cache: LruCacheConfig::default(),
             timeout: default_timeout(),
             keepalive: default_keepalive(),
             credential_identifier_header: default_credential_identifier_header(),
@@ -216,6 +200,7 @@ impl PluginValidation for LdapAuthConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_default_config() {
@@ -230,7 +215,6 @@ mod tests {
         assert!(cfg.resolved_client_certificate.is_none());
         assert_eq!(cfg.header_type, "ldap");
         assert_eq!(cfg.realm, "API Gateway");
-        assert_eq!(cfg.cache_ttl, 60);
         assert_eq!(cfg.timeout, 10_000);
         assert_eq!(cfg.credential_identifier_header, "X-Credential-Identifier");
         assert_eq!(cfg.anonymous_header, "X-Anonymous-Consumer");
@@ -274,9 +258,24 @@ mod tests {
     }
 
     #[test]
-    fn test_ldap_auth_cache_capacity_default_zero() {
-        let cfg = LdapAuthConfig::default();
-        assert_eq!(cfg.lru_cache.capacity, 0, "0 means use global default");
+    fn ldap_cache_fields_are_not_part_of_the_schema() {
+        let schema = schemars::schema_for!(LdapAuthConfig);
+        let value = json!({
+            "ldapHost": "ldap.example.com",
+            "baseDn": "dc=example,dc=com",
+            "attribute": "uid",
+            "cacheTtl": 60,
+            "lruCache": {"capacity": 512, "shards": 4},
+            "memoryCache": {"maxEntries": 512}
+        });
+        assert_eq!(
+            crate::schema_check::unknown_key_paths(&value, &schema),
+            vec![
+                "cacheTtl".to_string(),
+                "lruCache".to_string(),
+                "memoryCache".to_string(),
+            ]
+        );
     }
 
     #[test]

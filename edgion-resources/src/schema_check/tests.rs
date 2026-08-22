@@ -544,6 +544,8 @@ fn config_data_generated_schema_keeps_only_misc_open() {
         .as_array()
         .expect("ConfigEntry must remain an adjacent-tagged oneOf");
     assert_eq!(branches.len(), 6);
+    let mut saw_misc = false;
+    let mut typed_branches = 0usize;
 
     for branch in branches {
         let variant = branch["properties"]["type"]["const"]
@@ -551,14 +553,21 @@ fn config_data_generated_schema_keeps_only_misc_open() {
             .expect("each ConfigEntry branch must pin its discriminator");
         let config = &branch["properties"]["config"];
         if variant == "Misc" {
+            saw_misc = true;
             assert_eq!(config, &json!(true), "Misc.config must remain unconstrained");
         } else {
+            typed_branches += 1;
             assert!(
                 config.get("$ref").and_then(serde_json::Value::as_str).is_some(),
                 "typed {variant}.config must remain schema-backed, got {config}"
             );
         }
     }
+    assert!(saw_misc, "ConfigEntry must retain its Misc escape hatch");
+    assert!(
+        typed_branches > 0,
+        "ConfigEntry must retain schema-backed typed variants"
+    );
 }
 
 #[test]

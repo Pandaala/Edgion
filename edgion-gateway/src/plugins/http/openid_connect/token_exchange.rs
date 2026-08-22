@@ -46,7 +46,9 @@ impl OpenidConnect {
             return None;
         }
         // Expiry (including clock_skew) was baked into TTL at insert time — no manual check needed.
-        self.access_token_cache.get(&session_ref.to_string()).map(|e| e.token)
+        self.access_token_cache
+            .get(&session_ref.to_string())
+            .map(|entry| entry.token)
     }
 
     pub(super) async fn remove_cached_access_token(&self, session_ref: &str) {
@@ -386,25 +388,7 @@ impl OpenidConnect {
         Ok(session_cookie.access_token.clone())
     }
 
-    pub(super) async fn get_or_create_refresh_lock(&self, lock_key: &str) -> Arc<Mutex<()>> {
-        // ShardedLruCache has no entry/get_or_insert_with API, so this is best-effort
-        // get-or-insert: under a true concurrent miss two callers can each insert their
-        // own lock and the last writer wins. The leader's lock is then orphaned and the
-        // two refreshes proceed in parallel — the second waiter's `try_get_recent_refresh_result`
-        // double-check after acquiring its own lock still de-dupes via the results cache,
-        // and worst case is one extra refresh round-trip for that key.
-        if let Some(existing) = self.refresh_singleflight_locks.get(&lock_key.to_string()) {
-            return existing;
-        }
-        let new_lock = Arc::new(Mutex::new(()));
-        self.refresh_singleflight_locks
-            .insert(lock_key.to_string(), new_lock.clone(), None);
-        new_lock
-    }
-
     pub(super) async fn try_get_recent_refresh_result(&self, lock_key: &str) -> Option<OidcSessionCookie> {
-        // Freshness window is owned by the cache TTL (see `put_refresh_result`); LRU
-        // lazy-expires entries past the window on read, no manual elapsed-check needed.
         self.refresh_singleflight_results.get(&lock_key.to_string())
     }
 
@@ -418,9 +402,9 @@ impl OpenidConnect {
         lock_key: &str,
         session_cookie: &mut OidcSessionCookie,
     ) -> VerifyResult<String> {
-        let lock = self.get_or_create_refresh_lock(lock_key).await;
+        let flight = self.refresh_singleflight.get_or_create(lock_key);
         let wait_timeout = Duration::from_secs(self.config.timeout);
-        let _guard = match tokio::time::timeout(wait_timeout, lock.lock()).await {
+        let _guard = match tokio::time::timeout(wait_timeout, flight.lock().lock()).await {
             Ok(guard) => guard,
             Err(_) => {
                 if let Some(cached_payload) = self.try_get_recent_refresh_result(lock_key).await {

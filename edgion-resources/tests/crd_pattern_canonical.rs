@@ -1,7 +1,7 @@
 //! Canonical-pattern drift guard for the hand-written edgion CRDs.
 //!
 //! The CRD YAML under `config/crd/edgion-crd/` cannot reference the Rust
-//! constants in `edgion_resources::gwapi_types` / `duration`, so inline regex
+//! constants in `edgion_resources`, so inline regex
 //! `pattern:` constraints could silently drift from the canonical grammars.
 //! This test parses every committed edgion CRD and asserts each regex pattern
 //! is byte-for-byte one of the shared constants. A legitimately new grammar
@@ -47,6 +47,11 @@ fn edgion_crd_patterns_are_canonical() {
         edgion_resources::gwapi_types::PRECISE_HOSTNAME_PATTERN,
         edgion_resources::gwapi_types::HEADER_NAME_PATTERN,
         edgion_resources::gwapi_types::GROUP_NAME_PATTERN,
+        edgion_resources::resources::edgion_backend::AI_CREDENTIAL_ALIAS_PATTERN,
+        edgion_resources::resources::edgion_backend::AI_REDIS_REF_PATTERN,
+        edgion_resources::resources::edgion_backend::AI_PRICE_PATTERN,
+        edgion_resources::resources::edgion_backend::A2A_SERVICE_NAME_PATTERN,
+        edgion_resources::resources::edgion_backend::KUBE_DNS_LABEL_PATTERN,
     ];
 
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../config/crd/edgion-crd");
@@ -77,7 +82,7 @@ fn edgion_crd_patterns_are_canonical() {
     assert!(
         violations.is_empty(),
         "non-canonical regex pattern(s) in edgion CRDs — every schema `pattern:` must equal one \
-         of the shared constants in edgion_resources::gwapi_types / duration. Offending:\n{}",
+         of the shared constants in edgion_resources. Offending:\n{}",
         violations.join("\n")
     );
 }

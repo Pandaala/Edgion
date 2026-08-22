@@ -282,6 +282,15 @@ whether the feature needs incremental bytes or one complete document.
 One canonical implementation per cross-cutting mechanism — violating any line below is a bug.
 Details, verified consumer lists, and exemptions: `skills/01-architecture/00-common/05-unification-points.md`.
 
+### In-process cache selection
+
+Edgion currently has two shared in-process cache implementations. Choose by semantics, not preference:
+
+- Use `ShardedLruCache` when a caller needs explicit removal/invalidation or strict replacement behavior.
+- Use Pingora's unchanged `TinyUfo` through `TinyUfoTtlCache` only for high-cardinality, admission-friendly data where eviction is acceptable and no per-key deletion is required. Its currently approved use is positive OIDC introspection results.
+
+Do not add another cache implementation or broaden TinyUFO usage without documenting why these two cannot satisfy the required semantics.
+
 1. Outbound HTTP clients are built via `build_outbound_client` (`edgion-common/src/link_sys_core/http_client.rs`); a bare `reqwest::Client::builder()` outside tests is a bug.
 2. Outbound TLS (CA/mTLS/verify) resolves through `resolve_outbound_tls` — including non-reqwest dialers (tonic/ldap3/fred/rskafka).
 3. A new egress path with a config- or request-influenced destination uses `EgressResolver` (or at minimum `classify_ip`) at dial time, disables proxy-env pickup, and denies redirects unless per-hop re-checked.

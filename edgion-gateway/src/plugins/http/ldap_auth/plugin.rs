@@ -1,18 +1,7 @@
 //! LDAP Authentication plugin implementation
 
-use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
-use base64::{engine::general_purpose, Engine as _};
-use bytes::Bytes;
-use ldap3::{LdapConnAsync, LdapConnSettings};
-use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
-use rustls::{ClientConfig, RootCertStore};
-use sha2::{Digest, Sha256};
-
-use crate::cache::ShardedLruCache;
-use crate::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::observe::metrics::registry::{record_ldap_auth_error, record_outbound_tls_san_mismatch};
 use crate::plugins::http::common::auth_common::{
     apply_auth_failure_delay, send_gateway_auth_error_response, send_gateway_plain_error_response,
@@ -20,16 +9,21 @@ use crate::plugins::http::common::auth_common::{
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::tls::validation::outbound_san_mismatch_reason;
+use async_trait::async_trait;
+use base64::{engine::general_purpose, Engine as _};
+use bytes::Bytes;
 use edgion_common::link_sys_core::outbound_tls::{resolve_outbound_tls, EffectiveCa};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::LdapAuthConfig;
+use ldap3::{LdapConnAsync, LdapConnSettings};
+use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+use rustls::{ClientConfig, RootCertStore};
 
 /// LDAP Authentication plugin
 pub struct LdapAuth {
     name: String,
     config: LdapAuthConfig,
     ldap_url: String,
-    auth_cache: Arc<ShardedLruCache<String, String>>,
     /// Rustls ClientConfig for TLS-enabled LDAP connections (ldaps or starttls).
     /// None = plain LDAP (ldaps=false, start_tls=false).
     tls_config: Option<std::sync::Arc<ClientConfig>>,
@@ -220,18 +214,6 @@ impl LdapAuth {
         let scheme = if config.ldaps { "ldaps" } else { "ldap" };
         let ldap_url = format!("{}://{}:{}", scheme, config.ldap_host, config.ldap_port);
 
-        let capacity = if config.lru_cache.capacity == 0 {
-            get_default_lru_cache_capacity()
-        } else {
-            config.lru_cache.capacity
-        };
-        let shards = if config.lru_cache.shards > 0 {
-            config.lru_cache.shards
-        } else {
-            get_default_lru_cache_shards()
-        };
-        let auth_cache = std::sync::Arc::new(ShardedLruCache::new(capacity, shards));
-
         let tls_config = if config.ldaps || config.start_tls {
             let resolved = resolve_outbound_tls(
                 &config.tls,
@@ -260,7 +242,6 @@ impl LdapAuth {
             name: "LdapAuth".to_string(),
             config: config.clone(),
             ldap_url,
-            auth_cache,
             tls_config,
         })
     }
@@ -303,34 +284,6 @@ impl LdapAuth {
                 .map_or(ParseAuthResult::Invalid, |(u, p)| ParseAuthResult::Valid(u, p)),
             (None, None) => ParseAuthResult::Missing,
         }
-    }
-
-    fn cache_key(username: &str, password: &str) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(username.as_bytes());
-        hasher.update(b":");
-        hasher.update(password.as_bytes());
-        hex::encode(hasher.finalize())
-    }
-
-    fn check_cache(&self, username: &str, password: &str) -> Option<String> {
-        if self.config.cache_ttl == 0 {
-            return None;
-        }
-        let key = Self::cache_key(username, password);
-        self.auth_cache.get(&key)
-    }
-
-    fn store_cache(&self, username: &str, password: &str) {
-        if self.config.cache_ttl == 0 {
-            return;
-        }
-        let key = Self::cache_key(username, password);
-        self.auth_cache.insert(
-            key,
-            username.to_string(),
-            Some(Duration::from_secs(self.config.cache_ttl)),
-        );
     }
 
     fn build_bind_dn(&self, username: &str) -> Result<String, &'static str> {
@@ -460,16 +413,6 @@ impl RequestFilter for LdapAuth {
             }
         };
 
-        if let Some(cached_username) = self.check_cache(&username, &password) {
-            self.apply_authenticated_headers(session, &cached_username);
-            self.hide_credentials_if_needed(session);
-            plugin_log.push("cache hit");
-            plugin_log.push_fmt("OK user {}", la![sensitive(cached_username.as_str())]);
-            return PluginRunningResult::GoodNext;
-        }
-
-        plugin_log.push("cache miss");
-
         let bind_dn = match self.build_bind_dn(&username) {
             Ok(dn) => dn,
             Err(_) => {
@@ -480,7 +423,6 @@ impl RequestFilter for LdapAuth {
 
         match self.ldap_bind(&bind_dn, &password).await {
             Ok(()) => {
-                self.store_cache(&username, &password);
                 self.apply_authenticated_headers(session, &username);
                 self.hide_credentials_if_needed(session);
                 plugin_log.push_fmt("OK user {}", la![sensitive(&username)]);
@@ -525,7 +467,6 @@ impl RequestFilter for LdapAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgion_resources::resources::edgion_plugins::LruCacheConfig;
 
     fn test_config() -> LdapAuthConfig {
         LdapAuthConfig {
@@ -631,24 +572,6 @@ mod tests {
         let auth = LdapAuth::new(&config).expect("must build");
         let dn = auth.build_bind_dn("alice,admin").unwrap();
         assert_eq!(dn, r"uid=alice\2cadmin,ou=people,dc=example,dc=com");
-    }
-
-    #[test]
-    fn test_ldap_auth_cache_is_lru() {
-        let config = LdapAuthConfig {
-            cache_ttl: 60,
-            lru_cache: LruCacheConfig {
-                capacity: 5,
-                ..Default::default()
-            },
-            ldap_host: "localhost".to_string(),
-            ldap_port: 389,
-            base_dn: "dc=test,dc=com".to_string(),
-            ..Default::default()
-        };
-        install_test_crypto_provider();
-        let auth = LdapAuth::new(&config).expect("must build");
-        assert_eq!(auth.auth_cache.len(), 0);
     }
 
     /// No TLS (ldaps=false, start_tls=false) → tls_config must be None.

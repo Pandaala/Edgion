@@ -1036,6 +1036,9 @@ mod tests {
         quota.finish(QuotaFinalStatus::OverLimit);
         let mut processor = UsageExtractionProcessor::new_with_quota(Arc::clone(&shared), Some(quota), true, true);
         let mut session = MockPluginSession::new();
+        session.expect_semantic_guard_active().return_const(false);
+        session.expect_try_claim_response_terminal().return_const(true);
+        session.expect_mark_response_terminal_emission().return_const(());
         session.expect_add_error().return_const(());
         let mut sink = ResponseBodySink::new();
         let mut body = Some(Bytes::from_static(

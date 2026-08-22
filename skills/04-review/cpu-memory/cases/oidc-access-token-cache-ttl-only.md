@@ -10,7 +10,7 @@ closed: 2026-08-02
 
 ## Conclusion
 
-`AccessTokenCacheEntry` stores only the token. The existing cache-lifetime policy is fully represented by the `ShardedLruCache` TTL computed at insertion; removing the duplicate absolute timestamp does not change that policy.
+`AccessTokenCacheEntry` stores only the token. The cache-lifetime policy is fully represented by the `ShardedLruCache` TTL computed at insertion; removing the duplicate absolute timestamp does not change that policy.
 
 Fix suggestions that add an `expires_at` field without a distinct consumer are **not accepted**.
 

@@ -445,7 +445,7 @@ mod tests {
         get_global_plugin_store().replace_all(map);
     }
 
-    fn make_terminating_plugin(key_ns: &str, name: &str) {
+    fn make_terminating_plugin(key_ns: &str, name: &str) -> Arc<crate::plugins::runtime::PluginRuntime> {
         let ep = EdgionPlugins {
             metadata: ObjectMeta {
                 namespace: Some(key_ns.to_string()),
@@ -460,18 +460,22 @@ mod tests {
             },
             status: None,
         };
-        let mut map = HashMap::new();
-        map.insert(format!("{key_ns}/{name}"), compile_plugins(&ep));
-        get_global_plugin_store().replace_all(map);
+        Arc::clone(&compile_plugins(&ep).plugin_runtime)
     }
 
     #[tokio::test]
     async fn request_inner_identity_restores_outer_on_early_result() {
-        make_terminating_plugin("ns", "terminating");
+        let runtime = make_terminating_plugin("ns", "terminating");
+        let runtime_for_resolve = Arc::clone(&runtime);
         let outer = crate::ctx::CurrentPluginEntryIdentity::new("ExtensionRef", Some("outer"));
         let outer_for_replace = outer;
 
         let mut session = MockPluginSession::new();
+        session
+            .expect_resolved_route_ext_ref()
+            .with(eq(0usize))
+            .times(1)
+            .returning(move |_| Some(Arc::clone(&runtime_for_resolve)));
         session
             .expect_start_edgion_plugins_log()
             .returning(|_| EdgionPluginsLogToken::new(0));
@@ -490,7 +494,7 @@ mod tests {
         session.expect_set_response_header().times(1).returning(|_, _| Ok(()));
         session.expect_push_to_edgion_plugins_log().times(1).return_const(());
 
-        let filter = ExtensionRefFilter::new(
+        let mut filter = ExtensionRefFilter::new(
             "ns".to_string(),
             LocalObjectReference {
                 group: "".into(),
@@ -499,6 +503,7 @@ mod tests {
                 resolved_namespace: None,
             },
         );
+        filter.set_index(0);
         let mut log = PluginLog::new("test");
         let result = filter.run_request(&mut session, &mut log).await;
         assert!(matches!(result, PluginRunningResult::ErrResponse { status: 200, .. }));

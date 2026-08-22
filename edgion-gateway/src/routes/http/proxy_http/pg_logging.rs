@@ -912,6 +912,7 @@ mod genai_tests {
         let mut processor = UsageExtractionProcessor::new(shared);
         let mut chunk = Some(Bytes::copy_from_slice(body));
         let mut session = MockPluginSession::new();
+        session.expect_semantic_guard_active().return_const(false);
         let mut sink = pingora_proxy::ResponseBodySink::new();
         processor.on_chunk(&mut chunk, eos, kind, &mut sink, &mut session).await;
         assert_eq!(chunk.as_deref(), Some(body), "usage observation must not mutate body");

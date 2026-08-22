@@ -15,7 +15,6 @@ spec:
         attribute: "uid"
         headerType: "ldap"
         realm: "LDAP TLS SAN Mismatch Test"
-        cacheTtl: 0
         timeout: 5000
         tls:
           validation:

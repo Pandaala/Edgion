@@ -15,7 +15,6 @@ spec:
         attribute: "uid"
         headerType: "ldap"
         realm: "LDAP wrong CA"
-        cacheTtl: 0
         timeout: 3000
         tls:
           # A self-signed CA that does NOT match the server cert — TLS will fail with certificate verify error.

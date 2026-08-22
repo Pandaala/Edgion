@@ -110,6 +110,17 @@ rate_limit:
   max_estimator_slots_k: 1024     # CMS 最大精度上限
   gateway_instance_count: 1       # 集群限流：实例数（无 Controller 推送时的静态 fallback）
 
+# ─── OIDC introspection TinyUFO 限制 ─────────────────────────────
+
+tiny_ufo_ttl_cache:
+  default_max_entries: 1024
+  default_max_logical_bytes: 4MiB
+
+# LRU 默认值，包括 OIDC Access Token 缓存。
+lru_cache:
+  default_capacity: 1024
+  default_shards: 0
+
 # ─── 日志脱敏（默认 replace）────────────────────────────────────
 
 access_log_sensitive:
@@ -317,6 +328,22 @@ rate_limit:
   max_estimator_slots_k: 1024
   gateway_instance_count: 3   # 部署了 3 个 Gateway 副本
 ```
+
+### OIDC Introspection TinyUFO 限制
+
+```yaml
+tiny_ufo_ttl_cache:
+  default_max_entries: 1024
+  default_max_logical_bytes: 4MiB
+```
+
+OIDC introspection 未配置 `tinyUfoTtlCache` 覆盖值时使用这些进程默认值。
+覆盖配置必须同时设置 `maxEntries` 和 `maxLogicalBytes`。总逻辑预算控制单个
+TinyUFO 实例的记录权重，不是精确的分配器或 RSS 上限；Gateway 进程的硬上限应由
+Kubernetes/cgroup 内存限制保证。OIDC Access Token 缓存使用独立的 `lru_cache`
+默认值；LDAP 认证不缓存。绝对安全上限分别为 65,536 个
+缓存条目和 4,194,304 个 TinyUFO 权重单位（按 64 字节逻辑单位计为 256 MiB）；
+这些上限不是默认值。
 
 ### 启用日志脱敏
 

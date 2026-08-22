@@ -1448,9 +1448,10 @@ impl PluginRuntime {
                 Err(_) => CreateResult::Ok(None),
             },
             EdgionPlugin::AllEndpointStatus(config) => CreateResult::Ok(Some(Box::new(AllEndpointStatus::new(config)))),
-            EdgionPlugin::OpenidConnect(config) => {
-                CreateResult::Ok(Some(Box::new(OpenidConnect::new(config, namespace.to_string()))))
-            }
+            EdgionPlugin::OpenidConnect(config) => match OpenidConnect::try_new(config, namespace.to_string()) {
+                Ok(plugin) => CreateResult::Ok(Some(Box::new(plugin))),
+                Err(_) => CreateResult::Ok(None),
+            },
             EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config(config)),
             EdgionPlugin::RegionRoute(config) => CreateResult::Ok(Some(RegionRoute::create(config, namespace))),
             EdgionPlugin::Wasm(config) => CreateResult::Ok(WasmPlugin::create_request(config)),

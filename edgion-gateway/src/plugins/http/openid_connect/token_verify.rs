@@ -247,27 +247,30 @@ impl OpenidConnect {
             return None;
         }
         let key = Self::introspection_cache_key(token);
-        self.introspection_cache.get(&key).map(|e| e.claims)
+        self.introspection_cache.get(&key).0.map(|entry| entry.claims)
     }
 
     pub(super) async fn cache_introspection_claims(&self, token: &str, claims: &Value) {
-        if self.config.introspection_cache_ttl == 0 {
+        if self.config.introspection_cache_ttl == 0 || claims.get("active") != Some(&Value::Bool(true)) {
             return;
         }
         let key = Self::introspection_cache_key(token);
-        let config_ttl = Duration::from_secs(self.config.introspection_cache_ttl);
-        // Cap TTL at token's remaining lifetime
-        let token_remaining = claims["exp"]
-            .as_u64()
-            .and_then(|exp| exp.checked_sub(Self::now_unix_secs()))
-            .map(Duration::from_secs);
-        let ttl = match token_remaining {
-            Some(remaining) => config_ttl.min(remaining),
-            None => config_ttl,
-        };
+        let ttl =
+            Self::bounded_introspection_cache_ttl(claims, self.config.introspection_cache_ttl, Self::now_unix_secs());
         self.introspection_cache
-            .insert(key, IntrospectionCacheEntry { claims: claims.clone() }, Some(ttl));
-        // No retain/len check needed — LocalLruCache handles eviction automatically
+            .insert(key, IntrospectionCacheEntry { claims: claims.clone() }, ttl);
+        // Non-retention is a normal cache miss; the current request still uses
+        // the authoritative introspection result.
+    }
+
+    pub(super) fn bounded_introspection_cache_ttl(claims: &Value, configured_ttl_secs: u64, now: u64) -> Duration {
+        let configured_ttl = Duration::from_secs(configured_ttl_secs);
+        claims
+            .get("exp")
+            .and_then(Value::as_u64)
+            .map_or(configured_ttl, |expires_at| {
+                configured_ttl.min(Duration::from_secs(expires_at.saturating_sub(now)))
+            })
     }
 
     pub(super) async fn validate_id_token_nonce(

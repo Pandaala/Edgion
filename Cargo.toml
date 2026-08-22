@@ -120,6 +120,7 @@ pingora-proxy = { git = "https://github.com/Pandaala/pingora.git", branch = "edg
 pingora-limits = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
 pingora-load-balancing = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
 pingora-ketama = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
+tinyufo = { package = "TinyUFO", git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
 
 # HTTP server / client
 axum = { version = "0.8.8", features = ["macros", "ws"] }

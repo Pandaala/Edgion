@@ -89,7 +89,7 @@ edgion-gateway/src/
 │   ├── policy/    # BackendTLSPolicy + EdgionBackendTrafficPolicy
 │   ├── preload.rs # Hydrate referenced Service backend lists at startup
 │   └── validation.rs
-├── cache/         # LRU cache
+├── cache/         # Retained LRU plus OIDC introspection TinyUFO TTL cache
 ├── cli/           # Startup entry (EdgionGatewayCli::run())
 │   ├── config.rs  # EdgionGatewayConfig YAML configuration structure
 │   └── pingora.rs # Pingora Server creation and run (two-phase)

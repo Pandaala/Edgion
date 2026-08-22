@@ -51,7 +51,7 @@ edgion-gateway/src/
 │   ├── health/       # Active health checks
 │   ├── policy/       # Backend TLS policy
 │   └── circuit_breaker/ # Backend circuit-breaker state
-├── cache/        # LRU cache
+├── cache/        # Retained LRU plus OIDC introspection TinyUFO TTL cache
 ├── cli/          # CLI entry + Pingora startup
 ├── config/       # GatewayClass / EdgionGatewayConfig handlers and storage
 ├── conf_sync/    # gRPC config client + ClientCache

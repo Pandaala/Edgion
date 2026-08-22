@@ -1,6 +1,11 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use edgion_resources::rate_limit_config::RateLimitGlobalConfig;
+use edgion_resources::resources::common::parse_byte_size;
+use edgion_resources::resources::edgion_plugins::{
+    validate_tiny_ufo_effective_limits, LruCacheConfig, TinyUfoTtlCacheConfig, MAX_LRU_CACHE_CAPACITY,
+    MAX_LRU_CACHE_SHARDS,
+};
 use edgion_resources::LogConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -116,10 +121,15 @@ pub struct EdgionGatewayConfig {
     #[serde(default, alias = "rate_limiter")]
     pub rate_limit: RateLimitGlobalConfig,
 
-    /// Global LRU cache configuration for plugins
+    /// Global configuration for the retained LRU implementation
     #[arg(skip)]
     #[serde(default, alias = "auth_cache")]
     pub lru_cache: LruCacheGlobalConfig,
+
+    /// Global bounded TinyUFO TTL-cache configuration
+    #[arg(skip)]
+    #[serde(default)]
+    pub tiny_ufo_ttl_cache: TinyUfoTtlCacheGlobalConfig,
 
     /// AllEndpointStatus plugin global configuration
     #[arg(skip)]
@@ -875,10 +885,46 @@ impl Default for LruCacheGlobalConfig {
 
 static LRU_CACHE_GLOBAL_CONFIG: OnceLock<LruCacheGlobalConfig> = OnceLock::new();
 
-/// Initialize the global LRU cache configuration (call once at startup).
-pub fn init_lru_cache_global_config(config: &LruCacheGlobalConfig) {
+fn validate_effective_lru_cache_limits(capacity: usize, shards: usize) -> Result<(), String> {
+    if capacity == 0 {
+        return Err("LRU cache capacity must be greater than zero".to_string());
+    }
+    if capacity > MAX_LRU_CACHE_CAPACITY {
+        return Err(format!(
+            "LRU cache capacity {capacity} exceeds the safety ceiling {MAX_LRU_CACHE_CAPACITY}"
+        ));
+    }
+    let effective_shards = shards.max(1);
+    if effective_shards > MAX_LRU_CACHE_SHARDS {
+        return Err(format!(
+            "LRU cache shards {effective_shards} exceeds the safety ceiling {MAX_LRU_CACHE_SHARDS}"
+        ));
+    }
+    if effective_shards > capacity {
+        return Err("LRU cache shards must not exceed capacity".to_string());
+    }
+    Ok(())
+}
+
+/// Initialize the validated global LRU cache configuration once at startup.
+pub fn init_lru_cache_global_config(config: &LruCacheGlobalConfig) -> Result<(), String> {
+    validate_effective_lru_cache_limits(config.default_capacity, config.default_shards)?;
     let result = LRU_CACHE_GLOBAL_CONFIG.set(config.clone());
     debug_assert!(result.is_ok(), "init_lru_cache_global_config called more than once");
+    Ok(())
+}
+
+pub fn resolve_lru_cache_limits(config: &LruCacheConfig) -> Result<(usize, usize), String> {
+    config
+        .validation_error()
+        .map_or(Ok(()), |error| Err(error.to_string()))?;
+    let (capacity, shards) = if config.capacity == 0 {
+        (get_default_lru_cache_capacity(), get_default_lru_cache_shards())
+    } else {
+        (config.capacity, config.shards)
+    };
+    validate_effective_lru_cache_limits(capacity, shards)?;
+    Ok((capacity, shards))
 }
 
 /// Get the default LRU cache capacity.
@@ -887,7 +933,7 @@ pub fn init_lru_cache_global_config(config: &LruCacheGlobalConfig) {
 pub fn get_default_lru_cache_capacity() -> usize {
     LRU_CACHE_GLOBAL_CONFIG
         .get()
-        .map(|c| c.default_capacity)
+        .map(|config| config.default_capacity)
         .unwrap_or(DEFAULT_LRU_CACHE_CAPACITY)
 }
 
@@ -896,8 +942,100 @@ pub fn get_default_lru_cache_capacity() -> usize {
 pub fn get_default_lru_cache_shards() -> usize {
     LRU_CACHE_GLOBAL_CONFIG
         .get()
-        .map(|c| c.default_shards)
+        .map(|config| config.default_shards)
         .unwrap_or(DEFAULT_LRU_CACHE_SHARDS)
+}
+
+// ============================================
+// TinyUFO TTL Cache Global Configuration
+// ============================================
+
+const DEFAULT_TINY_UFO_TTL_CACHE_MAX_ENTRIES: usize = 1024;
+const DEFAULT_TINY_UFO_TTL_CACHE_MAX_LOGICAL_BYTES: &str = "4MiB";
+const DEFAULT_REFRESH_SINGLEFLIGHT_MAX_REGISTERED_KEYS: usize = 1024;
+
+fn default_tiny_ufo_ttl_cache_max_entries() -> usize {
+    DEFAULT_TINY_UFO_TTL_CACHE_MAX_ENTRIES
+}
+
+fn default_tiny_ufo_ttl_cache_max_logical_bytes() -> String {
+    DEFAULT_TINY_UFO_TTL_CACHE_MAX_LOGICAL_BYTES.to_string()
+}
+
+/// Global defaults for bounded TinyUFO TTL caches.
+///
+/// ## YAML Configuration Example:
+/// ```yaml
+/// tiny_ufo_ttl_cache:
+///   default_max_entries: 1024
+///   default_max_logical_bytes: 4MiB
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TinyUfoTtlCacheGlobalConfig {
+    #[serde(default = "default_tiny_ufo_ttl_cache_max_entries")]
+    pub default_max_entries: usize,
+
+    #[serde(default = "default_tiny_ufo_ttl_cache_max_logical_bytes")]
+    pub default_max_logical_bytes: String,
+}
+
+impl Default for TinyUfoTtlCacheGlobalConfig {
+    fn default() -> Self {
+        Self {
+            default_max_entries: DEFAULT_TINY_UFO_TTL_CACHE_MAX_ENTRIES,
+            default_max_logical_bytes: default_tiny_ufo_ttl_cache_max_logical_bytes(),
+        }
+    }
+}
+
+static TINY_UFO_TTL_CACHE_GLOBAL_CONFIG: OnceLock<TinyUfoTtlCacheGlobalConfig> = OnceLock::new();
+
+/// Initialize validated TinyUFO TTL-cache defaults once at Gateway startup.
+pub fn init_tiny_ufo_ttl_cache_global_config(config: &TinyUfoTtlCacheGlobalConfig) -> Result<(), String> {
+    resolve_tiny_ufo_ttl_cache_limits_with(config, &TinyUfoTtlCacheConfig::default())?;
+    let result = TINY_UFO_TTL_CACHE_GLOBAL_CONFIG.set(config.clone());
+    debug_assert!(
+        result.is_ok(),
+        "init_tiny_ufo_ttl_cache_global_config called more than once"
+    );
+    Ok(())
+}
+
+fn resolve_tiny_ufo_ttl_cache_limits_with(
+    global: &TinyUfoTtlCacheGlobalConfig,
+    plugin: &TinyUfoTtlCacheConfig,
+) -> Result<crate::cache::TinyUfoCacheLimits, String> {
+    if let Some(error) = plugin.validation_error() {
+        return Err(error.to_string());
+    }
+    let max_entries = if plugin.max_entries == 0 {
+        global.default_max_entries
+    } else {
+        plugin.max_entries
+    };
+    let logical_bytes = match plugin.parsed_max_logical_bytes().map_err(str::to_string)? {
+        Some(bytes) => bytes,
+        None => parse_byte_size(&global.default_max_logical_bytes)
+            .ok_or_else(|| "defaultMaxLogicalBytes must be a valid byte size".to_string())?,
+    };
+    let logical_bytes = usize::try_from(logical_bytes)
+        .map_err(|_| "TinyUFO TTL cache logical budget does not fit this platform".to_string())?;
+    validate_tiny_ufo_effective_limits(max_entries, logical_bytes).map_err(str::to_string)?;
+    let limits = crate::cache::TinyUfoCacheLimits::try_new(max_entries, logical_bytes).map_err(|e| e.to_string())?;
+    crate::cache::TinyUfoTtlCache::<String, String>::validate_limits(limits).map_err(|e| e.to_string())?;
+    Ok(limits)
+}
+
+pub fn resolve_tiny_ufo_ttl_cache_limits(
+    config: &TinyUfoTtlCacheConfig,
+) -> Result<crate::cache::TinyUfoCacheLimits, String> {
+    let global = TINY_UFO_TTL_CACHE_GLOBAL_CONFIG.get().cloned().unwrap_or_default();
+    resolve_tiny_ufo_ttl_cache_limits_with(&global, config)
+}
+
+pub fn get_refresh_singleflight_max_registered_keys() -> usize {
+    DEFAULT_REFRESH_SINGLEFLIGHT_MAX_REGISTERED_KEYS
 }
 
 // ============================================
@@ -1077,17 +1215,38 @@ mod tests {
     }
 
     #[test]
-    fn test_lru_cache_global_config_default() {
-        let config = LruCacheGlobalConfig::default();
-        assert_eq!(config.default_capacity, 1024);
+    fn test_tiny_ufo_ttl_cache_global_config_default() {
+        let config = TinyUfoTtlCacheGlobalConfig::default();
+        assert_eq!(config.default_max_entries, 1024);
+        assert_eq!(config.default_max_logical_bytes, "4MiB");
     }
 
     #[test]
-    fn test_get_default_lru_cache_capacity_fallback() {
-        // Before init (or after init with default), capacity must be >= 1
-        // so ShardedLruCache::new() never panics
-        let cap = get_default_lru_cache_capacity();
-        assert!(cap >= 1, "capacity must be > 0");
+    fn test_tiny_ufo_ttl_cache_default_limits_resolve() {
+        let limits = resolve_tiny_ufo_ttl_cache_limits_with(
+            &TinyUfoTtlCacheGlobalConfig::default(),
+            &TinyUfoTtlCacheConfig::default(),
+        )
+        .expect("default limits must be valid");
+        assert_eq!(limits.max_entries.get(), 1024);
+        assert_eq!(limits.max_logical_bytes.get(), 4 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_lru_cache_global_config_remains_available() {
+        let config = LruCacheGlobalConfig::default();
+        assert_eq!(config.default_capacity, 1024);
+        assert_eq!(config.default_shards, 0);
+        assert!(get_default_lru_cache_capacity() > 0);
+    }
+
+    #[test]
+    fn lru_cache_limits_reject_zero_oversized_and_capacity_expanding_shards() {
+        assert!(validate_effective_lru_cache_limits(0, 1).is_err());
+        assert!(validate_effective_lru_cache_limits(MAX_LRU_CACHE_CAPACITY + 1, 1).is_err());
+        assert!(validate_effective_lru_cache_limits(4, 5).is_err());
+        assert!(validate_effective_lru_cache_limits(1024, MAX_LRU_CACHE_SHARDS + 1).is_err());
+        assert!(validate_effective_lru_cache_limits(1024, 8).is_ok());
     }
 
     #[test]

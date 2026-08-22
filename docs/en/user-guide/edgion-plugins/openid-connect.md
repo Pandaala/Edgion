@@ -83,6 +83,31 @@
 | `introspectionCacheTtl` | Integer | `0` | Introspection result cache TTL (seconds), `0` disables |
 | `tokenEndpointAuthMethod` | Enum | `client_secret_basic` | Token endpoint auth method. Values: `client_secret_basic` | `client_secret_post` |
 
+### Cache Selection and Limits
+
+Only positive introspection results use TinyUFO/S3-FIFO. Access-token
+indirection retains the LRU cache because logout and refresh require explicit
+invalidation:
+
+```yaml
+introspection:
+  tinyUfoTtlCache:
+    maxEntries: 2048
+    maxLogicalBytes: 8MiB
+accessToken:
+  lruCache:
+    capacity: 2048
+    shards: 8
+```
+
+The two sections inherit `tiny_ufo_ttl_cache` and `lru_cache` Gateway defaults,
+respectively. Set both TinyUFO override fields together, or omit both to inherit
+the process defaults. For an explicit LRU capacity, `shards: 0` selects one
+shard; a shards-only override is invalid. The TinyUFO byte field is the cache
+instance's total logical record-weight budget, not an exact RSS limit. Discovery
+and JWKS retain their dedicated snapshot providers; the refresh singleflight
+registry is also separate from both caches.
+
 ### Header Forwarding Parameters
 
 | Parameter | Type | Default | Description |

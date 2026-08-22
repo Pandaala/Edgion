@@ -2,7 +2,7 @@
 """Guard the Edgion Pingora branch/lockfile source policy.
 
 Development manifests track the shared `edgion` branch so advancing the fork
-does not require six synchronized SHA edits. A release milestone may select one
+does not require synchronized SHA edits. A release milestone may select one
 protected immutable tag for the whole family. Reproducibility comes from the
 committed Cargo.lock and `--locked` CI/release commands. This guard prevents a
 partial source-family edit, a return to per-package revisions, or a lockfile
@@ -20,14 +20,15 @@ FORK_SOURCE = re.compile(
     r"^git\+https://github\.com/Pandaala/pingora\.git"
     r"\?(branch|tag)=([^#]+)#([0-9a-f]{40})$"
 )
-DIRECT_DEPENDENCIES = [
-    "pingora-core",
-    "pingora-http",
-    "pingora-proxy",
-    "pingora-limits",
-    "pingora-load-balancing",
-    "pingora-ketama",
-]
+DIRECT_DEPENDENCIES = {
+    "pingora-core": "pingora-core",
+    "pingora-http": "pingora-http",
+    "pingora-proxy": "pingora-proxy",
+    "pingora-limits": "pingora-limits",
+    "pingora-load-balancing": "pingora-load-balancing",
+    "pingora-ketama": "pingora-ketama",
+    "tinyufo": "TinyUFO",
+}
 
 
 def main() -> int:
@@ -35,7 +36,7 @@ def main() -> int:
     manifest = (REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8")
     selectors = set()
 
-    for name in DIRECT_DEPENDENCIES:
+    for name, package in DIRECT_DEPENDENCIES.items():
         match = re.search(rf"^{re.escape(name)}\s*=\s*\{{([^}}]+)\}}$", manifest, re.MULTILINE)
         if match is None:
             errors.append(f"Cargo.toml: missing inline-table dependency {name}")
@@ -59,6 +60,13 @@ def main() -> int:
                 errors.append(f"Cargo.toml: {name} has an invalid release tag {tag!r}")
         if re.search(r"\brev\s*=", spec):
             errors.append(f"Cargo.toml: {name} must not set rev")
+        package_match = re.search(r'\bpackage\s*=\s*"([^"]+)"', spec)
+        if package != name and (
+            package_match is None or package_match.group(1) != package
+        ):
+            errors.append(
+                f"Cargo.toml: {name} must set package = {package!r}"
+            )
 
     if len(selectors) != 1:
         errors.append(
@@ -104,7 +112,7 @@ def main() -> int:
         )
 
     locked_names = set(fork_packages)
-    for package in DIRECT_DEPENDENCIES:
+    for package in DIRECT_DEPENDENCIES.values():
         if package not in locked_names:
             errors.append(f"Cargo.lock: fork package {package} is missing")
 

@@ -18,6 +18,7 @@ pub const AI_MODEL_ALIAS_MAX_COUNT: usize = 32;
 pub const AI_CREDENTIAL_MAX_COUNT: usize = 16;
 pub const AI_CREDENTIAL_ALIAS_MAX_BYTES: usize = 64;
 pub const AI_CREDENTIAL_ALIAS_PATTERN: &str = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$";
+pub const AI_REDIS_REF_PATTERN: &str = r"^[A-Za-z0-9_-]+/[A-Za-z0-9_-]+$";
 pub const AI_CREDENTIAL_WEIGHT_MAX: u32 = 1_000_000;
 pub const AI_CREDENTIAL_LIMIT_MAX: u64 = 9_007_199_254_740_991;
 pub const AI_PRICE_MAX_USD_PER_MILLION: u64 = 1_000_000;
@@ -316,6 +317,7 @@ pub struct AiCredentialPool {
     /// Redis LinkSys reference in `namespace/name` form. Required exactly when
     /// at least one credential declares an RPM or TPM limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(AI_REDIS_REF_PATTERN))]
     pub redis_ref: Option<String>,
     /// Redis dependency failure is fail-close by default.
     #[serde(default = "default_on_redis_failure_deny")]

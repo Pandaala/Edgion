@@ -141,9 +141,13 @@ rate_limit:
   max_estimator_slots_k: 1024             # CMS maximum precision cap
   gateway_instance_count: 1               # Static instance count (fallback when no Controller push)
 
+tiny_ufo_ttl_cache:
+  default_max_entries: 1024
+  default_max_logical_bytes: 4MiB
+
 lru_cache:
   default_capacity: 1024
-  default_shards: 0                        # 0 = unsharded
+  default_shards: 0                        # Retained independent LRU defaults
 
 all_endpoint_status:
   max_endpoints: 20                        # Hard ceiling remains 50
@@ -355,7 +359,14 @@ no CLI token flag. See [03-auth-bootstrap.md](03-auth-bootstrap.md#gateway-provi
   aggregation, not persistent metering or billing. Per-request GenAI token usage is
   always written to the access log independently of this switch; configure the log
   backend to retain that ledger.
-- `lru_cache` supplies process-wide plugin cache defaults.
+- `tiny_ufo_ttl_cache` supplies process-wide limits for positive OIDC
+  introspection results, the only approved TinyUFO consumer. The
+  logical byte setting is the per-cache-instance total weighting budget, not exact process
+  RSS; Kubernetes/cgroup remains the hard process-memory boundary. Absolute
+  safety ceilings are 65,536 cache entries, 4,194,304 TinyUFO weight units
+  (256 MiB of 64-byte logical units). These ceilings are not defaults.
+- `lru_cache` and its existing `auth_cache` alias configure retained LRU users,
+  including OIDC access-token caching. LDAP authentication is not cached.
 - `all_endpoint_status` sets security ceilings for that plugin.
 - `path_normalization` is process-local and restart-bound. It is not an
   `EdgionGatewayConfig` CRD field.

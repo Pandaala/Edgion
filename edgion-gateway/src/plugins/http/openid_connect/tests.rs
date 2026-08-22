@@ -968,7 +968,47 @@ async fn test_introspection_cache_put_and_get() {
 }
 
 #[tokio::test]
-async fn test_introspection_cache_prunes_expired_entries_on_insert() {
+async fn inactive_introspection_result_is_never_cached() {
+    let mut cfg = base_config();
+    cfg.introspection_cache_ttl = 60;
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+
+    plugin
+        .cache_introspection_claims("inactive-token", &json!({"active": false, "sub": "u1"}))
+        .await;
+
+    assert_eq!(plugin.get_cached_introspection_claims("inactive-token").await, None);
+}
+
+#[test]
+fn introspection_cache_ttl_never_exceeds_config_or_token_lifetime() {
+    use std::time::Duration as StdDuration;
+
+    let now = 1_000;
+    assert_eq!(
+        OpenidConnect::bounded_introspection_cache_ttl(&json!({"exp": now + 5}), 60, now),
+        StdDuration::from_secs(5)
+    );
+    assert_eq!(
+        OpenidConnect::bounded_introspection_cache_ttl(&json!({"exp": now + 120}), 60, now),
+        StdDuration::from_secs(60)
+    );
+    assert_eq!(
+        OpenidConnect::bounded_introspection_cache_ttl(&json!({}), 60, now),
+        StdDuration::from_secs(60)
+    );
+    assert_eq!(
+        OpenidConnect::bounded_introspection_cache_ttl(&json!({"exp": now}), 60, now),
+        StdDuration::ZERO
+    );
+    assert_eq!(
+        OpenidConnect::bounded_introspection_cache_ttl(&json!({"exp": now - 1}), 60, now),
+        StdDuration::ZERO
+    );
+}
+
+#[tokio::test]
+async fn expired_introspection_result_remains_a_miss_after_another_insert() {
     use std::time::Duration as StdDuration;
     let mut cfg = base_config();
     cfg.introspection_cache_ttl = 60;
@@ -981,7 +1021,7 @@ async fn test_introspection_cache_prunes_expired_entries_on_insert() {
         IntrospectionCacheEntry {
             claims: json!({"active": true, "sub": "old"}),
         },
-        Some(StdDuration::from_millis(1)),
+        StdDuration::from_millis(1),
     );
     // Wait for it to expire
     tokio::time::sleep(StdDuration::from_millis(10)).await;
@@ -990,8 +1030,9 @@ async fn test_introspection_cache_prunes_expired_entries_on_insert() {
         .cache_introspection_claims("fresh-token", &json!({"active": true, "sub": "new"}))
         .await;
 
-    // Expired entry should not be retrievable
-    assert!(plugin.introspection_cache.get(&expired_key).is_none());
+    // Unchanged TinyUFO reclaims expired slots through normal eviction, but
+    // the wrapper must keep the expired record logically invisible.
+    assert!(plugin.introspection_cache.get(&expired_key).0.is_none());
 }
 
 #[tokio::test]
@@ -1041,8 +1082,8 @@ async fn test_refresh_singleflight_wait_timeout() {
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
     let lock_key = "refresh-lock";
-    let lock = plugin.get_or_create_refresh_lock(lock_key).await;
-    let _held_guard = lock.lock().await;
+    let flight = plugin.refresh_singleflight.get_or_create(lock_key);
+    let _held_guard = flight.lock().lock().await;
 
     let now = OpenidConnect::now_unix_secs();
     let mut cookie = OidcSessionCookie {
@@ -1083,8 +1124,8 @@ async fn test_refresh_singleflight_wait_timeout_uses_recent_cached_result() {
         )
         .await;
 
-    let lock = plugin.get_or_create_refresh_lock(lock_key).await;
-    let _held_guard = lock.lock().await;
+    let flight = plugin.refresh_singleflight.get_or_create(lock_key);
+    let _held_guard = flight.lock().lock().await;
 
     let mut cookie = OidcSessionCookie {
         session_ref: "session-ref".to_string(),

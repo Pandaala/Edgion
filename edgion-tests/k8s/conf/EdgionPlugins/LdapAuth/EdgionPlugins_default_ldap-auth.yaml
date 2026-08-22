@@ -14,6 +14,5 @@ spec:
         attribute: "uid"
         headerType: "ldap"
         realm: "LDAP Test"
-        cacheTtl: 60
         timeout: 3000
         hideCredentials: false

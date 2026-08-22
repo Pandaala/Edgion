@@ -45,7 +45,7 @@ The root cause of weak hashes (SHA-1, MD5) is the **lack of key-stretching**; ad
 
 ## Password / key cache keys
 
-Memory-leak risk of using plaintext or reversibly-encoded values (base64) as LRU cache keys:
+Memory-leak risk of using plaintext or reversibly-encoded values (base64) as cache keys:
 
 - Must be analyzed together with the **cache value**: if the value is the username, a cache-key collision causes authentication to be attributed to the wrong user — more severe than a memory leak
 - Hashed-key schemes (SHA-256 / ahash) need to guarantee no collisions, otherwise they introduce auth bypass

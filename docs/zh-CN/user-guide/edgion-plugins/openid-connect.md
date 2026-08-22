@@ -83,6 +83,28 @@
 | `introspectionCacheTtl` | Integer | `0` | Introspection 结果缓存 TTL（秒），`0` 禁用 |
 | `tokenEndpointAuthMethod` | Enum | `client_secret_basic` | Token 端点认证方式。可选值：`client_secret_basic` | `client_secret_post` |
 
+### 内存缓存限制
+
+只有 positive introspection 结果使用 TinyUFO/S3-FIFO。Access Token 间接存储
+保留 LRU，因为 logout 和 refresh 需要显式失效：
+
+```yaml
+introspection:
+  tinyUfoTtlCache:
+    maxEntries: 2048
+    maxLogicalBytes: 8MiB
+accessToken:
+  lruCache:
+    capacity: 2048
+    shards: 8
+```
+
+两类缓存分别继承 Gateway 的 `tiny_ufo_ttl_cache` 和 `lru_cache` 默认值。
+覆盖 TinyUFO 配置时必须同时设置两个字段；省略两个字段则继承进程默认值。显式设置
+LRU capacity 时，`shards: 0` 表示单分片；仅覆盖 shards 是无效配置。TinyUFO 字节
+字段表示单个缓存实例的总逻辑记录权重预算，并非精确 RSS 上限。Discovery/JWKS 继续
+使用专用 snapshot provider；refresh singleflight registry 也独立于两类缓存。
+
 ### Header 转发参数
 
 | 参数 | 类型 | 默认值 | 说明 |

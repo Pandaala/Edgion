@@ -3591,7 +3591,10 @@ mod record_outcome_tests {
     }
 
     async fn apply_local_reply(request: &str, upstream_status: u16) -> (bool, EdgionHttpContext) {
-        let mut session = test_session_raw(request).await;
+        apply_local_reply_to_session(test_session_raw(request).await, upstream_status)
+    }
+
+    fn apply_local_reply_to_session(mut session: Session, upstream_status: u16) -> (bool, EdgionHttpContext) {
         let mut ctx = EdgionHttpContext::default();
         let mut response_header = ResponseHeader::build(upstream_status, None).unwrap();
         let applied = {
@@ -3599,6 +3602,12 @@ mod record_outcome_tests {
             adapter.apply_response_local_reply(403, Some("denied".to_string()))
         };
         (applied, ctx)
+    }
+
+    async fn apply_connect_local_reply(upstream_status: u16) -> (bool, EdgionHttpContext) {
+        let mut session = test_session().await;
+        session.req_header_mut().set_method(http::Method::CONNECT);
+        apply_local_reply_to_session(session, upstream_status)
     }
 
     /// The defect this refusal predicate was rewritten for: an `Upgrade` header
@@ -3642,8 +3651,7 @@ mod record_outcome_tests {
     /// CONNECT is refused only once the tunnel actually exists.
     #[tokio::test]
     async fn local_reply_refused_for_established_connect_tunnel() {
-        let (applied, _ctx) =
-            apply_local_reply("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n", 200).await;
+        let (applied, _ctx) = apply_connect_local_reply(200).await;
         assert!(!applied, "an established CONNECT tunnel must stay unreplaceable");
     }
 
@@ -3651,8 +3659,7 @@ mod record_outcome_tests {
     /// ordinary replaceable response.
     #[tokio::test]
     async fn local_reply_replaces_rejected_connect() {
-        let (applied, ctx) =
-            apply_local_reply("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n", 403).await;
+        let (applied, ctx) = apply_connect_local_reply(403).await;
         assert!(applied, "a CONNECT the upstream refused carries no tunnel");
         assert!(ctx.local_reply_header.is_some());
     }
