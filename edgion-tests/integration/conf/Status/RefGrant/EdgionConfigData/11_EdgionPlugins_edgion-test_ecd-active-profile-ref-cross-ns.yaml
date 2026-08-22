@@ -20,14 +20,13 @@ spec:
         defaultProfile: "normal"
         profiles:
           normal:
-            defaultAction: deny
-            sourceMatch:
-              directPeerIp:
-                ipRules:
-                  - ips:
-                      inline:
-                        - name: internal
-                          cidrs: ["10.0.0.0/8"]
+            requiredRuleGroups:
+              - name: source
+                anyOfRules:
+                  - name: internal
+                    type: directPeerIp
+                    config:
+                      ips: ["10.0.0.0/8"]
         activeProfileRef:
           name: ecd-active-selector
           namespace: edgion-default

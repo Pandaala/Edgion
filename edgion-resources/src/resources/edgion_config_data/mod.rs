@@ -7,6 +7,7 @@
 //! |-------|---------|-------|
 //! | Standard primitive | `KeyList` | Unified string+regex list |
 //! | Standard primitive | `IpList` | CIDR range list |
+//! | Policy data | `RequestAccessUrlAllowList` | URL allow candidates bound by RequestAccessPolicy |
 //! | Selector | `Selector` | Active-profile selector via `activeProfileRef` (GlobalConnectionIpRestriction) |
 //! | First-party overlay | `RegionRouteOverride` | All-Optional region table overlay via `overrideRef` |
 //! | Escape hatch | `Misc` | Third-party / unknown payloads |
@@ -19,6 +20,7 @@ pub mod ip_list;
 pub mod key_list;
 pub mod overlay;
 pub mod region_route;
+pub mod request_access_url_allow_list;
 pub mod selector;
 
 pub use ip_group::IpGroup;
@@ -26,6 +28,7 @@ pub use ip_list::IpListData;
 pub use key_list::{KeyGroup, KeyListData, KeyMatchMode, MetaDataItem};
 pub use overlay::{apply_override, OverlaySignal};
 pub use region_route::{merge_region_route_override, validate_regions, RegionRouteOverride};
+pub use request_access_url_allow_list::RequestAccessUrlAllowListData;
 pub use selector::Selector;
 
 use crate::resources::common::Condition;
@@ -197,6 +200,10 @@ pub enum ConfigEntry {
     /// IP address / CIDR range list for IP-based filtering.
     IpList(IpListData),
 
+    /// Named URL allow candidates imported by RequestAccessPolicy. The
+    /// Controller binds nested IP/Secret references into the referring plugin.
+    RequestAccessUrlAllowList(RequestAccessUrlAllowListData),
+
     /// Generic active-profile selector. Carries only `active` (the profile name to
     /// activate) + an optional `description`. Referenced via `activeProfileRef` from a
     /// `GlobalConnectionIpRestriction` stream plugin (and reusable by other
@@ -223,6 +230,7 @@ impl EdgionConfigData {
         match &self.spec.data {
             ConfigEntry::KeyList(_) => "KeyList",
             ConfigEntry::IpList(_) => "IpList",
+            ConfigEntry::RequestAccessUrlAllowList(_) => "RequestAccessUrlAllowList",
             ConfigEntry::Selector(_) => "Selector",
             ConfigEntry::RegionRouteOverride(_) => "RegionRouteOverride",
             ConfigEntry::Misc(_) => "Misc",
@@ -241,6 +249,11 @@ impl EdgionConfigData {
             // skipped at index-build time and surfaced via the PartiallyInvalid status condition,
             // NOT rejected here. KeyList/RegionRouteOverride remain all-or-nothing.
             ConfigEntry::IpList(_) => {}
+            ConfigEntry::RequestAccessUrlAllowList(data) => {
+                if let Err(error) = data.validate() {
+                    errors.push(error);
+                }
+            }
             ConfigEntry::KeyList(key_list) => {
                 if let Err(e) = crate::matcher::key_group_helpers::validate_key_groups_structure(
                     &key_list.items,

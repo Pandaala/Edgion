@@ -19,6 +19,7 @@ and others later) may reference it via a generic `dataRef`.
 - Type definitions: `edgion-resources/src/resources/edgion_config_data/mod.rs` (main module, `ConfigEntry` enum, `EdgionConfigDataSpec`)
 - `KeyList` shape: `edgion-resources/src/resources/edgion_config_data/key_list.rs`
 - `IpList` shape: `edgion-resources/src/resources/edgion_config_data/ip_list.rs`
+- `RequestAccessUrlAllowList` shape: `edgion-resources/src/resources/edgion_config_data/request_access_url_allow_list.rs`
 - `IpGroup` (shared primitive): `edgion-resources/src/resources/edgion_config_data/ip_group.rs`
 - `Selector` shape: `edgion-resources/src/resources/edgion_config_data/selector.rs`
 - First-party overlay shape: `edgion-resources/src/resources/edgion_config_data/region_route.rs` (`RegionRouteOverride`)
@@ -104,6 +105,7 @@ Envelope (any variant): `enable: bool` (default true), `active: Option<String>`,
 |-------|---------|-------|-------|
 | std primitive | `KeyList` | `{ matchMode: exact\|regex, items: [KeyGroup] }` | Unified string+regex via `matchMode` |
 | std primitive | `IpList` | `{ items: [IpGroup] }` | Radix-tree CIDR matcher; consumed by IpRestriction (HTTP/L4/TLS-route) and GCIR per-profile via `allowRefs`/`denyRefs` |
+| typed policy data | `RequestAccessUrlAllowList` | `{ items: [UrlAccessCandidate] }` | URL allow candidates expanded into RequestAccessPolicy by the Controller |
 | selector | `Selector` | `{ active?: string, description?: string }` | Active-profile selector; switches among the consumer's git-owned profiles |
 | first-party overlay | `RegionRouteOverride` | `{ regions?: [...], enable?: bool, active?: string }` | Typed; whole-replace of region table |
 | escape hatch | `Misc` | `x-kubernetes-preserve-unknown-fields` | Third-party / unknown / experimental only |
@@ -235,7 +237,7 @@ Full analysis and the decision to keep it that way:
 | Direction | Mechanism |
 |-----------|-----------|
 | EdgionConfigData ← EdgionPlugins | `overrideRef` in `RegionRouteConfig` → `RegionRouteOverride`; EP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
-| EdgionConfigData ← EdgionPlugins | `RequestAccessPolicy.activeProfileRef` → `Selector`, and its nested IP sets → `IpList`; EP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
+| EdgionConfigData ← EdgionPlugins | `RequestAccessPolicy.activeProfileRef` → `Selector`; IP rules/conditions → `IpList`; URL rules → `RequestAccessUrlAllowList` | Selector failures affect `ResolvedRefs`; optional IP/URL data failures, including cross-ns denial, are omitted individually and reported through `PartiallyInvalid`. All refs use the shared reverse index and cross-namespace requeue path. |
 | EdgionConfigData ← EdgionStreamPlugins | `activeProfileRef` in `GlobalConnectionIpRestrictionConfig` → `Selector`; ESP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
 | EdgionConfigData ← {EdgionPlugins, EdgionStreamPlugins} | `allowRefs`/`denyRefs` in IpRestriction (HTTP/L4/TLS-route) or GCIR per-profile `ProfileRules` → `IpList`; referrer `ResolvedRefs` reflects resolution (missing/disabled/wrong-type → `ResolvedRefs=False`; cross-ns without grant/visibility → `RefNotPermitted`) |
 | EdgionConfigData → {EdgionPlugins, EdgionStreamPlugins} | `EdgionConfigDataRefManager` requeue on change/delete |

@@ -5,7 +5,8 @@
 //!
 //! Features:
 //! - parse: Resolve Secret references and register to SecretRefManager for cascading updates
-//! - parse: Register `overrideRef` EdgionConfigData → EP in `edgion_config_data_refs` for requeue on change
+//! - parse: Register every EdgionConfigData dependency for cascading requeue
+//! - parse: Expand RequestAccessPolicy IP/URL data and then bind its Secret/HMAC conditions
 //! - on_delete: Clear SecretRefManager references + EdgionConfigData refs
 //! - update_status: Validate `overrideRef` resolves to a `RegionRouteOverride` EdgionConfigData
 
@@ -40,96 +41,12 @@ impl Default for EdgionPluginsHandler {
     }
 }
 
-fn visit_policy_ip_refs(
-    config: &edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessPolicyConfig,
-    mut visit: impl FnMut(&edgion_resources::resources::edgion_config_data::EdgionConfigDataRef),
-) {
-    use edgion_resources::resources::edgion_plugins::plugin_configs::AccessCondition;
-    for profile in config.profiles.values() {
-        for source in [
-            profile.source_match.direct_peer_ip.as_ref(),
-            profile.source_match.remote_ip.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            for rule in &source.ip_rules {
-                for reference in &rule.ips.refs {
-                    visit(reference);
-                }
-                for group in rule.any_of.iter().flatten() {
-                    for condition in &group.all_of {
-                        if let AccessCondition::IpMatch(ips) = condition {
-                            for reference in &ips.refs {
-                                visit(reference);
-                            }
-                        }
-                    }
-                }
-            }
-            for rule in &source.url_rules {
-                for group in rule.any_of.iter().flatten() {
-                    for condition in &group.all_of {
-                        if let AccessCondition::IpMatch(ips) = condition {
-                            for reference in &ips.refs {
-                                visit(reference);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn visit_policy_ip_refs_mut(
-    config: &mut edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessPolicyConfig,
-    mut visit: impl FnMut(&mut edgion_resources::resources::edgion_config_data::EdgionConfigDataRef),
-) {
-    use edgion_resources::resources::edgion_plugins::plugin_configs::AccessCondition;
-    for profile in config.profiles.values_mut() {
-        for source in [
-            profile.source_match.direct_peer_ip.as_mut(),
-            profile.source_match.remote_ip.as_mut(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            for rule in &mut source.ip_rules {
-                for reference in &mut rule.ips.refs {
-                    visit(reference);
-                }
-                for group in rule.any_of.iter_mut().flatten() {
-                    for condition in &mut group.all_of {
-                        if let AccessCondition::IpMatch(ips) = condition {
-                            for reference in &mut ips.refs {
-                                visit(reference);
-                            }
-                        }
-                    }
-                }
-            }
-            for rule in &mut source.url_rules {
-                for group in rule.any_of.iter_mut().flatten() {
-                    for condition in &mut group.all_of {
-                        if let AccessCondition::IpMatch(ips) = condition {
-                            for reference in &mut ips.refs {
-                                visit(reference);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 // ============================================================================
 // RegionRoute overrideRef helpers
 // ============================================================================
 
 impl EdgionPluginsHandler {
-    /// Clear all EdgionConfigData reverse refs (overrideRef + IpList allow/deny refs) registered by this EdgionPlugins.
+    /// Clear all EdgionConfigData reverse refs registered by this EdgionPlugins.
     fn clear_config_data_refs(ep: &EdgionPlugins, ctx: &HandlerContext) {
         let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
         let ep_name = ep.metadata.name.as_deref().unwrap_or("");
@@ -181,10 +98,6 @@ impl EdgionPluginsHandler {
                         keys.push(format!("{}/{}", rns, r.name));
                     }
                 }
-                EdgionPlugin::RequestAccessPolicy(config) => visit_policy_ip_refs(config, |reference| {
-                    let ref_ns = reference.namespace.as_deref().unwrap_or(ns);
-                    keys.push(format!("{}/{}", ref_ns, reference.name));
-                }),
                 _ => {}
             }
         }
@@ -270,9 +183,6 @@ impl EdgionPluginsHandler {
                     if let Some(r) = config.active_profile_ref.as_mut() {
                         mark_one_ref(r, &from_ns, "EdgionPlugins", ExpectedEntry::Selector, ctx);
                     }
-                    visit_policy_ip_refs_mut(config, |reference| {
-                        mark_one_ref(reference, &from_ns, "EdgionPlugins", ExpectedEntry::IpList, ctx);
-                    });
                 }
                 EdgionPlugin::Canary(config) => {
                     if let Some(r) = config.active_profile_ref.as_mut() {
@@ -395,13 +305,12 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         cred::resolve_ext_proc(&mut ep, &resource_ref, ctx);
         cred::resolve_ldap_auth(&mut ep, &resource_ref, ctx);
         cred::resolve_csrf(&mut ep, &resource_ref, ctx);
-        cred::resolve_request_access_policy(&mut ep, &resource_ref, ctx);
         cred::resolve_forward_auth(&mut ep, &resource_ref, ctx).await;
         cred::resolve_guardrail(&mut ep, &resource_ref, ctx).await;
         cred::resolve_ai_guard(&mut ep, &resource_ref, ctx).await;
         cred::resolve_wasm(&mut ep, &resource_ref, ctx);
 
-        // Clear existing EdgionConfigData override refs for this EP, then re-register from scratch.
+        // Clear existing EdgionConfigData refs for this EP, then re-register from scratch.
         Self::clear_config_data_refs(&ep, ctx);
 
         let ns = ep.metadata.namespace.as_deref().unwrap_or("default").to_string();
@@ -460,6 +369,13 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
 
         // Mark cross-namespace EdgionConfigData refs as denied when no ReferenceGrant permits them.
         Self::mark_config_data_ref_denials(&mut ep, ctx);
+
+        // Expand RequestAccessPolicy IP and URL data before resolving its Secret
+        // references. The expansion registers every direct and nested
+        // EdgionConfigData dependency, so data changes requeue this resource and
+        // atomically replace the gateway-bound runtime snapshot.
+        super::plugins::request_access_policy_data::resolve(&mut ep, &resource_ref, ctx);
+        cred::resolve_request_access_policy(&mut ep, &resource_ref, ctx);
         ProcessResult::Continue(ep)
     }
 
@@ -535,11 +451,17 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         };
 
         let inline_errors = collect_inline_ip_entry_errors(ep);
-        let partially_invalid = if inline_errors.is_empty() {
+        let mut partial_messages = Vec::new();
+        if !inline_errors.is_empty() {
+            partial_messages.push(edgion_resources::matcher::ip_cidr_helpers::format_entry_errors(
+                &inline_errors,
+            ));
+        }
+        partial_messages.extend(request_access_policy_resolution_warnings(ep));
+        let partially_invalid = if partial_messages.is_empty() {
             partially_invalid_condition(None, generation)
         } else {
-            let msg = edgion_resources::matcher::ip_cidr_helpers::format_entry_errors(&inline_errors);
-            partially_invalid_condition(Some(msg), generation)
+            partially_invalid_condition(Some(partial_messages.join("; ")), generation)
         };
 
         // Computed before the mutable `status` borrow below (collect_policy_hits_http
@@ -945,7 +867,6 @@ pub fn resolve_ip_list_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<Res
                     check_ref(reference);
                 }
             }
-            EdgionPlugin::RequestAccessPolicy(config) => visit_policy_ip_refs(config, &mut check_ref),
             _ => {}
         }
     }
@@ -1075,6 +996,19 @@ fn collect_inline_ip_entry_errors(ep: &EdgionPlugins) -> Vec<edgion_resources::m
     errs
 }
 
+fn request_access_policy_resolution_warnings(ep: &EdgionPlugins) -> Vec<String> {
+    ep.spec
+        .request_plugins
+        .iter()
+        .flatten()
+        .filter_map(|entry| match &entry.plugin {
+            EdgionPlugin::RequestAccessPolicy(config) => Some(config.resolution_warnings.iter().cloned()),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::EdgionPluginsHandler;
@@ -1122,49 +1056,47 @@ mod tests {
         active_profile_ref: Option<EdgionConfigDataRef>,
         condition: Option<edgion_resources::resources::edgion_plugins::plugin_configs::AccessCondition>,
     ) -> edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessPolicyConfig {
-        use edgion_resources::resources::edgion_config_data::IpGroup;
         use edgion_resources::resources::edgion_plugins::plugin_configs::{
-            AccessConditionGroup, AccessIpSet, IpFirstRule, IpSourceMatch, RequestAccessProfile, SourceOperator,
-            SourceRules,
+            IpAccessMatch, IpAccessRuleConfig, RequestAccessProfile, RequestAccessRule, RequestAccessRuleType,
+            RequiredRuleGroup,
         };
-        use edgion_resources::resources::edgion_plugins::DefaultAction;
-
-        let any_of = condition.map(|condition| {
-            vec![AccessConditionGroup {
-                all_of: vec![condition],
-            }]
-        });
         edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessPolicyConfig {
             default_profile: "lockdown".to_string(),
             profiles: HashMap::from([(
                 "lockdown".to_string(),
                 RequestAccessProfile {
-                    default_action: DefaultAction::Deny,
-                    source_match: IpSourceMatch {
-                        operator: SourceOperator::Any,
-                        direct_peer_ip: Some(SourceRules {
-                            ip_rules: vec![IpFirstRule {
-                                name: Some("test".to_string()),
-                                ips: AccessIpSet {
-                                    inline: vec![IpGroup {
-                                        name: "all".to_string(),
-                                        description: None,
-                                        cidrs: vec!["0.0.0.0/0".to_string(), "::/0".to_string()],
-                                    }],
+                    required_rule_groups: vec![RequiredRuleGroup {
+                        name: "source".to_string(),
+                        any_of_rules: vec![RequestAccessRule {
+                            name: "test".to_string(),
+                            rule: RequestAccessRuleType::DirectPeerIp(IpAccessRuleConfig {
+                                ip: IpAccessMatch {
+                                    ips: vec!["0.0.0.0/0".to_string(), "::/0".to_string()],
                                     ..Default::default()
                                 },
-                                any_of,
-                            }],
-                            url_rules: vec![],
-                        }),
-                        remote_ip: None,
-                    },
+                                all_of: condition.into_iter().collect(),
+                            }),
+                        }],
+                    }],
                 },
             )]),
             active_profile_ref,
             status: 403,
             message: None,
             description: None,
+            resolved_profiles: None,
+            resolution_warnings: Vec::new(),
+        }
+    }
+
+    fn first_request_access_policy_condition(
+        config: &edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessPolicyConfig,
+    ) -> &edgion_resources::resources::edgion_plugins::plugin_configs::AccessCondition {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessRuleType;
+        let rule = &config.runtime_profiles()["lockdown"].required_rule_groups[0].any_of_rules[0];
+        match &rule.rule {
+            RequestAccessRuleType::DirectPeerIp(ip) | RequestAccessRuleType::RemoteIp(ip) => &ip.all_of[0],
+            RequestAccessRuleType::Url(url) => &url.all_of[0],
         }
     }
 
@@ -2820,6 +2752,233 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn request_access_policy_merges_ip_refs_and_tracks_missing_siblings() {
+        use edgion_resources::resources::edgion_config_data::{IpGroup, IpListData};
+        use edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessRuleType;
+
+        let ip_data = build_edgion_config_data(
+            "default",
+            "shared-networks",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: Default::default(),
+                unknown_fields: Vec::new(),
+                data: ConfigEntry::IpList(IpListData {
+                    items: vec![IpGroup {
+                        name: "shared".to_string(),
+                        description: None,
+                        cidrs: vec!["203.0.113.0/24".to_string()],
+                    }],
+                }),
+            },
+        );
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        runtime
+            .edgion_config_data_store
+            .replace_all(HashMap::from([("default/shared-networks".to_string(), ip_data)]));
+
+        let mut config = request_access_policy_config(None, None);
+        let rule = &mut config.profiles.get_mut("lockdown").unwrap().required_rule_groups[0].any_of_rules[0];
+        let RequestAccessRuleType::DirectPeerIp(ip) = &mut rule.rule else {
+            panic!("expected directPeerIp rule")
+        };
+        ip.ip.ip_refs = vec![
+            EdgionConfigDataRef {
+                name: "shared-networks".to_string(),
+                ..Default::default()
+            },
+            EdgionConfigDataRef {
+                name: "missing-networks".to_string(),
+                ..Default::default()
+            },
+        ];
+
+        let mut ep = EdgionPlugins::new("policy", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestAccessPolicy(config))]);
+        let parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+
+        let EdgionPlugin::RequestAccessPolicy(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("expected RequestAccessPolicy")
+        };
+        let rule = &config.runtime_profiles()["lockdown"].required_rule_groups[0].any_of_rules[0];
+        let RequestAccessRuleType::DirectPeerIp(ip) = &rule.rule else {
+            panic!("expected directPeerIp rule")
+        };
+        let resolved = ip.ip.resolved_ips.as_ref().expect("controller-expanded IP union");
+        assert!(resolved.contains(&"0.0.0.0/0".to_string()));
+        assert!(resolved.contains(&"203.0.113.0/24".to_string()));
+        assert!(config
+            .resolution_warnings
+            .iter()
+            .any(|warning| warning.contains("missing-networks")));
+        assert_eq!(
+            runtime
+                .edgion_config_data_refs
+                .get_refs("default/shared-networks")
+                .len(),
+            1
+        );
+        assert_eq!(
+            runtime
+                .edgion_config_data_refs
+                .get_refs("default/missing-networks")
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn request_access_policy_denied_ip_ref_is_partial_not_unresolved() {
+        use edgion_resources::resources::edgion_config_data::{IpGroup, IpListData};
+        use edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessRuleType;
+
+        let ip_data = build_edgion_config_data(
+            "team-b",
+            "private-networks",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: Default::default(),
+                unknown_fields: Vec::new(),
+                data: ConfigEntry::IpList(IpListData {
+                    items: vec![IpGroup {
+                        name: "private".to_string(),
+                        description: None,
+                        cidrs: vec!["203.0.113.0/24".to_string()],
+                    }],
+                }),
+            },
+        );
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        runtime
+            .edgion_config_data_store
+            .replace_all(HashMap::from([("team-b/private-networks".to_string(), ip_data)]));
+        let mut config = request_access_policy_config(None, None);
+        let rule = &mut config.profiles.get_mut("lockdown").unwrap().required_rule_groups[0].any_of_rules[0];
+        let RequestAccessRuleType::DirectPeerIp(ip) = &mut rule.rule else {
+            panic!("expected directPeerIp rule")
+        };
+        ip.ip.ip_refs.push(EdgionConfigDataRef {
+            name: "private-networks".to_string(),
+            namespace: Some("team-b".to_string()),
+            ..Default::default()
+        });
+
+        let mut ep = EdgionPlugins::new("policy", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("team-a".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestAccessPolicy(config))]);
+        let mut parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        EdgionPluginsHandler.update_status(&mut parsed, &ctx, &[]);
+
+        let conditions = &parsed.status.as_ref().unwrap().conditions;
+        let resolved = conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        let partial = conditions
+            .iter()
+            .find(|condition| condition.type_ == "PartiallyInvalid")
+            .unwrap();
+        assert_eq!(resolved.status, "True");
+        assert_eq!(partial.status, "True");
+        assert!(partial.message.contains("not permitted"));
+        assert_eq!(
+            runtime
+                .edgion_config_data_refs
+                .get_refs("team-b/private-networks")
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn request_access_policy_expands_url_data_and_tracks_dependency() {
+        use edgion_resources::resources::edgion_config_data::RequestAccessUrlAllowListData;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{
+            AccessPathMatch, AccessPathMatchType, RequestAccessRule, RequestAccessRuleType,
+            RequestAccessUrlAllowListRef, UrlAccessCandidate, UrlAccessRuleConfig,
+        };
+
+        let url_data = build_edgion_config_data(
+            "default",
+            "vendor-callbacks",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: Default::default(),
+                unknown_fields: Vec::new(),
+                data: ConfigEntry::RequestAccessUrlAllowList(RequestAccessUrlAllowListData {
+                    items: vec![UrlAccessCandidate {
+                        name: "vendor".to_string(),
+                        hosts: vec!["callbacks.example.com".to_string()],
+                        paths: vec![AccessPathMatch {
+                            match_type: AccessPathMatchType::PathPrefix,
+                            value: "/callbacks/:vendor".to_string(),
+                        }],
+                        all_of: Vec::new(),
+                    }],
+                }),
+            },
+        );
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        runtime
+            .edgion_config_data_store
+            .replace_all(HashMap::from([("default/vendor-callbacks".to_string(), url_data)]));
+
+        let mut config = request_access_policy_config(None, None);
+        config.profiles.get_mut("lockdown").unwrap().required_rule_groups[0].any_of_rules = vec![RequestAccessRule {
+            name: "vendor-url".to_string(),
+            rule: RequestAccessRuleType::Url(UrlAccessRuleConfig {
+                hosts: Vec::new(),
+                paths: Vec::new(),
+                all_of: Vec::new(),
+                config_refs: vec![RequestAccessUrlAllowListRef {
+                    reference: EdgionConfigDataRef {
+                        name: "vendor-callbacks".to_string(),
+                        ..Default::default()
+                    },
+                    validate: Default::default(),
+                }],
+                resolved_candidates: None,
+            }),
+        }];
+
+        let mut ep = EdgionPlugins::new("policy", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestAccessPolicy(config))]);
+        let parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        let EdgionPlugin::RequestAccessPolicy(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("expected RequestAccessPolicy")
+        };
+        let RequestAccessRuleType::Url(url) =
+            &config.runtime_profiles()["lockdown"].required_rule_groups[0].any_of_rules[0].rule
+        else {
+            panic!("expected URL rule")
+        };
+        let candidates = url.resolved_candidates.as_ref().expect("expanded URL candidates");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].name, "vendor");
+        assert_eq!(
+            runtime
+                .edgion_config_data_refs
+                .get_refs("default/vendor-callbacks")
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn request_access_policy_resolves_secret_values() {
         use edgion_resources::common::KeyGet;
         use edgion_resources::resources::edgion_plugins::plugin_configs::{AccessCondition, SecretMatchCondition};
@@ -2857,16 +3016,7 @@ mod tests {
             EdgionPlugin::RequestAccessPolicy(c) => c,
             _ => panic!("unexpected plugin type"),
         };
-        let condition = &config.profiles["lockdown"]
-            .source_match
-            .direct_peer_ip
-            .as_ref()
-            .unwrap()
-            .ip_rules[0]
-            .any_of
-            .as_ref()
-            .unwrap()[0]
-            .all_of[0];
+        let condition = first_request_access_policy_condition(config);
         let AccessCondition::SecretMatch(condition) = condition else {
             panic!("unexpected condition type")
         };
@@ -2911,16 +3061,7 @@ mod tests {
             EdgionPlugin::RequestAccessPolicy(c) => c,
             _ => panic!("unexpected plugin type"),
         };
-        let condition = &config.profiles["lockdown"]
-            .source_match
-            .direct_peer_ip
-            .as_ref()
-            .unwrap()
-            .ip_rules[0]
-            .any_of
-            .as_ref()
-            .unwrap()[0]
-            .all_of[0];
+        let condition = first_request_access_policy_condition(config);
         let AccessCondition::SecretMatch(condition) = condition else {
             panic!("unexpected condition type")
         };
@@ -3219,16 +3360,7 @@ mod tests {
             EdgionPlugin::RequestAccessPolicy(c) => c,
             _ => panic!("unexpected plugin type"),
         };
-        let condition = &config.profiles["lockdown"]
-            .source_match
-            .direct_peer_ip
-            .as_ref()
-            .unwrap()
-            .ip_rules[0]
-            .any_of
-            .as_ref()
-            .unwrap()[0]
-            .all_of[0];
+        let condition = first_request_access_policy_condition(config);
         let AccessCondition::SecretMatch(condition) = condition else {
             panic!("unexpected condition type")
         };

@@ -194,6 +194,10 @@ impl EdgionConfigDataStore {
                         ip_list.insert(key.clone(), Arc::new(matcher));
                     }
                 }
+                ConfigEntry::RequestAccessUrlAllowList(_) => {
+                    // RequestAccessPolicy URL data is expanded by the Controller.
+                    // No Gateway request-time index is built for this variant.
+                }
                 ConfigEntry::Selector(_) => {
                     // Active-profile selector. Not indexed — the GlobalConnectionIpRestriction
                     // plugin reads it via `get_raw_by_key` and type-guards inline.

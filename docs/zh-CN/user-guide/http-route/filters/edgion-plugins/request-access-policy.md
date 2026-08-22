@@ -1,36 +1,20 @@
 # 请求访问策略
 
-`RequestAccessPolicy` 是纯七层请求插件，可通过 Gateway 的插件引用作用于整个网关，也可通过 HTTPRoute 的 `ExtensionRef` 只作用于某条路由。
+`RequestAccessPolicy` 是纯七层请求插件，可以挂载到 Gateway，也可以通过 `ExtensionRef` 只挂载到某条 HTTPRoute。
 
 ## 策略模型
 
-配置包含多个命名 profile，并通过 `defaultProfile` 指定默认项。可选的 `activeProfileRef` 引用 Selector 类型的 `EdgionConfigData`，用于热切换 profile。Selector 不存在、类型错误、跨命名空间引用被拒绝或选中了未知 profile 时，请求会被拒绝。
+配置包含多个命名 profile，并通过 `defaultProfile` 指定默认项。可选的 `activeProfileRef` 引用 Selector 类型的 `EdgionConfigData`；Selector 不可用属于硬失败，请求会被拒绝。
 
-每个 profile 分别判断两个 IP 身份：
+每个 profile 包含 `requiredRuleGroups`，所有 group 都必须通过（AND）。每个 group 内的 `anyOfRules` 只需有一条完整规则通过（OR），而且同一 group 可以混合三种规则：
 
-- `directPeerIp`：当前 TCP 连接的直接上一跳，不会被请求头改写，安全规则应优先使用它。
-- `remoteIp`：RealIp 根据可信代理配置解析出的客户端地址；可信代理配置错误时可能被伪造。
+- `directPeerIp`：先匹配当前 TCP 连接的直接上一跳，再检查所有 `allOf` 条件。
+- `remoteIp`：先匹配 RealIp 解析出的客户端地址，再检查所有 `allOf` 条件。
+- `url`：先匹配 path，再匹配精确 host 和所有 `allOf` 条件。
 
-`sourceMatch.operator` 默认为 `any`。设为 `all` 时必须同时配置两个 IP 分支，并且两个分支都要匹配。
+Controller 会把一条完整 IP 规则中的内联 IP 与所有有效 `ipRefs` 合并，并统一编译成一棵 radix tree。`configRefs` 引用强类型 `RequestAccessUrlAllowList`。IP/URL 数据引用不存在、未启用、类型错误或跨命名空间未授权时，只忽略该引用并记录 `PartiallyInvalid`，其他有效引用继续生效。ConfigData 或 Secret 更新后会自动 requeue 对应的 `EdgionPlugins` 并重新生成运行时快照。
 
-每个 IP 分支包含两类互为 OR 的规则：
-
-- `ipRules`：先匹配 IP，再判断可选的辅助条件。
-- `urlRules`：先匹配精确 host 和 path，再判断可选的辅助条件。Exact 和 PathPrefix 使用 radix tree，并支持 `/callbacks/:vendor` 形式的参数段。
-
-不写 `anyOf` 表示主条件匹配即可。写了以后，`anyOf` 各项之间是 OR，每项内部的 `allOf` 是 AND；空数组会在配置校验阶段被拒绝。
-
-## 辅助条件
-
-`allOf` 支持：
-
-- `keyExist`：本地 `KeyGet` 值存在。
-- `keyMatch`：本地 `KeyGet` 值匹配 `value`、`values` 或 `regex`。
-- `secretMatch`：本地 `KeyGet` 值与 Secret 中任一值精确相等。
-- `ipMatch`：当前分支的 IP 命中内联或 ConfigData IP 列表。
-- `hmacAuth`：通过标准 HMAC 校验；嵌入策略时不会修改请求头。
-
-策略条件禁止使用 Webhook 类型的 KeyGet，避免访问控制依赖运行时外部网络调用。解析后的 Secret 和 HMAC 凭据在管理配置输出中会被脱敏。
+`allOf` 支持 `keyExist`、`keyMatch`、`secretMatch`、`directPeerIpMatch`、`remoteIpMatch` 和 `hmacAuth`。Secret/HMAC 在 Controller 解析，管理配置输出中的敏感值会被脱敏。
 
 ## 示例
 
@@ -46,46 +30,41 @@ spec:
       config:
         defaultProfile: lockdown
         status: 403
-        message: Access denied
         profiles:
           lockdown:
-            defaultAction: deny
-            sourceMatch:
-              operator: any
-              directPeerIp:
-                ipRules:
-                  - name: internal
-                    ips:
-                      refs:
-                        - name: internal-networks
-                  - name: cdn
-                    ips:
-                      refs:
-                        - name: cdn-networks
-                    anyOf:
-                      - allOf:
-                          - type: secretMatch
-                            key:
-                              type: header
-                              name: X-Origin-Token
-                            secretRef:
-                              name: cdn-origin-token
-                urlRules:
+            requiredRuleGroups:
+              - name: trusted-previous-hop
+                anyOfRules:
+                  - name: internal-peer
+                    type: directPeerIp
+                    config:
+                      ipRefs: [{ name: internal-networks }]
+                  - name: authenticated-cdn
+                    type: directPeerIp
+                    config:
+                      ipRefs: [{ name: cloudflare-networks }]
+                      allOf:
+                        - type: secretMatch
+                          key: { type: header, name: X-Origin-Token }
+                          secretRef: { name: cloudflare-origin-token }
+              - name: allowed-client
+                anyOfRules:
+                  - name: internal-client
+                    type: remoteIp
+                    config:
+                      ipRefs: [{ name: internal-networks }]
                   - name: vendor-callback
-                    urls:
-                      - hosts: ["callbacks.example.com"]
-                        paths:
-                          - type: PathPrefix
-                            value: /callbacks/:vendor
-                    anyOf:
-                      - allOf:
-                          - type: ipMatch
-                            refs:
-                              - name: vendor-networks
+                    type: url
+                    config:
+                      hosts: [callbacks.example.com]
+                      paths:
+                        - type: PathPrefix
+                          value: /callbacks/:vendor
+                      allOf:
+                        - type: remoteIpMatch
+                          ipRefs: [{ name: vendor-networks }]
 ```
 
-host 会先去掉端口和结尾的 DNS 点并转成小写，然后做精确匹配；不支持通配 host。PathPrefix 只在路径段边界匹配，因此 `/api` 不会匹配 `/apiv2`。
+`Exact` 和 `PathPrefix` 支持路由风格的 `:参数` 路径段，并统一编译到 profile 级 radix tree。host 会去掉端口和末尾 DNS 点、转为小写后精确匹配，不支持通配 host。
 
-## 失败策略
-
-插件固定 fail-close。初始化失败、profile/Selector 不可用、IP 列表引用未解析、Secret 值缺失或 HMAC 校验失败，都不能放行请求。正常完成规则判断但没有命中时，才使用 profile 的 `defaultAction`。
+插件固定 fail-close。每个 required group 都必须找到一条成功的完整规则；配置错误或 profile 选择失败都会拒绝请求。

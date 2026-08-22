@@ -722,14 +722,14 @@ mod request_access_policy_variant_tests {
                 "defaultProfile": "normal",
                 "profiles": {
                     "normal": {
-                        "defaultAction": "deny",
-                        "sourceMatch": {
-                            "directPeerIp": {
-                                "ipRules": [{
-                                    "ips": { "inline": [{ "name": "internal", "cidrs": ["10.0.0.0/8"] }] }
-                                }]
-                            }
-                        }
+                        "requiredRuleGroups": [{
+                            "name": "peer",
+                            "anyOfRules": [{
+                                "name": "internal",
+                                "type": "directPeerIp",
+                                "config": { "ips": ["10.0.0.0/8"] }
+                            }]
+                        }]
                     }
                 }
             }
@@ -748,32 +748,29 @@ mod request_access_policy_variant_tests {
             profiles: std::collections::HashMap::from([(
                 "normal".to_string(),
                 crate::resources::edgion_plugins::plugin_configs::RequestAccessProfile {
-                    default_action: crate::resources::edgion_plugins::plugin_configs::DefaultAction::Deny,
-                    source_match: crate::resources::edgion_plugins::plugin_configs::IpSourceMatch {
-                        operator: crate::resources::edgion_plugins::plugin_configs::SourceOperator::Any,
-                        direct_peer_ip: Some(crate::resources::edgion_plugins::plugin_configs::SourceRules {
-                            ip_rules: vec![crate::resources::edgion_plugins::plugin_configs::IpFirstRule {
-                                name: None,
-                                ips: crate::resources::edgion_plugins::plugin_configs::AccessIpSet {
-                                    inline: vec![crate::resources::edgion_config_data::IpGroup {
-                                        name: "internal".to_string(),
-                                        description: None,
-                                        cidrs: vec!["10.0.0.0/8".to_string()],
-                                    }],
-                                    ..Default::default()
+                    required_rule_groups: vec![crate::resources::edgion_plugins::plugin_configs::RequiredRuleGroup {
+                        name: "peer".to_string(),
+                        any_of_rules: vec![crate::resources::edgion_plugins::plugin_configs::RequestAccessRule {
+                            name: "internal".to_string(),
+                            rule: crate::resources::edgion_plugins::plugin_configs::RequestAccessRuleType::DirectPeerIp(
+                                crate::resources::edgion_plugins::plugin_configs::IpAccessRuleConfig {
+                                    ip: crate::resources::edgion_plugins::plugin_configs::IpAccessMatch {
+                                        ips: vec!["10.0.0.0/8".to_string()],
+                                        ..Default::default()
+                                    },
+                                    all_of: vec![],
                                 },
-                                any_of: None,
-                            }],
-                            url_rules: vec![],
-                        }),
-                        remote_ip: None,
-                    },
+                            ),
+                        }],
+                    }],
                 },
             )]),
             description: None,
             active_profile_ref: None,
             status: 403,
             message: None,
+            resolved_profiles: None,
+            resolution_warnings: vec![],
         };
         let p = EdgionPlugin::RequestAccessPolicy(cfg);
         assert!(p.validation_error().unwrap().contains("defaultProfile"));

@@ -1,10 +1,10 @@
-//! Resolve Secret-backed RequestAccessPolicy conditions.
+//! Resolve Secret-backed RequestAccessPolicy conditions after data expansion.
 
 use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_secret, FetchOutcome, PendingReason};
 use crate::conf_mgr::sync_runtime::resource_processor::{format_secret_key, HandlerContext, ResourceRef};
 use edgion_resources::prelude_resources::EdgionPlugins;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{
-    AccessCondition, AccessConditionGroup, SecretMatchCondition, SourceRules,
+    AccessCondition, RequestAccessRuleType, SecretMatchCondition,
 };
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 
@@ -62,39 +62,25 @@ fn resolve_secret_match(
     }
 }
 
-fn resolve_groups(
-    groups: Option<&mut Vec<AccessConditionGroup>>,
+fn resolve_conditions(
+    conditions: &mut [AccessCondition],
     owner_namespace: Option<&String>,
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    let Some(groups) = groups else { return };
-    for group in groups {
-        for condition in &mut group.all_of {
-            match condition {
-                AccessCondition::SecretMatch(condition) => {
-                    resolve_secret_match(condition, owner_namespace, resource_ref, ctx);
-                }
-                AccessCondition::HmacAuth(config) => {
-                    hmac::resolve_config(config, owner_namespace, resource_ref, ctx);
-                }
-                _ => {}
+    for condition in conditions {
+        match condition {
+            AccessCondition::SecretMatch(condition) => {
+                resolve_secret_match(condition, owner_namespace, resource_ref, ctx);
             }
+            AccessCondition::HmacAuth(config) => {
+                hmac::resolve_config(config, owner_namespace, resource_ref, ctx);
+            }
+            AccessCondition::KeyExist(_)
+            | AccessCondition::KeyMatch(_)
+            | AccessCondition::DirectPeerIpMatch(_)
+            | AccessCondition::RemoteIpMatch(_) => {}
         }
-    }
-}
-
-fn resolve_source(
-    source: &mut SourceRules,
-    owner_namespace: Option<&String>,
-    resource_ref: &ResourceRef,
-    ctx: &HandlerContext,
-) {
-    for rule in &mut source.ip_rules {
-        resolve_groups(rule.any_of.as_mut(), owner_namespace, resource_ref, ctx);
-    }
-    for rule in &mut source.url_rules {
-        resolve_groups(rule.any_of.as_mut(), owner_namespace, resource_ref, ctx);
     }
 }
 
@@ -111,12 +97,30 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
         let EdgionPlugin::RequestAccessPolicy(config) = &mut entry.plugin else {
             continue;
         };
-        for profile in config.profiles.values_mut() {
-            if let Some(source) = &mut profile.source_match.direct_peer_ip {
-                resolve_source(source, owner_namespace.as_ref(), resource_ref, ctx);
-            }
-            if let Some(source) = &mut profile.source_match.remote_ip {
-                resolve_source(source, owner_namespace.as_ref(), resource_ref, ctx);
+        let Some(profiles) = config.resolved_profiles.as_mut() else {
+            continue;
+        };
+        for profile in profiles.values_mut() {
+            for group in &mut profile.required_rule_groups {
+                for rule in &mut group.any_of_rules {
+                    match &mut rule.rule {
+                        RequestAccessRuleType::DirectPeerIp(config) | RequestAccessRuleType::RemoteIp(config) => {
+                            resolve_conditions(&mut config.all_of, owner_namespace.as_ref(), resource_ref, ctx);
+                        }
+                        RequestAccessRuleType::Url(config) => {
+                            if let Some(candidates) = &mut config.resolved_candidates {
+                                for candidate in candidates {
+                                    resolve_conditions(
+                                        &mut candidate.all_of,
+                                        owner_namespace.as_ref(),
+                                        resource_ref,
+                                        ctx,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

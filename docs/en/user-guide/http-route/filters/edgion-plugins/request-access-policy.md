@@ -1,42 +1,24 @@
 # Request Access Policy
 
-> **Edgion extension**
->
-> `RequestAccessPolicy` is an L7 request plugin in the `EdgionPlugins` CRD. Attach it to a Gateway through the Gateway plugin reference, or to an individual HTTPRoute through an `ExtensionRef` filter.
+`RequestAccessPolicy` is an L7 request plugin. It can be attached to a Gateway or to one HTTPRoute through an `ExtensionRef`.
 
-## Model
+## Evaluation model
 
-A configuration contains named profiles and a required `defaultProfile`. An optional `activeProfileRef` points to a Selector `EdgionConfigData` and switches profiles without changing the plugin resource. An unavailable, denied, wrong-type, or unknown selector result denies the request.
+A configuration contains named profiles and a required `defaultProfile`. An optional `activeProfileRef` selects a profile through Selector `EdgionConfigData`. Selector failures are hard failures and deny the request.
 
-Each profile evaluates two distinct IP identities:
+Each profile contains `requiredRuleGroups`. Every group must pass (AND). Within one group, any complete rule in `anyOfRules` may pass (OR). The complete rule types are:
 
-- `directPeerIp`: the immediate TCP peer. It is never rewritten and is the preferred security boundary.
-- `remoteIp`: the client address resolved by RealIp from trusted proxy headers. Use it only when the trusted proxy configuration is correct.
+- `directPeerIp`: matches the immediate TCP peer, then every `allOf` condition.
+- `remoteIp`: matches the RealIp-resolved client, then every `allOf` condition.
+- `url`: matches a path first, then an exact host and every `allOf` condition.
 
-`sourceMatch.operator` is `any` by default. With `all`, both IP sources must be configured and both branches must match.
+One group may mix all three rule types. This directly models alternatives such as an internal client IP or an authenticated vendor callback.
 
-Each source has two OR-ed rule lists:
+Inline IPs and all usable `ipRefs` in one complete IP rule are expanded by the Controller and compiled into one radix matcher. `configRefs` import typed `RequestAccessUrlAllowList` data. Missing, disabled, wrong-type, or unpermitted IP/URL data refs are ignored individually and reported through `PartiallyInvalid`; valid siblings continue to work. ConfigData and Secret changes dynamically requeue the owning `EdgionPlugins` resource.
 
-- `ipRules`: match the source IP first, then evaluate optional auxiliary conditions.
-- `urlRules`: match exact host and path first, then evaluate optional auxiliary conditions. Exact and prefix paths use a radix tree and support `:parameter` segments.
-
-An omitted `anyOf` means the primary IP or URL match is sufficient. When present, `anyOf` is OR and each `allOf` is AND. Empty groups are rejected.
-
-## Conditions
-
-The supported `allOf` condition types are:
-
-- `keyExist`: a local unified `KeyGet` value must exist.
-- `keyMatch`: a local `KeyGet` value must match `value`, `values`, or `regex`.
-- `secretMatch`: a local `KeyGet` value must exactly match one value from a referenced Secret.
-- `ipMatch`: the current branch's IP must match an inline or ConfigData-backed IP set.
-- `hmacAuth`: the request must pass the standard HMAC verifier. It performs no header mutation when embedded in this policy.
-
-Webhook-backed keys are rejected because access decisions must not add a runtime network dependency. Secret values and resolved HMAC credentials are redacted from the admin configuration output.
+Supported `allOf` conditions are `keyExist`, `keyMatch`, `secretMatch`, `directPeerIpMatch`, `remoteIpMatch`, and `hmacAuth`. Secret and HMAC material is resolved by the Controller and redacted from admin configuration output.
 
 ## Example
-
-This policy allows internal callers by direct peer IP, or Cloudflare callers that come from the configured CDN range and present the Secret-backed token. It also permits a vendor only on one exact host and route-shaped path.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -50,77 +32,45 @@ spec:
       config:
         defaultProfile: lockdown
         status: 403
-        message: Access denied
-        activeProfileRef:
-          name: dev-access-selector
         profiles:
           lockdown:
-            defaultAction: deny
-            sourceMatch:
-              operator: any
-              directPeerIp:
-                ipRules:
-                  - name: internal
-                    ips:
-                      refs:
+            requiredRuleGroups:
+              - name: trusted-previous-hop
+                anyOfRules:
+                  - name: internal-peer
+                    type: directPeerIp
+                    config:
+                      ipRefs:
                         - name: internal-networks
-                  - name: cloudflare
-                    ips:
-                      refs:
+                  - name: authenticated-cdn
+                    type: directPeerIp
+                    config:
+                      ipRefs:
                         - name: cloudflare-networks
-                    anyOf:
-                      - allOf:
-                          - type: secretMatch
-                            key:
-                              type: header
-                              name: X-Origin-Token
-                            secretRef:
-                              name: cloudflare-origin-token
-                urlRules:
+                      allOf:
+                        - type: secretMatch
+                          key: { type: header, name: X-Origin-Token }
+                          secretRef: { name: cloudflare-origin-token }
+              - name: allowed-client
+                anyOfRules:
+                  - name: internal-client
+                    type: remoteIp
+                    config:
+                      ipRefs:
+                        - name: internal-networks
                   - name: vendor-callback
-                    urls:
-                      - hosts: ["callbacks.example.com"]
-                        paths:
-                          - type: PathPrefix
-                            value: /callbacks/:vendor
-                    anyOf:
-                      - allOf:
-                          - type: ipMatch
-                            refs:
-                              - name: vendor-networks
+                    type: url
+                    config:
+                      hosts: [callbacks.example.com]
+                      paths:
+                        - type: PathPrefix
+                          value: /callbacks/:vendor
+                      allOf:
+                        - type: remoteIpMatch
+                          ipRefs:
+                            - name: vendor-networks
 ```
 
-An IP list reference points to `EdgionConfigData` with `type: IpList`:
+`Exact` and `PathPrefix` entries support route-style `:parameter` segments and share one profile-wide radix tree. `PathPrefix` matches only at segment boundaries. `RegularExpression` uses a compiled Rust regex. Hosts are exact, case-insensitive matches after port and trailing-dot normalization; wildcard hosts are rejected.
 
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionConfigData
-metadata:
-  name: internal-networks
-  namespace: edgion-system
-spec:
-  data:
-    type: IpList
-    config:
-      items:
-        - name: private
-          cidrs: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
-```
-
-## Path and host behavior
-
-Hosts are exact, case-insensitive matches after removing a port and trailing DNS dot. Wildcard hosts are rejected. Every URL entry must contain at least one host and path.
-
-Path types are:
-
-- `Exact`: the whole normalized request path must match.
-- `PathPrefix`: the path must match at a segment boundary. `/api` does not match `/apiv2`.
-- `RegularExpression`: the configured Rust regex must match the normalized request path.
-
-Static and parameterized Exact/PathPrefix entries are indexed by the shared path radix tree.
-
-## Failure behavior
-
-The plugin fails closed. Invalid runtime initialization, an unavailable selected profile, an unresolved selector, an unresolved IP allow-list reference, a missing Secret value, or failed HMAC verification cannot authorize a request. A profile's `defaultAction` is applied only after normal rule evaluation; it does not turn configuration failures into authorization.
-
-The plugin records `allow:<source>:<rule>`, `allow:default`, or `deny:no-match` in its access-log entry.
+The plugin always fails closed. Every required group must find a successful complete rule; configuration or profile-selection failures deny the request.

@@ -195,7 +195,7 @@ impl RequestAccessPolicyTestSuite {
     fn test_access_log_allow_decision() -> TestCase {
         TestCase::new(
             "access_log_allow_decision",
-            "Access log: allow path records allow:directPeerIp:cloudflare",
+            "Access log: allow path records allow:matched",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -233,18 +233,15 @@ impl RequestAccessPolicyTestSuite {
 
                                         match policy_log {
                                             Some(log) => {
-                                                if log.log.iter().any(|l| l.contains("allow:directPeerIp:cloudflare")) {
+                                                if log.log.iter().any(|l| l.contains("allow:matched")) {
                                                     TestResult::passed_with_message(
                                                         start.elapsed(),
-                                                        "Access log contains allow:directPeerIp:cloudflare".to_string(),
+                                                        "Access log contains allow:matched".to_string(),
                                                     )
                                                 } else {
                                                     TestResult::failed(
                                                         start.elapsed(),
-                                                        format!(
-                                                            "Expected allow:directPeerIp:cloudflare in log, got: {:?}",
-                                                            log.log
-                                                        ),
+                                                        format!("Expected allow:matched in log, got: {:?}", log.log),
                                                     )
                                                 }
                                             }

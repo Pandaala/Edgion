@@ -125,9 +125,11 @@ pub use region_route::{
     HashAlgorithm, HashCalcConfig, RegionDef, RegionRouteConfig, RouteByKeyConfMatchMeta, RouteRule,
 };
 pub use request_access_policy::{
-    AccessCondition, AccessConditionGroup, AccessIpSet, AccessPathMatch, AccessPathMatchType, AccessUrlMatch,
-    IpFirstRule, IpSourceMatch, RequestAccessPolicyConfig, RequestAccessProfile, SecretMatchCondition, SourceOperator,
-    SourceRules, UrlFirstRule,
+    AccessCondition, AccessPathMatch, AccessPathMatchType, IpAccessMatch, IpAccessRuleConfig,
+    RequestAccessPolicyConfig, RequestAccessProfile, RequestAccessRule, RequestAccessRuleType,
+    RequestAccessUrlAllowListRef, RequiredRuleGroup, SecretMatchCondition, UrlAccessCandidate, UrlAccessRuleConfig,
+    UrlAllowListRefValidation, DEFAULT_MAX_REFERENCED_IP_RULES, DEFAULT_MAX_REFERENCED_URL_RULES,
+    MAX_REFERENCED_IP_RULES, MAX_REFERENCED_URL_RULES,
 };
 pub use request_body_buffer::RequestBodyBufferConfig;
 pub use request_match::{OnMissing, RestrictionRule, RestrictionSource, SanType};
