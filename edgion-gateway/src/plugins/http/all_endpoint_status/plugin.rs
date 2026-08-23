@@ -398,15 +398,18 @@ impl AllEndpointStatus {
                     let req_method: reqwest::Method = method.parse().unwrap_or(reqwest::Method::GET);
                     let mut req = client.request(req_method, &url).timeout(timeout);
 
-                    // Forward original headers, filtering hop-by-hop
-                    // (RFC 9110 §7.6.1 — static set plus names dynamically listed
-                    // in the originating request's Connection: header value).
+                    // Forward original headers. Skip hop-by-hop (RFC 9110 §7.6.1),
+                    // Host (rewritten below to the backend service), and headers
+                    // that describe the inbound body — this probe sends none.
                     for (name, value) in &headers {
-                        if !is_hop_by_hop_or_listed(name, &dynamic_listed) && !name.eq_ignore_ascii_case("host") {
-                            req = req.header(name.as_str(), value.as_str());
+                        if is_hop_by_hop_or_listed(name, &dynamic_listed)
+                            || name.eq_ignore_ascii_case("host")
+                            || is_inbound_body_header(name)
+                        {
+                            continue;
                         }
+                        req = req.header(name.as_str(), value.as_str());
                     }
-                    // Set Host to backend service name
                     req = req.header("Host", backend_name.as_str());
 
                     match req.send().await {
@@ -463,6 +466,15 @@ impl AllEndpointStatus {
         // Wall-clock timeout with partial result preservation
         fan_out_with_wall_timeout(futures, wall_timeout).await
     }
+}
+
+/// Headers that describe the inbound message body.
+///
+/// `Content-Length` and `Expect` are end-to-end, so hop-by-hop filtering leaves
+/// them alone. The status probe sends no body, so copying them makes the backend
+/// wait for bytes that never arrive, or answer `417`.
+fn is_inbound_body_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("content-length") || name.eq_ignore_ascii_case("expect")
 }
 
 /// Fan-out with wall timeout that preserves partial results.
@@ -537,6 +549,19 @@ mod tests {
         assert!(wall_timeout_hit);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].address, "delay-1");
+    }
+
+    #[test]
+    fn inbound_body_headers_are_content_length_and_expect() {
+        assert!(is_inbound_body_header("Content-Length"));
+        assert!(is_inbound_body_header("expect"));
+        assert!(
+            !is_inbound_body_header("Transfer-Encoding"),
+            "Transfer-Encoding is hop-by-hop, not an inbound-body header"
+        );
+        assert!(!is_inbound_body_header("authorization"));
+        assert!(!is_inbound_body_header("host"));
+        assert!(is_hop_by_hop_or_listed("Transfer-Encoding", &[]));
     }
 }
 
