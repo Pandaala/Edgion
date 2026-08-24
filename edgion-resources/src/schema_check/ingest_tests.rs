@@ -328,6 +328,7 @@ fn config_data_url_allow_list_keeps_secret_match_strict() {
             "allOf": [{
                 "type": "secretMatch",
                 "key": {"type": "header", "name": "X-Access-Key"},
+                "secretKey": "token",
                 "secretRef": {"name": "access-secret"},
                 "unexpectedCredentialField": true
             }]

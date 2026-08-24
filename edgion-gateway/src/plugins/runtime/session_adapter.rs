@@ -7,7 +7,7 @@ use pingora_proxy::Session;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::conditions::{EvaluationResult, PluginConditionsExt};
+use super::conditions::EvaluationResult;
 use super::dye_plan::{CompiledDyePlan, CompiledDyeRule};
 use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use super::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader, RouteProto};
@@ -18,7 +18,7 @@ use crate::request_body::BodyStorage;
 use crate::request_body::{BodyOperationError, BodyScanResult};
 use crate::runtime::server::{http_to_grpc_status, send_grpc_trailers_only_frame};
 use crate::{EdgionHttpContext, MirrorState, PendingHeaderOp, ResponseStageDenial, SetJumpOutcome, UpstreamJumpTarget};
-use edgion_resources::common::{KeyGet, KeySet, WebhookExtract};
+use edgion_resources::common::{KeyGet, KeySet};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::sanitize_field_value;
 use edgion_resources::EdgionStatus;
@@ -460,24 +460,6 @@ impl<'a> PingoraSessionAdapter<'a> {
         send_grpc_trailers_only_frame(self.inner, resp, grpc_status, message)
             .await
             .map_err(|e| Box::new(e) as PluginSessionError)
-    }
-
-    /// Resolve a key value by calling an external webhook service.
-    ///
-    /// Looks up the WebhookRuntime from the global registry, performs health/rate-limit
-    /// checks, sends the HTTP request with retry, and extracts the value from the response.
-    ///
-    /// The outbound request shape (method, path, headers, body) is defined entirely
-    /// by the webhook resource and applied inside `webhook_call`; the consumer only
-    /// supplies the `session` and an optional `path_override`.
-    async fn resolve_webhook(
-        &self,
-        webhook_ref: &str,
-        path_override: Option<&str>,
-        extract: &WebhookExtract,
-    ) -> Option<String> {
-        use crate::link_sys::providers::webhook::resolve_webhook_key;
-        resolve_webhook_key(self, webhook_ref, None, path_override, extract).await
     }
 
     /// Extract path parameters from route pattern (lazy extraction).
@@ -1500,45 +1482,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         }
     }
 
-    async fn key_get(&self, key: &KeyGet) -> Option<String> {
-        match key {
-            // ---- Sync variants: zero-cost, no actual await ----
-            KeyGet::RemoteIp => {
-                let ip = self.remote_ip();
-                if ip.is_empty() {
-                    None
-                } else {
-                    Some(ip.to_string())
-                }
-            }
-            KeyGet::Header { name } => self.header_value(name),
-            KeyGet::Cookie { name } => self.get_cookie(name),
-            KeyGet::Query { name } => self.get_query_param(name),
-            KeyGet::Path => Some(self.get_path().to_string()),
-            KeyGet::Method => Some(self.get_method().to_string()),
-            KeyGet::Ctx { name } => self.get_ctx_var(name),
-            KeyGet::RemoteIpAndPath => {
-                let ip = self.remote_ip();
-                if ip.is_empty() {
-                    None
-                } else {
-                    Some(format!("{}:{}", ip, self.get_path()))
-                }
-            }
-
-            // ---- Async variant: calls external webhook service ----
-            KeyGet::Webhook {
-                webhook_ref,
-                path_override,
-                extract,
-            } => {
-                self.resolve_webhook(webhook_ref, path_override.as_deref(), extract)
-                    .await
-            }
-        }
-    }
-
-    fn key_get_local(&self, key: &KeyGet) -> Option<String> {
+    fn key_get(&self, key: &KeyGet) -> Option<String> {
         match key {
             KeyGet::RemoteIp => {
                 let ip = self.remote_ip();
@@ -1552,6 +1496,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             KeyGet::Cookie { name } => self.get_cookie(name),
             KeyGet::Query { name } => self.get_query_param(name),
             KeyGet::Path => Some(self.get_path().to_string()),
+            KeyGet::RequestPath => Some(self.get_request_path().to_string()),
             KeyGet::Method => Some(self.get_method().to_string()),
             KeyGet::Ctx { name } => self.get_ctx_var(name),
             KeyGet::RemoteIpAndPath => {
@@ -1562,7 +1507,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                     Some(format!("{}:{}", ip, self.get_path()))
                 }
             }
-            KeyGet::Webhook { .. } => None,
         }
     }
 
@@ -1734,7 +1678,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 continue;
             }
             if let Some(conds) = &rule.conditions {
-                if conds.should_evaluate() && conds.evaluate_sync(self) == EvaluationResult::Skip {
+                if conds.should_evaluate() && conds.evaluate(self) == EvaluationResult::Skip {
                     continue;
                 }
             }
@@ -1746,7 +1690,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 continue;
             }
             if let Some(conds) = &rule.conditions {
-                if conds.should_evaluate() && conds.evaluate_sync(self) == EvaluationResult::Skip {
+                if conds.should_evaluate() && conds.evaluate(self) == EvaluationResult::Skip {
                     continue;
                 }
             }

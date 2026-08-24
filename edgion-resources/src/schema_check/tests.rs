@@ -433,7 +433,7 @@ fn real_schema_internally_tagged_conditions_run_has_zero_findings() {
                 "config": {"defaultAction": "allow"},
                 "conditions": {
                     "run": [
-                        {"type": "keyMatch", "key": {"type": "header", "name": "X-Test"}, "value": "1"}
+                        {"type": "keyMatch", "key": {"type": "header", "name": "X-Test"}, "values": ["1"]}
                     ]
                 }
             }
@@ -441,6 +441,42 @@ fn real_schema_internally_tagged_conditions_run_has_zero_findings() {
     });
 
     assert_eq!(unknown_key_paths(&value, &schema), Vec::<String>::new());
+}
+
+#[test]
+fn unknown_key_paths_reports_typo_inside_flattened_match_core_on_real_condition_schema() {
+    // First production `#[serde(flatten)]` on Condition: a typo inside the
+    // flattened MatchCore region (`valuez` / `regexx` on a `keyMatch`) must
+    // be reported against the real EdgionPlugins spec schema.
+    let schema = crate::resources::edgion_plugins::edgion_plugins_spec_schema();
+    let value = json!({
+        "requestPlugins": [
+            {
+                "type": "IpRestriction",
+                "config": {"defaultAction": "allow"},
+                "conditions": {
+                    "run": [
+                        {
+                            "type": "keyMatch",
+                            "key": {"type": "header", "name": "X-Test"},
+                            "values": ["ok"],
+                            "valuez": "typo",
+                            "regexx": ["^x"]
+                        }
+                    ]
+                }
+            }
+        ]
+    });
+    let findings = unknown_key_paths(&value, schema);
+    assert!(
+        findings.iter().any(|p| p.contains("valuez")),
+        "flattened MatchCore typo valuez must be reported, got {findings:?}"
+    );
+    assert!(
+        findings.iter().any(|p| p.contains("regexx")),
+        "flattened MatchCore typo regexx must be reported, got {findings:?}"
+    );
 }
 
 // ============================================================

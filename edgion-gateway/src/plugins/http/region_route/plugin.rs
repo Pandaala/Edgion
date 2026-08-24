@@ -166,13 +166,13 @@ impl RegionRoute {
     // ── Key extraction ────────────────────────────────────────────────────────
 
     /// Extract the first non-empty value from the given key sources.
-    async fn extract_first<'s>(
+    fn extract_first<'s>(
         &self,
         session: &mut dyn PluginSession,
         sources: &'s [edgion_resources::common::KeyGet],
     ) -> Option<(String, &'s edgion_resources::common::KeyGet)> {
         for source in sources {
-            if let Some(v) = session.key_get(source).await {
+            if let Some(v) = session.key_get(source) {
                 if !v.is_empty() {
                     return Some((v, source));
                 }
@@ -303,7 +303,7 @@ impl RegionRoute {
 
         // Fast path: try pre-computed hash from hash_key_get.
         if let Some(ref hkg) = self.base.hash_key_get {
-            if let Some((raw, src)) = self.extract_first(session, hkg).await {
+            if let Some((raw, src)) = self.extract_first(session, hkg) {
                 if let Ok(v) = raw.parse::<u16>() {
                     if v < modulo {
                         log.push_fmt(
@@ -330,7 +330,7 @@ impl RegionRoute {
             return None;
         }
 
-        let (key, src) = match self.extract_first(session, &self.base.key_get).await {
+        let (key, src) = match self.extract_first(session, &self.base.key_get) {
             Some(v) => v,
             None => {
                 log.push("key_missing, pass");
@@ -398,7 +398,7 @@ impl RequestFilter for RegionRoute {
             match rule {
                 // ── RouteByDirectRegion ────────────────────────────────────────
                 RouteRule::RouteByDirectRegion { key_from } => {
-                    let (name, src) = match self.extract_first(session, key_from).await {
+                    let (name, src) = match self.extract_first(session, key_from) {
                         Some(v) => v,
                         None => continue,
                     };
@@ -421,7 +421,7 @@ impl RequestFilter for RegionRoute {
                         log.push("conf_match: no key_get, skip");
                         continue;
                     }
-                    let (value, src) = match self.extract_first(session, &self.base.key_get).await {
+                    let (value, src) = match self.extract_first(session, &self.base.key_get) {
                         Some(v) => v,
                         None => continue,
                     };

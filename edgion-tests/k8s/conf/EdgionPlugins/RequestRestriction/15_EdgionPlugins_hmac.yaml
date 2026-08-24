@@ -1,0 +1,24 @@
+# S14: RequestRestriction hmacAuth that needs Controller-resolved credentials.
+# mode Allow: a valid HMAC match passes; unsigned / bad signature is rejected.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-hmac
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Allow
+        anyOf:
+          - allOf:
+              - type: hmacAuth
+                secretGroups:
+                  - name: rr
+                    secretRefs:
+                      - name: rr-hmac-credentials
+                algorithms: [hmac-sha256]
+                enforceHeaders: ["@request-target", host, date]
+        status: 403
+        message: "HMAC restriction did not match"

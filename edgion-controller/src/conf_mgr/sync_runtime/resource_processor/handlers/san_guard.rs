@@ -188,6 +188,9 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
                                 ));
                             }
                         }
+                        // Not SAN-enforced at plugin level; outbound TLS is on the
+                        // LinkSys Webhook resource (`SAN_ENFORCED_LINK_SYS`). Same as ForwardAuth.
+                        EdgionPlugin::WebhookKeyGet(_) => {}
                         // No outbound TLS `validation` block to guard. Exhaustive
                         // (no `_`) on purpose: this is an admission gate for
                         // "SAN pinning declared but not enforced", so a new

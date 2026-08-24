@@ -1,45 +1,51 @@
 # Request Restriction Plugin
 
 > **🔌 Edgion extension**
-> 
+>
 > RequestRestriction is a request restriction plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 
 ## Overview
 
-The `RequestRestriction` plugin restricts access based on request attributes, supporting multiple data sources and matching methods. Unlike the `IpRestriction` plugin which focuses on IP addresses, this plugin supports access control based on Header, Cookie, Query parameters, Path, Method, and Referer, plus **post-authentication identity** — mTLS client-certificate subject / SAN / CN (`MtlsSubject` / `MtlsSan` / `MtlsCn`) and verified JWT claims (`JwtClaim`).
+The `RequestRestriction` plugin restricts access using the shared `Condition` enum. Unlike `IpRestriction`, which focuses on IP addresses, this plugin matches request attributes (header, cookie, query, path, method) and **post-authentication identity** — mTLS client-certificate subject / SAN / CN (`mtlsMatch`) and verified JWT claims (`jwtClaimMatch`). Inline IP sets (`directPeerIpMatch` / `remoteIpMatch` with `ips`) can sit in the same group as a path match.
 
-It remains a **local allow/deny matcher**, not a full RBAC orchestration layer: a rule is still a pure predicate, and a single required `mode` decides whether a match means admit or reject. The identity sources let you match on *who* the caller is (in addition to *what* they are sending) without turning the plugin into a role/principal engine.
+It remains a **local allow/deny matcher**, not a full RBAC orchestration layer: a condition is still a pure predicate, and a single required `mode` decides whether a match means admit or reject.
 
-## Model: rule groups (OR-of-AND) + `mode`
+## Model: groups (OR-of-AND) + `mode`
 
-The plugin evaluates a list of **rule groups** in disjunctive normal form (DNF):
+The plugin evaluates a list of groups in disjunctive normal form (DNF):
 
-- **`ruleGroups` is an array combined with OR** — the policy fires if **any** group matches.
-- **Each group's `rules` is combined with AND** — a group matches only when **all** of its (non-skipped) predicates are true.
+- **`anyOf` is an array combined with OR** — the policy fires if **any** group matches. Groups are evaluated in configuration order; the first match short-circuits.
+- **Each group's `allOf` is combined with AND** — a group matches only when **every** condition is true.
 - **`mode` is required** and decides what a match means:
   - `Deny`: any matching group ⇒ **reject**; anything unmatched passes.
   - `Allow`: any matching group ⇒ **pass**; anything unmatched is rejected.
 
-`mode` has **no default**. Omitting it is a validation error, not a silent fallback — a policy that meant to be `Allow` can never quietly degrade into `Deny` (which, with no group matching, would let every request through).
+`mode` has **no default**. Omitting it is a validation error, not a silent fallback.
 
-A **rule is a pure predicate**: it is true when the extracted value is in `values` **or** matches `regex`. It carries no per-rule allow/deny — the polarity lives entirely at `mode`. This lets you express `(A AND B) OR C` while keeping the model flat (two levels, no deeper nesting and no negation).
+A **condition is a pure predicate**. It carries no per-condition allow/deny — the polarity lives entirely at `mode`. This lets you express `(A AND B) OR C` while keeping the model flat (two levels). This is distinct from plugin `conditions.run`, which is a conjunction.
+
+A missing value is **false** for `keyMatch` / identity matches. To require a header to be present, use `keyExist` with `negate: true` (true when the header is absent).
 
 ## Features
 
-- **Multiple data sources**: Header, Cookie, Query, Path, RequestPath, Method, Referer
-- **Identity sources**: mTLS client-cert subject / SAN / CN (`MtlsSubject` / `MtlsSan` / `MtlsCn`, with optional `sanType`) and verified JWT claims (`JwtClaim`)
-- **Exact and regex matching**: `values` for exact matching, `regex` for regex matching (a predicate is true if either matches)
+- **Shared Condition vocabulary**: the same `Condition` types used by plugin `run`/`skip`
+- **Request attributes**: header, cookie, query, path, requestPath, method
+- **Identity matches**: `mtlsMatch` (subject / CN / SAN, optional `sanType`) and `jwtClaimMatch`
+- **Inline and referenced IP sets**: `directPeerIpMatch` / `remoteIpMatch` with `ips` and `ipRefs` (IpList ConfigData)
+- **Exact and regex matching**: `values` for exact matching, `regex` for regex matching
 - **Automatic performance optimization**: Exact match lists exceeding 16 values automatically use HashSet (O(1) lookup)
-- **Boolean composition**: AND within a group, OR across groups (DNF)
+- **Boolean composition**: AND within a group (`allOf`), OR across groups (`anyOf`)
 - **Explicit polarity**: `mode: Deny | Allow` (required, no default)
-- **Missing value handling**: Configurable predicate behavior when the target value is missing (`Match` / `NoMatch` / `Skip`)
 - **Custom responses**: Configurable status code and message on denial
 
 ## Difference from Plugin Conditions
 
+Plugin `run`/`skip` predicates are documented in [Plugin Conditions](./conditions.md). Both surfaces use the same `Condition` enum.
+
 | Dimension | Plugin Conditions | Request Restriction |
 |-----------|------------------|---------------------|
 | **Purpose** | Conditional execution framework, decides whether to run a plugin | Standalone plugin, directly rejects non-compliant requests |
+| **Combination** | `skip` is OR; `run` is AND | `anyOf` is OR; each `allOf` is AND |
 | **Return behavior** | Skips the plugin (continues processing chain) | Rejects the request (returns error response) |
 | **Configuration location** | Attached to other plugins as conditions | Configured as a standalone plugin |
 | **Use cases** | Canary releases, A/B testing, conditional execution | Access control, security protection |
@@ -51,7 +57,7 @@ A **rule is a pure predicate**: it is true when the extracted value is in `value
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `mode` | Enum (`Deny` \| `Allow`) | **Required** | Polarity. `Deny`: a matching group rejects. `Allow`: a matching group passes, otherwise reject. No default — omitting it is a validation error. |
-| `ruleGroups` | Array\<RuleGroup\> | **Required** | List of rule groups, combined with OR |
+| `anyOf` | Array\<RuleGroup\> | **Required** | Groups combined with OR, evaluated in configuration order |
 | `status` | Integer | `403` | HTTP status code on denial |
 | `message` | String | `Access denied...` | Response message on denial |
 
@@ -60,67 +66,54 @@ A **rule is a pure predicate**: it is true when the extracted value is in `value
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `name` | String | none | Group name (for logging) |
-| `rules` | Array\<RestrictionRule\> | **Required** | Predicates combined with AND |
+| `allOf` | Array\<Condition\> | **Required** | Conditions combined with AND (must be non-empty) |
 
-### RestrictionRule (predicate)
+Each `allOf` entry is a shared `Condition` (`type: keyMatch`, `keyExist`, `mtlsMatch`, `jwtClaimMatch`, `directPeerIpMatch`, …). HMAC `validateRequestBody: true` is accepted here.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `name` | String | none | Rule name (for logging) |
-| `source` | Enum | **Required** | Data source: `Header` / `Cookie` / `Query` / `Path` / `RequestPath` / `Method` / `Referer` / `MtlsSubject` / `MtlsCn` / `MtlsSan` / `JwtClaim` |
-| `key` | String | none | Key name (**Required** for `Header` / `Cookie` / `Query`; the dot-nested claim path for `JwtClaim`; ignored for the others) |
-| `values` | Array\<String\> | none | Exact-match values. Predicate is true if the value is in this list. |
-| `regex` | Array\<String\> | none | Regex patterns. Predicate is true if the value matches (patterns merged with `\|`). |
-| `sanType` | Enum | none | Only valid for `MtlsSan`. Scopes matching to one SAN kind: `DNS` / `URI` / `Email`. When omitted, raw SAN entries are whole-string matched. |
-| `caseSensitive` | Boolean | `true` | Whether exact matching is case-sensitive |
-| `onMissing` | Enum | `NoMatch` | Predicate result when the value is missing. Allowed values: `Match` / `NoMatch` / `Skip` |
+## Migrated data-source spellings
 
-> **Note**: A predicate must declare at least one of `values` or `regex`, **unless** `onMissing: Match` is used as a pure presence/absence check.
+The eleven former restriction sources are still expressible:
 
-### Data Source Reference
+| Old source | New spelling |
+|------------|----------------|
+| Header | `keyMatch` / `keyExist` + `key: { type: header, name }` |
+| Cookie | same with `cookie` |
+| Query | same with `query` |
+| Path | `keyMatch` + `key: { type: path }` (values still normalized) |
+| RequestPath | `keyMatch` + `key: { type: requestPath }` (not normalized) |
+| Method | `keyMatch` + `key: { type: method }` |
+| Referer | `keyMatch` + `key: { type: header, name: Referer }` |
+| MtlsSubject | `mtlsMatch` + `field: subject` |
+| MtlsCn | `mtlsMatch` + `field: cn` |
+| MtlsSan | `mtlsMatch` + `field: san` (+ optional `sanType`) |
+| JwtClaim | `jwtClaimMatch` + `claim: <path>` |
 
-| Data Source | Description | `key` required |
-|-------------|-------------|----------------|
-| `Header` | HTTP request header | Yes |
-| `Cookie` | HTTP Cookie | Yes |
-| `Query` | URL query parameter | Yes |
-| `Path` | Request path (normalized) | No |
-| `RequestPath` | Entry-time raw path (frozen, not normalized) | No |
-| `Method` | HTTP method | No |
-| `Referer` | Referer request header | No |
-| `MtlsSubject` | mTLS client-certificate subject DN string | No |
-| `MtlsCn` | mTLS client-certificate subject CN | No |
-| `MtlsSan` | mTLS client-certificate SAN list ("any entry matches"); optional `sanType` | No |
-| `JwtClaim` | Verified JWT claim, addressed by a dot-nested `key` | Yes (`key` = claim path) |
+A missing header that used to use a presence-only match is now `keyExist` + `negate: true`.
 
 ### Identity sources
 
-In addition to request attributes, the plugin can match on **post-authentication identity**: the mTLS client certificate and verified JWT claims. These are still pure predicates — `mode` decides admit/reject, and a missing value follows `onMissing` (default `NoMatch`).
+#### mTLS (`mtlsMatch`)
 
-#### mTLS sources (`MtlsSubject` / `MtlsCn` / `MtlsSan`)
-
-- `MtlsSubject` — the full subject **DN string** of the client certificate.
-- `MtlsCn` — the subject **CN** only.
-- `MtlsSan` — the certificate **SAN** list, evaluated as "any entry matches". An optional `sanType` of `DNS` / `URI` / `Email` scopes the match:
+- `field: subject` — the full subject **DN string** of the client certificate.
+- `field: cn` — the subject **CN** only.
+- `field: san` — the certificate **SAN** list, evaluated as "any entry matches". An optional `sanType` of `DNS` / `URI` / `Email` scopes the match:
   - **Untyped** (`sanType` omitted): the raw stored SAN entries are whole-string matched, including their type prefix (e.g. `uri:spiffe://…`, `email:alice@example.com`; DNS entries are bare).
   - **Typed**: only SAN entries of that kind are considered, and matching is done on the **prefix-stripped** value (e.g. `sanType: URI` matches `spiffe://…`, not `uri:spiffe://…`).
 
 > **Exposure gate (asymmetric).** The client certificate is only visible to this plugin when it has been exposed to the plugin layer:
-> - On the **EdgionTls** path, exposure requires the `edgion.io/expose-client-cert` annotation. Without it the mTLS sources are always **missing** (→ `onMissing`).
+> - On the **EdgionTls** path, exposure requires the `edgion.io/expose-client-cert` annotation. Without it the mTLS conditions are always missing (false).
 > - On the **Gateway `frontendValidation` mTLS** path, the certificate is exposed **without any annotation**.
 >
-> If the certificate is not exposed (or the connection is not mTLS), every mTLS source evaluates as missing.
+> If the certificate is not exposed (or the connection is not mTLS), every mTLS condition evaluates as missing (false).
 
-> **Prefer `MtlsCn` / `MtlsSan` over `MtlsSubject`.** `MtlsSubject` matches the gateway's specific DN serialization (e.g. `CN=foo, O=bar` — attribute short-names, `, `-joined, in certificate-entry order). It is **order- and spacing-sensitive**, so a small formatting difference breaks an exact match. Reserve `MtlsSubject` for `regex` matching; use `MtlsCn` or a typed `MtlsSan` for exact identity checks.
+> **Prefer `field: cn` / `field: san` over `subject`.** `subject` matches the gateway's specific DN serialization (e.g. `CN=foo, O=bar` — attribute short-names, `, `-joined, in certificate-entry order). It is **order- and spacing-sensitive**, so a small formatting difference breaks an exact match. Reserve `subject` for `regex` matching; use `cn` or a typed SAN for exact identity checks.
 
-#### JWT claims (`JwtClaim`)
+#### JWT claims (`jwtClaimMatch`)
 
-- `key` is a **dot-nested claim path**, e.g. `realm_access.roles` or `sub`.
+- `claim` is a **dot-nested claim path**, e.g. `realm_access.roles` or `sub`.
 - A **list** claim is matched with "any element matches"; scalar string/number/bool claims yield a single candidate.
-- Values are read from the **verified** JWT claims stored in the request context by an upstream auth plugin: `jwt_auth` writes `jwt_claims`, `openid_connect` writes `oidc_claims`. Lookup precedence is `jwt_claims` then `oidc_claims`: whichever blob is present is used in full — there is no per-claim fallback to the other blob.
-- **Plugin-chain ordering requirement.** The authenticating plugin (`jwt_auth` or `openid_connect`) must run **earlier in the chain** with `store_claims_in_ctx: true`. Otherwise no claims are in context and the `JwtClaim` source is always **missing** (→ `onMissing`).
-
-> **Out of scope: source IP / CIDR.** This plugin does not match on client IP or CIDR — use `IpRestriction` or `RequestAccessPolicy` for that. For the same reason `sanType` deliberately omits `IP`.
+- Values are read from the **verified** JWT claims stored in the request context by an upstream auth plugin: `jwt_auth` writes `jwt_claims`, `openid_connect` writes `oidc_claims`. Lookup precedence is `jwt_claims` then `oidc_claims`.
+- **Plugin-chain ordering requirement.** The authenticating plugin (`jwt_auth` or `openid_connect`) must run **earlier in the chain** with `store_claims_in_ctx: true`. Otherwise no claims are in context and the condition is false.
 
 ### Matching Methods
 
@@ -131,46 +124,21 @@ In addition to request attributes, the plugin can match on **post-authentication
 
 > **Tip**: Use the `(?i)` prefix in regex for case-insensitive matching, e.g., `(?i).*bot.*`.
 
-### `onMissing` semantics
-
-| Value | Predicate result when value is absent |
-|-------|----------------------------------------|
-| `Match` | predicate is **true** (e.g. "deny when the header is absent") |
-| `NoMatch` (default) | predicate is **false** |
-| `Skip` | predicate is **dropped** from the group's AND; if every predicate in a group is dropped, the group does not match |
-
-> **A `Match`-only predicate matches *only when absent*.** A rule with `onMissing: Match` and no
-> `values`/`regex` is true iff the value is **missing** — when the value is present it has nothing to
-> match against and the predicate is false. (This is how the "require auth" example's
-> `missing-token` group works.)
->
-> **`mode: Allow` + `Skip` is a foot-gun.** Under `mode: Allow`, a group whose predicates are all
-> `Skip`-dropped (because their sources are absent) does **not** match, so it cannot grant access —
-> the request is denied. An allow-mode group built only from `Skip` predicates therefore rejects every
-> request. Use `NoMatch`/`Match`, not `Skip`, when the source may be absent under `mode: Allow`.
-
 ## Execution Logic
 
 ```mermaid
 flowchart TD
-    A["Request Restriction"] --> B["For each group (OR)"]
-    B --> C["For each predicate in group (AND)"]
-    C --> D["Get value from data source"]
-    D --> E{"Value missing?"}
-    E -->|Yes| F{"onMissing"}
-    F -->|Match| P1["predicate = true"]
-    F -->|NoMatch| P0["predicate = false"]
-    F -->|Skip| PS["drop predicate from AND"]
-    E -->|No| G{"value in values OR matches regex?"}
-    G -->|Yes| P1
-    G -->|No| P0
-    P1 --> H{"all non-skipped predicates true AND at least one considered?"}
-    P0 --> H
-    PS --> H
-    H -->|Yes| M["group matches"]
-    H -->|No| N["group does not match"]
+    A["Request Restriction"] --> B["For each anyOf group in config order"]
+    B --> C["For each condition in allOf"]
+    C --> D["Condition.evaluate"]
+    D --> E{"true?"}
+    E -->|No| N["group does not match"]
+    E -->|Yes| H{"every condition true?"}
+    H -->|Yes| M["group matches; stop"]
+    H -->|No| C
+    N --> B
     M --> J{"mode"}
-    N --> J
+    B -->|no group matched| J
     J -->|"Deny: a group matched"| K["Reject (status/message)"]
     J -->|"Allow: no group matched"| K
     J -->|otherwise| L["Continue processing chain"]
@@ -190,18 +158,22 @@ spec:
     - type: RequestRestriction
       config:
         mode: Deny
-        ruleGroups:
-          - rules:
-              - name: "block-bots"
-                source: Header
-                key: "User-Agent"
+        anyOf:
+          - allOf:
+              - type: keyMatch
+                key:
+                  type: header
+                  name: "User-Agent"
                 regex:
                   - "(?i).*Bot.*"
                   - "(?i).*Spider.*"
                   - "(?i).*Crawler.*"
-                  - "(?i).*curl.*"
-                  - "(?i).*wget.*"
-                onMissing: Match  # Also deny requests without a UA header
+          - allOf:
+              - type: keyExist
+                key:
+                  type: header
+                  name: "User-Agent"
+                negate: true
         status: 403
         message: "Bot access denied"
 ```
@@ -218,10 +190,11 @@ spec:
     - type: RequestRestriction
       config:
         mode: Allow
-        ruleGroups:
-          - rules:
-              - name: "api-only"
-                source: Path
+        anyOf:
+          - allOf:
+              - type: keyMatch
+                key:
+                  type: path
                 values:
                   - "/health"
                   - "/ready"
@@ -243,10 +216,11 @@ spec:
     - type: RequestRestriction
       config:
         mode: Allow
-        ruleGroups:
-          - rules:
-              - name: "readonly"
-                source: Method
+        anyOf:
+          - allOf:
+              - type: keyMatch
+                key:
+                  type: method
                 values:
                   - "GET"
                   - "HEAD"
@@ -269,20 +243,21 @@ spec:
     - type: RequestRestriction
       config:
         mode: Deny
-        ruleGroups:
-          - rules:
-              - name: "bad-token"
-                source: Header
-                key: "X-Auth-Token"
+        anyOf:
+          - allOf:
+              - type: keyMatch
+                key:
+                  type: header
+                  name: "X-Auth-Token"
                 values:
                   - "invalid"
                   - "expired"
-                onMissing: NoMatch
-          - rules:
-              - name: "missing-token"
-                source: Header
-                key: "X-Auth-Token"
-                onMissing: Match  # absent header => this group matches => deny
+          - allOf:
+              - type: keyExist
+                key:
+                  type: header
+                  name: "X-Auth-Token"
+                negate: true
         status: 401
         message: "Authentication required"
 ```
@@ -301,21 +276,22 @@ spec:
     - type: RequestRestriction
       config:
         mode: Allow
-        ruleGroups:
-          - rules:
-              - name: "allow-internal"
-                source: Referer
+        anyOf:
+          - allOf:
+              - type: keyMatch
+                key:
+                  type: header
+                  name: Referer
                 regex:
                   - ".*example\\.com.*"
                   - ".*example\\.org.*"
-                onMissing: NoMatch  # no Referer => no group matches => deny
         status: 403
         message: "Invalid referer"
 ```
 
 ### 6. Block Debug Parameters
 
-Block a debug flag set via query **or** cookie — two single-predicate groups (OR).
+Block a debug flag set via query **or** cookie — two single-condition groups (OR).
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -327,18 +303,20 @@ spec:
     - type: RequestRestriction
       config:
         mode: Deny
-        ruleGroups:
-          - rules:
-              - name: "block-debug-query"
-                source: Query
-                key: "debug"
+        anyOf:
+          - allOf:
+              - type: keyMatch
+                key:
+                  type: query
+                  name: "debug"
                 values:
                   - "true"
                   - "1"
-          - rules:
-              - name: "block-debug-cookie"
-                source: Cookie
-                key: "debug"
+          - allOf:
+              - type: keyMatch
+                key:
+                  type: cookie
+                  name: "debug"
                 values:
                   - "true"
                   - "1"
@@ -348,7 +326,7 @@ spec:
 
 ### 7. AND within a group: deny only DELETE to /admin
 
-A single group with two predicates combined with AND — the request is denied only when **both** hold.
+A single group with two conditions combined with AND — the request is denied only when **both** hold.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -360,62 +338,47 @@ spec:
     - type: RequestRestriction
       config:
         mode: Deny
-        ruleGroups:
-          - rules:
-              - name: "is-delete"
-                source: Method
+        anyOf:
+          - allOf:
+              - type: keyMatch
+                key:
+                  type: method
                 values: ["DELETE"]
-              - name: "is-admin-path"
-                source: Path
+              - type: keyMatch
+                key:
+                  type: path
                 regex: [".*/admin/.*"]
         status: 403
         message: "Deleting admin resources is not allowed"
 ```
 
-### 8. Comprehensive Security Policy (multiple OR groups)
+### 8. IP and path in one group
+
+Deny admin paths only from an inline peer IP set.
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
-  name: security-policy
+  name: local-admin-deny
 spec:
   requestPlugins:
     - type: RequestRestriction
       config:
         mode: Deny
-        ruleGroups:
-          # Block crawlers
-          - rules:
-              - name: "block-bots"
-                source: Header
-                key: "User-Agent"
-                regex:
-                  - "(?i).*Bot.*"
-                  - "(?i).*Spider.*"
-          # Block sensitive paths
-          - rules:
-              - name: "block-sensitive"
-                source: Path
-                regex:
-                  - ".*/admin/.*"
-                  - ".*/internal/.*"
-                  - ".*\\.php$"
-                  - ".*\\.asp$"
-          # Block SQL injection attempts
-          - rules:
-              - name: "block-sqli"
-                source: Query
-                key: "id"
-                regex:
-                  - ".*('|--|;|/\\*).*"
+        anyOf:
+          - allOf:
+              - type: directPeerIpMatch
+                ips: ["127.0.0.1", "::1"]
+              - type: keyMatch
+                key:
+                  type: path
+                regex: [".*/admin/.*"]
         status: 403
-        message: "Access denied by security policy"
+        message: "Admin access denied from local peer"
 ```
 
 ### 9. Identity allowlist (mTLS SAN OR JWT claim)
-
-Admit only callers proven by a SPIFFE URI SAN **or** an `admin` role in the verified JWT — two single-predicate groups combined with OR under `mode: Allow`. For the `JwtClaim` group to work, an auth plugin (`jwt_auth` / `openid_connect`) must run earlier in the chain with `store_claims_in_ctx: true`; for the `MtlsSan` group the client cert must be exposed (see the exposure gate above).
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -427,17 +390,16 @@ spec:
     - type: RequestRestriction
       config:
         mode: Allow
-        ruleGroups:
-          - rules:
-              - source: MtlsSan
+        anyOf:
+          - allOf:
+              - type: mtlsMatch
+                field: san
                 sanType: URI
                 values: ["spiffe://edgion.io/ns/payments/sa/checkout"]
-                onMissing: NoMatch
-          - rules:
-              - source: JwtClaim
-                key: "realm_access.roles"
+          - allOf:
+              - type: jwtClaimMatch
+                claim: "realm_access.roles"
                 values: ["admin"]
-                onMissing: NoMatch
         status: 403
         message: "Identity not allowed"
 ```
@@ -459,34 +421,35 @@ Edgion's `RequestRestriction` plugin unifies multiple restriction capabilities i
 ## Notes
 
 1. **Group order**: Groups are evaluated in configuration order and processing stops at the first matching group — a deny under `mode: Deny`, a pass under `mode: Allow`.
-2. **Polarity is global**: A rule is a pure predicate. Whether a match means allow or deny is decided once by `mode`, not per rule.
+2. **Polarity is global**: A condition is a pure predicate. Whether a match means allow or deny is decided once by `mode`.
 3. **Case sensitivity**: Exact matching (`values`) is case-sensitive by default; use `caseSensitive: false` to disable; for regex, use the `(?i)` prefix.
 4. **Regex performance**: Multiple regex patterns are merged into a single regex (joined with `|`), reducing matching overhead.
 5. **HashSet optimization**: Exact match lists exceeding 16 values automatically use HashSet for O(1) lookup.
-6. **Path vs RequestPath**: `Path` is compared against the normalized current path (and `values` are normalized at load time); `RequestPath` is the entry-time raw path (use it for audit-style raw-form matching). Regex is never normalized.
-7. **Missing value handling**: Choose the appropriate `onMissing` behavior — for "deny when absent" use `Match`; for "ignore when absent" use `NoMatch`; to drop the predicate from the group's AND use `Skip`.
+6. **Path vs requestPath**: `key: { type: path }` is compared against the normalized current path (and `values` are normalized at load time); `key: { type: requestPath }` is the entry-time raw path. Regex is never normalized.
+7. **Missing values**: `keyMatch` / identity matches are false when the value is absent. Use `keyExist` + `negate: true` to match absence.
+8. **ipRefs**: group conditions may use inline `ips` and `ipRefs` (IpList ConfigData). The Controller expands `ipRefs` onto `resolvedIps` on apply. A missing, disabled, wrong-type, or unpermitted IpList reference is fail-closed (`ResolvedRefs=False`); the gateway does not compile an empty matcher from unresolved operator `ipRefs`.
 
 ## FAQ
 
 ### Q1: How do I express a blacklist vs a whitelist?
 
-**A**: Set `mode`. `Deny` rejects a request when any group matches; `Allow` rejects a request unless some group matches. `mode` is required — there is no default to fall back on. A rule itself never carries allow/deny — it is just a predicate.
+**A**: Set `mode`. `Deny` rejects a request when any group matches; `Allow` rejects a request unless some group matches. `mode` is required — there is no default to fall back on.
 
 ### Q2: How do I express `(A AND B) OR C`?
 
-**A**: Put `A` and `B` as two predicates in one group (AND), and `C` as a separate group (OR). The plugin supports exactly this two-level DNF — no deeper nesting and no negation.
+**A**: Put `A` and `B` as two conditions in one group's `allOf` (AND), and `C` as a separate `anyOf` group (OR).
 
-### Q3: When is the `key` field required?
+### Q3: When is a key name required?
 
-**A**: For the `Header`, `Cookie`, and `Query` sources, which look up a named value, and for `JwtClaim`, where `key` is the dot-nested claim path. For `Path`, `RequestPath`, `Method`, `Referer`, and the mTLS sources (`MtlsSubject` / `MtlsCn` / `MtlsSan`) the value is intrinsic to the request/connection, so `key` is ignored.
+**A**: For `header`, `cookie`, and `query` keys. `path`, `requestPath`, and `method` have no name. `jwtClaimMatch` uses `claim`. `mtlsMatch` uses `field`.
 
-### Q4: What does `onMissing: Match` do?
+### Q4: How do I deny when a header is missing?
 
-**A**: It makes the predicate true when the value is absent — useful for "deny when this header/parameter is missing". Under `mode: Deny`, an absent value then causes the group to match and the request to be rejected.
+**A**: Add a group whose only condition is `keyExist` + `negate: true` on that header. Under `mode: Deny`, an absent header makes the group match and the request is rejected.
 
 ### Q5: How do I make exact matching case-insensitive?
 
-**A**: Set `caseSensitive: false` on the rule (it applies to `values` exact matching). For regex matching use the `(?i)` inline flag, e.g. `(?i).*bot.*`.
+**A**: Set `caseSensitive: false` on the condition (it applies to `values` exact matching). For regex matching use the `(?i)` inline flag, e.g. `(?i).*bot.*`.
 
 ---
 
@@ -504,3 +467,4 @@ If you run into problems:
 
 - [IpRestriction](./ip-restriction.md) — IP access control
 - [RateLimit](./rate-limit.md) — Rate limiting
+- [Plugin Conditions](./conditions.md) — shared Condition vocabulary

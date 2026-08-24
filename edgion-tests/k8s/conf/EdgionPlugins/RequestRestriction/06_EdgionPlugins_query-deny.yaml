@@ -12,13 +12,13 @@ spec:
       type: RequestRestriction
       config:
         mode: Deny
-        ruleGroups:
-          - rules:
-              - name: "block-decoded-space"
-                source: Query
-                key: "name"
+        anyOf:
+          - allOf:
+              - type: keyMatch
+                key:
+                  type: query
+                  name: "name"
                 values:
                   - "hello world"
-                onMissing: NoMatch
         status: 403
         message: "Query value blocked"

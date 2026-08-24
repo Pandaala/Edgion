@@ -173,10 +173,11 @@ Gateway compile, single implementation):
 ## `conditions`
 
 Each rule may carry an optional `conditions` block, reusing the same
-`PluginConditions` run/skip shape used by entry-level `conditions`. Unlike
-the strip (which is unconditional), `conditions` gate whether a *matching*
-outcome actually renders its header — this doubles as the primary security
-mitigation for internet-facing routes (see below).
+`PluginConditions` run/skip shape used by entry-level `conditions`. See
+[Plugin Conditions](./conditions.md) for variants, `negate`, and `values`.
+Unlike the strip (which is unconditional), `conditions` gate whether a
+*matching* outcome actually renders its header — this doubles as the primary
+security mitigation for internet-facing routes (see below).
 
 ## Security guidance
 

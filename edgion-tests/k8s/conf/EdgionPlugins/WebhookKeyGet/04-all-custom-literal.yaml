@@ -62,19 +62,17 @@ metadata:
 spec:
   requestPlugins:
     - enable: true
-      type: CtxSet
+      type: WebhookKeyGet
       config:
         vars:
           - name: wh4_user_id
-            from:
-              type: webhook
-              webhookRef: "edgion-default/wh4-resolver"
-              extract:
-                # X-Source is a custom literal ("edgion-gateway"). Reading it back
-                # from the echo proves the custom value was injected and that an
-                # incoming X-Source was NOT leaked through (allow-list + override).
-                source: body
-                path: "data.echo_headers.x-source"
+            webhookRef: "edgion-default/wh4-resolver"
+            extract:
+              # X-Source is a custom literal ("edgion-gateway"). Reading it back
+              # from the echo proves the custom value was injected and that an
+              # incoming X-Source was NOT leaked through (allow-list + override).
+              source: body
+              path: "data.echo_headers.x-source"
             default: "fallback-user"
 ---
 apiVersion: gateway.networking.k8s.io/v1

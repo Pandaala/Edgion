@@ -171,6 +171,40 @@ fn collect_condition_errors(conds: &PluginConditions, label: &str, index: usize,
 /// Same as [`collect_condition_errors`] but for a plugin's secondary body gate
 /// conditions (`entry.body.conditions`) — mirrors the gateway's
 /// `compile_body_entries` wording (`"... body conditions ..."`).
+fn collect_dye_condition_errors(dye: &super::dye::DyeSuite, label: &str, index: usize, errors: &mut Vec<String>) {
+    for rule in dye.request.iter().chain(dye.response.iter()) {
+        if let Some(conds) = rule.conditions.as_ref() {
+            let mut conds = conds.clone();
+            if let Err(errs) = conds.compile() {
+                for e in errs {
+                    errors.push(format!("{}[{}] dye conditions regex: {}", label, index, e));
+                }
+            }
+            if let Err(errs) = conds.validate() {
+                for e in errs {
+                    errors.push(format!("{}[{}] dye conditions: {}", label, index, e));
+                }
+            }
+        }
+    }
+}
+
+fn count_ip_matches_in_conditions(conds: Option<&PluginConditions>) -> usize {
+    conds.map(PluginConditions::ip_match_count).unwrap_or(0)
+}
+
+fn count_ip_matches_in_dye(dye: Option<&super::dye::DyeSuite>) -> usize {
+    dye.map(|suite| {
+        suite
+            .request
+            .iter()
+            .chain(suite.response.iter())
+            .map(|rule| count_ip_matches_in_conditions(rule.conditions.as_ref()))
+            .sum()
+    })
+    .unwrap_or(0)
+}
+
 fn collect_body_condition_errors(conds: &PluginConditions, label: &str, index: usize, errors: &mut Vec<String>) {
     let mut conds = conds.clone();
     if let Err(errs) = conds.compile() {
@@ -247,6 +281,31 @@ impl EdgionPlugins {
         }
         compile_body_conditions!(self.spec.request_plugins, "requestPlugins");
         compile_body_conditions!(self.spec.upstream_response_plugins, "upstreamResponsePlugins");
+
+        macro_rules! compile_dye_conditions {
+            ($entries:expr, $label:literal) => {
+                if let Some(entries) = &$entries {
+                    for (i, entry) in entries.iter().enumerate() {
+                        if !entry.is_enabled() || entry.policy_action.is_some() {
+                            continue;
+                        }
+                        if let Some(dye) = entry.dye.as_ref() {
+                            collect_dye_condition_errors(dye, $label, i, &mut errors);
+                        }
+                    }
+                }
+            };
+        }
+        compile_dye_conditions!(self.spec.request_plugins, "requestPlugins");
+        compile_dye_conditions!(
+            self.spec.upstream_response_filter_plugins,
+            "upstreamResponseFilterPlugins"
+        );
+        compile_dye_conditions!(
+            self.spec.upstream_response_body_filter_plugins,
+            "upstreamResponseBodyFilterPlugins"
+        );
+        compile_dye_conditions!(self.spec.upstream_response_plugins, "upstreamResponsePlugins");
 
         // Request-stage entries whose bounded-structured `body` is invalid. The
         // gateway's `add_from_request_filters` records these in its prepass and
@@ -520,7 +579,72 @@ impl EdgionPlugins {
             }
         }
 
+        let ip_matches = self.ip_match_count();
+        if ip_matches > super::plugin_configs::MAX_REFERENCED_IP_RULES {
+            errors.push(format!(
+                "IP match conditions cannot exceed {}",
+                super::plugin_configs::MAX_REFERENCED_IP_RULES
+            ));
+        }
+
         errors
+    }
+
+    /// Count IP-match conditions across entry, body, dye, RAP `allOf`, and RR `anyOf`.
+    pub fn ip_match_count(&self) -> usize {
+        let mut ip_matches = 0usize;
+        if let Some(entries) = &self.spec.request_plugins {
+            for entry in entries {
+                if !entry.is_enabled() || entry.policy_action.is_some() {
+                    continue;
+                }
+                ip_matches += count_ip_matches_in_conditions(entry.conditions.as_ref());
+                ip_matches += count_ip_matches_in_conditions(entry.body.as_ref().and_then(|b| b.conditions.as_ref()));
+                ip_matches += count_ip_matches_in_dye(entry.dye.as_ref());
+                match &entry.plugin {
+                    EdgionPlugin::RequestAccessPolicy(cfg) => {
+                        ip_matches += cfg.ip_match_count();
+                    }
+                    EdgionPlugin::RequestRestriction(cfg) => {
+                        ip_matches += cfg
+                            .any_of
+                            .iter()
+                            .map(|group| super::conditions::ip_match_count(&group.all_of))
+                            .sum::<usize>();
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(entries) = &self.spec.upstream_response_filter_plugins {
+            for entry in entries {
+                if !entry.is_enabled() || entry.policy_action.is_some() {
+                    continue;
+                }
+                ip_matches += count_ip_matches_in_conditions(entry.conditions.as_ref());
+                ip_matches += count_ip_matches_in_dye(entry.dye.as_ref());
+            }
+        }
+        if let Some(entries) = &self.spec.upstream_response_body_filter_plugins {
+            for entry in entries {
+                if !entry.is_enabled() || entry.policy_action.is_some() {
+                    continue;
+                }
+                ip_matches += count_ip_matches_in_conditions(entry.conditions.as_ref());
+                ip_matches += count_ip_matches_in_dye(entry.dye.as_ref());
+            }
+        }
+        if let Some(entries) = &self.spec.upstream_response_plugins {
+            for entry in entries {
+                if !entry.is_enabled() || entry.policy_action.is_some() {
+                    continue;
+                }
+                ip_matches += count_ip_matches_in_conditions(entry.conditions.as_ref());
+                ip_matches += count_ip_matches_in_conditions(entry.body.as_ref().and_then(|b| b.conditions.as_ref()));
+                ip_matches += count_ip_matches_in_dye(entry.dye.as_ref());
+            }
+        }
+        ip_matches
     }
 }
 
@@ -1059,6 +1183,39 @@ mod tests {
             )
             .to_string()]
         );
+    }
+
+    #[test]
+    fn ip_match_count_includes_rr_groups() {
+        use crate::resources::edgion_plugins::conditions::{Condition, IpAccessMatch, RuleGroup};
+        use crate::resources::edgion_plugins::plugin_configs::{RequestRestrictionConfig, RestrictionMode};
+
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::RequestRestriction(RequestRestrictionConfig {
+            mode: Some(RestrictionMode::Deny),
+            any_of: vec![RuleGroup {
+                name: None,
+                all_of: vec![
+                    Condition::DirectPeerIpMatch(IpAccessMatch {
+                        ips: vec!["10.0.0.0/8".to_string()],
+                        ..Default::default()
+                    }),
+                    Condition::RemoteIpMatch(IpAccessMatch {
+                        ips: vec!["192.0.2.0/24".to_string()],
+                        ..Default::default()
+                    }),
+                ],
+            }],
+            ..Default::default()
+        }));
+        entry.conditions = Some(crate::resources::edgion_plugins::conditions::PluginConditions {
+            run: Some(vec![Condition::DirectPeerIpMatch(IpAccessMatch {
+                ips: vec!["127.0.0.1".to_string()],
+                ..Default::default()
+            })]),
+            ..Default::default()
+        });
+        let ep = with_request_plugins(vec![entry]);
+        assert_eq!(ep.ip_match_count(), 3);
     }
 }
 

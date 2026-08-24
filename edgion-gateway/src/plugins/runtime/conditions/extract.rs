@@ -1,41 +1,17 @@
-//! Shared per-source value extraction for the restriction match engine.
+//! Multi-valued identity extractors for the shared condition layer (D-26).
 //!
-//! `request_restriction` builds its candidate match values through
-//! `extract_rule_values`; the implementation stays centralized here so each
-//! request-identity source has one extraction path.
+//! `KeyGet` stays a single optional string. JWT claims and mTLS SAN lists can
+//! yield several candidates; those reads live here so `JwtClaimMatch` /
+//! `MtlsMatch` and `RequestRestriction` share one implementation.
 
-use crate::plugins::http::common::resolve_claim_path;
+use crate::plugins::http::common::auth_common::resolve_claim_path;
 use crate::plugins::runtime::PluginSession;
-use edgion_resources::resources::edgion_plugins::{RestrictionRule, RestrictionSource, SanType};
-
-/// Extract the candidate match values for a rule from the live session.
-///
-/// An empty `Vec` means the source value is absent — the caller's
-/// `RestrictionRule::evaluate_multi` then applies `on_missing`. Scalar sources
-/// yield 0 or 1 element.
-pub fn extract_rule_values(session: &dyn PluginSession, rule: &RestrictionRule) -> Vec<String> {
-    match rule.source {
-        RestrictionSource::Header => single(rule.key.as_deref().and_then(|k| session.header_value(k))),
-        RestrictionSource::Cookie => single(rule.key.as_deref().and_then(|k| session.get_cookie(k))),
-        RestrictionSource::Query => single(rule.key.as_deref().and_then(|k| session.get_query_param(k))),
-        RestrictionSource::Path => single(Some(session.get_path().to_string())),
-        RestrictionSource::RequestPath => single(Some(session.get_request_path().to_string())),
-        RestrictionSource::Method => single(Some(session.get_method().to_string())),
-        RestrictionSource::Referer => single(session.header_value("Referer")),
-        RestrictionSource::MtlsSubject => single(session.client_cert_info().map(|c| c.subject)),
-        RestrictionSource::MtlsCn => single(session.client_cert_info().and_then(|c| c.cn)),
-        RestrictionSource::MtlsSan => extract_san_values(session, rule.san_type.as_ref()),
-        RestrictionSource::JwtClaim => extract_jwt_claim_values(session, rule.key.as_deref()),
-    }
-}
+use edgion_resources::resources::edgion_plugins::conditions::{MtlsField, SanType};
 
 /// JWT claim candidates from ctx. Reads `jwt_claims` (jwt_auth) first, then
 /// `oidc_claims` (openid_connect). Requires the authenticating plugin to run
 /// earlier in the chain with `store_claims_in_ctx: true`; otherwise missing.
-fn extract_jwt_claim_values(session: &dyn PluginSession, key: Option<&str>) -> Vec<String> {
-    let Some(path) = key else {
-        return Vec::new();
-    };
+pub fn extract_jwt_claim_values(session: &dyn PluginSession, claim: &str) -> Vec<String> {
     let Some(raw) = session
         .get_ctx_var("jwt_claims")
         .or_else(|| session.get_ctx_var("oidc_claims"))
@@ -45,9 +21,19 @@ fn extract_jwt_claim_values(session: &dyn PluginSession, key: Option<&str>) -> V
     let Ok(claims) = serde_json::from_str::<serde_json::Value>(&raw) else {
         return Vec::new();
     };
-    match resolve_claim_path(&claims, path) {
+    match resolve_claim_path(&claims, claim) {
         Some(node) => json_node_to_candidates(node),
         None => Vec::new(),
+    }
+}
+
+/// mTLS client-certificate candidates. Subject / CN yield 0 or 1 value; SAN
+/// yields every matching entry (optionally filtered by `san_type`).
+pub fn extract_mtls_values(session: &dyn PluginSession, field: MtlsField, san_type: Option<&SanType>) -> Vec<String> {
+    match field {
+        MtlsField::Subject => single(session.client_cert_info().map(|c| c.subject)),
+        MtlsField::Cn => single(session.client_cert_info().and_then(|c| c.cn)),
+        MtlsField::San => extract_san_values(session, san_type),
     }
 }
 
@@ -72,7 +58,6 @@ fn json_node_to_candidates(node: &serde_json::Value) -> Vec<String> {
     }
 }
 
-/// Wrap an optional scalar into a 0/1-element candidate list.
 fn single(v: Option<String>) -> Vec<String> {
     match v {
         Some(s) => vec![s],
@@ -113,7 +98,6 @@ mod tests {
     use super::*;
     use crate::ctx::ClientCertInfo;
     use crate::plugins::runtime::traits::session::MockPluginSession;
-    use edgion_resources::resources::edgion_plugins::SanType;
 
     fn cert() -> ClientCertInfo {
         ClientCertInfo {
@@ -128,25 +112,6 @@ mod tests {
         }
     }
 
-    fn rule(source: RestrictionSource) -> RestrictionRule {
-        RestrictionRule {
-            source,
-            ..Default::default()
-        }
-    }
-
-    fn jwt_rule(key: &str) -> RestrictionRule {
-        RestrictionRule {
-            source: RestrictionSource::JwtClaim,
-            key: Some(key.to_string()),
-            ..Default::default()
-        }
-    }
-
-    fn values(session: &dyn PluginSession, rule: &RestrictionRule) -> Vec<String> {
-        extract_rule_values(session, rule)
-    }
-
     #[test]
     fn jwt_claim_nested_array_any_match() {
         let mut s = MockPluginSession::new();
@@ -157,7 +122,7 @@ mod tests {
                 None
             }
         });
-        let out = values(&s, &jwt_rule("realm_access.roles"));
+        let out = extract_jwt_claim_values(&s, "realm_access.roles");
         assert_eq!(out, vec!["admin".to_string(), "dev".to_string()]);
     }
 
@@ -171,9 +136,9 @@ mod tests {
                 None
             }
         });
-        assert_eq!(values(&s, &jwt_rule("sub")), vec!["u1".to_string()]);
-        assert_eq!(values(&s, &jwt_rule("age")), vec!["42".to_string()]);
-        assert_eq!(values(&s, &jwt_rule("active")), vec!["true".to_string()]);
+        assert_eq!(extract_jwt_claim_values(&s, "sub"), vec!["u1".to_string()]);
+        assert_eq!(extract_jwt_claim_values(&s, "age"), vec!["42".to_string()]);
+        assert_eq!(extract_jwt_claim_values(&s, "active"), vec!["true".to_string()]);
     }
 
     #[test]
@@ -184,17 +149,15 @@ mod tests {
             "oidc_claims" => Some(r#"{"groups":["g1"]}"#.to_string()),
             _ => None,
         });
-        assert_eq!(values(&s, &jwt_rule("groups")), vec!["g1".to_string()]);
+        assert_eq!(extract_jwt_claim_values(&s, "groups"), vec!["g1".to_string()]);
     }
 
     #[test]
     fn jwt_claim_missing_branches() {
-        // No ctx var at all.
         let mut s = MockPluginSession::new();
         s.expect_get_ctx_var().returning(|_| None);
-        assert!(values(&s, &jwt_rule("sub")).is_empty());
+        assert!(extract_jwt_claim_values(&s, "sub").is_empty());
 
-        // Path resolves to an object/null => missing.
         let mut s2 = MockPluginSession::new();
         s2.expect_get_ctx_var().returning(|k| {
             if k == "jwt_claims" {
@@ -203,8 +166,8 @@ mod tests {
                 None
             }
         });
-        assert!(values(&s2, &jwt_rule("realm_access")).is_empty());
-        assert!(values(&s2, &jwt_rule("missing.path")).is_empty());
+        assert!(extract_jwt_claim_values(&s2, "realm_access").is_empty());
+        assert!(extract_jwt_claim_values(&s2, "missing.path").is_empty());
     }
 
     #[test]
@@ -212,23 +175,25 @@ mod tests {
         let mut s = MockPluginSession::new();
         s.expect_client_cert_info().returning(|| Some(cert()));
         assert_eq!(
-            values(&s, &rule(RestrictionSource::MtlsSubject)),
+            extract_mtls_values(&s, MtlsField::Subject, None),
             vec!["CN=alice, O=acme".to_string()]
         );
+        assert_eq!(extract_mtls_values(&s, MtlsField::Cn, None), vec!["alice".to_string()]);
     }
 
     #[test]
     fn mtls_missing_when_no_cert() {
         let mut s = MockPluginSession::new();
         s.expect_client_cert_info().returning(|| None);
-        assert!(values(&s, &rule(RestrictionSource::MtlsCn)).is_empty());
+        assert!(extract_mtls_values(&s, MtlsField::Cn, None).is_empty());
+        assert!(extract_mtls_values(&s, MtlsField::San, None).is_empty());
     }
 
     #[test]
     fn mtls_san_untyped_returns_raw() {
         let mut s = MockPluginSession::new();
         s.expect_client_cert_info().returning(|| Some(cert()));
-        let out = values(&s, &rule(RestrictionSource::MtlsSan));
+        let out = extract_mtls_values(&s, MtlsField::San, None);
         assert!(out.contains(&"uri:spiffe://edgion.io/ns/foo".to_string()));
         assert!(out.contains(&"alice.example.com".to_string()));
     }
@@ -237,12 +202,13 @@ mod tests {
     fn mtls_san_typed_strips_prefix() {
         let mut s = MockPluginSession::new();
         s.expect_client_cert_info().returning(|| Some(cert()));
-        let mut r = rule(RestrictionSource::MtlsSan);
-        r.san_type = Some(SanType::Uri);
-        assert_eq!(values(&s, &r), vec!["spiffe://edgion.io/ns/foo".to_string()]);
-
-        let mut dns = rule(RestrictionSource::MtlsSan);
-        dns.san_type = Some(SanType::Dns);
-        assert_eq!(values(&s, &dns), vec!["alice.example.com".to_string()]);
+        assert_eq!(
+            extract_mtls_values(&s, MtlsField::San, Some(&SanType::Uri)),
+            vec!["spiffe://edgion.io/ns/foo".to_string()]
+        );
+        assert_eq!(
+            extract_mtls_values(&s, MtlsField::San, Some(&SanType::Dns)),
+            vec!["alice.example.com".to_string()]
+        );
     }
 }

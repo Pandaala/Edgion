@@ -10,7 +10,7 @@
 # Behavior (when preserve_path_parameters = true):
 #   - /api/users;v=1/data               -> upstream sees the literal ;v=1, not stripped
 #   - /admin/..;jsessionid=x/secret     -> NOT normalized to /secret
-#                                          ACL Path deny "/secret" does not match -> 200
+#                                          ACL path deny "/secret" does not match -> 200
 #                                          (operator explicitly accepts this bypass risk)
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -23,16 +23,16 @@ spec:
       type: RequestRestriction
       config:
         mode: Deny
-        ruleGroups:
-          - rules:
-              # Path source: compared against the current path after normalization.
+        anyOf:
+          - allOf:
+              # path key: compared against the current path after normalization.
               # When preserve_path_parameters = false (default):
               #   /admin/..;jsessionid=x/secret -> normalized to /secret -> matches -> 403
               # When preserve_path_parameters = true (opt-out):
               #   /admin/..;jsessionid=x/secret kept as-is -> /secret does not match -> 200
-              - name: "block-secret-normalized"
-                source: Path
+              - type: keyMatch
+                key:
+                  type: path
                 values:
                   - "/secret"
-                onMissing: NoMatch
         status: 403

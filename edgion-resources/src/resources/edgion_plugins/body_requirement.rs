@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn secondary_conditions_parse() {
         let req: BodyRequirement = serde_json::from_str(
-            r#"{ "conditions": { "run": [ { "type": "include", "key": { "type": "method" }, "values": ["POST"] } ] } }"#,
+            r#"{ "conditions": { "run": [ { "type": "keyMatch", "key": { "type": "method" }, "values": ["POST"] } ] } }"#,
         )
         .unwrap();
         assert!(req.conditions.is_some());

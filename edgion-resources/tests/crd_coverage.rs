@@ -195,7 +195,7 @@ fn plugin_key_get_enum_uses_remote_ip_names() {
             "method",
             "ctx",
             "remoteIpAndPath",
-            "webhook"
+            "requestPath",
         ]
     );
 }

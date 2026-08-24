@@ -70,7 +70,7 @@ spec:
 | `method` | — | The HTTP method |
 | `ctx` | `name` | An existing context variable |
 
-For a fixed literal, use the top-level `value` field on the rule instead of `from`. For a composite string, use `template`.
+For a fixed literal, use the top-level `value` field on the rule instead of `from`. For a composite string, use `template`. To resolve a value from a LinkSys webhook, use [WebhookKeyGet](./webhook-key-get.md) — not a CtxSet `from` source. If webhook templates need `${ctx:NAME}`, run CtxSet first and WebhookKeyGet after it.
 
 ### `template` variables
 
@@ -293,6 +293,7 @@ spec:
 
 ## Related links
 
+- [Webhook KeyGet](./webhook-key-get.md)
 - [Rate Limit Plugin](./rate-limit.md)
 - [DSL Plugin](./dsl/README.md)
 - [Filters overview](../README.md)

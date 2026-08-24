@@ -4,7 +4,7 @@
 //! Each system type has its own sub-module for runtime management:
 //! - `redis/` — Redis client (standalone/sentinel/cluster) via fred
 //! - `etcd/` — Etcd client (v3 API) via etcd-client
-//! - `webhook/` — HTTP webhook service for KeyGet::Webhook resolution
+//! - `webhook/` — HTTP webhook service for the WebhookKeyGet plugin
 //! - `local_file/` — File-based log writer with rotation
 //!
 //! The `LinkSysStore` provides a unified store with `ConfHandler<LinkSys>` integration,

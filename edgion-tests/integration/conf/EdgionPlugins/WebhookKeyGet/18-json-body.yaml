@@ -77,29 +77,25 @@ spec:
       name: wh18_ct
   requestPlugins:
     - enable: true
-      type: CtxSet
+      type: WebhookKeyGet
       config:
         vars:
           - name: wh18_body_user
-            from:
-              type: webhook
-              webhookRef: "edgion-default/wh18-resolver"
-              extract:
-                # The webhook backend echoes the parsed request body it received
-                # under data.echo_body; reading userId back proves the gateway
-                # rendered the json body template with the header variable.
-                source: body
-                path: "data.echo_body.userId"
+            webhookRef: "edgion-default/wh18-resolver"
+            extract:
+              # The webhook backend echoes the parsed request body it received
+              # under data.echo_body; reading userId back proves the gateway
+              # rendered the json body template with the header variable.
+              source: body
+              path: "data.echo_body.userId"
             default: "fallback"
           - name: wh18_ct
-            from:
-              type: webhook
-              webhookRef: "edgion-default/wh18-resolver"
-              extract:
-                # Content-Type observed by the backend must be the auto-injected
-                # application/json.
-                source: body
-                path: "data.echo_headers.content-type"
+            webhookRef: "edgion-default/wh18-resolver"
+            extract:
+              # Content-Type observed by the backend must be the auto-injected
+              # application/json.
+              source: body
+              path: "data.echo_headers.content-type"
             default: "fallback"
 ---
 apiVersion: gateway.networking.k8s.io/v1

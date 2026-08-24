@@ -150,7 +150,7 @@ impl LimitHeaderNames {
 /// Behavior when rate limit key cannot be extracted
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
-pub enum OnMissingKey {
+pub enum OnKeyMiss {
     /// Allow the request (default, fail-open)
     #[default]
     Allow,
@@ -221,7 +221,7 @@ pub struct RateLimitConfig {
     ///
     /// Default: [{ type: remoteIp }]. An explicitly empty list is a valid
     /// configuration meaning "one global bucket": it is not a key miss, so it
-    /// still rate-limits rather than falling through to `onMissingKey`.
+    /// still rate-limits rather than falling through to `onKeyMiss`.
     ///
     /// ## YAML Examples
     ///
@@ -247,13 +247,13 @@ pub struct RateLimitConfig {
     ///
     /// Note: If `defaultKey` is configured, it takes precedence over this setting.
     #[serde(default)]
-    pub on_missing_key: OnMissingKey,
+    pub on_key_miss: OnKeyMiss,
 
     /// Default key to use when key cannot be extracted
     ///
     /// When configured, requests without a valid key will use this default key
     /// for rate limiting (all such requests share one rate limit bucket).
-    /// This takes precedence over `onMissingKey`.
+    /// This takes precedence over `onKeyMiss`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_key: Option<String>,
 
@@ -375,7 +375,7 @@ impl Default for RateLimitConfig {
             rate: 100,
             interval: default_interval(),
             key: vec![KeyGet::default()],
-            on_missing_key: OnMissingKey::default(),
+            on_key_miss: OnKeyMiss::default(),
             default_key: None,
             reject_status: default_reject_status(),
             reject_message: None,
@@ -789,7 +789,7 @@ key:
     fn test_yaml_omitted_key_defaults_to_remote_ip() {
         // An omitted `key` must match the documented default and the `Default`
         // impl. It used to deserialize to an empty list, which the gateway then
-        // treated as a key miss — with the default `onMissingKey: Allow` that
+        // treated as a key miss — with the default `onKeyMiss: Allow` that
         // silently disabled the limiter.
         let yaml = r#"
 rate: 50

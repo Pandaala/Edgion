@@ -1006,7 +1006,7 @@ impl AllConditionsTestSuite {
                                 .flat_map(|ep| &ep.logs)
                                 .any(|log| {
                                     log.name == "Mock"
-                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("run:include"))
+                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("run:keyMatch"))
                                 });
 
                             if found_skipped {
@@ -1208,7 +1208,7 @@ impl AllConditionsTestSuite {
                                 .flat_map(|ep| &ep.logs)
                                 .any(|log| {
                                     log.name == "Mock"
-                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("skip:exclude"))
+                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("skip:keyMatch"))
                                 });
 
                             if found_skipped {
@@ -1253,7 +1253,7 @@ impl AllConditionsTestSuite {
                                         && log
                                             .cond_skip
                                             .as_ref()
-                                            .is_some_and(|s| s.contains("skip:exclude") && s.contains("mtd"))
+                                            .is_some_and(|s| s.contains("skip:keyMatch") && s.contains("mtd"))
                                 });
 
                             if found_skipped {
@@ -1295,7 +1295,7 @@ impl AllConditionsTestSuite {
                                 .flat_map(|ep| &ep.logs)
                                 .any(|log| {
                                     log.name == "Mock"
-                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("skip:exclude"))
+                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("skip:keyMatch"))
                                 });
 
                             if found_skipped {

@@ -15,7 +15,7 @@ use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilte
 use crate::{InternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataRef};
-use edgion_resources::resources::edgion_plugins::plugin_configs::{CanaryConfig, DynUpstreamOnInvalid};
+use edgion_resources::resources::edgion_plugins::plugin_configs::{CanaryConfig, UpstreamFallback};
 use edgion_resources::HTTPBackendRefKind;
 
 /// Resolve the "namespace/name" Selector store key for a (possibly denied)
@@ -160,14 +160,14 @@ impl RequestFilter for Canary {
         if !found {
             log.push_err("backend ref not found");
             return match self.config.on_invalid {
-                DynUpstreamOnInvalid::Reject => {
+                UpstreamFallback::Reject => {
                     session.record_outcome(DyeOutcome::Reject, "on-invalid");
                     PluginRunningResult::ErrResponse {
                         status: 403,
                         body: Some("Target backend not allowed".to_string()),
                     }
                 }
-                DynUpstreamOnInvalid::Fallback => {
+                UpstreamFallback::Fallback => {
                     session.record_outcome(DyeOutcome::Fallback, "on-invalid");
                     PluginRunningResult::GoodNext
                 }
@@ -308,7 +308,7 @@ mod tests {
                 ("canary".to_string(), target("app-v2")),
             ]),
             active_profile_ref: None,
-            on_invalid: DynUpstreamOnInvalid::default(),
+            on_invalid: UpstreamFallback::Reject,
         }
     }
 
@@ -560,7 +560,7 @@ mod tests {
     #[tokio::test]
     async fn canary_records_reject_outcome_on_invalid_backend() {
         let config = CanaryConfig {
-            on_invalid: DynUpstreamOnInvalid::Reject,
+            on_invalid: UpstreamFallback::Reject,
             ..base_config()
         };
         let plugin = canary_with_key(config, None);
@@ -593,7 +593,7 @@ mod tests {
     #[tokio::test]
     async fn canary_records_fallback_outcome_on_invalid_backend() {
         let config = CanaryConfig {
-            on_invalid: DynUpstreamOnInvalid::Fallback,
+            on_invalid: UpstreamFallback::Fallback,
             ..base_config()
         };
         let plugin = canary_with_key(config, None);

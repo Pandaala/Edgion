@@ -397,7 +397,7 @@ impl RateLimitTestSuite {
     fn test_missing_key_allows() -> TestCase {
         TestCase::new(
             "rate_limit_missing_key_allows",
-            ":  X-Rate-Key  (onMissingKey=Allow)",
+            ":  X-Rate-Key  (onKeyMiss=Allow)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -413,7 +413,7 @@ impl RateLimitTestSuite {
                             if status == 200 {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "Request without X-Rate-Key allowed (onMissingKey=Allow)".to_string(),
+                                    "Request without X-Rate-Key allowed (onKeyMiss=Allow)".to_string(),
                                 )
                             } else {
                                 TestResult::failed(
@@ -676,23 +676,23 @@ impl RateLimitTestSuite {
     // Regression pin (conf/EdgionPlugins/RateLimit/04_EdgionPlugins_rate-limit-empty-key.yaml):
     // `RateLimitConfig.key` used to deserialize to an empty list whenever `key`
     // was omitted, and an empty list was then treated as a key-extraction MISS
-    // — so with the default `onMissingKey: Allow` the limiter was silently
+    // — so with the default `onKeyMiss: Allow` the limiter was silently
     // bypassed for every request. This is now fixed: an omitted `key`
     // deserializes to the documented default `[{type: remoteIp}]`, and an
     // explicitly empty `key: []` means "one global bucket" — every request
     // composes to the same empty key and IS rate-limited; it is NOT a key
-    // miss, so `onMissingKey` / `defaultKey` never apply.
+    // miss, so `onKeyMiss` / `defaultKey` never apply.
     //
-    // The fixture pins `onMissingKey: Allow` deliberately: that is the exact
+    // The fixture pins `onKeyMiss: Allow` deliberately: that is the exact
     // setting that used to turn `key: []` into a full bypass. rate=3/interval=10s
     // on a dedicated route (rate-limit-empty-key.example.com) whose bucket is
     // never touched by any other case in this suite: send 3 requests (must all
     // be 200), then a 4th (must be 429) — proving the limiter is active despite
-    // `onMissingKey: Allow`.
+    // `onKeyMiss: Allow`.
     fn test_empty_key_still_rate_limits() -> TestCase {
         TestCase::new(
             "rate_limit_empty_key_still_rate_limits",
-            "An explicitly empty `key: []` still rate-limits as one global bucket, even with onMissingKey: Allow",
+            "An explicitly empty `key: []` still rate-limits as one global bucket, even with onKeyMiss: Allow",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -727,7 +727,7 @@ impl RateLimitTestSuite {
                     }
 
                     // The 4th request must be blocked. If the empty key list regressed back
-                    // to being treated as a key miss, `onMissingKey: Allow` would let this
+                    // to being treated as a key miss, `onKeyMiss: Allow` would let this
                     // (and every other) request through as 200.
                     let response = client.get(&url).header("host", HOST).send().await;
 
@@ -740,7 +740,7 @@ impl RateLimitTestSuite {
                                     start.elapsed(),
                                     format!(
                                         "Empty key list still rate-limited: 3 requests passed, the 4th \
-                                         returned 429 despite onMissingKey: Allow (body: {})",
+                                         returned 429 despite onKeyMiss: Allow (body: {})",
                                         body
                                     ),
                                 )
@@ -750,7 +750,7 @@ impl RateLimitTestSuite {
                                     format!(
                                         "Request 4 expected 429, got {}. An explicitly empty `key: []` must \
                                          still rate-limit as one global bucket - it is NOT a key miss, so \
-                                         onMissingKey: Allow must not bypass the limiter. Body: {}",
+                                         onKeyMiss: Allow must not bypass the limiter. Body: {}",
                                         status, body
                                     ),
                                 )
@@ -794,7 +794,7 @@ impl TestSuite for RateLimitTestSuite {
             // Access log: stage_logs includes RateLimit entry
             Self::test_stage_logs_contain_rate_limit(),
             // Explicitly empty key: one global bucket, not a key miss - must still
-            // rate-limit even with onMissingKey: Allow.
+            // rate-limit even with onKeyMiss: Allow.
             Self::test_empty_key_still_rate_limits(),
         ]
     }

@@ -9,7 +9,7 @@
 # (`LinkSys::validate_config` prefixes the schema error with "Webhook
 # configuration error: ", so the substring survives).
 #
-# No CtxSet/HTTPRoute/traffic is involved: this is asserted purely against
+# No WebhookKeyGet/HTTPRoute/traffic is involved: this is asserted purely against
 # the controller's own status output (`/configserver/LinkSys?namespace=
 # edgion-default&name=wh17-origin-only`), not the gateway.
 apiVersion: edgion.io/v1

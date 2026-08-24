@@ -12,4 +12,5 @@
 
 mod key_accessor;
 
-pub use key_accessor::{KeyGet, KeySet, WebhookExtract};
+pub use crate::resources::edgion_plugins::plugin_configs::WebhookExtract;
+pub use key_accessor::{KeyGet, KeySet};

@@ -9,7 +9,7 @@ description: Decision rule for findings about duplicated rate-limit key extracti
 
 The key-extraction block that resolves a rate-limit key from `config.key` sources
 was copy-pasted between `rate_limit/plugin.rs` and `rate_limit_redis/plugin.rs`,
-and had already silently diverged (`OnMissingKey::Deny` logged `"Deny key miss"`
+and had already silently diverged (`OnKeyMiss::Deny` logged `"Deny key miss"`
 in one and `"Deny rate limit"` in the other). It is now extracted into a single
 shared free function:
 
@@ -21,7 +21,7 @@ pub async fn resolve_rate_limit_key(
     session: &mut dyn PluginSession,
     keys: &[KeyGet],
     default_key: Option<&str>,
-    on_missing: &OnMissingKey,
+    on_missing: &OnKeyMiss,
     plugin_log: &mut PluginLog,
 ) -> RateLimitKey
 ```
@@ -51,8 +51,8 @@ not a list of literal strings. The finding's `&[String]` signature was inaccurat
 
 **3. `on_missing` is taken by reference.**
 
-`OnMissingKey` is not `Copy`; passing it by value would move out of the shared
-`&self.config`. The helper takes `&OnMissingKey` to keep the change scoped to the
+`OnKeyMiss` is not `Copy`; passing it by value would move out of the shared
+`&self.config`. The helper takes `&OnKeyMiss` to keep the change scoped to the
 gateway (no `Copy` derive added to the types layer).
 
 ## Fix Suggestions Not Accepted

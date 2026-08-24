@@ -112,78 +112,9 @@ pub enum KeyGet {
     /// No additional parameters needed.
     RemoteIpAndPath,
 
-    /// Resolve key from an external webhook service (LinkSys resource).
-    ///
-    /// The webhook is called with the original request's metadata (configurable headers,
-    /// method, URI, etc.), and the key value is extracted from the webhook's response.
-    ///
-    /// Requires a corresponding LinkSys Webhook resource to be configured.
-    Webhook {
-        /// Reference to LinkSys Webhook resource: "namespace/name"
-        #[serde(rename = "webhookRef")]
-        webhook_ref: String,
-
-        /// Optional path override for the webhook call.
-        /// Only takes effect if the referenced webhook resource allows path overrides;
-        /// otherwise it is ignored in favor of the resource-declared path.
-        #[serde(default, skip_serializing_if = "Option::is_none", rename = "pathOverride")]
-        path_override: Option<String>,
-
-        /// How to extract the key value from the webhook response
-        extract: WebhookExtract,
-    },
-}
-
-/// How to extract a key value from a webhook HTTP response.
-///
-/// ## YAML Examples
-///
-/// ```yaml
-/// # From response header
-/// extract:
-///   source: header
-///   name: "X-Resolved-Key"
-///
-/// # From response body (JSON path)
-/// extract:
-///   source: body
-///   path: "data.user_id"
-///
-/// # From response cookie
-/// extract:
-///   source: cookie
-///   name: "session_token"
-///
-/// # Entire response body as plain text
-/// extract:
-///   source: bodyText
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(tag = "source", rename_all = "camelCase")]
-pub enum WebhookExtract {
-    /// Extract from a response header
-    Header {
-        /// Response header name (case-insensitive)
-        name: String,
-    },
-
-    /// Extract from a response cookie (Set-Cookie header)
-    Cookie {
-        /// Cookie name
-        name: String,
-    },
-
-    /// Extract from response body using a dot-path into JSON
-    ///
-    /// Path format: "data.user_id", "result.0.key" (array index)
-    /// The extracted value is converted to string.
-    Body {
-        /// Dot-path expression (e.g., "data.user_id")
-        path: String,
-    },
-
-    /// Use entire response body as the key value (trimmed)
-    BodyText,
+    /// Entry-time raw request path (never normalized).
+    /// No additional parameters needed.
+    RequestPath,
 }
 
 impl KeyGet {
@@ -198,7 +129,7 @@ impl KeyGet {
             KeyGet::Method => "method".to_string(),
             KeyGet::Ctx { name } => format!("ctx:{}", name),
             KeyGet::RemoteIpAndPath => "remote-ip+path".to_string(),
-            KeyGet::Webhook { webhook_ref, .. } => format!("webhook:{}", webhook_ref),
+            KeyGet::RequestPath => "request-path".to_string(),
         }
     }
 
@@ -213,7 +144,7 @@ impl KeyGet {
             KeyGet::Method => "method",
             KeyGet::Ctx { .. } => "ctx",
             KeyGet::RemoteIpAndPath => "remoteIpAndPath",
-            KeyGet::Webhook { .. } => "webhook",
+            KeyGet::RequestPath => "requestPath",
         }
     }
 
@@ -223,7 +154,6 @@ impl KeyGet {
             KeyGet::Header { name } | KeyGet::Cookie { name } | KeyGet::Query { name } | KeyGet::Ctx { name } => {
                 Some(name)
             }
-            KeyGet::Webhook { webhook_ref, .. } => Some(webhook_ref),
             _ => None,
         }
     }
@@ -328,15 +258,7 @@ mod tests {
         );
         assert_eq!(KeyGet::Path.as_log_str(), "path");
         assert_eq!(KeyGet::RemoteIpAndPath.as_log_str(), "remote-ip+path");
-        assert_eq!(
-            KeyGet::Webhook {
-                webhook_ref: "prod/resolver".to_string(),
-                path_override: None,
-                extract: WebhookExtract::BodyText,
-            }
-            .as_log_str(),
-            "webhook:prod/resolver"
-        );
+        assert_eq!(KeyGet::RequestPath.as_log_str(), "request-path");
     }
 
     #[test]
@@ -355,15 +277,7 @@ mod tests {
             "header"
         );
         assert_eq!(KeyGet::Path.source_type(), "path");
-        assert_eq!(
-            KeyGet::Webhook {
-                webhook_ref: "ns/name".to_string(),
-                path_override: None,
-                extract: WebhookExtract::BodyText,
-            }
-            .source_type(),
-            "webhook"
-        );
+        assert_eq!(KeyGet::RequestPath.source_type(), "requestPath");
     }
 
     #[test]
@@ -467,6 +381,16 @@ mod tests {
     }
 
     #[test]
+    fn test_key_get_serde_request_path() {
+        let key = KeyGet::RequestPath;
+        let json = serde_json::to_string(&key).unwrap();
+        assert_eq!(json, "{\"type\":\"requestPath\"}");
+
+        let deserialized: KeyGet = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, key);
+    }
+
+    #[test]
     fn test_key_set_serde() {
         let key = KeySet::ResponseHeader {
             name: "X-Response-Time".to_string(),
@@ -523,274 +447,6 @@ name: user_id
             key,
             KeySet::Ctx {
                 name: "user_id".to_string()
-            }
-        );
-    }
-
-    // ========== Webhook Tests ==========
-
-    #[test]
-    fn test_key_get_webhook_serde_header_extract() {
-        let yaml = r#"
-type: webhook
-webhookRef: "prod/key-resolver"
-extract:
-  source: header
-  name: "X-Resolved-Key"
-"#;
-        let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(
-            key,
-            KeyGet::Webhook {
-                webhook_ref: "prod/key-resolver".to_string(),
-                path_override: None,
-                extract: WebhookExtract::Header {
-                    name: "X-Resolved-Key".to_string(),
-                },
-            }
-        );
-    }
-
-    #[test]
-    fn test_key_get_webhook_serde_body_extract() {
-        let yaml = r#"
-type: webhook
-webhookRef: "prod/user-mapper"
-extract:
-  source: body
-  path: "data.user_id"
-"#;
-        let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(
-            key,
-            KeyGet::Webhook {
-                webhook_ref: "prod/user-mapper".to_string(),
-                path_override: None,
-                extract: WebhookExtract::Body {
-                    path: "data.user_id".to_string(),
-                },
-            }
-        );
-    }
-
-    #[test]
-    fn test_key_get_webhook_serde_body_text_extract() {
-        let yaml = r#"
-type: webhook
-webhookRef: "ns/resolver"
-extract:
-  source: bodyText
-"#;
-        let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(
-            key,
-            KeyGet::Webhook {
-                webhook_ref: "ns/resolver".to_string(),
-                path_override: None,
-                extract: WebhookExtract::BodyText,
-            }
-        );
-    }
-
-    #[test]
-    fn test_key_get_webhook_serde_cookie_extract() {
-        let yaml = r#"
-type: webhook
-webhookRef: "ns/resolver"
-extract:
-  source: cookie
-  name: "session_token"
-"#;
-        let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(
-            key,
-            KeyGet::Webhook {
-                webhook_ref: "ns/resolver".to_string(),
-                path_override: None,
-                extract: WebhookExtract::Cookie {
-                    name: "session_token".to_string(),
-                },
-            }
-        );
-    }
-
-    #[test]
-    fn test_key_get_webhook_json_roundtrip() {
-        let key = KeyGet::Webhook {
-            webhook_ref: "prod/resolver".to_string(),
-            path_override: None,
-            extract: WebhookExtract::Body {
-                path: "data.key".to_string(),
-            },
-        };
-        let json = serde_json::to_string(&key).unwrap();
-        let deserialized: KeyGet = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized, key);
-    }
-
-    #[test]
-    fn test_key_get_webhook_name() {
-        assert_eq!(
-            KeyGet::Webhook {
-                webhook_ref: "prod/resolver".to_string(),
-                path_override: None,
-                extract: WebhookExtract::BodyText,
-            }
-            .name(),
-            Some("prod/resolver")
-        );
-    }
-
-    #[test]
-    fn test_key_get_webhook_with_path_override() {
-        let yaml = r#"
-type: webhook
-webhookRef: "prod/resolver"
-pathOverride: "/v2/resolve"
-extract:
-  source: bodyText
-"#;
-        let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
-        match key {
-            KeyGet::Webhook {
-                webhook_ref,
-                path_override,
-                extract,
-            } => {
-                assert_eq!(webhook_ref, "prod/resolver");
-                assert_eq!(path_override.as_deref(), Some("/v2/resolve"));
-                assert_eq!(extract, WebhookExtract::BodyText);
-            }
-            _ => panic!("Expected Webhook variant"),
-        }
-    }
-
-    #[test]
-    fn test_key_get_webhook_without_path_override_defaults_none() {
-        // path_override should default to None when absent.
-        let yaml = r#"
-type: webhook
-webhookRef: "ns/name"
-extract:
-  source: bodyText
-"#;
-        let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
-        match key {
-            KeyGet::Webhook { path_override, .. } => {
-                assert!(path_override.is_none());
-            }
-            _ => panic!("Expected Webhook variant"),
-        }
-    }
-
-    #[test]
-    fn test_key_get_webhook_with_extract() {
-        // The extract field is preserved and parsed independently of path_override.
-        let yaml = r#"
-type: webhook
-webhookRef: "ns/name"
-extract:
-  source: header
-  name: "X-Resolved-Key"
-"#;
-        let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
-        match key {
-            KeyGet::Webhook {
-                extract, path_override, ..
-            } => {
-                assert!(path_override.is_none());
-                assert_eq!(
-                    extract,
-                    WebhookExtract::Header {
-                        name: "X-Resolved-Key".to_string(),
-                    }
-                );
-            }
-            _ => panic!("Expected Webhook variant"),
-        }
-    }
-
-    #[test]
-    fn test_key_get_webhook_forward_headers_field_removed() {
-        // forwardHeaders is no longer a recognized field. With serde's default
-        // (non-deny-unknown) behavior the unknown key is ignored, and the webhook
-        // still deserializes without any forward_headers field on the variant.
-        let yaml = r#"
-type: webhook
-webhookRef: "ns/name"
-forwardHeaders:
-  - Authorization
-extract:
-  source: bodyText
-"#;
-        let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(
-            key,
-            KeyGet::Webhook {
-                webhook_ref: "ns/name".to_string(),
-                path_override: None,
-                extract: WebhookExtract::BodyText,
-            }
-        );
-    }
-
-    #[test]
-    fn test_key_get_webhook_path_suffix_field_removed() {
-        // pathSuffix has been replaced by pathOverride. A pathSuffix key is now an
-        // ignored unknown field and does NOT populate path_override.
-        let yaml = r#"
-type: webhook
-webhookRef: "ns/name"
-pathSuffix: "/v2/resolve"
-extract:
-  source: bodyText
-"#;
-        let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
-        match key {
-            KeyGet::Webhook { path_override, .. } => {
-                assert!(path_override.is_none(), "pathSuffix must not map onto path_override");
-            }
-            _ => panic!("Expected Webhook variant"),
-        }
-    }
-
-    #[test]
-    fn test_webhook_extract_serde() {
-        // Header
-        let yaml = r#"source: header
-name: "X-Key""#;
-        let extract: WebhookExtract = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(
-            extract,
-            WebhookExtract::Header {
-                name: "X-Key".to_string()
-            }
-        );
-
-        // Body
-        let yaml = r#"source: body
-path: "result.value""#;
-        let extract: WebhookExtract = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(
-            extract,
-            WebhookExtract::Body {
-                path: "result.value".to_string()
-            }
-        );
-
-        // BodyText
-        let yaml = "source: bodyText";
-        let extract: WebhookExtract = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(extract, WebhookExtract::BodyText);
-
-        // Cookie
-        let yaml = r#"source: cookie
-name: "sess""#;
-        let extract: WebhookExtract = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(
-            extract,
-            WebhookExtract::Cookie {
-                name: "sess".to_string()
             }
         );
     }

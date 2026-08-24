@@ -1,7 +1,7 @@
 // DynamicExternalUpstream Integration Test Suite
 //
 // Required config files (in edgion-tests/integration/conf/EdgionPlugins/DynamicExternalUpstream/):
-// - 01_EdgionPlugins_default_deu-skip.yaml        (skip mode: onMissing=skip, onNoMatch=skip)
+// - 01_EdgionPlugins_default_deu-skip.yaml        (fallback mode: onMissing=fallback, onNoMatch=fallback)
 // - 01_EdgionPlugins_default_deu-reject.yaml      (reject mode: onMissing=reject, onNoMatch=reject)
 // - 01_EdgionPlugins_default_deu-regex.yaml       (regex extraction mode)
 // - 02_HTTPRoute_default_deu-skip-test.yaml        (fallback to test-http:30001)
@@ -16,7 +16,7 @@
 //
 // We verify:
 // 1. Plugin request_filter logic via access log (plugin_log entries)
-// 2. Skip/Reject behavior for missing/unmatched keys
+// 2. Fallback/Reject behavior for missing/unmatched keys
 // 3. Regex extraction
 // 4. dye presence
 // 5. Loopback rejection (security)

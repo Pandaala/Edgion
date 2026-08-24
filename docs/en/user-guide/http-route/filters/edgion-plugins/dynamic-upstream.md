@@ -184,8 +184,8 @@ spec:
 | `from` | Object | **Required** | Value source (see sub-fields) |
 | `extract` | Object | none | Extraction rules with `regex` and `group` (default group `1`) |
 | `domainMap` | Object | **Required** | Domain mapping whitelist (must be non-empty) |
-| `onMissing` | Enum | `Skip` | Behavior when the routing key is missing. Allowed values: `Skip` / `Reject` (400) |
-| `onNoMatch` | Enum | `Skip` | Behavior when the key matches no `domainMap` entry. Allowed values: `Skip` / `Reject` (400) |
+| `onMissing` | Enum | `Fallback` | Behavior when the routing key is missing. Allowed values: `Fallback` / `Reject` (400) |
+| `onNoMatch` | Enum | `Fallback` | Behavior when the key matches no `domainMap` entry. Allowed values: `Fallback` / `Reject` (400) |
 
 `dye` is an **entry-level** field — a sibling of `type`/`config`/`enable`, not a member of `config`:
 
@@ -235,7 +235,7 @@ requestPlugins:
           domain: ap-east.api.internal
           port: 443
           tls: true
-      onMissing: skip
+      onMissing: fallback
 ```
 
 #### Third-Party API Proxy (Override Host + SNI)
@@ -293,14 +293,14 @@ requestPlugins:
 ```
 
 - An omitted `value` on `success` carries the resolved selection: **`DynamicInternalUpstream`** uses the target backendRef's `[ns/]name`; **`DynamicExternalUpstream`** uses the target's `domain:port`.
-- Both plugins declare `success`, `fallback`, and `reject` dye capabilities — `fallback`/`reject` rules also dye the `onMissing`/`onNoMatch` branches (whichever of `fallback`/`skip` or `reject` each is configured to take), and, for `DynamicInternalUpstream` only, the `onInvalid` branch (DynamicExternalUpstream has no `onInvalid`, since `domainMap` membership is inherent to matching). A plain `success` rule (the default `on`) never fires on those paths.
+- Both plugins declare `success`, `fallback`, and `reject` dye capabilities — `fallback`/`reject` rules also dye the `onMissing`/`onNoMatch` branches (whichever of `fallback` or `reject` each is configured to take), and, for `DynamicInternalUpstream` only, the `onInvalid` branch (DynamicExternalUpstream has no `onInvalid`, since `domainMap` membership is inherent to matching). A plain `success` rule (the default `on`) never fires on those paths.
 - Protocol gating follows the plugins' existing gRPC skip: neither plugin *dyes* gRPC traffic, since both early-return on a gRPC-matched route before reaching the point where they would record an outcome. The **strip** still runs on gRPC traffic — it is runtime-owned and unconditional (see [Dye](./dye.md)), so a client cannot use a gRPC request to smuggle a spoofed dye header past a route that also serves HTTP.
 
 ## Behavior Details
 
 - **DynamicInternalUpstream**: The selected target must exist in the current route's `backendRefs`; otherwise it is treated as invalid
 - **DynamicExternalUpstream**: Can only route to domains in the `domainMap` whitelist, preventing SSRF
-- In `Skip` / `Fallback` mode, unmatched requests use normal routing logic
+- In `Fallback` mode, unmatched requests use normal routing logic
 - See [Dye Headers](#dye-headers) above for the `dye` behavior shared by both sub-plugins
 
 ---
@@ -313,7 +313,7 @@ requestPlugins:
 
 ### Q2: Why does my DynamicExternalUpstream request go to the normal backend instead of the external domain?
 
-**A**: The default `onMissing` and `onNoMatch` are both `Skip`, which proceeds with normal backend selection rather than rejecting. If the routing key is missing or matches no `domainMap` entry, the request silently uses the route's `backendRefs`. Set both to `Reject` to fail closed, or configure `dye` to confirm whether a jump occurred.
+**A**: The default `onMissing` and `onNoMatch` are both `Fallback`, which proceeds with normal backend selection rather than rejecting. If the routing key is missing or matches no `domainMap` entry, the request silently uses the route's `backendRefs`. Set both to `Reject` to fail closed, or configure `dye` to confirm whether a jump occurred.
 
 ### Q3: Can DynamicExternalUpstream reach any domain?
 

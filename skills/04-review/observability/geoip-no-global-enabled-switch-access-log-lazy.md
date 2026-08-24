@@ -58,11 +58,14 @@ downstream indexing. The resolved shape is `Option<GeoLogBlock>` with
 `skip_serializing_if` at three levels (the whole block, and each of
 `client`/`direct` independently) — this is the same pattern already used for
 `genai`, `match_info`, and other optional access-log sections. An operator who
-wants `geo` in every log line gets it by configuring a predicate that reads
-each slot (an `onMissing: Skip` rule is enough to force the read without
-changing the request outcome) — the log field and the enforcement decision
-share the same underlying lookup, so there is nothing left to keep in sync
-between "did I turn geo on" and "did I write a geo rule".
+wants `geo` in every log line gets it by configuring a predicate that
+already reads the GeoIP-backed slot (`ClientGeo` / `DirectGeo`) — typically
+a `geoip_location` rule, or any other Condition that queries that slot as
+part of a real enforcement decision. There is no Skip outcome and no
+dedicated force-lookup-without-verdict knob; the log field and the
+enforcement decision share the same underlying lookup, so there is nothing
+left to keep in sync between "did I turn geo on" and "did I write a geo
+rule".
 
 ## Fix Suggestions Not Accepted
 

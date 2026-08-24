@@ -11,14 +11,11 @@ use std::collections::{HashMap, HashSet};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::hmac_auth::HmacMatchConfig;
-use crate::common::KeyGet;
-use crate::matcher::ip_cidr_helpers::{build_grouped_matcher, build_grouped_matcher_partial};
-use crate::matcher::ip_radix_tree::IpRadixMatcher;
 use crate::path_normalization::{get_path_normalization_config, normalize_config_path};
-use crate::resources::common::SecretObjectReference;
-use crate::resources::edgion_config_data::{EdgionConfigDataRef, IpGroup};
-use crate::resources::edgion_plugins::conditions::{KeyExistCondition, KeyMatchCondition};
+use crate::resources::edgion_config_data::EdgionConfigDataRef;
+use crate::resources::edgion_plugins::conditions::{
+    conditions_validate_request_body, ip_match_count, Condition, IpAccessMatch,
+};
 use crate::resources::edgion_plugins::PluginValidation;
 
 pub const DEFAULT_MAX_REFERENCED_URL_RULES: usize = 100;
@@ -116,28 +113,7 @@ pub struct IpAccessRuleConfig {
     #[serde(flatten)]
     pub ip: IpAccessMatch,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub all_of: Vec<AccessCondition>,
-}
-
-/// Inline and referenced IP ranges evaluated as one union.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct IpAccessMatch {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ips: Vec<String>,
-
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ip_refs: Vec<EdgionConfigDataRef>,
-
-    /// Controller-expanded union of inline IPs and every usable IpList ref.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub resolved_ips: Option<Vec<String>>,
-
-    /// Receiver-local matcher compiled from `resolvedIps` or inline `ips`.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub matcher: Option<IpRadixMatcher>,
+    pub all_of: Vec<Condition>,
 }
 
 /// One URL typed rule. Its inline candidate and every referenced item are OR-ed.
@@ -149,7 +125,7 @@ pub struct UrlAccessRuleConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<AccessPathMatch>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub all_of: Vec<AccessCondition>,
+    pub all_of: Vec<Condition>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config_refs: Vec<RequestAccessUrlAllowListRef>,
 
@@ -168,7 +144,7 @@ pub struct UrlAccessCandidate {
     pub hosts: Vec<String>,
     pub paths: Vec<AccessPathMatch>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub all_of: Vec<AccessCondition>,
+    pub all_of: Vec<Condition>,
 }
 
 /// Reference to a typed RequestAccessUrlAllowList and its consumer-side limits.
@@ -220,33 +196,6 @@ pub enum AccessPathMatchType {
     RegularExpression,
 }
 
-/// Extensible secondary match conditions. Conditions in one `allOf` are AND-ed.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum AccessCondition {
-    KeyExist(KeyExistCondition),
-    KeyMatch(KeyMatchCondition),
-    SecretMatch(SecretMatchCondition),
-    DirectPeerIpMatch(IpAccessMatch),
-    RemoteIpMatch(IpAccessMatch),
-    HmacAuth(HmacMatchConfig),
-}
-
-/// Exact match against Controller-resolved Secret values.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SecretMatchCondition {
-    pub key: KeyGet,
-    pub secret_ref: SecretObjectReference,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::redact::redact_opt::serialize"
-    )]
-    #[schemars(skip)]
-    pub resolved_values: Option<Vec<String>>,
-}
-
 impl RequestAccessPolicyConfig {
     pub fn validate_and_init(&mut self) -> Result<(), String> {
         self.validate_base()?;
@@ -263,6 +212,28 @@ impl RequestAccessPolicyConfig {
 
     pub fn runtime_profiles(&self) -> &HashMap<String, RequestAccessProfile> {
         self.resolved_profiles.as_ref().unwrap_or(&self.profiles)
+    }
+
+    /// Count IP-match conditions across every allOf (inline rules and resolved URL candidates).
+    pub fn ip_match_count(&self) -> usize {
+        self.runtime_profiles()
+            .values()
+            .flat_map(|profile| profile.required_rule_groups.iter())
+            .flat_map(|group| group.any_of_rules.iter())
+            .map(|rule| match &rule.rule {
+                RequestAccessRuleType::DirectPeerIp(config) | RequestAccessRuleType::RemoteIp(config) => {
+                    ip_match_count(&config.all_of)
+                }
+                RequestAccessRuleType::Url(config) => {
+                    ip_match_count(&config.all_of)
+                        + config
+                            .resolved_candidates
+                            .as_ref()
+                            .map(|items| items.iter().map(UrlAccessCandidate::ip_rule_count).sum::<usize>())
+                            .unwrap_or(0)
+                }
+            })
+            .sum()
     }
 
     pub fn validates_request_body(&self) -> bool {
@@ -364,36 +335,6 @@ impl IpAccessRuleConfig {
     }
 }
 
-impl IpAccessMatch {
-    fn validate_and_init(&mut self) -> Result<(), String> {
-        if self.ips.is_empty() && self.ip_refs.is_empty() {
-            return Err("ips or ipRefs must be configured".to_string());
-        }
-        for (index, reference) in self.ip_refs.iter().enumerate() {
-            validate_name(&reference.name, &format!("ipRefs[{index}].name"))?;
-        }
-        let effective = self.resolved_ips.as_ref().unwrap_or(&self.ips);
-        if effective.is_empty() {
-            self.matcher = None;
-            return Ok(());
-        }
-        let groups = [IpGroup {
-            name: "request-access-policy".to_string(),
-            description: None,
-            cidrs: effective.clone(),
-        }];
-        self.matcher = Some(if self.resolved_ips.is_some() {
-            // ConfigData IpList resources are partial-good: retain all valid
-            // siblings from the controller-expanded union while the source
-            // resource reports its own invalid entries.
-            build_grouped_matcher_partial(&groups).0
-        } else {
-            build_grouped_matcher(&groups)?
-        });
-        Ok(())
-    }
-}
-
 impl UrlAccessRuleConfig {
     fn validate_and_init(&mut self) -> Result<(), String> {
         let has_inline = !self.hosts.is_empty() || !self.paths.is_empty();
@@ -429,15 +370,7 @@ impl UrlAccessCandidate {
     }
 
     pub fn ip_rule_count(&self) -> usize {
-        self.all_of
-            .iter()
-            .filter(|condition| {
-                matches!(
-                    condition,
-                    AccessCondition::DirectPeerIpMatch(_) | AccessCondition::RemoteIpMatch(_)
-                )
-            })
-            .count()
+        ip_match_count(&self.all_of)
     }
 }
 
@@ -485,56 +418,18 @@ fn validate_url_parts(hosts: &[String], paths: &mut [AccessPathMatch], allow_no_
     Ok(())
 }
 
-fn validate_conditions(conditions: &mut [AccessCondition]) -> Result<(), String> {
-    for condition in conditions {
-        validate_condition(condition)?;
+fn validate_conditions(conditions: &mut [Condition]) -> Result<(), String> {
+    for (ordinal, condition) in conditions.iter_mut().enumerate() {
+        validate_condition(condition, ordinal)?;
     }
     Ok(())
 }
 
-fn validate_condition(condition: &mut AccessCondition) -> Result<(), String> {
-    fn local_key(key: &KeyGet) -> Result<(), String> {
-        if matches!(key, KeyGet::Webhook { .. }) {
-            Err("request access policy conditions cannot use webhook keys".to_string())
-        } else {
-            Ok(())
-        }
-    }
-
-    match condition {
-        AccessCondition::KeyExist(config) => local_key(&config.key),
-        AccessCondition::KeyMatch(config) => {
-            local_key(&config.key)?;
-            let has_value = config.value.is_some()
-                || config.values.as_ref().is_some_and(|values| !values.is_empty())
-                || config.regex.as_ref().is_some_and(|patterns| !patterns.is_empty());
-            if !has_value {
-                return Err("keyMatch requires value, values, or regex".to_string());
-            }
-            config
-                .compile()
-                .map_err(|error| format!("invalid keyMatch regex: {error}"))
-        }
-        AccessCondition::SecretMatch(config) => {
-            local_key(&config.key)?;
-            validate_name(&config.secret_ref.name, "secretMatch.secretRef.name")
-        }
-        AccessCondition::DirectPeerIpMatch(config) | AccessCondition::RemoteIpMatch(config) => {
-            config.validate_and_init()
-        }
-        AccessCondition::HmacAuth(config) => {
-            if !config.has_credentials_source() {
-                return Err("hmacAuth condition requires at least one secret group".to_string());
-            }
-            config.detect_validation_error().map_or(Ok(()), Err)
-        }
-    }
-}
-
-fn conditions_validate_request_body(conditions: &[AccessCondition]) -> bool {
-    conditions
-        .iter()
-        .any(|condition| matches!(condition, AccessCondition::HmacAuth(config) if config.validate_request_body))
+fn validate_condition(condition: &mut Condition, ordinal: usize) -> Result<(), String> {
+    condition
+        .compile(ordinal)
+        .map_err(|error| format!("invalid keyMatch regex: {error}"))?;
+    condition.validate_all_of()
 }
 
 fn validate_name(value: &str, field: &str) -> Result<(), String> {
@@ -554,6 +449,12 @@ impl PluginValidation for RequestAccessPolicyConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::KeyGet;
+    use crate::resources::common::SecretObjectReference;
+    use crate::resources::edgion_plugins::conditions::{
+        JwtClaimMatchCondition, KeyMatchCondition, MatchCore, MtlsField, MtlsMatchCondition, SecretMatchCondition,
+    };
+    use crate::resources::edgion_plugins::plugin_configs::HmacMatchConfig;
 
     fn ip_rule(name: &str, cidr: &str) -> RequestAccessRule {
         RequestAccessRule {
@@ -592,6 +493,74 @@ mod tests {
     #[test]
     fn validates_required_group_model() {
         assert!(config().validate_and_init().is_ok());
+    }
+
+    #[test]
+    fn all_of_rejects_empty_match_payloads() {
+        let conditions = [
+            Condition::KeyMatch(KeyMatchCondition {
+                key: KeyGet::Header {
+                    name: "X-Test".to_string(),
+                },
+                core: MatchCore::default(),
+                negate: true,
+                descriptor: Box::from(""),
+            }),
+            Condition::JwtClaimMatch(JwtClaimMatchCondition {
+                claim: "sub".to_string(),
+                core: MatchCore::default(),
+                negate: true,
+                descriptor: Box::from(""),
+            }),
+            Condition::MtlsMatch(MtlsMatchCondition {
+                field: MtlsField::Cn,
+                san_type: None,
+                core: MatchCore::default(),
+                negate: true,
+                descriptor: Box::from(""),
+            }),
+        ];
+
+        for condition in conditions {
+            let mut value = config();
+            let RequestAccessRuleType::RemoteIp(rule) =
+                &mut value.profiles.get_mut("default").unwrap().required_rule_groups[0].any_of_rules[0].rule
+            else {
+                panic!("expected remote IP rule")
+            };
+            rule.all_of = vec![condition];
+
+            let checked = value.check_fields();
+            let error = value
+                .validate_and_init()
+                .expect_err("empty allOf match payload must be rejected");
+            assert_eq!(checked.as_deref(), Some(error.as_str()));
+            assert!(error.contains("requires values or regex"), "{error}");
+        }
+    }
+
+    #[test]
+    fn all_of_rejects_blank_jwt_claim() {
+        let mut value = config();
+        let RequestAccessRuleType::RemoteIp(rule) =
+            &mut value.profiles.get_mut("default").unwrap().required_rule_groups[0].any_of_rules[0].rule
+        else {
+            panic!("expected remote IP rule")
+        };
+        rule.all_of = vec![Condition::JwtClaimMatch(JwtClaimMatchCondition {
+            claim: "\t ".to_string(),
+            core: MatchCore {
+                values: Some(vec!["admin".to_string()]),
+                ..MatchCore::default()
+            },
+            negate: false,
+            descriptor: Box::from(""),
+        })];
+
+        let checked = value.check_fields();
+        let error = value.validate_and_init().expect_err("blank JWT claim must be rejected");
+        assert_eq!(checked.as_deref(), Some(error.as_str()));
+        assert!(error.contains("jwtClaimMatch.claim cannot be empty"), "{error}");
     }
 
     #[test]
@@ -637,16 +606,13 @@ mod tests {
             "upstreamHeaderFields: [X-Consumer]",
         ] {
             let yaml = format!("type: hmacAuth\n{field}\n");
-            assert!(
-                serde_yaml::from_str::<AccessCondition>(&yaml).is_err(),
-                "accepted: {field}"
-            );
+            assert!(serde_yaml::from_str::<Condition>(&yaml).is_err(), "accepted: {field}");
         }
     }
 
     #[test]
     fn hmac_match_condition_redacts_admin_output_and_round_trips_conf_sync() {
-        let condition = AccessCondition::HmacAuth(HmacMatchConfig {
+        let condition = Condition::HmacAuth(HmacMatchConfig {
             resolved_credentials: Some(HashMap::from([(
                 "alice".to_string(),
                 crate::resources::edgion_plugins::plugin_configs::HmacCredential {
@@ -666,8 +632,8 @@ mod tests {
         assert!(admin_json.contains("[redacted]"), "{admin_json}");
 
         let wire = serde_json::to_vec(&condition).unwrap();
-        let decoded: AccessCondition = serde_json::from_slice(&wire).unwrap();
-        let AccessCondition::HmacAuth(config) = decoded else {
+        let decoded: Condition = serde_json::from_slice(&wire).unwrap();
+        let Condition::HmacAuth(config) = decoded else {
             panic!("unexpected condition type")
         };
         assert_eq!(
@@ -689,7 +655,7 @@ mod tests {
                 ..Default::default()
             }],
             resolved_ips: Some(vec!["10.0.0.0/8".to_string(), "203.0.113.0/24".to_string()]),
-            matcher: None,
+            ..Default::default()
         };
         value.validate_and_init().unwrap();
         let matcher = value.matcher.as_ref().expect("one compiled union matcher");
@@ -698,18 +664,40 @@ mod tests {
     }
 
     #[test]
+    fn all_invalid_resolved_ips_compile_to_empty_matcher() {
+        let mut value = IpAccessMatch {
+            ips: vec!["10.0.0.0/8".to_string()],
+            ip_refs: vec![EdgionConfigDataRef {
+                name: "junk-networks".to_string(),
+                ..Default::default()
+            }],
+            resolved_ips: Some(vec!["not-a-cidr".to_string(), "999.999.999.999".to_string()]),
+            ..Default::default()
+        };
+        value
+            .validate_and_init()
+            .expect("all-invalid resolvedIps must not fail RAP init");
+        let matcher = value.matcher.as_ref().expect("empty matcher");
+        assert!(!matcher.contains(&"10.1.2.3".parse().unwrap()));
+        assert!(!matcher.contains(&"203.0.113.8".parse().unwrap()));
+    }
+
+    #[test]
     fn resolved_secret_values_are_redacted_in_admin_mode() {
         let condition = SecretMatchCondition {
             key: KeyGet::Header {
                 name: "X-Origin-Token".to_string(),
             },
+            secret_key: "token".to_string(),
             secret_ref: SecretObjectReference {
                 name: "origin-token".to_string(),
                 group: None,
                 kind: None,
                 namespace: None,
             },
+            negate: false,
             resolved_values: Some(vec!["do-not-expose".to_string()]),
+            descriptor: Box::from(""),
         };
         let json = {
             let _guard = crate::redact::AdminRedactGuard::new();
@@ -754,17 +742,20 @@ mod tests {
                 match_type: AccessPathMatchType::Exact,
                 value: "/callback".to_string(),
             }],
-            all_of: vec![AccessCondition::SecretMatch(SecretMatchCondition {
+            all_of: vec![Condition::SecretMatch(SecretMatchCondition {
                 key: KeyGet::Header {
                     name: "X-Origin-Token".to_string(),
                 },
+                secret_key: "token".to_string(),
                 secret_ref: SecretObjectReference {
                     name: "origin-token".to_string(),
                     group: None,
                     kind: None,
                     namespace: None,
                 },
+                negate: false,
                 resolved_values: Some(vec!["nested-policy-secret".to_string()]),
+                descriptor: Box::from(""),
             })],
         };
         value.resolved_profiles = Some(HashMap::from([(
@@ -806,7 +797,7 @@ mod tests {
         else {
             panic!("expected URL rule")
         };
-        let AccessCondition::SecretMatch(secret) = &url.resolved_candidates.as_ref().unwrap()[0].all_of[0] else {
+        let Condition::SecretMatch(secret) = &url.resolved_candidates.as_ref().unwrap()[0].all_of[0] else {
             panic!("expected Secret match")
         };
         assert_eq!(
@@ -831,5 +822,34 @@ mod tests {
                 "schema exposed runtime field {field}: {schema}"
             );
         }
+    }
+
+    #[test]
+    fn validates_request_body_scans_all_of() {
+        let mut value = config();
+        value.profiles.get_mut("default").unwrap().required_rule_groups[0].any_of_rules[0].rule =
+            RequestAccessRuleType::RemoteIp(IpAccessRuleConfig {
+                ip: IpAccessMatch {
+                    ips: vec!["10.0.0.0/8".to_string()],
+                    ..Default::default()
+                },
+                all_of: vec![Condition::HmacAuth(HmacMatchConfig {
+                    validate_request_body: true,
+                    secret_groups: Some(vec![
+                        crate::resources::edgion_plugins::plugin_configs::HmacAuthSecretGroup {
+                            name: "default".to_string(),
+                            description: None,
+                            secret_refs: vec![SecretObjectReference {
+                                name: "hmac-credentials".to_string(),
+                                group: None,
+                                kind: None,
+                                namespace: None,
+                            }],
+                        },
+                    ]),
+                    ..Default::default()
+                })],
+            });
+        assert!(value.validates_request_body());
     }
 }

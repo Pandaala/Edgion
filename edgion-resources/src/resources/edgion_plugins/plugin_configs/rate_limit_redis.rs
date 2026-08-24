@@ -21,7 +21,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-use super::rate_limit::{LimitHeaderNames, OnMissingKey};
+use super::rate_limit::{LimitHeaderNames, OnKeyMiss};
 
 // ========== Rate Limit Algorithm ==========
 
@@ -170,13 +170,13 @@ pub struct RateLimitRedisConfig {
     /// "-" when it does not resolve, joined with "_").
     /// Default: [{ type: remoteIp }]. An explicitly empty list is a valid
     /// configuration meaning "one global bucket": it is not a key miss, so it
-    /// still rate-limits rather than falling through to `onMissingKey`.
+    /// still rate-limits rather than falling through to `onKeyMiss`.
     #[serde(default = "default_key_sources")]
     pub key: Vec<KeyGet>,
 
     /// Behavior when key cannot be extracted (default: Allow)
     #[serde(default)]
-    pub on_missing_key: OnMissingKey,
+    pub on_key_miss: OnKeyMiss,
 
     /// Default key fallback when extraction fails
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -278,7 +278,7 @@ impl Default for RateLimitRedisConfig {
             redis_ref: String::new(),
             policies: vec![],
             key: vec![KeyGet::default()],
-            on_missing_key: OnMissingKey::default(),
+            on_key_miss: OnKeyMiss::default(),
             default_key: None,
             reject_status: default_reject_status(),
             reject_message: None,
@@ -656,7 +656,7 @@ policies:
     interval: "1m"
     algorithm: TokenBucket
 onRedisFailure: Deny
-onMissingKey: Deny
+onKeyMiss: Deny
 cost: 5
 maxKeyLen: 16384
 keyPrefix: "myapp:rl:"
@@ -667,7 +667,7 @@ keyPrefix: "myapp:rl:"
         assert_eq!(config.policies[1].algorithm, RateLimitAlgorithm::FixedWindow);
         assert_eq!(config.policies[2].algorithm, RateLimitAlgorithm::TokenBucket);
         assert_eq!(config.on_redis_failure, OnRedisFailure::Deny);
-        assert_eq!(config.on_missing_key, OnMissingKey::Deny);
+        assert_eq!(config.on_key_miss, OnKeyMiss::Deny);
         assert_eq!(config.cost, 5);
         assert_eq!(config.max_key_len, 16384);
         assert_eq!(config.key_prefix, "myapp:rl:");

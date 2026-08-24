@@ -367,7 +367,7 @@ declarations remain authoritative and invalid shares are preserved.
 
 `tokenQuota` requires `redisRef`, an explicit `key` array, and one to eight `limits`. Each limit has
 `scope: identity` or `scope: identityModel`, `tokens`, and `window`. Defaults are
-`onMissingKey: Deny`, `onRedisFailure: Deny`, `flushTokens: 100`, `flushInterval: 1s`, and
+`onKeyMiss: Deny`, `onRedisFailure: Deny`, `flushTokens: 100`, `flushInterval: 1s`, and
 `requestTimeout: 500ms`.
 
 `identityModel` partitions by the exact requested logical name. A canonical

@@ -9,13 +9,12 @@ use std::time::Duration;
 
 use crate::plugins::runtime::{PluginLog, PluginSession};
 use edgion_resources::common::KeyGet;
-use edgion_resources::resources::edgion_plugins::OnMissingKey;
+use edgion_resources::resources::edgion_plugins::OnKeyMiss;
 
 pub mod auth_common;
 mod capped_writer;
 pub mod http_client;
 pub mod http_util;
-pub mod identity_source;
 pub mod json_request;
 pub mod outbound;
 
@@ -24,7 +23,6 @@ pub use capped_writer::CappedWriter;
 pub use http_client::{
     connection_listed_hop_by_hop, get_http_client, is_hop_by_hop, is_hop_by_hop_or_listed, HOP_BY_HOP_HEADERS,
 };
-pub use identity_source::extract_rule_values;
 pub use json_request::{form_request_headers_are_supported, json_request_headers_are_supported};
 
 /// Outcome of resolving a rate-limit key from the configured `key` sources.
@@ -36,9 +34,9 @@ pub use json_request::{form_request_headers_are_supported, json_request_headers_
 pub enum RateLimitKey {
     /// A non-empty key was resolved (joined parts, or the configured default).
     Resolved(String),
-    /// No key resolved and `OnMissingKey::Allow` — let the request through.
+    /// No key resolved and `OnKeyMiss::Allow` — let the request through.
     Allow,
-    /// No key resolved and `OnMissingKey::Deny` — reject the request.
+    /// No key resolved and `OnKeyMiss::Deny` — reject the request.
     Deny,
 }
 
@@ -46,50 +44,50 @@ pub enum RateLimitKey {
 /// resolved parts with [`compose_rate_limit_key`].
 ///
 /// Shared by the `RateLimit` and `RateLimitRedis` plugins so the key-extraction
-/// policy (separator, default-key fallback, `OnMissingKey` handling, and the
+/// policy (separator, default-key fallback, `OnKeyMiss` handling, and the
 /// PluginLog tags) lives in exactly one place. The PluginLog tags distinguish the
 /// three key-miss outcomes: `"key miss:default"` (rate-limited under the shared
-/// default key), `"key miss:allow"` (full bypass via `OnMissingKey::Allow`), and
+/// default key), `"key miss:allow"` (full bypass via `OnKeyMiss::Allow`), and
 /// `"Deny key miss"` (the canonical key-miss-denial tag, distinct from a
 /// quota-exceeded denial).
 ///
 /// `plugin_log` entries stay short (≤40B) and never contain the resolved key,
 /// which can be a user-identifying value (API key, user_id).
-pub async fn resolve_rate_limit_key(
+pub fn resolve_rate_limit_key(
     session: &mut dyn PluginSession,
     keys: &[KeyGet],
     default_key: Option<&str>,
-    on_missing: &OnMissingKey,
+    on_missing: &OnKeyMiss,
     plugin_log: &mut PluginLog,
 ) -> RateLimitKey {
     let mut parts: Vec<Option<String>> = Vec::with_capacity(keys.len());
     for k in keys {
-        parts.push(session.key_get(k).await);
+        parts.push(session.key_get(k));
     }
 
     // An empty `keys` list is not a key miss: there is no source that could have
     // been missed, so the plugin still rate-limits, under the single empty-string
     // bucket every request composes to. Routing it through the miss path instead
-    // would silently disable the limiter whenever `onMissingKey` is `Allow`.
+    // would silently disable the limiter whenever `onKeyMiss` is `Allow`.
     if keys.is_empty() || parts.iter().any(|p| p.is_some()) {
         return RateLimitKey::Resolved(compose_rate_limit_key(&parts));
     }
 
     // No keys resolved - fall back to the configured default key if present.
-    // Distinct tag from the OnMissingKey::Allow path below: here the request IS
+    // Distinct tag from the OnKeyMiss::Allow path below: here the request IS
     // rate-limited (counted against the shared default-key bucket), it is not a bypass.
     if let Some(default_key) = default_key {
         plugin_log.push("key miss:default");
         return RateLimitKey::Resolved(default_key.to_string());
     }
 
-    // No default key - apply the onMissingKey policy.
+    // No default key - apply the onKeyMiss policy.
     match on_missing {
-        OnMissingKey::Allow => {
+        OnKeyMiss::Allow => {
             plugin_log.push("key miss:allow");
             RateLimitKey::Allow
         }
-        OnMissingKey::Deny => {
+        OnKeyMiss::Deny => {
             plugin_log.push("Deny key miss");
             RateLimitKey::Deny
         }
@@ -173,52 +171,52 @@ mod tests {
 
     use crate::plugins::runtime::traits::session::MockPluginSession;
 
-    #[tokio::test]
-    async fn resolve_rate_limit_key_returns_resolved_when_key_present() {
+    #[test]
+    fn resolve_rate_limit_key_returns_resolved_when_key_present() {
         let mut session = MockPluginSession::new();
         session.expect_key_get().return_const(Some("user-1".to_string()));
         let mut plugin_log = PluginLog::new("RateLimit");
         let keys = vec![KeyGet::RemoteIp];
 
-        let out = resolve_rate_limit_key(&mut session, &keys, None, &OnMissingKey::Deny, &mut plugin_log).await;
+        let out = resolve_rate_limit_key(&mut session, &keys, None, &OnKeyMiss::Deny, &mut plugin_log);
 
         assert!(matches!(out, RateLimitKey::Resolved(k) if k == "user-1"));
     }
 
-    #[tokio::test]
-    async fn resolve_rate_limit_key_falls_back_to_default_key() {
+    #[test]
+    fn resolve_rate_limit_key_falls_back_to_default_key() {
         let mut session = MockPluginSession::new();
         session.expect_key_get().return_const(None);
         let mut plugin_log = PluginLog::new("RateLimit");
         let keys = vec![KeyGet::RemoteIp];
 
-        let out = resolve_rate_limit_key(&mut session, &keys, Some("dflt"), &OnMissingKey::Deny, &mut plugin_log).await;
+        let out = resolve_rate_limit_key(&mut session, &keys, Some("dflt"), &OnKeyMiss::Deny, &mut plugin_log);
 
         assert!(matches!(out, RateLimitKey::Resolved(k) if k == "dflt"));
         assert!(plugin_log.contains("key miss:default"));
     }
 
-    #[tokio::test]
-    async fn resolve_rate_limit_key_allows_on_missing_allow() {
+    #[test]
+    fn resolve_rate_limit_key_allows_on_missing_allow() {
         let mut session = MockPluginSession::new();
         session.expect_key_get().return_const(None);
         let mut plugin_log = PluginLog::new("RateLimit");
         let keys = vec![KeyGet::RemoteIp];
 
-        let out = resolve_rate_limit_key(&mut session, &keys, None, &OnMissingKey::Allow, &mut plugin_log).await;
+        let out = resolve_rate_limit_key(&mut session, &keys, None, &OnKeyMiss::Allow, &mut plugin_log);
 
         assert!(matches!(out, RateLimitKey::Allow));
         assert!(plugin_log.contains("key miss:allow"));
     }
 
-    #[tokio::test]
-    async fn resolve_rate_limit_key_denies_with_canonical_tag_on_missing_deny() {
+    #[test]
+    fn resolve_rate_limit_key_denies_with_canonical_tag_on_missing_deny() {
         let mut session = MockPluginSession::new();
         session.expect_key_get().return_const(None);
         let mut plugin_log = PluginLog::new("RateLimit");
         let keys = vec![KeyGet::RemoteIp];
 
-        let out = resolve_rate_limit_key(&mut session, &keys, None, &OnMissingKey::Deny, &mut plugin_log).await;
+        let out = resolve_rate_limit_key(&mut session, &keys, None, &OnKeyMiss::Deny, &mut plugin_log);
 
         assert!(matches!(out, RateLimitKey::Deny));
         // Canonical key-miss-denial tag, shared by both rate-limit plugins.
@@ -226,7 +224,7 @@ mod tests {
     }
 
     /// Resolve a two-header key configuration, returning the composed bucket key.
-    async fn resolve_tenant_user_key(tenant: Option<&str>, user: Option<&str>) -> String {
+    fn resolve_tenant_user_key(tenant: Option<&str>, user: Option<&str>) -> String {
         let (tenant, user) = (tenant.map(str::to_string), user.map(str::to_string));
         let mut session = MockPluginSession::new();
         session.expect_key_get().returning(move |k| match k {
@@ -244,27 +242,27 @@ mod tests {
             },
         ];
 
-        match resolve_rate_limit_key(&mut session, &keys, None, &OnMissingKey::Deny, &mut plugin_log).await {
+        match resolve_rate_limit_key(&mut session, &keys, None, &OnKeyMiss::Deny, &mut plugin_log) {
             RateLimitKey::Resolved(k) => k,
             _ => panic!("expected a resolved key"),
         }
     }
 
-    #[tokio::test]
-    async fn resolve_rate_limit_key_multi_source_separator_is_unambiguous() {
+    #[test]
+    fn resolve_rate_limit_key_multi_source_separator_is_unambiguous() {
         // A plain "_" join would render both tuples as "t1_u_2", merging the two
         // clients into one bucket.
-        let a = resolve_tenant_user_key(Some("t1"), Some("u_2")).await;
-        let b = resolve_tenant_user_key(Some("t1_u"), Some("2")).await;
+        let a = resolve_tenant_user_key(Some("t1"), Some("u_2"));
+        let b = resolve_tenant_user_key(Some("t1_u"), Some("2"));
         assert_ne!(a, b);
     }
 
-    #[tokio::test]
-    async fn resolve_rate_limit_key_multi_source_unresolved_slot_keeps_position() {
+    #[test]
+    fn resolve_rate_limit_key_multi_source_unresolved_slot_keeps_position() {
         // Skipping an unresolved source would shift the remaining one, so both
         // tuples would render as "x".
-        let a = resolve_tenant_user_key(None, Some("x")).await;
-        let b = resolve_tenant_user_key(Some("x"), None).await;
+        let a = resolve_tenant_user_key(None, Some("x"));
+        let b = resolve_tenant_user_key(Some("x"), None);
         assert_ne!(a, b);
     }
 
@@ -276,15 +274,15 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn resolve_rate_limit_key_empty_key_list_still_rate_limits() {
+    #[test]
+    fn resolve_rate_limit_key_empty_key_list_still_rate_limits() {
         let mut session = MockPluginSession::new();
         session.expect_key_get().return_const(None);
         let mut plugin_log = PluginLog::new("RateLimit");
 
-        // No configured source is not a key miss: OnMissingKey::Allow must not
+        // No configured source is not a key miss: OnKeyMiss::Allow must not
         // turn an empty `key` list into a silent bypass of the limiter.
-        let out = resolve_rate_limit_key(&mut session, &[], None, &OnMissingKey::Allow, &mut plugin_log).await;
+        let out = resolve_rate_limit_key(&mut session, &[], None, &OnKeyMiss::Allow, &mut plugin_log);
 
         assert!(matches!(out, RateLimitKey::Resolved(k) if k.is_empty()));
     }

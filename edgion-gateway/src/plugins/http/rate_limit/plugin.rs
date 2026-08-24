@@ -150,7 +150,7 @@ impl RateLimit {
         resp.insert_header("Content-Type", "application/json").ok();
         // RFC 7231 §7.1.3: Retry-After is a delta-seconds integer; "0" tells
         // RFC-compliant clients to retry immediately and risks a hot-loop under
-        // pressure. Omit the header for Duration::ZERO (OnMissingKey::Deny path)
+        // pressure. Omit the header for Duration::ZERO (OnKeyMiss::Deny path)
         // and ceil any positive sub-second value to 1.
         if !retry_after.is_zero() {
             let secs = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
@@ -220,11 +220,9 @@ impl RequestFilter for RateLimit {
             session,
             &self.config.key,
             self.config.default_key.as_deref(),
-            &self.config.on_missing_key,
+            &self.config.on_key_miss,
             plugin_log,
-        )
-        .await
-        {
+        ) {
             RateLimitKey::Resolved(k) => k,
             RateLimitKey::Allow => return PluginRunningResult::GoodNext,
             RateLimitKey::Deny => return self.reject_request(session, Duration::ZERO).await,

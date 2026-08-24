@@ -16,7 +16,7 @@ spec:
         key:                 #  key  key 
           - type: header
             name: "X-Rate-Key"
-        onMissingKey: Allow  #  key 
+        onKeyMiss: Allow  #  key 
         rejectStatus: 429
         rejectMessage: "Rate limit exceeded - try again later"
         showLimitHeaders: true
@@ -32,7 +32,7 @@ spec:
           - type: header
             name: "X-API-Key"
           - type: path
-        onMissingKey: Allow
+        onKeyMiss: Allow
         rejectStatus: 429
         rejectMessage: "API rate limit exceeded"
         showLimitHeaders: true

@@ -3,9 +3,7 @@ use async_trait::async_trait;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::{
-    DynamicExternalUpstreamConfig, ExtUpstreamOnMissing, ExtUpstreamOnNoMatch,
-};
+use edgion_resources::resources::edgion_plugins::{DynamicExternalUpstreamConfig, UpstreamFallback};
 
 pub struct DynamicExternalUpstream {
     name: String,
@@ -37,16 +35,16 @@ impl RequestFilter for DynamicExternalUpstream {
         }
 
         // 1. Extract raw routing key via KeyGet
-        let raw_value = match session.key_get(&self.config.from).await {
+        let raw_value = match session.key_get(&self.config.from) {
             Some(v) if !v.is_empty() => v,
             _ => {
                 return match self.config.on_missing {
-                    ExtUpstreamOnMissing::Skip => {
+                    UpstreamFallback::Fallback => {
                         session.record_outcome(DyeOutcome::Fallback, "on-missing");
                         log.push("upstream miss");
                         PluginRunningResult::GoodNext
                     }
-                    ExtUpstreamOnMissing::Reject => {
+                    UpstreamFallback::Reject => {
                         session.record_outcome(DyeOutcome::Reject, "on-missing");
                         log.push_err("no routing key");
                         PluginRunningResult::ErrResponse {
@@ -65,12 +63,12 @@ impl RequestFilter for DynamicExternalUpstream {
                     Some(m) => m.as_str().to_string(),
                     None => {
                         return match self.config.on_missing {
-                            ExtUpstreamOnMissing::Skip => {
+                            UpstreamFallback::Fallback => {
                                 session.record_outcome(DyeOutcome::Fallback, "on-missing");
                                 log.push("upstream miss");
                                 PluginRunningResult::GoodNext
                             }
-                            ExtUpstreamOnMissing::Reject => {
+                            UpstreamFallback::Reject => {
                                 session.record_outcome(DyeOutcome::Reject, "on-missing");
                                 log.push_err("regex extract fail");
                                 PluginRunningResult::ErrResponse {
@@ -93,12 +91,12 @@ impl RequestFilter for DynamicExternalUpstream {
             Some(t) => t,
             None => {
                 return match self.config.on_no_match {
-                    ExtUpstreamOnNoMatch::Skip => {
+                    UpstreamFallback::Fallback => {
                         session.record_outcome(DyeOutcome::Fallback, "on-no-match");
                         log.push("upstream miss");
                         PluginRunningResult::GoodNext
                     }
-                    ExtUpstreamOnNoMatch::Reject => {
+                    UpstreamFallback::Reject => {
                         session.record_outcome(DyeOutcome::Reject, "on-no-match");
                         log.push_err("no upstream available");
                         PluginRunningResult::ErrResponse {
@@ -169,8 +167,8 @@ mod tests {
                     sni: None,
                 },
             )]),
-            on_missing: ExtUpstreamOnMissing::default(),
-            on_no_match: ExtUpstreamOnNoMatch::default(),
+            on_missing: UpstreamFallback::Fallback,
+            on_no_match: UpstreamFallback::Fallback,
             compiled_regex: None,
         }
     }
@@ -211,7 +209,7 @@ mod tests {
     #[tokio::test]
     async fn deu_records_reject_outcome_on_missing_key() {
         let config = DynamicExternalUpstreamConfig {
-            on_missing: ExtUpstreamOnMissing::Reject,
+            on_missing: UpstreamFallback::Reject,
             ..base_config()
         };
         let plugin = DynamicExternalUpstream {
@@ -239,7 +237,7 @@ mod tests {
         );
     }
 
-    /// `on_no_match: Skip` (default) on a routing key with no domain entry must
+    /// `on_no_match: Fallback` (default) on a routing key with no domain entry must
     /// record `Fallback` with cause `on-no-match` and pass the request through.
     #[tokio::test]
     async fn deu_records_fallback_outcome_on_no_match() {

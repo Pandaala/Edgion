@@ -18,4 +18,4 @@ spec:
             key:
               type: header
               name: X-Fault
-            value: "1"
+            values: ["1"]

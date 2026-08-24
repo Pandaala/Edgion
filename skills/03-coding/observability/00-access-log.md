@@ -229,6 +229,21 @@ Each plugin writes a compact execution summary to the access log via `log: &mut 
 - Key parameters use the `k=v` format; multiple parameters are space-separated
 - New code always uses `push_err` for error entries
 
+### Condition-derived signals (`cond_skip` and descriptors)
+
+Two independent signals. Do not collapse them.
+
+| Signal | Where | When | Meaning |
+|--------|--------|------|---------|
+| `cond_skip` | `PluginLog.cond_skip` (`set_cond_skip`) | Plugin skipped by `PluginConditions` | Why it was skipped: `skip:<type>,<detail>` or `!run:<type>,<detail>`. Format and producer are unchanged (D-23). |
+| Compiled descriptors | plugin `log` array (`PluginLog::push`) | A condition **matches** on the request/response path | `<ordinal>:<type>[:<accessor>]`. Value-free. Non-match logs nothing. Body/dye stay silent (`evaluate` with `None`). |
+
+`skip` (OR) pushes only the first matching descriptor. `run` (AND) pushes
+each success in order and stops on the first failure (no push for the
+failure). Reconstruct the chain from that sequence; `cond_skip` still names
+the skip reason. See
+[`docs/en/user-guide/http-route/filters/edgion-plugins/conditions.md`](../../../docs/en/user-guide/http-route/filters/edgion-plugins/conditions.md).
+
 ### Error-entry API constraint: must use `push_err`
 
 > **Authoritative source**: this section is also part of iron rule 1 in `skills/03-coding/01-log-safety.md`. This section explains "what it looks like in the access log"; log-safety.md explains "why the constraint and the safety rule".

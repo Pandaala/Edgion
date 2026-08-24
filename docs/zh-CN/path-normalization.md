@@ -124,18 +124,18 @@ path:
   value: "/admin"
 ```
 
-### 3. `RestrictionSource::Path` 配置
+### 3. `keyMatch` + `key: { type: path }` 配置
 
-`Path` source 规则的 `values` 加载时会被规范化（与请求侧匹配同一空间）。若有 `/admin/` 之类 trailing slash，会被规范化为 `/admin`——INFO 日志会记录此转换，不静默。
+path 键的 `keyMatch` 条件的 `values` 加载时会被规范化（与请求侧匹配同一空间）。若有 `/admin/` 之类 trailing slash，会被规范化为 `/admin`。
 
-若需要按字面 raw 拒绝，改用 `RestrictionSource::RequestPath`。
+若需要按字面 raw 拒绝，改用 `keyMatch` + `key: { type: requestPath }`。
 
 ### 4. `;param` 对拒绝/允许模式规则的副作用
 
 path normalization 会剥除每个 segment 中的 `;param=...`（防 `..;/` 类绕过）。
 
-- 影响 **拒绝模式分组**（`mode: Deny`）：`/admin/..;jsessionid=x/secret` 在 ACL 视图为 `/secret`，能正确命中 `Path` 规则的 `values: ["/secret"]` ✓
-- 影响 **允许模式分组**（`mode: Allow`）：请求 `/api/users;v=1/data` 在 ACL 视图为 `/api/users/data`——若配置 `Path` 规则 `values: ["/api/users"]` exact，**不命中**
+- 影响 **拒绝模式分组**（`mode: Deny`）：`/admin/..;jsessionid=x/secret` 在 ACL 视图为 `/secret`，能正确命中 path `keyMatch` 的 `values: ["/secret"]` ✓
+- 影响 **允许模式分组**（`mode: Allow`）：请求 `/api/users;v=1/data` 在 ACL 视图为 `/api/users/data`——若配置 path `keyMatch` `values: ["/api/users"]` exact，**不命中**
 
 上游仍收到含 `;param` 的 raw path，依赖 `;jsessionid` 的应用不受影响。
 
@@ -149,14 +149,14 @@ path normalization 会剥除每个 segment 中的 `;param=...`（防 `..;/` 类�
 - type: RequestRestriction
   config:
     mode: Deny
-    ruleGroups:
-      - rules:
-          - name: block-admin
-            source: Path             # current 视图，覆盖所有编码变体
+    anyOf:
+      - allOf:
+          - type: keyMatch
+            key:
+              type: path             # current 视图，覆盖所有编码变体
             values:
               - "/admin"
               - "/internal"
-            onMissing: NoMatch
 ```
 
 ### 审计日志记录客户端原始 URI
@@ -227,4 +227,4 @@ path_normalization:
   preserve_path_parameters: true
 ```
 
-注意：开启后 `..;/` 类绕过攻击不再被默认拦截（参见 spec §14.4）。建议同时用 `RestrictionSource::RequestPath` regex 拦截 `;` 字符的可疑模式。
+注意：开启后 `..;/` 类绕过攻击不再被默认拦截（参见 spec §14.4）。建议同时用 `keyMatch` + `key: { type: requestPath }` 的 regex 拦截 `;` 字符的可疑模式。

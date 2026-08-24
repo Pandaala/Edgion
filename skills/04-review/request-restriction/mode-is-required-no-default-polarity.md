@@ -11,9 +11,9 @@ closed: 2026-08-22
 ## Conclusion
 
 `RequestRestrictionConfig` keeps a single global polarity field and a single
-`ruleGroups` list. Two things changed: the values are now `Deny` / `Allow` (was
-`Blacklist` / `Whitelist`), and the field is **required** — a config with no
-`mode` is rejected by `check_fields()`.
+`anyOf` list of groups (each group's `allOf` is AND). Two things changed: the
+values are now `Deny` / `Allow` (was `Blacklist` / `Whitelist`), and the field
+is **required** — a config with no `mode` is rejected by `check_fields()`.
 
 The defect was never "a global polarity field exists". It was **the default
 value**. Fix suggestions of the form "give `mode` a sensible default so simple
@@ -64,9 +64,9 @@ access-control family reads with one set of terms.
 - Give `mode` a default (`Deny`, `Blacklist`, or anything else) — reintroduces the silent fail-open in rationale 1. Shorter configs are not worth it.
 - Split into `allowRuleGroups` / `denyRuleGroups` and drop `mode` — implemented and reverted; see rationale 2. Equivalent expressiveness for one polarity, implicit fallback verdict.
 - Add `denyRuleGroups` + `allowRuleGroups` + `defaultAction` with deny-wins so "allow X except Y" is expressible in one plugin — also implemented and reverted. It works and is a defensible shape, but it costs an extra required field in every configuration to buy a case that is currently served by a regex exclusion or by chaining two plugin instances. Revisit only under the trigger below, not as a general cleanup.
-- Add a `defaultAction` field alongside `mode` — redundant: with one `ruleGroups` list and one `mode`, the fallback verdict is already fully determined (`Allow` => unmatched denied, `Deny` => unmatched passes). It would only ever hold its one correct value.
+- Add a `defaultAction` field alongside `mode` — redundant: with one `anyOf` list and one `mode`, the fallback verdict is already fully determined (`Allow` => unmatched denied, `Deny` => unmatched passes). It would only ever hold its one correct value.
 - Add per-group or per-rule polarity — that is the nginx `ngx_http_access_module` model (single ordered list, first match wins, order-sensitive). Edgion deliberately follows the order-insensitive Envoy/NetworkPolicy shape instead.
-- "Fix" the all-`Skip` foot-gun (a `mode: Allow` group whose predicates are all `Skip`-dropped rejects every request) — documented behavior of `onMissing: Skip`, regression-tested in both polarities; the guidance is to use `NoMatch`/`Match` when the source may be absent.
+- "Fix" the former all-`Skip` foot-gun (a `mode: Allow` group whose predicates were all `Skip`-dropped rejected every request) — historical. `onMissing: Skip` was deleted in condition-layer S13; Skip is not a `Condition` outcome. A missing source is base false, then `negate` applies. Re-reports of that foot-gun are not accepted.
 
 ## Re-evaluation Triggers
 

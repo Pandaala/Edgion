@@ -14,3 +14,4 @@ Global plugins not bound to a specific Route type, configured independently via 
 | [jwe-decrypt.md](jwe-decrypt.md) | JWE Decrypt — JWE decryption |
 | [forward-auth.md](forward-auth.md) | ForwardAuth — External auth delegation |
 | [ctx-setter.md](ctx-setter.md) | CtxSet — Context variable setting |
+| [Webhook KeyGet](../http-route/filters/edgion-plugins/webhook-key-get.md) | Resolve a LinkSys webhook value into request context |

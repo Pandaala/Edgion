@@ -50,7 +50,7 @@ impl RequestAccessUrlAllowListData {
 mod tests {
     use super::*;
     use crate::resources::edgion_plugins::plugin_configs::{
-        AccessCondition, AccessPathMatch, AccessPathMatchType, IpAccessMatch,
+        AccessPathMatch, AccessPathMatchType, Condition, IpAccessMatch,
     };
 
     fn candidate(name: &str, hosts: Vec<&str>, match_type: AccessPathMatchType, path: &str) -> UrlAccessCandidate {
@@ -121,7 +121,7 @@ mod tests {
             AccessPathMatchType::Exact,
             "/exact",
         );
-        exact.all_of.push(AccessCondition::DirectPeerIpMatch(IpAccessMatch {
+        exact.all_of.push(Condition::DirectPeerIpMatch(IpAccessMatch {
             ips: vec!["127.0.0.0/8".to_string()],
             ..Default::default()
         }));
@@ -131,7 +131,7 @@ mod tests {
             AccessPathMatchType::PathPrefix,
             "/callbacks/:vendor",
         );
-        prefix.all_of.push(AccessCondition::RemoteIpMatch(IpAccessMatch {
+        prefix.all_of.push(Condition::RemoteIpMatch(IpAccessMatch {
             ip_refs: vec![crate::resources::edgion_config_data::EdgionConfigDataRef {
                 name: "vendor-networks".to_string(),
                 ..Default::default()

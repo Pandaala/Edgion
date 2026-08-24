@@ -21,7 +21,7 @@ spec:
         key:
           - type: header
             name: "x-rate-key" # lowercase: gRPC metadata keys are always lowercase
-        onMissingKey: Deny     # every request carries the key; Deny makes a missing key fail loudly
+        onKeyMiss: Deny     # every request carries the key; Deny makes a missing key fail loudly
         rejectStatus: 429      # maps to gRPC status 8 RESOURCE_EXHAUSTED (http_to_grpc_status)
         rejectMessage: "Rate limit exceeded"
         showLimitHeaders: true

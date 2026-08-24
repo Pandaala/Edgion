@@ -512,7 +512,7 @@ URL 目标按主机名寻址，因此——与通过 Kubernetes EndpointSlice �
 - **`target.blockPrivate: true` 时额外拒绝**：RFC1918 私有网段（`10/8`、`172.16/12`、`192.168/16`）及唯一本地地址（`fd00::/8`），在始终拒绝的类别之外追加。
 - **默认（`blockPrivate` 未设置或为 `false`）**：私有网段被放行，与 Service 目标一贯的行为保持一致——多数 webhook 合法地指向内部制品库，或只能通过私有网络访问的 SaaS。
 
-被拒绝的地址会导致该次调用连接失败（`key_get` 返回 `None`，与其他任何 webhook 失败一样）。拒绝会使 `edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` 计数器递增，但这仅在**主机名**路径上成立（`EgressResolver`，会记录全部三种 reason）。在 **IP 字面量**路径上，只有 `reason="private"` 会被记录：`dial_url` 的 `blockPrivate` 检查会记录该指标，但那条路径上的回环/链路本地拒绝要经过早于该指标就已存在的共享后端守卫（`validate_endpoint_backend_addr`），并不会写入该指标。因此，基于该计数器搭建的看板或告警，对主机名目标能获得完整覆盖，但当 `target.url` 是 IP 字面量时，对回环/链路本地拒绝是"看不见"的。
+被拒绝的地址会导致该次调用连接失败（WebhookKeyGet 不写入值，与其他任何 webhook 失败一样）。拒绝会使 `edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` 计数器递增，但这仅在**主机名**路径上成立（`EgressResolver`，会记录全部三种 reason）。在 **IP 字面量**路径上，只有 `reason="private"` 会被记录：`dial_url` 的 `blockPrivate` 检查会记录该指标，但那条路径上的回环/链路本地拒绝要经过早于该指标就已存在的共享后端守卫（`validate_endpoint_backend_addr`），并不会写入该指标。因此，基于该计数器搭建的看板或告警，对主机名目标能获得完整覆盖，但当 `target.url` 是 IP 字面量时，对回环/链路本地拒绝是"看不见"的。
 
 **网关本地默认值。** 当 webhook 未显式设置 `target.blockPrivate` 时，生效值来自网关自身的配置：
 
@@ -604,9 +604,9 @@ request:
 |------|------------------|----------|
 | `skipIfMissing`（默认） | 从出站请求中静默省略该字段，不记录日志。 | 缺失属正常的可选增强。 |
 | `warnIfMissing` | 省略该字段，写入一条 PluginLog 告警，请求继续。 | *应当*存在的字段——你想要可见性但不想让调用失败。 |
-| `required` | webhook 调用被视为失败：`key_get` 返回 `None`（无值），与其他任何 webhook 失败一样。 | 后端缺之不可的字段。 |
+| `required` | webhook 调用被视为失败：WebhookKeyGet 不写入值，与其他任何 webhook 失败一样。 | 后端缺之不可的字段。 |
 
-`statusOnError` 存在于该连接器的 schema 中（它与 ForwardAuth 插件共用 `ExternalHttpConnection`），但**webhook 连接器本身并不读取它**：任何失败——包括某个 `presence: required` 字段缺失——`key_get` 都只是返回 `None`，真正决定后续行为的是*消费方*插件自己的回退逻辑（例如 ctx-set 会让目标变量保持未设置，请求继续往下走）。在 webhook `LinkSys` 上设置此字段没有任何效果；它只在同一个结构体被直接嵌入 ForwardAuth 插件配置时才有意义。
+`statusOnError` 存在于该连接器的 schema 中（它与 ForwardAuth 插件共用 `ExternalHttpConnection`），但**webhook 连接器本身并不读取它**：任何失败——包括某个 `presence: required` 字段缺失——WebhookKeyGet 都不写入值（或写入其 `default`），请求继续往下走。在 webhook `LinkSys` 上设置此字段没有任何效果；它只在同一个结构体被直接嵌入 ForwardAuth 插件配置时才有意义。
 
 #### 自定义字段来源
 
@@ -932,7 +932,7 @@ spec:
         origin:
           - name: X-Trace-Id                       # 默认：skipIfMissing
           - name: X-User-Id
-            presence: required                     # 缺失 → key_get 返回 None
+            presence: required                     # 缺失 → WebhookKeyGet 不写入值
           - name: X-Org-Id
             presence: warnIfMissing                # 缺失 → PluginLog 告警，继续
 ```
@@ -980,16 +980,22 @@ spec:
           - name: X-User-Id
             template: "${ctx:user_id}"
 ---
-# 消费方插件（ctx-set），位于 HTTPRoute filter 上
-type: ctx-set
-vars:
-  - { name: user_id, template: "${header:X-User-Id}" }
-  - { name: action, value: "get-user" }
-  - name: resolved_user
-    from:
-      type: webhook
-      webhookRef: production/user-resolver
-      pathOverride: "/special/path"   # 仅因 allowOverride: true 才被采纳
+# 消费方插件，位于 HTTPRoute filter 上。
+# CtxSet 必须先运行：webhook 模板读取 ${ctx:user_id} / ${ctx:action}。
+- type: CtxSet
+  config:
+    vars:
+      - { name: user_id, template: "${header:X-User-Id}" }
+      - { name: action, value: "get-user" }
+- type: WebhookKeyGet
+  config:
+    vars:
+      - name: resolved_user
+        webhookRef: production/user-resolver
+        pathOverride: "/special/path"   # 仅因 allowOverride: true 才被采纳
+        extract:
+          source: body
+          path: "data.user"
 ```
 
 #### 示例：带重试和健康检查的弹性 webhook
@@ -1099,7 +1105,7 @@ spec:
               prefix: "Bearer "
 ```
 
-消费方侧，`pathSuffix` 和 `forwardHeaders` 已移除：
+消费方侧，`pathSuffix` 和 `forwardHeaders` 已移除。面向运维的消费方是 `WebhookKeyGet` 插件（不是 KeyGet 的 `type: webhook` 来源）：
 
 ```yaml
 # 旧
@@ -1111,13 +1117,23 @@ spec:
         pathSuffix: "/special/path"
         forwardHeaders: ["X-Tenant-Id", "X-User-Id"]
 
-# 新——在 webhook 资源上声明 path/headers；消费方只覆盖路径
-- type: key-auth
+# 新——在 webhook 资源上声明 path/headers；WebhookKeyGet 写入 ctx；
+# KeyAuth（或任何后续插件）读取 { type: ctx, name: … }。
+# WebhookKeyGet 必须排在 KeyAuth 之前；把列表写反是静默认证绕过。
+- type: WebhookKeyGet
   config:
-    keys:
-      - type: webhook
+    vars:
+      - name: resolved_key
         webhookRef: production/user-resolver
         pathOverride: "/special/path"   # 仅当 webhook 上 allowOverride: true 时被采纳
+        extract:
+          source: body
+          path: "data.key"
+- type: KeyAuth
+  config:
+    keySources:
+      - type: ctx
+        name: resolved_key
 ```
 
 > **外部端点。** `target.type: uri` 和 `kind: ExternalName` 不支持。用代理 Service（LoadBalancer，或由 ingress controller 前置的 ClusterIP）前置外部主机，并按名称引用该 Service。
@@ -1131,7 +1147,7 @@ spec:
 只有 `Service`、`ServiceClusterIp`、`ServiceEndpointSlice` 和留空有效。`ExternalName` 和 `ServiceImport` 被拒绝——请改用代理 Service。
 
 **Required 字段错误 / key 解析结果为空。**
-某个 `presence: required` 的 `origin` 字段在传入请求中缺失，这算作 webhook 失败：`key_get` 返回 `None`，由消费方插件自己的回退逻辑决定接下来发生什么（例如 ctx-set 会让目标变量保持未设置）。请确认客户端确实发送了该 header/arg/cookie（注意大小写：请求头大小写不敏感，arg 和 cookie 大小写敏感），或用 `presence: warnIfMissing` 仅记录而不失败。
+某个 `presence: required` 的 `origin` 字段在传入请求中缺失，这算作 webhook 失败：WebhookKeyGet 不写入值（或写入其 `default`）。请确认客户端确实发送了该 header/arg/cookie（注意大小写：请求头大小写不敏感，arg 和 cookie 大小写敏感），或用 `presence: warnIfMissing` 仅记录而不失败。
 
 **模板变量解析为空。**
 `${ctx:NAME}` 在变量从未设置时返回空。确保在 webhook 被调用之前有一个 ctx-set 步骤设置它，并检查 `${type:name}` 拼写。要强制存在性，优先在 `origin` 字段上用 `presence: required` 而非模板。

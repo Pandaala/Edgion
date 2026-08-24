@@ -6,9 +6,7 @@ use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::{DirectEndpointPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::{
-    DirectEndpointConfig, DirectEndpointOnInvalid, DirectEndpointOnMissing,
-};
+use edgion_resources::resources::edgion_plugins::{DirectEndpointConfig, UpstreamFallback};
 use edgion_resources::HTTPBackendRef;
 
 pub struct DirectEndpoint {
@@ -108,15 +106,15 @@ impl RequestFilter for DirectEndpoint {
         }
 
         // 1. Extract raw endpoint value via KeyGet
-        let raw_value = match session.key_get(&self.config.from).await {
+        let raw_value = match session.key_get(&self.config.from) {
             Some(v) if !v.is_empty() => v,
             _ => match self.config.on_missing {
-                DirectEndpointOnMissing::Fallback => {
+                UpstreamFallback::Fallback => {
                     session.record_outcome(DyeOutcome::Fallback, "on-missing");
                     log.push("no value fallback");
                     return PluginRunningResult::GoodNext;
                 }
-                DirectEndpointOnMissing::Reject => {
+                UpstreamFallback::Reject => {
                     session.record_outcome(DyeOutcome::Reject, "on-missing");
                     log.push("no value 400");
                     return PluginRunningResult::ErrResponse {
@@ -170,11 +168,11 @@ impl RequestFilter for DirectEndpoint {
             Err(ResolutionError::Missing(msg)) => {
                 log.push("endpoint miss");
                 match self.config.on_missing {
-                    DirectEndpointOnMissing::Fallback => {
+                    UpstreamFallback::Fallback => {
                         session.record_outcome(DyeOutcome::Fallback, "on-missing");
                         PluginRunningResult::GoodNext
                     }
-                    DirectEndpointOnMissing::Reject => {
+                    UpstreamFallback::Reject => {
                         session.record_outcome(DyeOutcome::Reject, "on-missing");
                         PluginRunningResult::ErrResponse {
                             status: 400,
@@ -186,11 +184,11 @@ impl RequestFilter for DirectEndpoint {
             Err(ResolutionError::Invalid(msg)) => {
                 log.push("endpoint invalid");
                 match self.config.on_invalid {
-                    DirectEndpointOnInvalid::Fallback => {
+                    UpstreamFallback::Fallback => {
                         session.record_outcome(DyeOutcome::Fallback, "on-invalid");
                         PluginRunningResult::GoodNext
                     }
-                    DirectEndpointOnInvalid::Reject => {
+                    UpstreamFallback::Reject => {
                         session.record_outcome(DyeOutcome::Reject, "on-invalid");
                         // 400 for parse errors ("ParseErr" in msg), 403 for validation denials.
                         let status = if msg.contains("ParseErr") { 400 } else { 403 };
@@ -365,8 +363,8 @@ mod tests {
             },
             extract: None,
             port: None,
-            on_missing: DirectEndpointOnMissing::default(),
-            on_invalid: DirectEndpointOnInvalid::default(),
+            on_missing: UpstreamFallback::Fallback,
+            on_invalid: UpstreamFallback::Reject,
             inherit_tls: false,
             compiled_regex: None,
         }
@@ -408,7 +406,7 @@ mod tests {
     #[tokio::test]
     async fn direct_endpoint_records_reject_outcome_on_missing_value() {
         let config = DirectEndpointConfig {
-            on_missing: DirectEndpointOnMissing::Reject,
+            on_missing: UpstreamFallback::Reject,
             ..base_config()
         };
         let plugin = DirectEndpoint {
@@ -442,7 +440,7 @@ mod tests {
     #[tokio::test]
     async fn direct_endpoint_records_fallback_outcome_on_invalid_endpoint() {
         let config = DirectEndpointConfig {
-            on_invalid: DirectEndpointOnInvalid::Fallback,
+            on_invalid: UpstreamFallback::Fallback,
             ..base_config()
         };
         let plugin = DirectEndpoint {

@@ -52,6 +52,7 @@ metadata:
   namespace: edgion-default
 spec:
   requestPlugins:
+    # CtxSet MUST run first: webhook templates read ${ctx:action} / ${ctx:user_id}.
     - enable: true
       type: CtxSet
       config:
@@ -65,14 +66,17 @@ spec:
               type: header
               name: X-User-Id
             default: "anon"
+    # WebhookKeyGet AFTER CtxSet — otherwise ${ctx:...} templates are empty.
+    - enable: true
+      type: WebhookKeyGet
+      config:
+        vars:
           # 3. Webhook call whose templates interpolate the two ctx vars above.
           - name: wh9_result
-            from:
-              type: webhook
-              webhookRef: "edgion-default/wh9-resolver"
-              extract:
-                source: body
-                path: "data.echo_headers.x-resolved-user"
+            webhookRef: "edgion-default/wh9-resolver"
+            extract:
+              source: body
+              path: "data.echo_headers.x-resolved-user"
             default: "fallback"
 ---
 apiVersion: gateway.networking.k8s.io/v1

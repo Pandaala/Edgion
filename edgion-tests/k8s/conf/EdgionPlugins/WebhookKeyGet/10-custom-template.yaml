@@ -55,6 +55,7 @@ metadata:
   namespace: edgion-default
 spec:
   requestPlugins:
+    # CtxSet MUST run first: webhook template reads ${ctx:trace}.
     - enable: true
       type: CtxSet
       config:
@@ -65,13 +66,16 @@ spec:
               type: header
               name: X-Request-ID
             default: "no-trace"
+    # WebhookKeyGet AFTER CtxSet — otherwise ${ctx:trace} is empty.
+    - enable: true
+      type: WebhookKeyGet
+      config:
+        vars:
           - name: wh10_result
-            from:
-              type: webhook
-              webhookRef: "edgion-default/wh10-resolver"
-              extract:
-                source: body
-                path: "data.echo_headers.x-from-header"
+            webhookRef: "edgion-default/wh10-resolver"
+            extract:
+              source: body
+              path: "data.echo_headers.x-from-header"
             default: "fallback"
 ---
 apiVersion: gateway.networking.k8s.io/v1

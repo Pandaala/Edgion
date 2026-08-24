@@ -274,7 +274,7 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 | `DslDynamic` | `EdgionPlugins/DslDynamic/DynamicTest` | DSL plugin source switch v1→v2 |
 | `BasicAuthDynamic` | `EdgionPlugins/BasicAuth/DynamicTest` | `secretRefs` list shrinks; bob credentials removed → 401 |
 | `BasicAuthDynamicGrouped` | `EdgionPlugins/BasicAuth/DynamicTest` | Grouped BasicAuth variant (`updates_grouped/`) |
-| `RateLimitDynamic` | `EdgionPlugins/RateLimit/DynamicTest` | `onMissingKey` switched from Allow to Deny |
+| `RateLimitDynamic` | `EdgionPlugins/RateLimit/DynamicTest` | `onKeyMiss` switched from Allow to Deny |
 | `RequestAccessPolicyHmacDynamic` | `EdgionPlugins/RequestAccessPolicy/DynamicTest` | Nested HMAC credentials rotate through a Secret update; old signatures stop matching and new signatures start matching without a restart |
 | `ObservedGenHighFreq` | `Status/ObservedGeneration/HighFrequency/DynamicTest` | 10 rapid Gateway spec changes; `observedGeneration` catches up to the final generation |
 | `BtlspRefFlap` | `Status/BackendTLSPolicy/RefFlap/DynamicTest` | BackendTLSPolicy CA ConfigMap ref flaps good→missing→good; `Accepted`/`ResolvedRefs` track it |

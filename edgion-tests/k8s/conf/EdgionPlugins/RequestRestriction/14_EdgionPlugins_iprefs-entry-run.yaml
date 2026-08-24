@@ -1,0 +1,39 @@
+# S14: entry-level conditions.run ipRefs.
+# RequestHeaderModifier runs only when the peer is in rr-ipref-list, then
+# RequestRestriction denies /gated when that header is present.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-iprefs-run
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestHeaderModifier
+      conditions:
+        run:
+          - type: directPeerIpMatch
+            ipRefs:
+              - name: rr-ipref-list
+      config:
+        set:
+          - name: X-IpRef-Run
+            value: "yes"
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Deny
+        anyOf:
+          - allOf:
+              - type: keyMatch
+                key:
+                  type: header
+                  name: X-IpRef-Run
+                values: ["yes"]
+              - type: keyMatch
+                key:
+                  type: path
+                regex:
+                  - ".*/gated.*"
+        status: 403
+        message: "Gated path denied after entry-level ipRefs run"

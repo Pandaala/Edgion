@@ -85,7 +85,8 @@ spec:
             key:
               type: header
               name: "X-Env"
-            value: "production"
+            values:
+              - "production"
 
     # 2.2 KeyMatch regex (run when User-Agent matches ^TestBot.*)
     - enable: true
@@ -118,7 +119,8 @@ spec:
             key:
               type: query
               name: "version"
-            value: "v2"
+            values:
+              - "v2"
 
     # 2.4 KeyMatch with multiple regex patterns (run when UA matches Mozilla OR Chrome OR Safari)
     - enable: true
@@ -251,12 +253,12 @@ spec:
           X-Include-Path-Ran: "true"
       conditions:
         run:
-          - type: include
+          - type: keyMatch
             key:
               type: path
-            values:
-              - "/api/*"
-              - "/v1/*"
+            regex:
+              - "^/api/.*"
+              - "^/v1/.*"
 
     # 5.2 Include method (run for POST, PUT methods)
     - enable: true
@@ -268,7 +270,7 @@ spec:
           X-Include-Method-Ran: "true"
       conditions:
         run:
-          - type: include
+          - type: keyMatch
             key:
               type: method
             values:
@@ -285,12 +287,11 @@ spec:
           X-Include-Regex-Ran: "true"
       conditions:
         run:
-          - type: include
+          - type: keyMatch
             key:
               type: path
-            values:
-              - "/static/*"
             regex:
+              - "^/static/.*"
               - "^/api/v[0-9]+/.*"
               - "(?i:^/internal/.*)"   # case-insensitive
 
@@ -308,7 +309,8 @@ spec:
           X-Exclude-Path-Ran: "true"
       conditions:
         skip:
-          - type: exclude
+          - type: keyMatch
+            negate: true
             key:
               type: path
             values:
@@ -326,7 +328,8 @@ spec:
           X-Exclude-Method-Ran: "true"
       conditions:
         skip:
-          - type: exclude
+          - type: keyMatch
+            negate: true
             key:
               type: method
             values:
@@ -342,7 +345,8 @@ spec:
           X-Exclude-Regex-Ran: "true"
       conditions:
         skip:
-          - type: exclude
+          - type: keyMatch
+            negate: true
             key:
               type: path
             values:

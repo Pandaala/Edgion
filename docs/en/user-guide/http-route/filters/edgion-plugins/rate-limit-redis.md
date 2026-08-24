@@ -90,8 +90,8 @@ spec:
 | `redisRef` | String | — (required) | Redis LinkSys resource reference in `"namespace/name"` format. Only alphanumeric characters, `-`, and `_` are allowed |
 | `policies` | Array\<Object\> | — (required) | Rate limiting policy list. At least 1, maximum 10. See Policy Configuration below |
 | `key` | Array\<Object\> | `[{type: remoteIp}]` | Rate limiting dimension list. A single key is used verbatim; multiple keys are length-prefixed and joined with `_`. See Key Configuration below |
-| `onMissingKey` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` \| `Deny` |
-| `defaultKey` | String | none | Default key value when extraction fails, takes precedence over `onMissingKey` |
+| `onKeyMiss` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` \| `Deny` |
+| `defaultKey` | String | none | Default key value when extraction fails, takes precedence over `onKeyMiss` |
 | `rejectStatus` | Integer | `429` | HTTP status code on rejection (100–599) |
 | `rejectMessage` | String | none | JSON response body on rejection |
 | `showLimitHeaders` | Boolean | `true` | Whether to return rate limit response headers |
@@ -166,7 +166,7 @@ The resulting Redis key looks like `{keyPrefix}{pluginScope}:{algorithm}:{policy
 
 Multiple routes referencing the **same** EdgionPlugins resource share one limiter — that is how a rate limit is shared across routes, and it matches the in-memory `RateLimit`, whose counter is likewise shared per resource. Two *different* resources can no longer share a bucket by construction: to share a quota across routes, point them at one resource rather than duplicating the configuration.
 
-Omitting `key` applies the default `[{type: remoteIp}]`. An explicitly empty `key: []` means "one global bucket": every request composes to the same empty key and is still rate limited — it is not treated as a key extraction failure, so `onMissingKey` / `defaultKey` do not apply to it.
+Omitting `key` applies the default `[{type: remoteIp}]`. An explicitly empty `key: []` means "one global bucket": every request composes to the same empty key and is still rate limited — it is not treated as a key extraction failure, so `onKeyMiss` / `defaultKey` do not apply to it.
 
 ---
 
@@ -276,7 +276,7 @@ spec:
         key:
           - type: header
             name: "X-API-Key"
-        onMissingKey: Deny
+        onKeyMiss: Deny
         policies:
           - rate: 50
             interval: "1s"
@@ -330,7 +330,7 @@ spec:
         key:
           - type: header
             name: "Authorization"
-        onMissingKey: Deny
+        onKeyMiss: Deny
         onRedisFailure: Deny
         policies:
           - rate: 1000

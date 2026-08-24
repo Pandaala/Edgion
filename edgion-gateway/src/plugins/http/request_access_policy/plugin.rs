@@ -8,19 +8,18 @@ use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 use edgion_resources::matcher::radix_tree::{MatchKind, RadixTree, RadixTreeBuilder};
 use edgion_resources::resources::edgion_config_data::ConfigEntry;
-use edgion_resources::resources::edgion_plugins::conditions::{KeyExistCondition, KeyMatchCondition};
+use edgion_resources::resources::edgion_plugins::conditions::Condition;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{
-    AccessCondition, AccessPathMatchType, IpAccessMatch, RequestAccessPolicyConfig, RequestAccessProfile,
-    RequestAccessRuleType, SecretMatchCondition, UrlAccessCandidate,
+    AccessPathMatchType, IpAccessMatch, RequestAccessPolicyConfig, RequestAccessProfile, RequestAccessRuleType,
+    UrlAccessCandidate,
 };
 use edgion_resources::resources::edgion_plugins::BodyRequirement;
 use regex::Regex;
-use subtle::ConstantTimeEq;
 
 use crate::ctx::NormalizedHostname;
 use crate::plugins::http::hmac_auth::{HmacVerifier, HmacVerifyOutcome};
 use crate::plugins::runtime::body_gate::body_read_failure_result;
-use crate::plugins::runtime::conditions::{KeyExistConditionExt, KeyMatchConditionExt};
+use crate::plugins::runtime::conditions::{CompiledCondition, ConditionExt};
 use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 
@@ -37,12 +36,9 @@ impl RuntimeIpSet {
 }
 
 enum RuntimeCondition {
-    KeyExist(KeyExistCondition),
-    KeyMatch(KeyMatchCondition),
-    SecretMatch(SecretMatchCondition),
-    DirectPeerIpMatch(RuntimeIpSet),
-    RemoteIpMatch(RuntimeIpSet),
-    HmacAuth(HmacVerifier),
+    Unresolved,
+    Sync(CompiledCondition),
+    HmacBody { verifier: HmacVerifier, negate: bool },
 }
 
 enum PolicyMatch {
@@ -52,46 +48,38 @@ enum PolicyMatch {
 }
 
 impl RuntimeCondition {
-    fn new(config: AccessCondition, body_requirement: Option<BodyRequirement>) -> Self {
+    fn new(config: Condition, body_requirement: Option<BodyRequirement>) -> Self {
+        if config.has_unresolved_refs() {
+            return Self::Unresolved;
+        }
         match config {
-            AccessCondition::KeyExist(value) => Self::KeyExist(value),
-            AccessCondition::KeyMatch(value) => Self::KeyMatch(value),
-            AccessCondition::SecretMatch(value) => Self::SecretMatch(value),
-            AccessCondition::DirectPeerIpMatch(value) => Self::DirectPeerIpMatch(RuntimeIpSet::new(value)),
-            AccessCondition::RemoteIpMatch(value) => Self::RemoteIpMatch(RuntimeIpSet::new(value)),
-            AccessCondition::HmacAuth(value) => Self::HmacAuth(HmacVerifier::new(&value, body_requirement)),
+            Condition::HmacAuth(value) if value.validate_request_body => Self::HmacBody {
+                negate: value.negate,
+                verifier: HmacVerifier::new(&value, body_requirement),
+            },
+            other => Self::Sync(CompiledCondition::new(other)),
         }
     }
 
     async fn matches(
         &self,
         session: &mut dyn PluginSession,
-        direct_peer_ip: Option<&IpAddr>,
-        remote_ip: Option<&IpAddr>,
+        _direct_peer_ip: Option<&IpAddr>,
+        _remote_ip: Option<&IpAddr>,
         log: &mut PluginLog,
     ) -> PolicyMatch {
         let matched = match self {
-            Self::KeyExist(value) => value.evaluate_sync(session),
-            Self::KeyMatch(value) => value.evaluate_sync_silent(session),
-            Self::SecretMatch(value) => {
-                let Some(actual) = session.key_get_local(&value.key) else {
-                    return PolicyMatch::NoMatch;
-                };
-                value.resolved_values.as_ref().is_some_and(|expected| {
-                    expected.iter().any(|candidate| {
-                        candidate.len() == actual.len() && candidate.as_bytes().ct_eq(actual.as_bytes()).into()
-                    })
-                })
-            }
-            Self::DirectPeerIpMatch(value) => value.matches(direct_peer_ip),
-            Self::RemoteIpMatch(value) => value.matches(remote_ip),
-            Self::HmacAuth(value) => match value.verify(session).await {
-                HmacVerifyOutcome::Verified { .. } => true,
-                HmacVerifyOutcome::NoMatch(_) | HmacVerifyOutcome::LogicalBodyLimit(_) => false,
+            // An incomplete allow candidate is unavailable. The caller keeps
+            // evaluating sibling rules and candidates before denying normally.
+            Self::Unresolved => false,
+            Self::Sync(condition) => condition.evaluate(session, None),
+            Self::HmacBody { verifier, negate } => match verifier.verify(session).await {
+                HmacVerifyOutcome::Verified { .. } => !*negate,
+                HmacVerifyOutcome::NoMatch(_) | HmacVerifyOutcome::LogicalBodyLimit(_) => *negate,
                 HmacVerifyOutcome::CaptureFailure(error) | HmacVerifyOutcome::DigestReadFailure(error) => {
                     return PolicyMatch::Terminal(body_read_failure_result(
                         session,
-                        value.body_requirement(),
+                        verifier.body_requirement(),
                         log,
                         &error,
                     ));
@@ -533,6 +521,7 @@ mod tests {
     use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
+    use edgion_resources::resources::edgion_plugins::plugin_configs::SecretMatchCondition;
     use edgion_resources::EdgionStatus;
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
@@ -571,7 +560,7 @@ profiles:
         let RequestAccessRuleType::DirectPeerIp(rule) = &mut rule.rule else {
             panic!("unexpected rule type")
         };
-        let AccessCondition::HmacAuth(hmac) = &mut rule.all_of[0] else {
+        let Condition::HmacAuth(hmac) = &mut rule.all_of[0] else {
             panic!("unexpected condition type")
         };
         hmac.resolved_credentials = Some(HashMap::from([(
@@ -594,6 +583,31 @@ profiles:
         mac.update(signing_string.as_bytes());
         let signature = STANDARD.encode(mac.finalize().into_bytes());
         format!(r#"hmac username="alice", algorithm="hmac-sha256", headers="{headers}", signature="{signature}""#)
+    }
+
+    #[tokio::test]
+    async fn unresolved_body_hmac_uses_backup_rule_without_negation() {
+        let mut config = hmac_fallback_config(true);
+        let rule = &mut config.profiles.get_mut("lockdown").unwrap().required_rule_groups[0].any_of_rules[0];
+        let RequestAccessRuleType::DirectPeerIp(rule) = &mut rule.rule else {
+            unreachable!()
+        };
+        let Condition::HmacAuth(hmac) = &mut rule.all_of[0] else {
+            unreachable!()
+        };
+        hmac.resolved_credentials = None;
+        hmac.negate = true;
+
+        let plugin = RequestAccessPolicy::create(&config, "default", Some(BodyRequirement::fail_close()));
+        let mut session = MockPluginSession::new();
+        session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
+        session.expect_remote_ip().return_const("198.51.100.10".to_string());
+        let mut log = PluginLog::new("RequestAccessPolicy");
+
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
     }
 
     #[tokio::test]
@@ -735,17 +749,20 @@ profiles:
                     value: "/callbacks/:vendor".to_string(),
                 },
             ],
-            all_of: vec![AccessCondition::SecretMatch(SecretMatchCondition {
+            all_of: vec![Condition::SecretMatch(SecretMatchCondition {
                 key: edgion_resources::common::KeyGet::Header {
                     name: "X-Vendor-Token".to_string(),
                 },
+                secret_key: "token".to_string(),
                 secret_ref: edgion_resources::resources::common::SecretObjectReference {
                     name: "vendor-token".to_string(),
                     group: None,
                     kind: None,
                     namespace: None,
                 },
+                negate: false,
                 resolved_values: Some(vec!["expected-token".to_string()]),
+                descriptor: Box::from(""),
             })],
         }]);
         config
@@ -762,7 +779,7 @@ profiles:
         session
             .expect_header_value()
             .returning(move |name| name.eq_ignore_ascii_case("host").then(|| host.clone()));
-        session.expect_key_get_local().returning(move |key| match key {
+        session.expect_key_get().returning(move |key| match key {
             edgion_resources::common::KeyGet::Header { name } if name.eq_ignore_ascii_case("X-Vendor-Token") => {
                 token.clone()
             }
@@ -916,11 +933,11 @@ profiles:
                 },
             ],
             all_of: vec![
-                AccessCondition::DirectPeerIpMatch(IpAccessMatch {
+                Condition::DirectPeerIpMatch(IpAccessMatch {
                     ips: vec!["192.0.2.0/24".to_string()],
                     ..Default::default()
                 }),
-                AccessCondition::RemoteIpMatch(IpAccessMatch {
+                Condition::RemoteIpMatch(IpAccessMatch {
                     ips: vec!["203.0.113.0/24".to_string()],
                     ..Default::default()
                 }),
@@ -1061,6 +1078,36 @@ profiles:
                 status: 408,
                 body: None
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn time_range_in_all_of_is_reachable() {
+        let config = parse_config(
+            r#"
+defaultProfile: lockdown
+profiles:
+  lockdown:
+    requiredRuleGroups:
+      - name: client
+        anyOfRules:
+          - name: internal
+            type: remoteIp
+            config:
+              ips: [10.0.0.0/8]
+              allOf:
+                - type: timeRange
+                  after: "2000-01-01T00:00:00Z"
+"#,
+        );
+        let plugin = RequestAccessPolicy::create(&config, "default", None);
+        let mut session = MockPluginSession::new();
+        session.expect_direct_peer_ip().return_const("198.51.100.8".to_string());
+        session.expect_remote_ip().return_const("10.1.2.3".to_string());
+        let mut log = PluginLog::new("RequestAccessPolicy");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
         );
     }
 }

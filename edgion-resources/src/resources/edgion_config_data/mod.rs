@@ -52,22 +52,7 @@ fn default_enable() -> bool {
     true
 }
 
-/// Reference to an EdgionConfigData resource by name (and optional namespace).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct EdgionConfigDataRef {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
-    /// Controller-set cross-namespace denial marker. When `Some`, this ref lacks a
-    /// permitting `ReferenceGrant` (and the target is not `visibility: Cluster`); the
-    /// gateway withholds its matcher (deny-all fail-closed for allowRefs). Not
-    /// operator-facing — excluded from the CRD via `schemars(skip)`; serialized for
-    /// conf_sync so the gateway sees it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub ref_denied: Option<crate::resources::common::RefDenied>,
-}
+pub use crate::resources::config_data_ref::EdgionConfigDataRef;
 
 /// EdgionConfigData is a general-purpose, hot-swappable metadata/overlay primitive
 /// referenced by EdgionPlugins and EdgionStreamPlugins.

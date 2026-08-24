@@ -1,7 +1,7 @@
 //! WebhookManager — global webhook service registry.
 //!
 //! Manages webhook service connections resolved from LinkSys Webhook resources.
-//! Keyed by "namespace/name" matching webhook_ref in KeyGet::Webhook.
+//! Keyed by "namespace/name" matching webhook_ref in the WebhookKeyGet plugin.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};

@@ -29,5 +29,5 @@ spec:
             port: 30002
             tls: false
             overrideHost: eu-central.internal
-        onMissing: skip
-        onNoMatch: skip
+        onMissing: fallback
+        onNoMatch: fallback

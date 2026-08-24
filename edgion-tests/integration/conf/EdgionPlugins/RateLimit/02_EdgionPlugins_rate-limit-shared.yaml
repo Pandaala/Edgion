@@ -25,7 +25,7 @@ spec:
         key:
           - type: header
             name: "X-Rate-Key" # fixed value => all traffic shares one CMS bucket
-        onMissingKey: Deny     # every request carries the key; Deny makes a missing key fail loudly
+        onKeyMiss: Deny     # every request carries the key; Deny makes a missing key fail loudly
         rejectStatus: 429
         rejectMessage: "Rate limit exceeded"
         showLimitHeaders: true

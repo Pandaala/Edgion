@@ -1,13 +1,20 @@
 ---
 name: response-signature-not-needed
-description: Use when reviewing webhook resolver response-signature findings; documents why relying on TLS without HMAC response verification is the correct industry pattern for active-call webhooks.
+description: Use when reviewing WebhookKeyGet / LinkSys webhook resolver response-signature findings; documents why relying on TLS without HMAC response verification is the correct industry pattern for active-call webhooks.
 ---
 
-# Webhook Key Resolver Has No Response Signature Verification: Relying on TLS is the Industry Pattern
+# WebhookKeyGet + LinkSys Resolver Has No Response Signature Verification: Relying on TLS is the Industry Pattern
 
 ## Conclusion
 
-`webhook/resolver.rs` not performing HMAC / signature verification on the HTTP response from the webhook service is a **deliberate architectural tradeoff** — consistent with the industry "actively call external services" category (OAuth Introspection, OPA ExtAuthz), relying on TLS + a legitimate CA as the sole defense line. It **should not** require introducing a `responseSignature` configuration field or enforcing signature verification.
+The `WebhookKeyGet` plugin and the LinkSys webhook resolver
+(`webhook/resolver.rs`) not performing HMAC / signature verification on the HTTP
+response from the webhook service is a **deliberate architectural tradeoff** —
+consistent with the industry "actively call external services" category (OAuth
+Introspection, OPA ExtAuthz), relying on TLS + a legitimate CA as the sole
+defense line. It **should not** require introducing a `responseSignature`
+configuration field or enforcing signature verification. The consumer is
+`WebhookKeyGet` + the LinkSys resolver, not a `KeyGet` variant.
 
 ## Reasons
 
@@ -64,4 +71,4 @@ Common pattern: **Edgion does not stack redundant, non-industry-standard securit
 
 - Decision date: 2026-04-22
 - Decision source: `tasks/security-audit/04-admin-api.md` L1 (Option D — NOT-AN-ISSUE)
-- Key fact: the webhook key resolver is "Edgion actively calls an external service" rather than "receiver passively receives a sender push"; signature semantics are completely different
+- Key fact: `WebhookKeyGet` + the LinkSys webhook resolver is "Edgion actively calls an external service" rather than "receiver passively receives a sender push"; signature semantics are completely different

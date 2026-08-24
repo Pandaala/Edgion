@@ -1,6 +1,6 @@
 ---
 name: unification-points
-description: Canonical registry of cross-cutting mechanisms that are (or must become) globally unified — outbound dialing, TLS, SSRF guards, DNS, Redis, dye headers, key extraction, IP matching, real IP, templates, durations, error replies. Check here BEFORE implementing any of these in a new plugin or module.
+description: Canonical registry of cross-cutting mechanisms that are (or must become) globally unified — outbound dialing, TLS, SSRF guards, DNS, Redis, dye headers, key extraction, condition predicates, IP matching, real IP, templates, durations, error replies. Check here BEFORE implementing any of these in a new plugin or module.
 ---
 
 # 05 Unification points registry
@@ -228,8 +228,13 @@ not in-process checks.
 - **Canon**: `edgion-resources/src/common/key_accessor.rs`. Used by 10+
   plugin configs (key_auth, rate_limit, rate_limit_redis, ctx_set,
   region_route, direct_endpoint, dynamic_*_upstream, conditions, ...).
-- **Rule**: any "take a key from header/query/cookie/path/..." config MUST
-  reuse `KeyGet` — never a plugin-local source enum.
+- **Contract**: nine local variants (includes `RequestPath` after S12); one synchronous `key_get`; no I/O.
+  Outbound resolution is the `WebhookKeyGet` plugin writing `KeyGet::Ctx`.
+- **Rule**: any new "take a key from header/query/cookie/path/..." field
+  MUST reuse `KeyGet` — never a plugin-local source enum. A new outbound
+  fetch MUST be a plugin, not a `KeyGet` variant and not a per-plugin
+  webhook field. See
+  [plugin-metadata/keyget-is-local-io-free.md](../../04-review/plugin-metadata/keyget-is-local-io-free.md).
 
 ### 9. IP/CIDR matching — Unified
 
@@ -311,6 +316,22 @@ not in-process checks.
   Detail goes to the access log / `EdgionStatus`, not the response body.
   Rationale and worked cases:
   [fail-closed-error-body-no-internal-detail.md](../../04-review/security/fail-closed-error-body-no-internal-detail.md).
+
+### 15. Condition predicate layer — Unified
+
+- **Canon**: schema in
+  `edgion-resources/src/resources/edgion_plugins/conditions.rs`
+  (`Condition`, `MatchCore`, `RuleGroup`); gateway evaluator under
+  `edgion-gateway/src/plugins/runtime/conditions/`.
+- **Grouping**: `PluginConditions.skip` is OR, `.run` is AND;
+  `RequestRestriction.anyOf` is OR of groups and each group's `allOf` is
+  AND; `RequestAccessPolicy` stays a conjunctive `allOf`.
+- **Naming criterion**: a container field name must state how its
+  elements combine (`anyOf` / `allOf`, not `ruleGroups` / `rules`).
+- **Rule**: new predicates MUST reuse `Condition`. Do not add a
+  plugin-local predicate enum, `Include`/`Exclude`, `RestrictionSource`,
+  or wildcard `values`. See
+  [plugin-metadata/unified-condition-layer.md](../../04-review/plugin-metadata/unified-condition-layer.md).
 
 ---
 

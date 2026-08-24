@@ -70,7 +70,7 @@ spec:
 | `method` | — | HTTP 方法 |
 | `ctx` | `name` | 已有的上下文变量 |
 
-如需固定字面量，请在规则上直接使用顶层 `value` 字段而非 `from`。如需组合字符串，请使用 `template`。
+如需固定字面量，请在规则上直接使用顶层 `value` 字段而非 `from`。如需组合字符串，请使用 `template`。要从 LinkSys webhook 解析值，请使用 [WebhookKeyGet](./webhook-key-get.md)，而不是 CtxSet 的 `from` 来源。若 webhook 模板需要 `${ctx:NAME}`，先运行 CtxSet，再运行 WebhookKeyGet。
 
 ### `template` 变量
 
@@ -293,6 +293,7 @@ spec:
 
 ## 相关链接
 
+- [Webhook KeyGet](./webhook-key-get.md)
 - [限流插件](./rate-limit.md)
 - [DSL 插件](./dsl/README.md)
 - [过滤器目录](../README.md)

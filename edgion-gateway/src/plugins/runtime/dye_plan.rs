@@ -15,18 +15,17 @@ use std::sync::Arc;
 
 use edgion_resources::resources::edgion_plugins::{CompiledTemplate, DyeOutcome, DyeRule, DyeSuite};
 
-use super::conditions::PluginConditions;
+use super::conditions::CompiledPluginConditions;
 
 /// One compiled dye rule: which outcomes render (`on`), the pre-compiled
 /// operator value template (`None` => render the plugin-recorded outcome
 /// value), and an optional render gate (never gates the anti-spoof strip).
-#[derive(Debug, Clone)]
 pub struct CompiledDyeRule {
     pub name: String,
     pub on: Vec<DyeOutcome>,
     /// Compiled operator value template; None => recorded value.
     pub value: Option<CompiledTemplate>,
-    pub conditions: Option<PluginConditions>,
+    pub(crate) conditions: Option<CompiledPluginConditions>,
 }
 
 impl CompiledDyeRule {
@@ -42,7 +41,7 @@ impl CompiledDyeRule {
             name: rule.name.clone(),
             on: rule.on.clone(),
             value,
-            conditions: rule.conditions.clone(),
+            conditions: rule.conditions.clone().map(CompiledPluginConditions::new),
         })
     }
 }
@@ -50,7 +49,6 @@ impl CompiledDyeRule {
 /// Compiled entry-level dye plan, split by direction so the request-stage
 /// anti-spoof strip only ever walks `request` and outcome recording only
 /// ever walks `response`.
-#[derive(Debug)]
 pub struct CompiledDyePlan {
     /// Rules rendered onto the upstream request (success outcomes only).
     pub request: Vec<CompiledDyeRule>,

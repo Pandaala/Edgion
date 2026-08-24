@@ -1,7 +1,7 @@
 //! Webhook service configuration for LinkSys
 //!
 //! Defines the connection parameters and health check settings for an external
-//! HTTP webhook service. Referenced by KeyGet::Webhook via "namespace/name".
+//! HTTP webhook service. Referenced by the WebhookKeyGet plugin via "namespace/name".
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

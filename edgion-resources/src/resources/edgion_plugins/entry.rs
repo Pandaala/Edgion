@@ -745,7 +745,7 @@ mod dye_entry_tests {
     // `CanaryConfig` has no `Default` impl (its fields are all operator-required),
     // so build a minimal valid instance directly rather than relying on `::default()`.
     fn canary_config() -> crate::resources::plugin_configs::CanaryConfig {
-        use crate::resources::plugin_configs::{CanaryConfig, DynUpstreamTarget};
+        use crate::resources::plugin_configs::{CanaryConfig, DynUpstreamTarget, UpstreamFallback};
         use std::collections::HashMap;
         CanaryConfig {
             enable: true,
@@ -758,7 +758,7 @@ mod dye_entry_tests {
                 },
             )]),
             active_profile_ref: None,
-            on_invalid: Default::default(),
+            on_invalid: UpstreamFallback::Reject,
         }
     }
 

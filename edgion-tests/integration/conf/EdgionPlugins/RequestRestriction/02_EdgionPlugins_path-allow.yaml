@@ -1,4 +1,4 @@
-# 2. Path  - 
+# 2. Path  -
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -10,14 +10,14 @@ spec:
       type: RequestRestriction
       config:
         mode: Allow
-        ruleGroups:
-          - rules:
-              - name: "api-whitelist"
-                source: Path
+        anyOf:
+          - allOf:
+              - type: keyMatch
+                key:
+                  type: path
                 values:
                   - "/health"
                 regex:
                   - "^/api/.*"
         status: 404
         message: "Path not allowed"
-

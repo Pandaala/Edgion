@@ -1,7 +1,7 @@
-# DynamicExternalUpstream - Skip mode (default behavior)
+# DynamicExternalUpstream - Fallback mode (default behavior)
 # Maps X-Target-Region header values to external domains
-# onMissing: skip → no header = normal backend
-# onNoMatch: skip → unmatched key = normal backend
+# onMissing: fallback → no header = normal backend
+# onNoMatch: fallback → unmatched key = normal backend
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -33,5 +33,5 @@ spec:
             port: 30003
             tls: false
             overrideHost: localhost
-        onMissing: skip
-        onNoMatch: skip
+        onMissing: fallback
+        onNoMatch: fallback

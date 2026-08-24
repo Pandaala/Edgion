@@ -5,7 +5,7 @@
 //
 // Config layout:
 //   /test/rate-limit-redis/allow          -> rate-limit-redis-main  (redisRef: default/redis-test, onRedisFailure: Allow)
-//   /test/rate-limit-redis/missing-deny   -> rate-limit-redis-missing-deny (onMissingKey: Deny, onRedisFailure: Allow)
+//   /test/rate-limit-redis/missing-deny   -> rate-limit-redis-missing-deny (onKeyMiss: Deny, onRedisFailure: Allow)
 //   /test/rate-limit-redis/redis-fail-open  -> rate-limit-redis-fail-open  (redisRef: default/redis-not-found, onRedisFailure: Allow)
 //   /test/rate-limit-redis/redis-fail-close -> rate-limit-redis-fail-close (redisRef: default/redis-not-found, onRedisFailure: Deny)
 
@@ -129,7 +129,7 @@ impl RateLimitRedisTestSuite {
     fn test_missing_key_returns_429() -> TestCase {
         TestCase::new(
             "rate_limit_redis_missing_key_denied",
-            "onMissingKey: Deny — request without X-Rate-Key header is rejected with 429",
+            "onKeyMiss: Deny — request without X-Rate-Key header is rejected with 429",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -150,7 +150,7 @@ impl RateLimitRedisTestSuite {
                                 let body = r.text().await.unwrap_or_default();
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    format!("Got 429 as expected (onMissingKey: Deny), body: {}", body),
+                                    format!("Got 429 as expected (onKeyMiss: Deny), body: {}", body),
                                 )
                             } else {
                                 TestResult::failed(

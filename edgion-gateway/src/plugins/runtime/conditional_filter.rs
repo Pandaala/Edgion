@@ -14,7 +14,7 @@ use super::log::PluginLog;
 use super::traits::{
     PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };
-use crate::plugins::runtime::conditions::{ConditionExt, EvaluationResult, PluginConditions, PluginConditionsExt};
+use crate::plugins::runtime::conditions::{CompiledPluginConditions, ConditionExt, EvaluationResult, PluginConditions};
 use edgion_resources::filters::PluginRunningResult;
 
 /// Wrapper that adds condition evaluation to a RequestFilter
@@ -25,7 +25,7 @@ use edgion_resources::filters::PluginRunningResult;
 /// - If conditions evaluate to Run, the inner filter executes normally
 pub struct ConditionalRequestFilter {
     inner: Box<dyn RequestFilter>,
-    conditions: Option<PluginConditions>,
+    conditions: Option<CompiledPluginConditions>,
     alias: Option<String>,
     dye_plan: Option<Arc<CompiledDyePlan>>,
 }
@@ -35,7 +35,7 @@ impl ConditionalRequestFilter {
     pub fn new(inner: Box<dyn RequestFilter>, conditions: Option<PluginConditions>) -> Self {
         Self {
             inner,
-            conditions,
+            conditions: conditions.map(CompiledPluginConditions::new),
             alias: None,
             dye_plan: None,
         }
@@ -51,7 +51,7 @@ impl ConditionalRequestFilter {
     ) -> Self {
         Self {
             inner,
-            conditions,
+            conditions: conditions.map(CompiledPluginConditions::new),
             alias,
             dye_plan,
         }
@@ -75,7 +75,7 @@ impl RequestFilter for ConditionalRequestFilter {
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
-                let eval = conditions.evaluate_detail(session, log).await;
+                let eval = conditions.evaluate_detail(session, log);
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cond) = eval.matched {
                         log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
@@ -91,7 +91,7 @@ impl RequestFilter for ConditionalRequestFilter {
 /// Wrapper that adds condition evaluation to an UpstreamResponseFilter (sync)
 pub struct ConditionalUpstreamResponseFilter {
     inner: Box<dyn UpstreamResponseFilter>,
-    conditions: Option<PluginConditions>,
+    conditions: Option<CompiledPluginConditions>,
     alias: Option<String>,
     dye_plan: Option<Arc<CompiledDyePlan>>,
 }
@@ -101,7 +101,7 @@ impl ConditionalUpstreamResponseFilter {
     pub fn new(inner: Box<dyn UpstreamResponseFilter>, conditions: Option<PluginConditions>) -> Self {
         Self {
             inner,
-            conditions,
+            conditions: conditions.map(CompiledPluginConditions::new),
             alias: None,
             dye_plan: None,
         }
@@ -117,7 +117,7 @@ impl ConditionalUpstreamResponseFilter {
     ) -> Self {
         Self {
             inner,
-            conditions,
+            conditions: conditions.map(CompiledPluginConditions::new),
             alias,
             dye_plan,
         }
@@ -144,7 +144,7 @@ impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
     ) -> PluginRunningResult {
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
-                let eval = conditions.evaluate_detail_sync(session, log);
+                let eval = conditions.evaluate_detail(session, log);
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cond) = eval.matched {
                         log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
@@ -165,7 +165,7 @@ impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
 /// - If conditions evaluate to Run, the inner filter executes normally
 pub struct ConditionalUpstreamResponseBodyFilter {
     inner: Box<dyn UpstreamResponseBodyFilter>,
-    conditions: Option<PluginConditions>,
+    conditions: Option<CompiledPluginConditions>,
     alias: Option<String>,
     dye_plan: Option<Arc<CompiledDyePlan>>,
 }
@@ -175,7 +175,7 @@ impl ConditionalUpstreamResponseBodyFilter {
     pub fn new(inner: Box<dyn UpstreamResponseBodyFilter>, conditions: Option<PluginConditions>) -> Self {
         Self {
             inner,
-            conditions,
+            conditions: conditions.map(CompiledPluginConditions::new),
             alias: None,
             dye_plan: None,
         }
@@ -191,7 +191,7 @@ impl ConditionalUpstreamResponseBodyFilter {
     ) -> Self {
         Self {
             inner,
-            conditions,
+            conditions: conditions.map(CompiledPluginConditions::new),
             alias,
             dye_plan,
         }
@@ -221,7 +221,7 @@ impl UpstreamResponseBodyFilter for ConditionalUpstreamResponseBodyFilter {
         // use the log-less evaluate variant. Skip-cause is intentionally not
         // recorded; emitting it per chunk would explode log volume.
         if let Some(conditions) = &self.conditions {
-            if conditions.should_evaluate() && conditions.evaluate_sync(session) == EvaluationResult::Skip {
+            if conditions.should_evaluate() && conditions.evaluate(session) == EvaluationResult::Skip {
                 return None;
             }
         }
@@ -234,7 +234,7 @@ impl UpstreamResponseBodyFilter for ConditionalUpstreamResponseBodyFilter {
 /// Wrapper that adds condition evaluation to an UpstreamResponse (async)
 pub struct ConditionalUpstreamResponse {
     inner: Box<dyn UpstreamResponse>,
-    conditions: Option<PluginConditions>,
+    conditions: Option<CompiledPluginConditions>,
     alias: Option<String>,
     dye_plan: Option<Arc<CompiledDyePlan>>,
 }
@@ -244,7 +244,7 @@ impl ConditionalUpstreamResponse {
     pub fn new(inner: Box<dyn UpstreamResponse>, conditions: Option<PluginConditions>) -> Self {
         Self {
             inner,
-            conditions,
+            conditions: conditions.map(CompiledPluginConditions::new),
             alias: None,
             dye_plan: None,
         }
@@ -260,7 +260,7 @@ impl ConditionalUpstreamResponse {
     ) -> Self {
         Self {
             inner,
-            conditions,
+            conditions: conditions.map(CompiledPluginConditions::new),
             alias,
             dye_plan,
         }
@@ -288,7 +288,7 @@ impl UpstreamResponse for ConditionalUpstreamResponse {
     async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
-                let eval = conditions.evaluate_detail(session, log).await;
+                let eval = conditions.evaluate_detail(session, log);
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cond) = eval.matched {
                         log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
@@ -304,9 +304,10 @@ impl UpstreamResponse for ConditionalUpstreamResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::runtime::conditions::{Condition, IncludeCondition, KeyExistCondition};
+    use crate::plugins::runtime::conditions::{Condition, KeyExistCondition, KeyMatchCondition};
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use edgion_resources::common::KeyGet;
+    use edgion_resources::resources::edgion_plugins::conditions::MatchCore;
     use mockall::predicate::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -345,7 +346,7 @@ mod tests {
     fn test_conditional_filter_no_conditions() {
         // When conditions is None, should_evaluate returns false
         let conditions = PluginConditions::default();
-        assert!(!conditions.should_evaluate());
+        assert!(conditions.is_empty());
     }
 
     #[test]
@@ -355,10 +356,12 @@ mod tests {
                 key: KeyGet::Header {
                     name: "X-Skip".to_string(),
                 },
+                negate: false,
+                descriptor: Box::from(""),
             })]),
             run: None,
         };
-        assert!(conditions.should_evaluate());
+        assert!(!conditions.is_empty());
     }
 
     #[tokio::test]
@@ -382,13 +385,14 @@ mod tests {
         // Run condition: method must be POST
         let conditions = PluginConditions {
             skip: None,
-            run: Some(vec![Condition::Include(IncludeCondition {
+            run: Some(vec![Condition::KeyMatch(KeyMatchCondition {
                 key: KeyGet::Method,
-                values: Some(vec!["POST".to_string()]),
-                regex: None,
-                values_set: None,
-                wildcard_patterns: None,
-                compiled_regex: None,
+                core: MatchCore {
+                    values: Some(vec!["POST".to_string()]),
+                    ..Default::default()
+                },
+                negate: false,
+                descriptor: Box::from(""),
             })]),
         };
 
@@ -414,13 +418,14 @@ mod tests {
         // Run condition: method must be POST
         let conditions = PluginConditions {
             skip: None,
-            run: Some(vec![Condition::Include(IncludeCondition {
+            run: Some(vec![Condition::KeyMatch(KeyMatchCondition {
                 key: KeyGet::Method,
-                values: Some(vec!["POST".to_string()]),
-                regex: None,
-                values_set: None,
-                wildcard_patterns: None,
-                compiled_regex: None,
+                core: MatchCore {
+                    values: Some(vec!["POST".to_string()]),
+                    ..Default::default()
+                },
+                negate: false,
+                descriptor: Box::from(""),
             })]),
         };
 
@@ -450,6 +455,8 @@ mod tests {
                 key: KeyGet::Header {
                     name: "X-Internal".to_string(),
                 },
+                negate: false,
+                descriptor: Box::from(""),
             })]),
             run: None,
         };
@@ -483,6 +490,8 @@ mod tests {
                 key: KeyGet::Header {
                     name: "X-Internal".to_string(),
                 },
+                negate: false,
+                descriptor: Box::from(""),
             })]),
             run: None,
         };
@@ -516,6 +525,8 @@ mod tests {
                 key: KeyGet::Header {
                     name: "X-Internal".to_string(),
                 },
+                negate: false,
+                descriptor: Box::from(""),
             })]),
             run: None,
         };
@@ -546,13 +557,14 @@ mod tests {
         // Run condition: method must be POST
         let conditions = PluginConditions {
             skip: None,
-            run: Some(vec![Condition::Include(IncludeCondition {
+            run: Some(vec![Condition::KeyMatch(KeyMatchCondition {
                 key: KeyGet::Method,
-                values: Some(vec!["POST".to_string()]),
-                regex: None,
-                values_set: None,
-                wildcard_patterns: None,
-                compiled_regex: None,
+                core: MatchCore {
+                    values: Some(vec!["POST".to_string()]),
+                    ..Default::default()
+                },
+                negate: false,
+                descriptor: Box::from(""),
             })]),
         };
 
@@ -570,7 +582,7 @@ mod tests {
 
         assert!(log.is_cond_skipped());
         // Verify cond_skip contains condition info (prefixed with ! for run condition not met)
-        assert_eq!(log.cond_skip.as_deref(), Some("!run:include,method"));
+        assert_eq!(log.cond_skip.as_deref(), Some("!run:keyMatch,method"));
     }
 
     #[test]
@@ -580,26 +592,33 @@ mod tests {
             key: KeyGet::Header {
                 name: "X-Test".to_string(),
             },
+            negate: false,
+            descriptor: Box::from(""),
         });
         assert_eq!(c1.cond_type(), "keyExist");
         assert_eq!(c1.cond_detail(), "hdr:X-Test");
 
-        // Test include
-        let c2 = Condition::Include(IncludeCondition {
+        // Test keyMatch
+        let c2 = Condition::KeyMatch(KeyMatchCondition {
             key: KeyGet::Method,
-            values: Some(vec!["GET".to_string(), "POST".to_string()]),
-            regex: None,
-            values_set: None,
-            wildcard_patterns: None,
-            compiled_regex: None,
+            core: MatchCore {
+                values: Some(vec!["GET".to_string(), "POST".to_string()]),
+                ..Default::default()
+            },
+            negate: false,
+            descriptor: Box::from(""),
         });
-        assert_eq!(c2.cond_type(), "include");
+        assert_eq!(c2.cond_type(), "keyMatch");
         assert_eq!(c2.cond_detail(), "method");
 
         // Test probability
-        let c3 =
-            Condition::Probability(crate::plugins::runtime::conditions::ProbabilityCondition { ratio: 0.1, key: None });
-        assert_eq!(c3.cond_type(), "prob");
+        let c3 = Condition::Probability(crate::plugins::runtime::conditions::ProbabilityCondition {
+            ratio: 0.1,
+            key: None,
+            negate: false,
+            descriptor: Box::from(""),
+        });
+        assert_eq!(c3.cond_type(), "probability");
         assert_eq!(c3.cond_detail(), "10%");
     }
 

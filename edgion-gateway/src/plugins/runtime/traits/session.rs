@@ -508,26 +508,14 @@ pub trait PluginSession: Send + Sync {
 
     // ========== KeyGet/KeySet unified accessor methods ==========
 
-    /// Get a value using KeyGet accessor
+    /// Read one optional string from the request using a KeyGet accessor.
     ///
-    /// This is the unified way to extract values from the session context.
-    /// Used by RateLimit, Conditions, and other plugins.
-    ///
-    /// This method is async to support remote key sources (e.g., Webhook).
-    /// For local key sources (Header, Cookie, Query, etc.), the async overhead
-    /// is negligible (nanosecond-level state machine creation + 1 poll(Ready)).
+    /// Synchronous and I/O-free. Used by RateLimit, Conditions, and other plugins.
     ///
     /// # Returns
     /// * `Some(String)` - The extracted value
     /// * `None` - If the value doesn't exist or is empty (for RemoteIp)
-    async fn key_get(&self, key: &KeyGet) -> Option<String>;
-
-    /// Synchronous version of key_get for local key sources only.
-    ///
-    /// Used by sync filter contexts (UpstreamResponseFilter, UpstreamResponseBodyFilter)
-    /// where async is not available. Only supports local variants (Header, Cookie, Query,
-    /// Path, Method, Ctx, RemoteIp, RemoteIpAndPath). Returns None for Webhook variants.
-    fn key_get_local(&self, key: &KeyGet) -> Option<String>;
+    fn key_get(&self, key: &KeyGet) -> Option<String>;
 
     /// Set a value using KeySet accessor
     ///

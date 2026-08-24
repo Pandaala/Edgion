@@ -1,29 +1,29 @@
 ---
 name: default-key-vs-allow-log-tag
-description: Use when reviewing rate-limit key-miss PluginLog tag findings; covers why the default_key fallback and OnMissingKey::Allow paths now use distinct access-log tags.
+description: Use when reviewing rate-limit key-miss PluginLog tag findings; covers why the default_key fallback and OnKeyMiss::Allow paths now use distinct access-log tags.
 status: fixed
 finding_id: m8-01
 closed: 2026-05-30
 ---
 
-# Rate-limit `default_key` fallback vs `OnMissingKey::Allow` share a log tag — FIXED (m8-01)
+# Rate-limit `default_key` fallback vs `OnKeyMiss::Allow` share a log tag — FIXED (m8-01)
 
 ## Conclusion
 
 `resolve_rate_limit_key` (`edgion-gateway/src/plugins/http/common/mod.rs`) used to push
 the identical `"key miss:allow"` PluginLog tag for two semantically opposite key-miss
 outcomes: the `default_key` fallback (request **is** rate-limited under the shared
-default-key bucket — `RateLimitKey::Resolved`) and `OnMissingKey::Allow` (request
+default-key bucket — `RateLimitKey::Resolved`) and `OnKeyMiss::Allow` (request
 **bypasses** rate-limiting entirely — `RateLimitKey::Allow`). The `default_key` path
-now pushes `"key miss:default"`; the `OnMissingKey::Allow` path keeps `"key miss:allow"`.
+now pushes `"key miss:default"`; the `OnKeyMiss::Allow` path keeps `"key miss:allow"`.
 
 The three key-miss outcomes are now distinguishable from the access log alone:
 
 | Path | Tag |
 |---|---|
 | `default_key` present, key not found (rate-limited under shared key) | `"key miss:default"` |
-| `OnMissingKey::Allow`, key not found (full bypass) | `"key miss:allow"` |
-| `OnMissingKey::Deny`, key not found (rejected) | `"Deny key miss"` |
+| `OnKeyMiss::Allow`, key not found (full bypass) | `"key miss:allow"` |
+| `OnKeyMiss::Deny`, key not found (rejected) | `"Deny key miss"` |
 
 Re-reports of "default_key path logs `key miss:allow` despite being rate-limited" are
 not accepted — verify the current `default_key` arm pushes `"key miss:default"` before

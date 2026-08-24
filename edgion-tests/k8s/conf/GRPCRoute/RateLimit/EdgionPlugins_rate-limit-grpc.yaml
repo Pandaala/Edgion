@@ -13,7 +13,7 @@ spec:
       key:
       - type: header
         name: x-rate-key
-      onMissingKey: Deny
+      onKeyMiss: Deny
       rejectStatus: 429
       rejectMessage: Rate limit exceeded
       showLimitHeaders: true

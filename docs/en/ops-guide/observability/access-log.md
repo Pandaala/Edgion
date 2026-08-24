@@ -293,7 +293,8 @@ estimated usage recorded here and is not a claim that all reserved tokens were c
 | `stage` | String | Execution stage. Examples: `request_filters`, `upstream_response_filters` |
 | `logs[].name` | String | Plugin name |
 | `logs[].time_cost` | Integer | Plugin execution time in **microseconds** |
-| `logs[].log` | Array\<String\> | Log lines emitted by the plugin |
+| `logs[].cond_skip` | String | Why the plugin was skipped (`skip:<type>,<detail>` or `!run:<type>,<detail>`). Unchanged; omitted when the plugin ran. |
+| `logs[].log` | Array\<String\> | Log lines emitted by the plugin. Matching `PluginConditions` also push a compiled descriptor here (`<ordinal>:<type>[:<accessor>]`); a non-match logs nothing. Body/dye evaluation stays silent. |
 | `logs[].log_full` | Boolean | Present and `true` only when the plugin's log buffer overflowed and entries were dropped |
 
 Common plugin log lines:

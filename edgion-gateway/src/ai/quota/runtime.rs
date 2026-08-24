@@ -27,7 +27,7 @@ struct CompiledLimit {
 pub struct CompiledAiQuotaPlan {
     redis_ref: String,
     key: Vec<edgion_resources::common::KeyGet>,
-    on_missing_key: edgion_resources::resources::edgion_plugins::OnMissingKey,
+    on_key_miss: edgion_resources::resources::edgion_plugins::OnKeyMiss,
     on_redis_failure: OnRedisFailure,
     limits: Vec<CompiledLimit>,
     flush_tokens: u64,
@@ -47,7 +47,7 @@ pub enum QuotaExceededAction {
 
 pub enum QuotaAdmission {
     Ready(AiQuotaRequest),
-    /// Admission was intentionally skipped by `onMissingKey: allow`.
+    /// Admission was intentionally skipped by `onKeyMiss: allow`.
     Bypass,
     /// Redis failed and `onRedisFailure: allow` explicitly permitted traffic.
     DependencyBypass,
@@ -79,7 +79,7 @@ impl CompiledAiQuotaPlan {
         Some(Self {
             redis_ref: config.redis_ref.clone(),
             key: config.key.clone(),
-            on_missing_key: config.on_missing_key.clone(),
+            on_key_miss: config.on_key_miss.clone(),
             on_redis_failure: config.on_redis_failure.clone(),
             limits: config
                 .limits
@@ -129,7 +129,7 @@ impl CompiledAiQuotaPlan {
         logical_model: &str,
         maximum_request_duration: Duration,
     ) -> QuotaAdmission {
-        let identity = match resolve_rate_limit_key(session, &self.key, None, &self.on_missing_key, log).await {
+        let identity = match resolve_rate_limit_key(session, &self.key, None, &self.on_key_miss, log) {
             RateLimitKey::Resolved(value) => value,
             RateLimitKey::Allow => return QuotaAdmission::Bypass,
             RateLimitKey::Deny => return QuotaAdmission::IdentityMissing,

@@ -7,19 +7,21 @@
 // Exercises the 11 redesigned webhook scenarios end to end, plus 6 further
 // scenarios (12-17) covering the URL-target feature (external `target.url`,
 // origin-only validation, SSRF egress guard), plus 1 further scenario (18)
-// covering the LinkSys webhook `request.body` block (json templating only).
+// covering the LinkSys webhook `request.body` block (json templating only),
+// plus 1 further scenario (19) composing WebhookKeyGet then KeyAuth.
 // Each scenario has a self-contained fixture in
 // conf/EdgionPlugins/WebhookKeyGet/NN-*.yaml that wires
 // up: a backend Service (+ EndpointSlice) OR an external `target.url`, a LinkSys
 // webhook resource declaring the outbound `request` (target + allow-listed
-// origin/custom fields), a CtxSet EdgionPlugins that invokes the webhook via a
-// KeyGet::Webhook var, and an HTTPRoute on host `whN.example.com` path `/test/whN`.
+// origin/custom fields), a WebhookKeyGet EdgionPlugins entry (scenarios 09/10
+// also keep a preceding CtxSet for local vars the webhook templates read),
+// and an HTTPRoute on host `whN.example.com` path `/test/whN`.
 //
 // Verification model
 // ------------------
 // Every request carries `access_log: test_store` + a unique `x-trace-id`; the
 // gateway stores the access-log entry (integration-testing mode) keyed by that
-// trace id. Every CtxSet var is flattened to a top-level key in the access-log
+// trace id. Every WebhookKeyGet (and CtxSet) var is flattened to a top-level key in the access-log
 // JSON, so asserting `"<var>":"<value>"` proves the resolved value.
 //
 // To verify *outbound request construction*, the test_server's webhook handler
@@ -31,7 +33,7 @@
 //
 // Known gaps surfaced by this suite (documented, not worked around):
 //
-//  1. statusOnError is NOT wired into the CtxSet consumer — a failed webhook
+//  1. statusOnError is NOT honored by WebhookKeyGet — a failed webhook
 //     simply falls back to the var `default` (or leaves it unset).
 //     So `presence: required` blocks the outbound call (verifiable) but does not
 //     return a 5xx to the client. Scenario 5 asserts the *gating* property (the
@@ -45,7 +47,8 @@
 //     see docs/superpowers/specs/2026-06-21-webhook-serviceclusterip-resolution-design.md.
 //
 // Net: 10/10 original scenarios pass, plus 6/6 URL-target scenarios (12-17), plus
-// 1/1 body-templating scenario (18; see below), for 17/17 total.
+// 1/1 body-templating scenario (18; see below), plus 1/1 WebhookKeyGet-then-KeyAuth
+// scenario (19), for 18/18 total.
 //
 // URL-target scenarios (12-17)
 // -----------------------------
@@ -83,6 +86,14 @@
 //     `data.echo_body`; the fixture extracts `data.echo_body.userId` (proving
 //     the template rendered correctly) and `data.echo_headers.content-type`
 //     (proving the auto-injected header reached the wire).
+//
+// WebhookKeyGet then KeyAuth (19)
+// --------------------------------
+// 19. WebhookKeyGet runs first and writes the echoed `X-Wh-Key` into ctx
+//     `wh19_key`; KeyAuth authenticates that ctx var against Secret
+//     `wh19-api-keys`. Valid key → 200; missing or wrong key → 401 (same as
+//     KeyAuth). A reversed plugin list is a silent auth bypass — W-1 declined
+//     a cross-plugin ordering check.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -403,7 +414,7 @@ impl WebhookKeyGetTestSuite {
     // ==================== 5. presence: required → gates the call ====================
     //
     // Design intent: missing required field → 403 (statusOnError). The gateway does
-    // NOT yet wire statusOnError into the CtxSet consumer, so this
+    // NOT honor statusOnError in WebhookKeyGet, so this
     // case asserts the verifiable property instead: with the required field present
     // the webhook resolves; without it, the webhook is NOT called (the var is never
     // set, because wh5 declares no `default`). See suite report for the 403 gap.
@@ -461,7 +472,7 @@ impl WebhookKeyGetTestSuite {
                     TestResult::passed_with_message(
                         start.elapsed(),
                         "presence: required gated the outbound call (resolved when present, skipped when missing). \
-                         NOTE: statusOnError 403 is not enforced by the CtxSet consumer (known gap)."
+                         NOTE: statusOnError 403 is not enforced by WebhookKeyGet (known gap)."
                             .to_string(),
                     )
                 })
@@ -1004,6 +1015,87 @@ impl WebhookKeyGetTestSuite {
             },
         )
     }
+
+    // ==================== 19. WebhookKeyGet then KeyAuth ====================
+    //
+    // Valid echoed key → 200. Missing or wrong key → 401 (KeyAuth). Documented
+    // hazard: KeyAuth before WebhookKeyGet is a silent auth bypass — W-1
+    // declined a cross-plugin ordering check.
+    fn test_webhook_then_key_auth() -> TestCase {
+        TestCase::new(
+            "webhook_then_key_auth",
+            "WebhookKeyGet writes a ctx key; KeyAuth after it accepts the valid key and 401s otherwise",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let trace_ok = format!("wh19-ok-{}", uuid::Uuid::new_v4());
+                    let resp_ok = match send_gw(
+                        &ctx,
+                        "wh19.example.com",
+                        "/test/wh19",
+                        &[("X-Wh-Key", "test-key-wh19-valid")],
+                        &trace_ok,
+                    )
+                    .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    };
+                    let status_ok = resp_ok.status().as_u16();
+                    if status_ok != 200 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("valid key expected 200, got {}", status_ok),
+                        );
+                    }
+
+                    let trace_missing = format!("wh19-missing-{}", uuid::Uuid::new_v4());
+                    let resp_missing = match send_gw(&ctx, "wh19.example.com", "/test/wh19", &[], &trace_missing).await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    };
+                    let status_missing = resp_missing.status().as_u16();
+                    if status_missing != 401 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("missing key expected 401, got {}", status_missing),
+                        );
+                    }
+
+                    let trace_wrong = format!("wh19-wrong-{}", uuid::Uuid::new_v4());
+                    let resp_wrong = match send_gw(
+                        &ctx,
+                        "wh19.example.com",
+                        "/test/wh19",
+                        &[("X-Wh-Key", "wrong-key")],
+                        &trace_wrong,
+                    )
+                    .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    };
+                    let status_wrong = resp_wrong.status().as_u16();
+                    if status_wrong != 401 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("wrong key expected 401, got {}", status_wrong),
+                        );
+                    }
+
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "WebhookKeyGet then KeyAuth: valid key 200; missing/wrong key 401. \
+                         Misordered list (KeyAuth first) is a silent auth bypass — W-1 declined \
+                         a cross-plugin ordering check."
+                            .to_string(),
+                    )
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for WebhookKeyGetTestSuite {
@@ -1030,6 +1122,7 @@ impl TestSuite for WebhookKeyGetTestSuite {
             Self::test_url_block_private_rejected(),
             Self::test_url_origin_only_rejected(),
             Self::test_json_body(),
+            Self::test_webhook_then_key_auth(),
         ]
     }
 }

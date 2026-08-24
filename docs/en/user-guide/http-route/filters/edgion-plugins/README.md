@@ -12,9 +12,11 @@ HTTP Route-level plugins provided by Edgion, configured via the `EdgionPlugins` 
 | [bandwidth-limit.md](bandwidth-limit.md) | Bandwidth throttling |
 | [basic-auth.md](basic-auth.md) | HTTP Basic authentication |
 | [canary.md](canary.md) | Full-cutover, remotely switchable traffic canary |
+| [conditions.md](conditions.md) | Plugin `run`/`skip` conditions (`keyExist`, `keyMatch`, `timeRange`, `probability`) |
 | [cors.md](cors.md) | Cross-origin resource sharing (CORS) |
 | [csrf.md](csrf.md) | CSRF protection |
 | [ctx-setter.md](ctx-setter.md) | Context variable extraction |
+| [webhook-key-get.md](webhook-key-get.md) | Resolve a LinkSys webhook value into request context |
 | [direct-endpoint.md](direct-endpoint.md) | Direct connection to a specific endpoint |
 | [dsl/README.md](dsl/README.md) | DSL scripting engine |
 | [dye.md](dye.md) | Traffic-tagging headers (entry-level `dye` — outcome vocabulary, value templates, anti-spoof strip) |

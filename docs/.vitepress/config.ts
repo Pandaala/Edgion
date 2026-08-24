@@ -109,6 +109,7 @@ const enSidebar = [
                   { text: 'Proxy Rewrite', link: '/en/user-guide/http-route/filters/edgion-plugins/proxy-rewrite' },
                   { text: 'Response Rewrite', link: '/en/user-guide/http-route/filters/edgion-plugins/response-rewrite' },
                   { text: 'Request Restriction', link: '/en/user-guide/http-route/filters/edgion-plugins/request-restriction' },
+                  { text: 'Conditions', link: '/en/user-guide/http-route/filters/edgion-plugins/conditions' },
                   { text: 'CORS', link: '/en/user-guide/http-route/filters/edgion-plugins/cors' },
                   { text: 'CSRF', link: '/en/user-guide/http-route/filters/edgion-plugins/csrf' },
                   { text: 'DSL', link: '/en/user-guide/http-route/filters/edgion-plugins/dsl/', collapsed: true, items: [
@@ -126,6 +127,7 @@ const enSidebar = [
                   { text: 'All Endpoint Status', link: '/en/user-guide/http-route/filters/edgion-plugins/all-endpoint-status' },
                   { text: 'Debug Access Log', link: '/en/user-guide/http-route/filters/edgion-plugins/debug-access-log' },
                   { text: 'Ctx Setter', link: '/en/user-guide/http-route/filters/edgion-plugins/ctx-setter' },
+                  { text: 'Webhook KeyGet', link: '/en/user-guide/http-route/filters/edgion-plugins/webhook-key-get' },
                   { text: 'Real IP', link: '/en/user-guide/http-route/filters/edgion-plugins/real-ip' },
                   { text: 'Region Route', link: '/en/user-guide/http-route/filters/edgion-plugins/region-route' },
                   { text: 'Dye', link: '/en/user-guide/http-route/filters/edgion-plugins/dye' },
@@ -198,6 +200,7 @@ const enSidebar = [
         items: [
           { text: 'Overview', link: '/en/user-guide/edgion-plugins/' },
           { text: 'Ctx Setter', link: '/en/user-guide/edgion-plugins/ctx-setter' },
+          { text: 'Webhook KeyGet', link: '/en/user-guide/http-route/filters/edgion-plugins/webhook-key-get' },
           { text: 'Forward Auth', link: '/en/user-guide/edgion-plugins/forward-auth' },
           { text: 'JWE Decrypt', link: '/en/user-guide/edgion-plugins/jwe-decrypt' },
           { text: 'LDAP Auth', link: '/en/user-guide/edgion-plugins/ldap-auth' },
@@ -359,6 +362,7 @@ const zhSidebar = [
                   { text: '代理重写', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/proxy-rewrite' },
                   { text: '响应重写', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/response-rewrite' },
                   { text: '请求限制', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/request-restriction' },
+                  { text: '插件条件', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/conditions' },
                   { text: 'CORS', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/cors' },
                   { text: 'CSRF', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/csrf' },
                   { text: 'DSL', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/dsl/', collapsed: true, items: [
@@ -376,6 +380,7 @@ const zhSidebar = [
                   { text: '全端点状态', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/all-endpoint-status' },
                   { text: '调试访问日志', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/debug-access-log' },
                   { text: 'Ctx Setter', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/ctx-setter' },
+                  { text: 'Webhook KeyGet', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/webhook-key-get' },
                   { text: 'Real IP', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/real-ip' },
                   { text: '区域路由', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/region-route' },
                   { text: '染色', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/dye' },
@@ -440,6 +445,7 @@ const zhSidebar = [
         items: [
           { text: '概览', link: '/zh-CN/user-guide/edgion-plugins/' },
           { text: 'Ctx Setter', link: '/zh-CN/user-guide/edgion-plugins/ctx-setter' },
+          { text: 'Webhook KeyGet', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/webhook-key-get' },
           { text: 'Forward Auth', link: '/zh-CN/user-guide/edgion-plugins/forward-auth' },
           { text: 'JWE Decrypt', link: '/zh-CN/user-guide/edgion-plugins/jwe-decrypt' },
           { text: 'LDAP Auth', link: '/zh-CN/user-guide/edgion-plugins/ldap-auth' },

@@ -22,7 +22,7 @@ Do **not** add grouping when any of these hold:
 - The list element already carries identity (mTLS subject DN/SAN, OIDC `sub`) — server-side grouping is redundant.
 - There is no actor concept on a hit (CORS origin is value-match, not actor identity).
 - The resource is single-valued (one LDAP server, one CSRF key, one rate, one IdP, one forward-auth URI, one rewrite target). Multi-source is modelled by multiple plugin / resource instances, not by grouping.
-- The list already lives in a per-rule wrapper that itself acts as the group (e.g. `RestrictionRule.name/source/key`). Adding sub-groups doubles the schema depth without new attribution.
+- The list already lives in a per-rule wrapper inside a named outer group (for example, `GeoRuleGroup.name` plus each `GeoRule`'s `source` / `key` / `values`). Adding sub-groups inside `GeoRule.values` doubles the schema depth without new attribution.
 
 Closed cases (do not reopen without new requirement): see the "Closed: not grouped" register in [`../../04-review/SKILL.md`](../../04-review/SKILL.md).
 

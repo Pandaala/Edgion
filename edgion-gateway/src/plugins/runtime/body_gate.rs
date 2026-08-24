@@ -34,7 +34,7 @@ use async_trait::async_trait;
 use super::log::PluginLog;
 use super::traits::session::BodyReadError;
 use super::traits::{PluginSession, RequestFilter, UpstreamResponse};
-use crate::plugins::runtime::conditions::{EvaluationResult, PluginConditionsExt};
+use crate::plugins::runtime::conditions::{CompiledPluginConditions, EvaluationResult};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{BodyReadFailureMode, BodyRequirement};
 use edgion_resources::EdgionStatus;
@@ -85,11 +85,17 @@ pub(crate) fn record_body_read_error_status(session: &mut dyn PluginSession, err
 pub struct BodyGatedRequestFilter {
     inner: Box<dyn RequestFilter>,
     requirement: BodyRequirement,
+    conditions: Option<CompiledPluginConditions>,
 }
 
 impl BodyGatedRequestFilter {
     pub fn new(inner: Box<dyn RequestFilter>, requirement: BodyRequirement) -> Self {
-        Self { inner, requirement }
+        let conditions = requirement.conditions.clone().map(CompiledPluginConditions::new);
+        Self {
+            inner,
+            requirement,
+            conditions,
+        }
     }
 }
 
@@ -105,9 +111,9 @@ impl RequestFilter for BodyGatedRequestFilter {
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         // 1. Secondary gate: is the body required for this request?
-        if let Some(conds) = &self.requirement.conditions {
+        if let Some(conds) = &self.conditions {
             if conds.should_evaluate() {
-                let eval = conds.evaluate_detail(session, log).await;
+                let eval = conds.evaluate_detail(session, log);
                 if eval.result == EvaluationResult::Skip {
                     // Body not required — run the plugin without body enforcement.
                     return self.inner.run_request(session, log).await;
@@ -149,11 +155,17 @@ impl RequestFilter for BodyGatedRequestFilter {
 pub struct BodyGatedUpstreamResponse {
     inner: Box<dyn UpstreamResponse>,
     requirement: BodyRequirement,
+    conditions: Option<CompiledPluginConditions>,
 }
 
 impl BodyGatedUpstreamResponse {
     pub fn new(inner: Box<dyn UpstreamResponse>, requirement: BodyRequirement) -> Self {
-        Self { inner, requirement }
+        let conditions = requirement.conditions.clone().map(CompiledPluginConditions::new);
+        Self {
+            inner,
+            requirement,
+            conditions,
+        }
     }
 }
 
@@ -168,9 +180,9 @@ impl UpstreamResponse for BodyGatedUpstreamResponse {
     }
 
     async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        if let Some(conds) = &self.requirement.conditions {
+        if let Some(conds) = &self.conditions {
             if conds.should_evaluate() {
-                let eval = conds.evaluate_detail(session, log).await;
+                let eval = conds.evaluate_detail(session, log);
                 if eval.result == EvaluationResult::Skip {
                     return self.inner.run_upstream_response(session, log).await;
                 }
@@ -276,7 +288,7 @@ mod tests {
     use crate::EdgionHttpContext;
     use bytes::Bytes;
     use edgion_resources::common::KeyGet;
-    use edgion_resources::resources::edgion_plugins::conditions::{Condition, IncludeCondition, PluginConditions};
+    use edgion_resources::resources::edgion_plugins::conditions::{Condition, KeyMatchCondition, PluginConditions};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A mock session that carries a default ctx (so cap resolution has what
@@ -423,13 +435,14 @@ mod tests {
         let req = BodyRequirement {
             conditions: Some(PluginConditions {
                 skip: None,
-                run: Some(vec![Condition::Include(IncludeCondition {
+                run: Some(vec![Condition::KeyMatch(KeyMatchCondition {
                     key: KeyGet::Method,
-                    values: Some(vec!["POST".to_string()]),
-                    regex: None,
-                    values_set: None,
-                    wildcard_patterns: None,
-                    compiled_regex: None,
+                    core: edgion_resources::resources::edgion_plugins::conditions::MatchCore {
+                        values: Some(vec!["POST".to_string()]),
+                        ..Default::default()
+                    },
+                    negate: false,
+                    descriptor: Box::from(""),
                 })]),
             }),
             ..Default::default()
@@ -455,13 +468,14 @@ mod tests {
         // proves the compiled regex actually evaluated.
         let mut conds = PluginConditions {
             skip: None,
-            run: Some(vec![Condition::Include(IncludeCondition {
+            run: Some(vec![Condition::KeyMatch(KeyMatchCondition {
                 key: KeyGet::Method,
-                values: None,
-                regex: Some(vec!["^POST$".to_string()]),
-                values_set: None,
-                wildcard_patterns: None,
-                compiled_regex: None,
+                core: edgion_resources::resources::edgion_plugins::conditions::MatchCore {
+                    regex: Some(vec!["^POST$".to_string()]),
+                    ..Default::default()
+                },
+                negate: false,
+                descriptor: Box::from(""),
             })]),
         };
         conds.compile().expect("regex compiles");

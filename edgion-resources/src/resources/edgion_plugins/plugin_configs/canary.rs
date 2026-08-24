@@ -12,7 +12,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::dynamic_internal_upstream::{DynUpstreamOnInvalid, DynUpstreamTarget};
+use super::dynamic_internal_upstream::DynUpstreamTarget;
+use super::upstream_fallback::{default_upstream_reject, UpstreamFallback};
 use crate::resources::edgion_config_data::EdgionConfigDataRef;
 use crate::resources::edgion_plugins::PluginValidation;
 
@@ -43,8 +44,8 @@ pub struct CanaryConfig {
     /// - `Reject` (default): 403.
     /// - `Fallback`: fall through to the route's own weighted `backendRefs`
     ///   selection.
-    #[serde(default)]
-    pub on_invalid: DynUpstreamOnInvalid,
+    #[serde(default = "default_upstream_reject")]
+    pub on_invalid: UpstreamFallback,
 }
 
 impl CanaryConfig {
@@ -100,7 +101,7 @@ mod tests {
                 ("canary".to_string(), target("app-v2")),
             ]),
             active_profile_ref: None,
-            on_invalid: DynUpstreamOnInvalid::default(),
+            on_invalid: default_upstream_reject(),
         }
     }
 

@@ -214,7 +214,7 @@ requestPlugins:
 ## 行为细节
 
 - 多个 `keySources` 按顺序检查，第一个找到非空值的来源用于认证
-- 设置 `hideCredentials: true` 后，认证使用的来源会在转发到上游前从请求中移除：覆盖 `header`、`query`、`cookie` 三种来源（`query` 会从请求 URI 中剥离匹配到的参数，`cookie` 会从 `Cookie` 头中移除匹配到的 cookie）。`webhook` 来源由服务端解析、从不出现在转发请求中，因此无需剥离
+- 设置 `hideCredentials: true` 后，认证使用的来源会在转发到上游前从请求中移除：覆盖 `header`、`query`、`cookie` 三种来源（`query` 会从请求 URI 中剥离匹配到的参数，`cookie` 会从 `Cookie` 头中移除匹配到的 cookie）。`ctx` 来源（包括由 [WebhookKeyGet](./webhook-key-get.md) 写入的值）已经在服务端，从不出现在转发请求中，因此无需剥离。WebhookKeyGet 必须排在 KeyAuth **之前**；把 `requestPlugins` 写反是静默认证绕过。
 - `anonymous` 模式下，未提供 Key 的请求也会通过，但会设置 `X-Anonymous-Consumer: true`
 - Key 存储在 Kubernetes Secret 的 `keys.yaml` 字段中，格式为 YAML 数组
 - 同一 Key 在多个组中出现时，以先定义的组为准（first-wins），并记录警告日志

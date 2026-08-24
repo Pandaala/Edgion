@@ -6,7 +6,7 @@
 
 `tokenQuota` 需要 `redisRef`、显式 `key` 数组，以及 1–8 个 limit。Limit 使用
 `scope: identity` 或 `scope: identityModel`，外加 `tokens` 与 `window`。默认值为
-`onMissingKey: Deny`、`onRedisFailure: Deny`、`flushTokens: 100`、`flushInterval: 1s`、
+`onKeyMiss: Deny`、`onRedisFailure: Deny`、`flushTokens: 100`、`flushInterval: 1s`、
 `requestTimeout: 500ms`。
 
 `identityModel` 使用客户端请求中的原始逻辑模型名。即使同一个 EdgionBackend 将 canonical

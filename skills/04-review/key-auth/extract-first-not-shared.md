@@ -24,7 +24,7 @@ via `common::resolve_rate_limit_key` (see
 **1. The two loops are not behavior-identical.**
 
 `key_auth::extract_key` filters the `KeyGet` variant before calling
-`session.key_get` — only `Header`, `Query`, `Cookie`, `Ctx`, `Webhook` are
+`session.key_get` — only `Header`, `Query`, `Cookie`, `Ctx` are
 honored; `RemoteIp`, `Path`, `Method`, etc. are silently skipped. This is a
 runtime defense-in-depth in addition to whatever the resource validator enforces.
 `region_route::extract_first` honors every `KeyGet` variant.
@@ -51,7 +51,7 @@ closure would add a layer of indirection for no behavioral gain.
 
 ## Fix Suggestions Not Accepted
 
-- Add a `pub async fn first_key_get(session, sources) -> Option<(String, &KeyGet)>`
+- Add a `pub fn first_key_get(session, sources) -> Option<(String, &KeyGet)>`
   in `common/` and call it from both plugins — `key_auth` cannot use it without
   losing its variant filter or paying the per-request filtering cost above.
 - Pass a predicate closure to a shared helper — adds indirection on the hot path

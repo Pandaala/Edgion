@@ -42,10 +42,11 @@ spec:
       type: RequestRestriction
       config:
         mode: Deny
-        ruleGroups:
-          - rules:
-              - name: "deny-everything"
-                source: Path
+        anyOf:
+          - allOf:
+              - type: keyMatch
+                key:
+                  type: path
                 regex:
                   - ".*"
         status: 403

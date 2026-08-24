@@ -15,6 +15,7 @@ spec:
           allOf:
             - type: secretMatch
               key: {type: header, name: X-CF-Secret}
+              secretKey: token
               secretRef: {name: gac-origin-secret}
         - name: nested-ip-allow
           hosts: [gac-url.example.com]

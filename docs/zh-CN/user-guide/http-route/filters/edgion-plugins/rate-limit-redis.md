@@ -90,8 +90,8 @@ spec:
 | `redisRef` | String | —（必填） | Redis LinkSys 资源引用，格式 `"namespace/name"`。仅支持字母数字、`-`、`_` |
 | `policies` | Array\<Object\> | —（必填） | 限流策略列表，至少一条，最多 10 条，见下方 Policy 配置 |
 | `key` | Array\<Object\> | `[{type: remoteIp}]` | 限流维度列表。单个 key 原样使用，多个 key 带长度前缀后用 `_` 拼接，见下方 Key 配置 |
-| `onMissingKey` | Enum | `Allow` | key 缺失时的行为。可选值：`Allow` \| `Deny` |
-| `defaultKey` | String | 无 | key 缺失时的默认值，优先于 `onMissingKey` |
+| `onKeyMiss` | Enum | `Allow` | key 缺失时的行为。可选值：`Allow` \| `Deny` |
+| `defaultKey` | String | 无 | key 缺失时的默认值，优先于 `onKeyMiss` |
 | `rejectStatus` | Integer | `429` | 拒绝时的 HTTP 状态码（100–599） |
 | `rejectMessage` | String | 无 | 拒绝时的 JSON 响应体 |
 | `showLimitHeaders` | Boolean | `true` | 是否返回限流响应头 |
@@ -166,7 +166,7 @@ key:
 
 引用**同一个** EdgionPlugins 资源的多条路由共享同一个限流器——这正是跨路由共享限流的实现方式，也与内存版 `RateLimit`（计数器同样按资源共享）一致。两个**不同**的资源在构造上已经不可能共享桶：想跨路由共享配额，请让它们指向同一个资源，而不是复制一份配置。
 
-不写 `key` 时套用默认值 `[{type: remoteIp}]`。显式写 `key: []` 表示「单一全局桶」：所有请求组合出同一个空键，仍然会被限流——它不算 key 提取失败，因此 `onMissingKey` / `defaultKey` 对它不生效。
+不写 `key` 时套用默认值 `[{type: remoteIp}]`。显式写 `key: []` 表示「单一全局桶」：所有请求组合出同一个空键，仍然会被限流——它不算 key 提取失败，因此 `onKeyMiss` / `defaultKey` 对它不生效。
 
 ---
 
@@ -276,7 +276,7 @@ spec:
         key:
           - type: header
             name: "X-API-Key"
-        onMissingKey: Deny
+        onKeyMiss: Deny
         policies:
           - rate: 50
             interval: "1s"
@@ -330,7 +330,7 @@ spec:
         key:
           - type: header
             name: "Authorization"
-        onMissingKey: Deny
+        onKeyMiss: Deny
         onRedisFailure: Deny
         policies:
           - rate: 1000

@@ -16,7 +16,7 @@ One group may mix all three rule types. This directly models alternatives such a
 
 Inline IPs and all usable `ipRefs` in one complete IP rule are expanded by the Controller and compiled into one radix matcher. `configRefs` import typed `RequestAccessUrlAllowList` data. Missing, disabled, wrong-type, or unpermitted IP/URL data refs are ignored individually and reported through `PartiallyInvalid`; valid siblings continue to work. ConfigData and Secret changes dynamically requeue the owning `EdgionPlugins` resource.
 
-Supported `allOf` conditions are `keyExist`, `keyMatch`, `secretMatch`, `directPeerIpMatch`, `remoteIpMatch`, and `hmacAuth`. Secret and HMAC material is resolved by the Controller and redacted from admin configuration output.
+`allOf` is the same `Condition` enum as plugin `run` / `skip` (including `timeRange` and `probability`). `keyMatch` uses the shared `MatchCore` (`values` / `regex` / `caseSensitive`, no singular `value`). See [Plugin Conditions](./conditions.md). Secret and HMAC material is resolved by the Controller and redacted from admin configuration output. `hmacAuth.validateRequestBody` is accepted only here (and later RequestRestriction), not on entry-level conditions.
 
 ### HMAC condition
 
@@ -69,6 +69,7 @@ spec:
                         - type: secretMatch
                           key: { type: header, name: X-Origin-Token }
                           secretRef: { name: cloudflare-origin-token }
+                          secretKey: token
               - name: allowed-client
                 anyOfRules:
                   - name: internal-client

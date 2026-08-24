@@ -24,4 +24,4 @@ spec:
                       allOf:
                         - type: keyMatch
                           key: {type: header, name: X-Hmac-Fallback}
-                          value: allow
+                          values: ["allow"]

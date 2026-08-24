@@ -11,15 +11,17 @@ spec:
       type: RequestRestriction
       config:
         mode: Deny
-        ruleGroups:
-          - rules:
-              - name: "is-prod"
-                source: Header
-                key: "X-Env"
+        anyOf:
+          - allOf:
+              - type: keyMatch
+                key:
+                  type: header
+                  name: "X-Env"
                 values:
                   - "prod"
-              - name: "is-admin-path"
-                source: Path
+              - type: keyMatch
+                key:
+                  type: path
                 regex:
                   - ".*/admin/.*"
         status: 403

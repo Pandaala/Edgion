@@ -14,13 +14,12 @@ spec:
       type: RequestRestriction
       config:
         mode: Allow
-        ruleGroups:
-          - rules:
-              - name: "allow-cn"
-                source: MtlsCn
+        anyOf:
+          - allOf:
+              - type: mtlsMatch
+                field: cn
                 values:
                   - "valid-client"
-                onMissing: NoMatch
         status: 403
         message: "Client CN not allowed"
 ---
@@ -37,13 +36,12 @@ spec:
       type: RequestRestriction
       config:
         mode: Allow
-        ruleGroups:
-          - rules:
-              - name: "allow-san-email"
-                source: MtlsSan
+        anyOf:
+          - allOf:
+              - type: mtlsMatch
+                field: san
                 sanType: Email
                 values:
                   - "test@edgion.io"
-                onMissing: NoMatch
         status: 403
         message: "Client SAN not allowed"

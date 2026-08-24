@@ -4,6 +4,7 @@
 // - Composite allow: client IP in 127.0.0.0/8 AND correct secret header => 200
 // - Deny when secret header is missing => 403
 // - Deny when secret header has a wrong value => 403
+// - Deny when secret header matches a non-selected value from the same Secret => 403
 // - Deny when client IP is outside the configured CIDR (10.0.0.0/8) even with correct header => 403
 // - Access-log decision assertion: allow path records the IP source and rule
 // - Access-log decision assertion: deny path records "deny:no-match"
@@ -212,6 +213,30 @@ impl RequestAccessPolicyTestSuite {
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_deny_non_selected_secret_value() -> TestCase {
+        TestCase::new(
+            "deny_non_selected_secret_value",
+            "Deny: a non-selected value from the referenced Secret must not match",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match get_status(
+                        &ctx,
+                        "gac.example.com",
+                        "/test/gac/lockdown/api",
+                        Some(("X-CF-Secret", "public-origin-user")),
+                    )
+                    .await
+                    {
+                        Ok(403) => TestResult::passed(start.elapsed()),
+                        Ok(status) => TestResult::failed(start.elapsed(), format!("Expected status 403, got {status}")),
+                        Err(error) => TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
                     }
                 })
             },
@@ -709,6 +734,7 @@ impl TestSuite for RequestAccessPolicyTestSuite {
             Self::test_allow_in_cidr_and_secret(),
             Self::test_deny_secret_missing(),
             Self::test_deny_secret_wrong(),
+            Self::test_deny_non_selected_secret_value(),
             Self::test_deny_ip_outside_cidr(),
             // Access-log decision assertions
             Self::test_access_log_allow_decision(),

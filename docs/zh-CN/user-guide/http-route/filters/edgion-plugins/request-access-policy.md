@@ -14,7 +14,7 @@
 
 Controller 会把一条完整 IP 规则中的内联 IP 与所有有效 `ipRefs` 合并，并统一编译成一棵 radix tree。`configRefs` 引用强类型 `RequestAccessUrlAllowList`。IP/URL 数据引用不存在、未启用、类型错误或跨命名空间未授权时，只忽略该引用并记录 `PartiallyInvalid`，其他有效引用继续生效。ConfigData 或 Secret 更新后会自动 requeue 对应的 `EdgionPlugins` 并重新生成运行时快照。
 
-`allOf` 支持 `keyExist`、`keyMatch`、`secretMatch`、`directPeerIpMatch`、`remoteIpMatch` 和 `hmacAuth`。Secret/HMAC 在 Controller 解析，管理配置输出中的敏感值会被脱敏。
+`allOf` 使用与插件 `run` / `skip` 相同的 `Condition` 枚举（含 `timeRange` 与 `probability`）。`keyMatch` 使用与插件条件相同的 `MatchCore`（`values` / `regex` / `caseSensitive`，没有单数 `value`）。详见 [插件条件](./conditions.md)。Secret/HMAC 在 Controller 解析，管理配置输出中的敏感值会被脱敏。`hmacAuth.validateRequestBody` 只在此处（以及日后的 RequestRestriction）合法，条目级条件会拒绝它。
 
 ### HMAC 条件
 
@@ -65,6 +65,7 @@ spec:
                         - type: secretMatch
                           key: { type: header, name: X-Origin-Token }
                           secretRef: { name: cloudflare-origin-token }
+                          secretKey: token
               - name: allowed-client
                 anyOfRules:
                   - name: internal-client

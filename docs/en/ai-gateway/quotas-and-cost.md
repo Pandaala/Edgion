@@ -7,7 +7,7 @@ quota Redis work.
 
 `tokenQuota` requires `redisRef`, an explicit `key` array, and one to eight limits. Limits use
 `scope: identity` or `scope: identityModel`, plus `tokens` and `window`. Defaults are
-`onMissingKey: Deny`, `onRedisFailure: Deny`, `flushTokens: 100`, `flushInterval: 1s`, and
+`onKeyMiss: Deny`, `onRedisFailure: Deny`, `flushTokens: 100`, `flushInterval: 1s`, and
 `requestTimeout: 500ms`.
 
 `identityModel` uses the exact client-requested logical model name. The

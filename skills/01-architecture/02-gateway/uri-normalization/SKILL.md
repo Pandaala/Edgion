@@ -67,8 +67,8 @@ pingora field:        req_header().uri
 | **ctx_set template variable** | `$path` | `$request_path` |
 | | `$uri` | `$request_uri` |
 | | (whole-query template var not supported) | `TemplateVarType::Query` with `var_name` (single-key, decoded, frozen) |
-| **`request_restriction` source** | `Path` | `RequestPath` |
-| | (whole-query source not supported) | `Query` with `key` (single-key, decoded, frozen) |
+| **`request_restriction` condition** | `keyMatch` + `key: { type: path }` | `keyMatch` + `key: { type: requestPath }` |
+| | (whole-query key not supported) | `keyMatch` + `key: { type: query, name }` (single-key, decoded, frozen) |
 
 ### Naming rules
 
@@ -83,7 +83,7 @@ The query string has two access shapes that follow different views:
 | Access shape | View | Encoding | Source |
 |--------------|------|----------|--------|
 | Whole string (`session.get_query()` / `req.query_string`) | current | raw (no decode) | `req_header().uri.query()` (live) |
-| Single key (`session.get_query_param(name)` / `req.query("name")` / `ctx_set TemplateVarType::Query` / `request_restriction` Query source) | **entry (frozen)** | **percent-decoded** (`+` → space) | `entry_raw_query` via `EdgionHttpContext::cached_query` |
+| Single key (`session.get_query_param(name)` / `req.query("name")` / `ctx_set TemplateVarType::Query` / `request_restriction` `key: { type: query, name }`) | **entry (frozen)** | **percent-decoded** (`+` → space) | `entry_raw_query` via `EdgionHttpContext::cached_query` |
 
 Single-key accessors share one per-request `OnceLock<HashMap>` cache (`EdgionHttpContext::cached_query_cell`) seeded from `entry_raw_query`. Result: the route matcher and every plugin reading by key see the same decoded value, regardless of read order or any in-request `set_upstream_uri` rewrite.
 
@@ -181,8 +181,8 @@ Note: path normalization **does not rewrite** `req_header().uri` — upstream / 
 | Route matching, ACL access control | current | `session.get_path()` / `req.path` |
 | access_log default request-path field | current | `$path` / `$uri` |
 | Audit: what the client actually sent | entry | `session.get_request_uri()` / `$request_uri` |
-| Deny rules that must defend against encoded bypass | current | `RestrictionSource::Path` (auto-normalized) |
-| Deny rules that must reject the literal raw form | entry | `RestrictionSource::RequestPath` |
+| Deny rules that must defend against encoded bypass | current | `keyMatch` + `key: { type: path }` (values auto-normalized) |
+| Deny rules that must reject the literal raw form | entry | `keyMatch` + `key: { type: requestPath }` |
 | Record the new path after rewrite | current (already refreshed) | `$uri` |
 | Need the original path even after rewrite | entry | `$request_uri` |
 | Modify the request path | — | `session.set_upstream_uri(&new_uri)` |

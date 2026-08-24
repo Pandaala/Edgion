@@ -183,15 +183,10 @@ impl KeyAuthConfig {
                         return Err(format!("key_sources[{}]: name cannot be empty", i));
                     }
                 }
-                KeyGet::Webhook { webhook_ref, .. } => {
-                    if webhook_ref.is_empty() {
-                        return Err(format!("key_sources[{}]: webhookRef cannot be empty", i));
-                    }
-                }
                 // Unsupported sources for API key extraction
-                KeyGet::RemoteIp | KeyGet::Path | KeyGet::Method | KeyGet::RemoteIpAndPath => {
+                KeyGet::RemoteIp | KeyGet::Path | KeyGet::Method | KeyGet::RemoteIpAndPath | KeyGet::RequestPath => {
                     return Err(format!(
-                        "key_sources[{}]: unsupported source type '{}' for API key extraction. Use header, query, cookie, ctx, or webhook",
+                        "key_sources[{}]: unsupported source type '{}' for API key extraction. Use header, query, cookie, or ctx",
                         i,
                         source.source_type()
                     ));
@@ -369,6 +364,17 @@ realm: "Production API"
         let error = config.validate().unwrap_err();
         assert!(error.contains("unsupported source type"));
         assert!(error.contains("remoteIp"));
+    }
+
+    #[test]
+    fn test_validate_unsupported_request_path_key_source() {
+        let config = KeyAuthConfig {
+            key_sources: vec![KeyGet::RequestPath],
+            ..Default::default()
+        };
+        let error = config.validate().unwrap_err();
+        assert!(error.contains("unsupported source type"));
+        assert!(error.contains("requestPath"));
     }
 
     #[test]

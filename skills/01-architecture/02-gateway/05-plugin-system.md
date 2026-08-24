@@ -56,24 +56,50 @@ Condition model (`PluginConditions`):
 
 Condition kinds include:
 - `KeyExist` — whether a key exists (e.g., header, query param).
-- `KeyMatch` — exact / multi-value / regex match against a key value.
-- `Include` — whether the key value is in a given set (supports values list and regex).
-- `Exclude` — value not in the set (the inverse of Include).
+- `KeyMatch` — flattened `MatchCore`: exact `values` (no singular `value`) and/or `regex`. No wildcards. `caseSensitive` defaults to true and applies to `values` only. `negate: true` is the exclude spelling.
 - `TimeRange` — whether the current time falls within a given range.
 - `Probability` — probabilistic execution (e.g., 10% sampling).
 
-Condition evaluation has three paths:
-- `evaluate_detail` (async): used by async phases (RequestFilter, UpstreamResponse), takes `&mut PluginLog`.
-- `evaluate_detail_sync` (sync): used by sync phases that need to write `cond_skip` into the outer PluginLog (`ConditionalUpstreamResponseFilter`).
-- `evaluate_sync` / `Condition::evaluate_sync_silent`: **body phase only**, no log, zero allocation. Internally goes through `KeyMatchCondition::evaluate_sync_silent` / `IncludeCondition::evaluate_sync_silent` / `ExcludeCondition::evaluate_sync_silent`. **Do NOT call `evaluate_detail_sync` in the body phase**; doing so reintroduces per-chunk PluginLog allocation.
+Every variant carries `negate` (default false), applied after an ordinary request-value miss (missing is base false; missing + `negate: true` is true). A Controller-owned reference payload that is unresolved is a separate state and always remains a non-match; `negate` must never invert it. `keyMatch` with `key.type: path` normalizes exact `values` at load time (regex is never normalized).
+
+`keyMatch`, `jwtClaimMatch`, and `mtlsMatch` require at least one non-empty
+`values` or `regex` list. This invariant is enforced by the shared `Condition`
+validation path for every consumer; plugin-specific validators must not carry
+partial copies of it. A present `values` list must not be empty, even when a
+non-empty `regex` list is also present.
+
+`jwtClaimMatch.claim` is required and must be non-empty after trimming. This
+accessor invariant is also owned by shared `Condition` validation, before any
+runtime claim extraction or `negate` handling.
+
+`secretMatch` carries both a request-side `key: KeyGet` and a required
+`secretKey` selecting exactly one entry from `secretRef`. The Controller never
+ORs unrelated Secret data values. A missing, non-UTF-8, or blank selected value
+leaves `resolvedValues` absent and is reported through `ResolvedRefs=False`.
+
+Unresolved-reference policy is consumer-specific. Active entry/body `PluginConditions` seal the EdgionPlugins runtime fail-closed. `RequestRestriction` fails with the generic 500 response in `Deny` mode but treats an incomplete `Allow` group as unavailable and continues with sibling groups. `RequestAccessPolicy` likewise treats an incomplete allow candidate as unavailable. Dye remains non-blocking: an unresolved dye condition does not match. Missing or denied references retain the Controller status signal. `secretMatch` also reports an unusable selected data key; other present-but-unusable Secret consumers may rely on their resolver-specific status or warning plus Gateway enforcement. These paths do not add a per-request metric or tracing call.
+
+The Gateway converts schema-level `Condition` / `PluginConditions` values into
+`CompiledCondition` / `CompiledPluginConditions` when it builds the immutable plugin
+runtime. Besides preserving the regexes compiled during preparse, this step builds a
+header-only HMAC verifier once and retains its credential map for the lifetime of the
+runtime snapshot. Entry wrappers, secondary body gates, dye rules, RequestRestriction,
+and RequestAccessPolicy must use this compiled representation; constructing an HMAC
+verifier from schema configuration during request evaluation is a hot-path bug.
+
+Compiled condition evaluation has two synchronous paths:
+- `evaluate` (log-less): used by the body phase and dye; no `PluginLog`, no skip descriptor.
+- `evaluate_detail` (logged): used by request/response filters (`ConditionalUpstreamResponseFilter` and async RequestFilter / UpstreamResponse wrappers); writes `cond_skip` into the outer `PluginLog`.
+
+Body phase: call `CompiledPluginConditions::evaluate`, never `evaluate_detail` (that allocates a skip descriptor).
 
 Gateway API standard filters (added through the private `add_from_httproute_filters_inner`; the public entries are the scope-explicit `from_httproute_filters_for_rule` / `from_httproute_filters_for_backend` mentioned above) are not wrapped with conditions and always execute.
 
-Skip log format: `"skip:keyExist,hdr:X-Internal"` or `"!run:include,method"`.
+Skip log format: `"skip:keyExist,hdr:X-Internal"` or `"!run:keyMatch,method"`.
 
 ### ⚠️ Critical constraint: regex must be compiled during preparse
 
-`KeyMatch`, `Include`, and `Exclude` support a `regex` field. The `compiled_regex` field is annotated with `#[serde(skip)]` and is `None` after deserialization. **`compile()` MUST be called during preparse to complete compilation**; otherwise every request that hits the fallback path will execute `Regex::new()`, causing significant CPU overhead.
+`KeyMatch` supports a `regex` field. The `compiled_regex` field is annotated with `#[serde(skip)]` and is `None` after deserialization. **`compile()` MUST be called during preparse to complete compilation**; otherwise every request that hits the fallback path will execute `Regex::new()`, causing significant CPU overhead.
 
 **compile call chain** (one-time, triggered when resources are received via gRPC list/watch):
 
@@ -81,8 +107,9 @@ Skip log format: `"skip:keyExist,hdr:X-Internal"` or `"!run:include,method"`.
 resource.pre_parse()                        # event_dispatch.rs
   → EdgionPlugins::preparse()              # edgion_plugins/mod.rs
       → compile_conditions()               # iterate all entries, call PluginConditions::compile()
-          → Condition::compile()           # conditions/types.rs
-              → KeyMatchCondition::compile() / IncludeCondition::compile() / ExcludeCondition::compile()
+          → Condition::compile()           # conditions.rs
+              → KeyMatchCondition::compile()
+                  → MatchCore::compile(normalize_paths)
       → add_from_*()                       # plugin_runtime.rs (the cloned conditions are already compiled at this point)
 ```
 
@@ -100,7 +127,7 @@ resource.pre_parse()                        # event_dispatch.rs
 1. **Do not add `&mut PluginLog` to `UpstreamResponseBodyFilter::run_upstream_response_body_filter`**. The trait signature is the contract; it promises no per-chunk logging in this phase. If diagnostics are truly needed someday, follow #4.
 2. **When implementing a new body-phase filter**, do not call `log.push*`, `log.set_*`, or any
    `tracing::` macro. Use bounded metrics or per-request aggregation emitted outside the per-chunk path.
-3. **When adding a new body-phase wrapper** (similar to `ConditionalUpstreamResponseBodyFilter`), do not create temporary logs via `PluginLog::new(...)`. Condition evaluation must go through `PluginConditions::evaluate_sync` or the `Condition::evaluate_sync_silent` chain — not `evaluate_detail_sync`.
+3. **When adding a new body-phase wrapper** (similar to `ConditionalUpstreamResponseBodyFilter`), do not create temporary logs via `PluginLog::new(...)`. Condition evaluation must go through `CompiledPluginConditions::evaluate`, never `evaluate_detail`.
 4. **For "body-phase summaries"** (e.g., how many times this request hit rate limiting): aggregate per-request, not push per-chunk. Add an aggregation slot in `EdgionHttpContext`, accumulate during the body phase, and emit once at the end of the request into `stage_logs`. **Never** write per-chunk execution traces into the access log.
 5. **ExtensionRef body path**: use `ExtensionRefFilter::resolve_runtime_silent`, **not** `prepare_execution` (the latter calls `start_edgion_plugins_log`).
 6. **Resource / configuration error diagnostics** ("referenced EdgionPlugins not found", "wrong kind", etc.) should be surfaced in Controller preparse / status conditions; **do not** rely on body-phase runtime logs as a backstop — body phase silently no-ops, and per-chunk error logs are themselves a DoS risk.
@@ -109,7 +136,7 @@ resource.pre_parse()                        # event_dispatch.rs
 
 - [ ] No `&mut PluginLog` added to the `UpstreamResponseBodyFilter` trait or its impls.
 - [ ] No heap allocations on the body-phase hot path (`PluginLog::new(...)`, `String::from(...)`, `format!(...)`, `Vec::new()`, etc.).
-- [ ] Condition evaluation uses the silent chain (grep for `evaluate_sync_silent` / `evaluate_sync` rather than `evaluate_detail_sync`).
+- [ ] Condition evaluation on the body path calls `CompiledPluginConditions::evaluate` (grep for `evaluate_detail` on the body path — must be absent).
 - [ ] No `ctx.pending_edgion_plugins_logs.push` or `session.start_edgion_plugins_log` calls on the body path.
 
 ## HTTP plugin inventory

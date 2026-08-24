@@ -56,7 +56,7 @@ CtxSet 支持从多种数据源（Header、Query、Cookie、Path、ClientIP、Me
 | `method` | — | HTTP 方法 |
 | `ctx` | `name` | 已有的上下文变量，由更早的规则或插件设置 |
 
-若要使用固定字面量，请使用顶层的 `value` 字段而不是 `from`。若要由多个来源构建组合字符串，请使用 `template`。
+若要使用固定字面量，请使用顶层的 `value` 字段而不是 `from`。若要由多个来源构建组合字符串，请使用 `template`。要从 LinkSys webhook 解析值，请使用 [WebhookKeyGet](../http-route/filters/edgion-plugins/webhook-key-get.md)，而不是 CtxSet 的 `from` 来源。
 
 ### `template` 变量
 
@@ -315,5 +315,6 @@ spec:
 ## 相关文档
 
 - [CtxSet（HTTPRoute 过滤器视角）](../http-route/filters/edgion-plugins/ctx-setter.md) - 在 HTTPRoute 过滤器中使用 CtxSet
+- [Webhook KeyGet](../http-route/filters/edgion-plugins/webhook-key-get.md) - 将 LinkSys webhook 的值解析进上下文
 - [RateLimit 插件](rate-limit.md) - 可使用 CtxSet 构造限流键
 - [HTTPRoute 总览](../http-route/overview.md) - HTTPRoute 配置总览

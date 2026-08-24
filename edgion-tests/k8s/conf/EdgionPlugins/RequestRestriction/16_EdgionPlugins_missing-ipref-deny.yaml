@@ -1,0 +1,20 @@
+# Missing ipRefs in a deny policy must fail closed instead of under-blocking.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-missing-ipref-deny
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Deny
+        anyOf:
+          - allOf:
+              - type: directPeerIpMatch
+                ipRefs:
+                  - name: rr-missing-ip-list
+                negate: true
+        status: 403
+        message: "This configured response must not mask an unresolved deny reference"

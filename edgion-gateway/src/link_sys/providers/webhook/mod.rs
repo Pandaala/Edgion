@@ -1,6 +1,6 @@
 //! Webhook service management for LinkSys Webhook resources.
 //!
-//! Provides health-aware webhook invocation for KeyGet::Webhook resolution.
+//! Provides health-aware webhook invocation for the WebhookKeyGet plugin.
 //! Runtime state is managed by WebhookManager, which is populated via the
 //! LinkSysStore ConfHandler when LinkSys Webhook resources are synced.
 

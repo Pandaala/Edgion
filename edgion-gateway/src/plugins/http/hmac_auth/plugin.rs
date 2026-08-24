@@ -61,6 +61,7 @@ pub(crate) struct HmacVerifier {
     body_requirement: BodyRequirement,
 }
 
+#[derive(Debug)]
 pub(crate) enum HmacVerifyOutcome {
     Verified { username: String },
     NoMatch(HmacVerifyFailure),
@@ -69,6 +70,7 @@ pub(crate) enum HmacVerifyOutcome {
     DigestReadFailure(BodyReadError),
 }
 
+#[derive(Debug)]
 pub(crate) enum HmacVerifyFailure {
     MissingAuth,
     NoCredentials,
@@ -112,23 +114,55 @@ impl HmacVerifier {
         self.credentials.get(username)
     }
 
-    pub(crate) async fn verify(&self, session: &mut dyn PluginSession) -> HmacVerifyOutcome {
+    pub(crate) fn verify_headers(&self, session: &dyn PluginSession) -> HmacVerifyOutcome {
+        Self::verify_headers_with(
+            &self.algorithms,
+            self.clock_skew,
+            self.enforce_headers.as_deref(),
+            self.validate_request_body,
+            Some(&self.credentials),
+            session,
+        )
+    }
+
+    /// Config-borrowing fallback for schema-level condition evaluation.
+    /// It does not construct a verifier or clone the credential map; runtime
+    /// consumers normally use a prebuilt [`HmacVerifier`].
+    pub(crate) fn verify_headers_config(config: &HmacMatchConfig, session: &dyn PluginSession) -> HmacVerifyOutcome {
+        Self::verify_headers_with(
+            &config.algorithms,
+            config.clock_skew,
+            config.enforce_headers.as_deref(),
+            config.validate_request_body,
+            config.resolved_credentials.as_ref(),
+            session,
+        )
+    }
+
+    fn verify_headers_with(
+        algorithms: &[HmacAlgorithm],
+        clock_skew: u64,
+        enforce_headers: Option<&[String]>,
+        validate_request_body: bool,
+        credentials: Option<&HashMap<String, HmacCredential>>,
+        session: &dyn PluginSession,
+    ) -> HmacVerifyOutcome {
         let Some(auth_header) = session
             .header_value("authorization")
             .or_else(|| session.header_value("proxy-authorization"))
         else {
             return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::MissingAuth);
         };
-        if self.credentials.is_empty() {
+        let Some(credentials) = credentials.filter(|credentials| !credentials.is_empty()) else {
             return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::NoCredentials);
-        }
+        };
         let Ok(params) = HmacAuth::parse_authorization(&auth_header) else {
             return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::BadFormat);
         };
-        if !self.algorithms.contains(&params.algorithm) {
+        if !algorithms.contains(&params.algorithm) {
             return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::AlgorithmNotAllowed);
         }
-        let Some(credential) = self.credentials.get(&params.username) else {
+        let Some(credential) = credentials.get(&params.username) else {
             return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::UnknownCredential);
         };
         let Some(signed_date) = params
@@ -139,10 +173,10 @@ impl HmacVerifier {
         else {
             return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::MissingSignedDate);
         };
-        if let Err(message) = HmacAuth::validate_clock_skew(session, self.clock_skew, signed_date) {
+        if let Err(message) = HmacAuth::validate_clock_skew(session, clock_skew, signed_date) {
             return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::BadTimestamp(message));
         }
-        if let Some(required) = &self.enforce_headers {
+        if let Some(required) = enforce_headers {
             let signed: HashSet<&str> = params.headers.iter().map(String::as_str).collect();
             if let Some(header) = required
                 .iter()
@@ -160,10 +194,25 @@ impl HmacVerifier {
         if !HmacAuth::verify_signature(params.algorithm, &credential.secret, &signing_string, &params.signature) {
             return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::BadSignature);
         }
+        if validate_request_body && !params.headers.iter().any(|header| header == "digest") {
+            return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::DigestNotSigned);
+        }
+        HmacVerifyOutcome::Verified {
+            username: params.username,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn credentials_ptr(&self) -> *const () {
+        Arc::as_ptr(&self.credentials).cast()
+    }
+
+    pub(crate) async fn verify(&self, session: &mut dyn PluginSession) -> HmacVerifyOutcome {
+        let username = match self.verify_headers(session) {
+            HmacVerifyOutcome::Verified { username } => username,
+            other => return other,
+        };
         if self.validate_request_body {
-            if !params.headers.iter().any(|header| header == "digest") {
-                return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::DigestNotSigned);
-            }
             let expected = match HmacAuth::expected_body_digest(session) {
                 Ok(value) => value,
                 Err(message) => return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::BadDigest(message)),
@@ -183,9 +232,7 @@ impl HmacVerifier {
                 Err(BodyDigestError::Read(error)) => return HmacVerifyOutcome::DigestReadFailure(error),
             }
         }
-        HmacVerifyOutcome::Verified {
-            username: params.username,
-        }
+        HmacVerifyOutcome::Verified { username }
     }
 }
 
@@ -976,6 +1023,21 @@ mod tests {
         let mut h = Sha256::new();
         h.update(body);
         format!("SHA-256={}", STANDARD.encode(h.finalize()))
+    }
+
+    #[tokio::test]
+    async fn verify_headers_agrees_with_verify_on_header_only_request() {
+        let plugin = create_plugin();
+        let mut session = signed_session(&["@request-target", "date"], None, b"");
+        let header_outcome = plugin.verifier.verify_headers(&session);
+        let verify_outcome = plugin.verifier.verify(&mut session).await;
+        match (header_outcome, verify_outcome) {
+            (HmacVerifyOutcome::Verified { username: headers }, HmacVerifyOutcome::Verified { username: verify }) => {
+                assert_eq!(headers, verify);
+                assert_eq!(headers, "alice");
+            }
+            (headers, verify) => panic!("expected both Verified, got headers={headers:?} verify={verify:?}"),
+        }
     }
 
     #[tokio::test]

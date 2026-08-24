@@ -23,7 +23,7 @@
 # in the same `test_server` process would reuse the previous run's counter and
 # the retry path would silently stop being exercised.
 #
-# Flow: HTTPRoute -> EdgionPlugins(CtxSet webhook KeyGet) -> LinkSys webhook
+# Flow: HTTPRoute -> EdgionPlugins(WebhookKeyGet) -> LinkSys webhook
 #       -> http://localhost:30001/retry-sequence/wh15-retry-seq/503,503,200
 apiVersion: edgion.io/v1
 kind: LinkSys
@@ -61,16 +61,14 @@ spec:
       name: wh15_result
   requestPlugins:
     - enable: true
-      type: CtxSet
+      type: WebhookKeyGet
       config:
         vars:
           - name: wh15_result
-            from:
-              type: webhook
-              webhookRef: "edgion-default/wh15-resolver"
-              extract:
-                source: header
-                name: "x-attempt-history"
+            webhookRef: "edgion-default/wh15-resolver"
+            extract:
+              source: header
+              name: "x-attempt-history"
             default: "fallback"
 ---
 apiVersion: gateway.networking.k8s.io/v1

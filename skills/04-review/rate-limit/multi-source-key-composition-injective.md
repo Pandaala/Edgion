@@ -69,12 +69,12 @@ this request belong to?":
 
 - **Empty `key` list was fail-open.** `#[serde(default)]` on `key` yielded `Vec::default()` (the
   `Default` impl's `vec![RemoteIp]` never runs on deserialization), so a config that omits `key`
-  resolved no key, fell through to `onMissingKey` and — with its `Allow` default — silently
+  resolved no key, fell through to `onKeyMiss` and — with its `Allow` default — silently
   disabled the limiter. `key` now uses `#[serde(default = "default_key_sources")]` on both
   `RateLimitConfig` and `RateLimitRedisConfig` so an omitted list matches the documented
   `[{type: remoteIp}]`, and `resolve_rate_limit_key` treats an explicitly empty list as "one global
   bucket" (`keys.is_empty()` composes to `""`) rather than as a key miss. Nothing configured cannot
-  be "missing", so `onMissingKey` / `defaultKey` no longer apply to it.
+  be "missing", so `onKeyMiss` / `defaultKey` no longer apply to it.
 - **Cross-plugin bucket namespace.** Every `RateLimitRedis` instance defaults to the same
   `keyPrefix` (`edgion:rl:`) and `policy_idx`, so bucket identity came down to the composed key
   alone. Two unrelated EdgionPlugins resources therefore indexed the same buckets — merging quotas

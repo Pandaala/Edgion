@@ -1,0 +1,20 @@
+# Missing ipRefs in an entry-level run gate must seal the resource fail closed.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-missing-ipref-run
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestHeaderModifier
+      conditions:
+        run:
+          - type: directPeerIpMatch
+            ipRefs:
+              - name: rr-missing-run-ip-list
+            negate: true
+      config:
+        set:
+          - name: X-Unresolved-Run
+            value: "must-not-run"

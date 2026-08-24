@@ -290,7 +290,8 @@ per-attempt 字段。`attempts` 最多包含八次已派发尝试，其序列化
 | `stage` | String | 执行阶段。示例：`request_filters`、`upstream_response_filters` |
 | `logs[].name` | String | 插件名称 |
 | `logs[].time_cost` | Integer | 插件执行时间（**微秒**） |
-| `logs[].log` | Array\<String\> | 插件输出的日志行 |
+| `logs[].cond_skip` | String | 插件被跳过的原因（`skip:<type>,<detail>` 或 `!run:<type>,<detail>`）。格式不变；插件实际执行时省略。 |
+| `logs[].log` | Array\<String\> | 插件输出的日志行。匹配的 `PluginConditions` 还会把编译后的描述符推入这里（`<ordinal>:<type>[:<accessor>]`）；未匹配不写。body / 染色求值保持静默。 |
 | `logs[].log_full` | Boolean | 仅在插件日志缓冲区溢出并丢弃条目时出现且为 `true` |
 
 常见插件日志行：

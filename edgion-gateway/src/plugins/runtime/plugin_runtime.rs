@@ -73,6 +73,7 @@ use crate::plugins::http::request_restriction::RequestRestriction;
 use crate::plugins::http::response_rewrite::ResponseRewrite;
 use crate::plugins::http::trace_context::TraceContext;
 use crate::plugins::http::wasm::WasmPlugin;
+use crate::plugins::http::webhook_key_get::WebhookKeyGet;
 use crate::plugins::http::AiGuard;
 use crate::plugins::runtime::gateway_api_filters::{
     DebugAccessLogToHeaderFilter, ExtensionRefFilter, GapiCorsFilter, RequestHeaderModifierFilter,
@@ -246,6 +247,15 @@ impl PluginRuntime {
     /// check.
     pub(crate) fn has_invalid_plugins(&self) -> bool {
         !self.invalid_plugins.is_empty()
+    }
+
+    /// Record an active plugin entry whose condition references were not
+    /// resolved by the controller. The plugin store detects this transport
+    /// state before runtime construction; sealing then installs the canonical
+    /// fail-closed request gate.
+    pub(crate) fn record_unresolved_condition(&mut self, plugin: &EdgionPlugin) {
+        self.invalid_plugins
+            .record_non_retainable(Self::get_plugin_name(plugin));
     }
 
     /// Publication policy for an update that failed runtime construction.
@@ -798,7 +808,9 @@ impl PluginRuntime {
                             Some(req)
                                 if !matches!(
                                     &entry.plugin,
-                                    EdgionPlugin::HmacAuth(_) | EdgionPlugin::RequestAccessPolicy(_)
+                                    EdgionPlugin::HmacAuth(_)
+                                        | EdgionPlugin::RequestAccessPolicy(_)
+                                        | EdgionPlugin::RequestRestriction(_)
                                 ) =>
                             {
                                 Box::new(BodyGatedRequestFilter::new(filter, req))
@@ -1428,10 +1440,13 @@ impl PluginRuntime {
                 CreateResult::Ok(ProxyRewrite::create(config, body_requirement).map(|plugin| Box::new(plugin) as _))
             }
             EdgionPlugin::RequestBodyBuffer(_) => CreateResult::Ok(Some(RequestBodyBuffer::create())),
-            EdgionPlugin::RequestRestriction(config) => CreateResult::Ok(Some(RequestRestriction::create(config))),
+            EdgionPlugin::RequestRestriction(config) => {
+                CreateResult::Ok(Some(RequestRestriction::create_with_body(config, body_requirement)))
+            }
             EdgionPlugin::RateLimit(config) => CreateResult::Ok(Some(RateLimit::create(config))),
             EdgionPlugin::RateLimitRedis(config) => CreateResult::Ok(Some(RateLimitRedis::create(config, entry_scope))),
             EdgionPlugin::CtxSet(config) => CreateResult::Ok(Some(CtxSet::create(config))),
+            EdgionPlugin::WebhookKeyGet(config) => CreateResult::Ok(Some(WebhookKeyGet::create(config))),
             EdgionPlugin::DirectEndpoint(config) => CreateResult::Ok(Some(Box::new(DirectEndpoint::new(config)))),
             EdgionPlugin::DynamicInternalUpstream(config) => {
                 CreateResult::Ok(Some(DynamicInternalUpstream::create(config)))
@@ -1504,6 +1519,7 @@ impl PluginRuntime {
             | EdgionPlugin::RateLimit(_)
             | EdgionPlugin::RateLimitRedis(_)
             | EdgionPlugin::CtxSet(_)
+            | EdgionPlugin::WebhookKeyGet(_)
             | EdgionPlugin::RealIp(_)
             | EdgionPlugin::TraceContext(_)
             | EdgionPlugin::ForwardAuth(_)
@@ -1567,6 +1583,7 @@ impl PluginRuntime {
             | EdgionPlugin::RateLimit(_)
             | EdgionPlugin::RateLimitRedis(_)
             | EdgionPlugin::CtxSet(_)
+            | EdgionPlugin::WebhookKeyGet(_)
             | EdgionPlugin::RealIp(_)
             | EdgionPlugin::ForwardAuth(_)
             | EdgionPlugin::OpenidConnect(_)
@@ -1623,6 +1640,7 @@ impl PluginRuntime {
             | EdgionPlugin::RateLimit(_)
             | EdgionPlugin::RateLimitRedis(_)
             | EdgionPlugin::CtxSet(_)
+            | EdgionPlugin::WebhookKeyGet(_)
             | EdgionPlugin::RealIp(_)
             | EdgionPlugin::TraceContext(_)
             | EdgionPlugin::ForwardAuth(_)
@@ -1673,6 +1691,7 @@ impl PluginRuntime {
             EdgionPlugin::RateLimit(_) => "RateLimit",
             EdgionPlugin::RateLimitRedis(_) => "RateLimitRedis",
             EdgionPlugin::CtxSet(_) => "CtxSet",
+            EdgionPlugin::WebhookKeyGet(_) => "WebhookKeyGet",
             EdgionPlugin::DirectEndpoint(_) => "DirectEndpoint",
             EdgionPlugin::RealIp(_) => "RealIp",
             EdgionPlugin::TraceContext(_) => "TraceContext",
@@ -2772,7 +2791,9 @@ mod tests {
     /// Canary is a request-stage plugin whose `dye_capabilities()` include
     /// `Success`, so it can carry a request-direction dye rule.
     fn canary_config_for_dye_test() -> edgion_resources::resources::edgion_plugins::plugin_configs::CanaryConfig {
-        use edgion_resources::resources::edgion_plugins::plugin_configs::{CanaryConfig, DynUpstreamTarget};
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{
+            CanaryConfig, DynUpstreamTarget, UpstreamFallback,
+        };
         use std::collections::HashMap;
         CanaryConfig {
             enable: true,
@@ -2785,7 +2806,7 @@ mod tests {
                 },
             )]),
             active_profile_ref: None,
-            on_invalid: Default::default(),
+            on_invalid: UpstreamFallback::Reject,
         }
     }
 
@@ -3023,8 +3044,9 @@ mod tests {
 
     #[test]
     fn canary_plugin_construction() {
-        use edgion_resources::resources::edgion_plugins::plugin_configs::CanaryConfig;
-        use edgion_resources::resources::edgion_plugins::plugin_configs::DynUpstreamTarget;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{
+            CanaryConfig, DynUpstreamTarget, UpstreamFallback,
+        };
         use std::collections::HashMap;
 
         // Create a minimal valid CanaryConfig (must have at least one profile).
@@ -3042,7 +3064,7 @@ mod tests {
             active_profile: "base".to_string(),
             profiles,
             active_profile_ref: None,
-            on_invalid: Default::default(),
+            on_invalid: UpstreamFallback::Reject,
         };
 
         let plugin = EdgionPlugin::Canary(config);
@@ -3218,8 +3240,8 @@ mod mcp_runtime_fact_tests {
     use edgion_resources::resources::edgion_plugins::conditions::{Condition, PluginConditions, ProbabilityCondition};
     use edgion_resources::resources::edgion_plugins::plugin_configs::{CanaryConfig, DynUpstreamTarget};
     use edgion_resources::resources::{
-        DirectEndpointConfig, DynUpstreamOnInvalid, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig,
-        RegionRouteConfig,
+        DirectEndpointConfig, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, RegionRouteConfig,
+        UpstreamFallback,
     };
 
     #[test]
@@ -3240,7 +3262,7 @@ mod mcp_runtime_fact_tests {
                     },
                 )]),
                 active_profile_ref: None,
-                on_invalid: DynUpstreamOnInvalid::default(),
+                on_invalid: UpstreamFallback::Reject,
             }),
         ];
         assert!(plugins.iter().all(PluginRuntime::plugin_may_override_upstream));
@@ -3303,6 +3325,8 @@ mod mcp_runtime_fact_tests {
             run: Some(vec![Condition::Probability(ProbabilityCondition {
                 ratio: 1.0,
                 key: None,
+                negate: false,
+                descriptor: Box::from(""),
             })]),
             skip: None,
         });

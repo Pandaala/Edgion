@@ -8,6 +8,7 @@
 // - Combined rules
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::suites::edgion_plugins::hmac_test_utils::build_hmac_headers;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde_json::json;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -22,6 +23,9 @@ const RR_JWT_ISS: &str = "https://rr.example";
 const RR_JWT_KID: &str = "rr-kid";
 /// Host carrying the JwtClaim chain route (shared request-restriction route host).
 const RR_HOST: &str = "request-restriction.example.com";
+const RR_HMAC_USERNAME: &str = "rr-alice";
+const RR_HMAC_SECRET: &[u8] = b"rr-hmac-secret-key-must-be-at-least-32-bytes";
+const RR_HMAC_BAD_SECRET: &[u8] = b"rr-hmac-wrong-secret-key-must-also-be-long";
 
 /// Build an HS256 JWT carrying a nested `realm_access.roles` array claim.
 fn build_jwt_with_roles(roles: &[&str]) -> String {
@@ -544,7 +548,7 @@ impl RequestRestrictionTestSuite {
     fn test_jwt_claim_missing_claim_denied() -> TestCase {
         TestCase::new(
             "jwt_claim_missing_claim_denied",
-            "JwtClaim: token without realm_access => onMissing NoMatch => denied (403)",
+            "JwtClaim: token without realm_access => missing claim is false => denied (403)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -631,6 +635,343 @@ impl RequestRestrictionTestSuite {
             })
         })
     }
+
+    fn test_ip_and_path_admin_blocked() -> TestCase {
+        TestCase::new(
+            "ip_and_path_admin_blocked",
+            "IP and path in one group: local peer + admin path => denied (403)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/test/ip-and-path/admin/users", ctx.http_url());
+                    let request = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", "request-restriction.example.com");
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 403 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("local peer + admin path denied with status {}", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_ip_and_path_public_allowed() -> TestCase {
+        TestCase::new(
+            "ip_and_path_public_allowed",
+            "IP and path in one group: local peer + public path => passes (200)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/test/ip-and-path/public/users", ctx.http_url());
+                    let request = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", "request-restriction.example.com");
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 200 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("path predicate false, passed with status {}", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected status 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_iprefs_group_admin_blocked() -> TestCase {
+        TestCase::new(
+            "iprefs_group_admin_blocked",
+            "ipRefs in RR group: local peer + admin path => denied (403)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/test/iprefs-group/admin/users", ctx.http_url());
+                    let request = ctx.http_client.get(&url).header("host", RR_HOST);
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 403 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("referenced IP list + admin path denied with status {}", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_iprefs_group_public_allowed() -> TestCase {
+        TestCase::new(
+            "iprefs_group_public_allowed",
+            "ipRefs in RR group: local peer + public path => passes (200)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/test/iprefs-group/public/users", ctx.http_url());
+                    let request = ctx.http_client.get(&url).header("host", RR_HOST);
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 200 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("path predicate false, passed with status {}", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected status 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_iprefs_run_gated_blocked() -> TestCase {
+        TestCase::new(
+            "iprefs_run_gated_blocked",
+            "entry-level run ipRefs: local peer sets header, gated path denied (403)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/test/iprefs-run/gated/users", ctx.http_url());
+                    let request = ctx.http_client.get(&url).header("host", RR_HOST);
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 403 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("entry-level ipRefs run denied gated path with status {}", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_iprefs_run_open_allowed() -> TestCase {
+        TestCase::new(
+            "iprefs_run_open_allowed",
+            "entry-level run ipRefs: local peer + open path => passes (200)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/test/iprefs-run/open/users", ctx.http_url());
+                    let request = ctx.http_client.get(&url).header("host", RR_HOST);
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 200 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("gated path predicate false, passed with status {}", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected status 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_missing_ipref_deny_fails_closed() -> TestCase {
+        TestCase::new(
+            "missing_ipref_deny_fails_closed",
+            "unresolved ipRefs in RequestRestriction Deny mode => generic 500",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/test/missing-ipref-deny/api", ctx.http_url());
+                    match ctx.http_client.get(&url).header("host", RR_HOST).send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            let body = response.text().await.unwrap_or_default();
+                            if status == 500 && body.contains("Internal restriction policy error") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "unresolved deny reference reached the restriction fail-closed path".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected restriction error 500, got status {status} body {body:?}"),
+                                )
+                            }
+                        }
+                        Err(error) => TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_missing_ipref_entry_run_seals_resource() -> TestCase {
+        TestCase::new(
+            "missing_ipref_entry_run_seals_resource",
+            "unresolved ipRefs in entry-level run => resource returns 500",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/test/missing-ipref-run/api", ctx.http_url());
+                    match ctx.http_client.get(&url).header("host", RR_HOST).send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            let body = response.text().await.unwrap_or_default();
+                            if status == 500 && body.contains("plugin configuration error") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "unresolved run gate reached the sealed runtime".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected plugin configuration error 500, got status {status} body {body:?}"
+                                    ),
+                                )
+                            }
+                        }
+                        Err(error) => TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_rr_hmac_valid_allowed() -> TestCase {
+        TestCase::new(
+            "rr_hmac_valid_allowed",
+            "RR HMAC Allow: valid signature => passes (200)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let path = "/test/rr-hmac/api";
+                    let signed = build_hmac_headers(RR_HMAC_USERNAME, RR_HMAC_SECRET, "GET", path, None, RR_HOST, None);
+                    let url = format!("{}{path}", ctx.http_url());
+                    let request = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", RR_HOST)
+                        .header("date", &signed.date)
+                        .header("authorization", &signed.authorization);
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 200 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("valid HMAC allowed with status {}", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected status 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_rr_hmac_unsigned_denied() -> TestCase {
+        TestCase::new(
+            "rr_hmac_unsigned_denied",
+            "RR HMAC Allow: unsigned request => denied (403)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/test/rr-hmac/api", ctx.http_url());
+                    let request = ctx.http_client.get(&url).header("host", RR_HOST);
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 403 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("unsigned HMAC denied with status {}", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_rr_hmac_bad_signature_denied() -> TestCase {
+        TestCase::new(
+            "rr_hmac_bad_signature_denied",
+            "RR HMAC Allow: bad signature => denied (403)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let path = "/test/rr-hmac/api";
+                    let signed =
+                        build_hmac_headers(RR_HMAC_USERNAME, RR_HMAC_BAD_SECRET, "GET", path, None, RR_HOST, None);
+                    let url = format!("{}{path}", ctx.http_url());
+                    let request = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", RR_HOST)
+                        .header("date", &signed.date)
+                        .header("authorization", &signed.authorization);
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 403 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("bad HMAC signature denied with status {}", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for RequestRestrictionTestSuite {
@@ -664,6 +1005,21 @@ impl TestSuite for RequestRestrictionTestSuite {
             Self::test_jwt_claim_non_admin_denied(),
             Self::test_jwt_claim_missing_claim_denied(),
             Self::test_jwt_claim_no_token_401(),
+            // IP and path in one group
+            Self::test_ip_and_path_admin_blocked(),
+            Self::test_ip_and_path_public_allowed(),
+            // S14: ipRefs in a RR group and entry-level run
+            Self::test_iprefs_group_admin_blocked(),
+            Self::test_iprefs_group_public_allowed(),
+            Self::test_iprefs_run_gated_blocked(),
+            Self::test_iprefs_run_open_allowed(),
+            // cl-01: unresolved references must not become negatable false.
+            Self::test_missing_ipref_deny_fails_closed(),
+            Self::test_missing_ipref_entry_run_seals_resource(),
+            // S14: RR HMAC resolved credentials
+            Self::test_rr_hmac_valid_allowed(),
+            Self::test_rr_hmac_unsigned_denied(),
+            Self::test_rr_hmac_bad_signature_denied(),
         ]
     }
 }

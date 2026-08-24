@@ -11,7 +11,7 @@ use crate::duration::parse_duration;
 use crate::resources::edgion_backend::AI_MODEL_NAME_MAX_BYTES;
 use crate::resources::edgion_plugins::PluginValidation;
 
-use super::rate_limit::OnMissingKey;
+use super::rate_limit::OnKeyMiss;
 use super::rate_limit_redis::OnRedisFailure;
 
 pub const AI_QUOTA_MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
@@ -186,8 +186,8 @@ pub struct AiTokenQuotaConfig {
     /// Identity dimensions. An explicitly empty list means one global bucket.
     pub key: Vec<KeyGet>,
     /// Missing identity fails closed by default.
-    #[serde(default = "default_on_missing_key_deny")]
-    pub on_missing_key: OnMissingKey,
+    #[serde(default = "default_on_key_miss_deny")]
+    pub on_key_miss: OnKeyMiss,
     /// Redis dependency failure fails closed before upstream dispatch.
     #[serde(default = "default_on_redis_failure_deny")]
     pub on_redis_failure: OnRedisFailure,
@@ -251,8 +251,8 @@ pub enum AiTokenQuotaOnExceeded {
     },
 }
 
-const fn default_on_missing_key_deny() -> OnMissingKey {
-    OnMissingKey::Deny
+const fn default_on_key_miss_deny() -> OnKeyMiss {
+    OnKeyMiss::Deny
 }
 
 const fn default_on_redis_failure_deny() -> OnRedisFailure {
@@ -449,11 +449,6 @@ impl AiTokenQuotaConfig {
             if key.name().is_some_and(str::is_empty) {
                 return Some(format!("tokenQuota.key[{index}].name must not be empty"));
             }
-            if matches!(key, KeyGet::Webhook { .. }) {
-                return Some(format!(
-                    "tokenQuota.key[{index}] must not use a webhook because quota admission cannot add an outbound dependency"
-                ));
-            }
         }
         if self.limits.is_empty() || self.limits.len() > 8 {
             return Some("tokenQuota.limits must contain between 1 and 8 entries".to_string());
@@ -555,7 +550,7 @@ mod tests {
         AiTokenQuotaConfig {
             redis_ref: "default/ai-quota".to_string(),
             key: vec![KeyGet::RemoteIp],
-            on_missing_key: OnMissingKey::Deny,
+            on_key_miss: OnKeyMiss::Deny,
             on_redis_failure: OnRedisFailure::Deny,
             limits: vec![AiTokenQuotaLimit {
                 scope: AiTokenQuotaScope::Identity,
@@ -730,7 +725,7 @@ tokenQuota:
         )
         .unwrap();
         let quota = config.token_quota.as_ref().unwrap();
-        assert_eq!(quota.on_missing_key, OnMissingKey::Deny);
+        assert_eq!(quota.on_key_miss, OnKeyMiss::Deny);
         assert_eq!(quota.on_redis_failure, OnRedisFailure::Deny);
         assert_eq!(quota.on_exceeded, AiTokenQuotaOnExceeded::Reject);
         assert_eq!(quota.flush_tokens, 100);
@@ -756,15 +751,6 @@ tokenQuota:
         let mut zero_timeout = base.clone();
         zero_timeout.request_timeout = "0s".to_string();
         cases.push(zero_timeout);
-        let mut webhook = base.clone();
-        webhook.key = vec![KeyGet::Webhook {
-            webhook_ref: "quota-key".to_string(),
-            path_override: None,
-            extract: crate::common::WebhookExtract::Body {
-                path: "consumer".to_string(),
-            },
-        }];
-        cases.push(webhook);
 
         for quota in cases {
             assert!(config(Some(quota)).validation_error().is_some());

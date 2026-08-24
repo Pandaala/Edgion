@@ -10,20 +10,20 @@ spec:
       type: RequestRestriction
       config:
         mode: Deny
-        ruleGroups:
-          - rules:
-              - name: "bad-token"
-                source: Header
-                key: "X-Auth-Token"
+        anyOf:
+          - allOf:
+              - type: keyMatch
+                key:
+                  type: header
+                  name: "X-Auth-Token"
                 values:
                   - "invalid"
                   - "expired"
-                onMissing: NoMatch
-          - rules:
-              - name: "missing-token"
-                source: Header
-                key: "X-Auth-Token"
-                onMissing: Match
+          - allOf:
+              - type: keyExist
+                key:
+                  type: header
+                  name: "X-Auth-Token"
+                negate: true
         status: 401
         message: "Authentication required"
-

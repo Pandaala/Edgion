@@ -256,9 +256,22 @@ pub enum ResolvedRefsError {
     /// Edgion extension · The Secret exists but is missing one or more required
     /// `data` keys (e.g. `password` for basic-auth, `tls.key` for TLS certs).
     MissingKeys { keys: Vec<&'static str> },
+    /// A SecretMatch-selected, operator-named data key is absent.
+    SecretMatchKeyMissing {
+        namespace: String,
+        name: String,
+        key: String,
+    },
     /// Edgion extension · A Secret data value could not be decoded (non-UTF-8,
     /// malformed JSON, etc.). `key` identifies the offending field.
     DecodeError { key: &'static str, detail: String },
+    /// A SecretMatch-selected value exists but is not usable as a non-empty UTF-8 token.
+    SecretMatchValueInvalid {
+        namespace: String,
+        name: String,
+        key: String,
+        detail: &'static str,
+    },
     /// Edgion extension · The `Secret.type` is not in the resolver's accepted
     /// whitelist (e.g. pointing an `kubernetes.io/tls` Secret at a basic-auth
     /// credential slot).
@@ -292,8 +305,8 @@ impl ResolvedRefsError {
             Self::SecretNotFound { .. } => condition_reasons::SECRET_NOT_FOUND,
             Self::RefNotPermitted { .. } => condition_reasons::REF_NOT_PERMITTED,
             Self::EdgionConfigDataNotFound { .. } => condition_reasons::INVALID_EDGION_CONFIG_DATA_REF,
-            Self::MissingKeys { .. } => condition_reasons::MISSING_KEYS,
-            Self::DecodeError { .. } => condition_reasons::DECODE_ERROR,
+            Self::MissingKeys { .. } | Self::SecretMatchKeyMissing { .. } => condition_reasons::MISSING_KEYS,
+            Self::DecodeError { .. } | Self::SecretMatchValueInvalid { .. } => condition_reasons::DECODE_ERROR,
             Self::InvalidSecretType { .. } => condition_reasons::INVALID_SECRET_TYPE,
             Self::CertContentInvalid { .. } => condition_reasons::INVALID_CERTIFICATE,
             Self::DelegationChildNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
@@ -338,9 +351,18 @@ impl ResolvedRefsError {
             Self::MissingKeys { keys } => {
                 format!("Secret is missing required data keys: {}", keys.join(", "))
             }
+            Self::SecretMatchKeyMissing { namespace, name, key } => {
+                format!("Secret '{namespace}/{name}' is missing required data key '{key}'")
+            }
             Self::DecodeError { key, detail } => {
                 format!("credential decode failed for key '{}': {}", key, detail)
             }
+            Self::SecretMatchValueInvalid {
+                namespace,
+                name,
+                key,
+                detail,
+            } => format!("Secret '{namespace}/{name}' data key '{key}' is unusable: {detail}"),
             Self::InvalidSecretType { got, allowed } => {
                 format!(
                     "Secret.type {:?} is not accepted for this credential (allowed: {:?})",
@@ -529,8 +551,8 @@ pub(crate) fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'stati
             // Service backend (both surface as BACKEND_NOT_FOUND).
             ResolvedRefsError::DelegationChildNotFound { .. } => 5,
             ResolvedRefsError::SecretNotFound { .. } => 6,
-            ResolvedRefsError::DecodeError { .. } => 7,
-            ResolvedRefsError::MissingKeys { .. } => 8,
+            ResolvedRefsError::DecodeError { .. } | ResolvedRefsError::SecretMatchValueInvalid { .. } => 7,
+            ResolvedRefsError::MissingKeys { .. } | ResolvedRefsError::SecretMatchKeyMissing { .. } => 8,
         }
     }
 

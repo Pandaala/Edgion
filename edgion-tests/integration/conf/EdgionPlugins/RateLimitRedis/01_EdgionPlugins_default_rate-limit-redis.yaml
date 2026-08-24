@@ -16,7 +16,7 @@ spec:
         key:
           - type: header
             name: "X-Rate-Key"
-        onMissingKey: Allow
+        onKeyMiss: Allow
         onRedisFailure: Allow
         rejectStatus: 429
         rejectMessage: "Redis rate limit exceeded"

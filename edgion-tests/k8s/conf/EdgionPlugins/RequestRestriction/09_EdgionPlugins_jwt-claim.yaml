@@ -29,13 +29,11 @@ spec:
       type: RequestRestriction
       config:
         mode: Allow
-        ruleGroups:
-          - rules:
-              - name: "require-admin-role"
-                source: JwtClaim
-                key: "realm_access.roles"
+        anyOf:
+          - allOf:
+              - type: jwtClaimMatch
+                claim: "realm_access.roles"
                 values:
                   - "admin"
-                onMissing: NoMatch
         status: 403
         message: "Missing required role"

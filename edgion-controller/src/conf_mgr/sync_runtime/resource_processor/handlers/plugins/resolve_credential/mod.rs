@@ -21,7 +21,6 @@ mod jwt;
 mod key_auth;
 mod ldap_auth;
 mod openid_connect;
-mod request_access_policy;
 mod wasm;
 
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use ai_guard::resolve as resolve_ai_guard;
@@ -37,8 +36,22 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use jwt::res
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use key_auth::resolve as resolve_key_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use ldap_auth::resolve as resolve_ldap_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use openid_connect::resolve as resolve_openid_connect;
-pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use request_access_policy::resolve as resolve_request_access_policy;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use wasm::resolve as resolve_wasm;
+
+use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
+
+/// Resolve HMAC credentials for a `Condition::HmacAuth` leaf.
+///
+/// Condition-tree HMAC ignores credential metadata (same as the former RAP
+/// walker). Calls into `hmac.rs`; do not duplicate that resolver.
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve_hmac_config(
+    config: &mut edgion_resources::resources::edgion_plugins::plugin_configs::HmacMatchConfig,
+    ep_namespace: Option<&String>,
+    resource_ref: &ResourceRef,
+    ctx: &HandlerContext,
+) {
+    hmac::resolve_config(config, hmac::MetadataPolicy::Ignore, ep_namespace, resource_ref, ctx);
+}
 
 /// Read a UTF-8 value from a Secret's `data` map. Returns the first non-empty
 /// match across the provided keys.

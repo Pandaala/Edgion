@@ -77,28 +77,24 @@ metadata:
 spec:
   requestPlugins:
     - enable: true
-      type: CtxSet
+      type: WebhookKeyGet
       config:
         vars:
           # Override honored: webhook allows it.
           - name: wh8_overridden
-            from:
-              type: webhook
-              webhookRef: "edgion-default/wh8-resolver"
-              pathOverride: "/webhook/override"
-              extract:
-                source: body
-                path: "data.path"
+            webhookRef: "edgion-default/wh8-resolver"
+            pathOverride: "/webhook/override"
+            extract:
+              source: body
+              path: "data.path"
             default: "no-override"
           # Override ignored: webhook forbids it -> default path used.
           - name: wh8_ignored
-            from:
-              type: webhook
-              webhookRef: "edgion-default/wh8-resolver-nooverride"
-              pathOverride: "/webhook/override"
-              extract:
-                source: body
-                path: "data.path"
+            webhookRef: "edgion-default/wh8-resolver-nooverride"
+            pathOverride: "/webhook/override"
+            extract:
+              source: body
+              path: "data.path"
             default: "no-override"
 ---
 apiVersion: gateway.networking.k8s.io/v1

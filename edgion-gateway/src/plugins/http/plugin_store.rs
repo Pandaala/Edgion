@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::LazyLock;
 
+use crate::plugins::runtime::conditions::PluginConditionsExt;
 use crate::plugins::runtime::{InvalidUpdatePolicy, PluginRuntime};
 use edgion_resources::resource::meta::ResourceMeta;
 use edgion_resources::resources::EdgionPlugins;
@@ -72,6 +73,7 @@ pub struct CompiledPlugins {
 pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     let mut spec = ep.clone();
     let mut errors = Vec::new();
+    let mut runtime = PluginRuntime::new();
     let namespace = spec.metadata.namespace.clone().unwrap_or_else(|| "default".to_string());
     // Identity of the resource as the store keys it, so a plugin-entry scope
     // derived from it is unique exactly when the store entry is: re-deriving
@@ -83,7 +85,13 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     // runtime. This avoids per-request Regex::new() in the fallback path of
     // condition evaluators. add_from_* clones the (now-compiled) conditions into
     // the runtime's ConditionalFilters.
-    compile_plugin_conditions(&mut spec, &mut errors);
+    compile_plugin_conditions(&mut spec, &mut errors, &mut runtime);
+    if spec.ip_match_count() > edgion_resources::resources::edgion_plugins::plugin_configs::MAX_REFERENCED_IP_RULES {
+        errors.push(format!(
+            "IP match conditions cannot exceed {}",
+            edgion_resources::resources::edgion_plugins::plugin_configs::MAX_REFERENCED_IP_RULES
+        ));
+    }
 
     // Mirror the controller's cross-entry ordering rule into the data plane,
     // from the same shared helper and with the same message, so
@@ -126,8 +134,6 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
             keep
         });
     }
-
-    let mut runtime = PluginRuntime::new();
 
     if let Some(request_plugins) = &spec.spec.request_plugins {
         errors.extend(runtime.add_from_request_filters(request_plugins, &namespace, &resource_key));
@@ -211,7 +217,7 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
 /// plugin entries. Both compile failures (regex) and validate failures (e.g.
 /// malformed `timeRange` bounds) push into `errors`, which `compile_plugins`
 /// then forwards to `seal_fail_closed`.
-fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>) {
+fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>, runtime: &mut PluginRuntime) {
     macro_rules! compile_entries {
         ($entries:expr, $label:expr) => {
             if let Some(entries) = &mut $entries {
@@ -236,6 +242,12 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>) {
                                 tracing::warn!("{}", msg);
                                 errors.push(msg);
                             }
+                        }
+                        if conds.has_unresolved_refs() {
+                            let msg = format!("{}[{}] conditions contain unresolved references", $label, i);
+                            tracing::warn!("{}", msg);
+                            errors.push(msg);
+                            runtime.record_unresolved_condition(&entry.plugin);
                         }
                     }
                 }
@@ -266,6 +278,10 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>) {
                     if !entry.is_enabled() || entry.policy_action.is_some() {
                         continue;
                     }
+                    let entry_refs_unresolved = entry
+                        .conditions
+                        .as_ref()
+                        .is_some_and(PluginConditionsExt::has_unresolved_refs);
                     if let Some(conds) = entry.body.as_mut().and_then(|b| b.conditions.as_mut()) {
                         if let Err(errs) = conds.compile() {
                             for e in errs {
@@ -277,6 +293,15 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>) {
                                 errors.push(format!("{}[{}] body conditions: {}", $label, i, e));
                             }
                         }
+                        if conds.has_unresolved_refs() {
+                            errors.push(format!(
+                                "{}[{}] body conditions contain unresolved references",
+                                $label, i
+                            ));
+                            if !entry_refs_unresolved {
+                                runtime.record_unresolved_condition(&entry.plugin);
+                            }
+                        }
                     }
                 }
             }
@@ -284,6 +309,46 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>) {
     }
     compile_body_entries!(ep.spec.request_plugins, "requestPlugins");
     compile_body_entries!(ep.spec.upstream_response_plugins, "upstreamResponsePlugins");
+
+    // Dye-rule conditions are entry-level (D-27). Compile/validate them here so
+    // `compile_plugins` and `validate_plugins` share the same error set.
+    macro_rules! compile_dye_entries {
+        ($entries:expr, $label:expr) => {
+            if let Some(entries) = &mut $entries {
+                for (i, entry) in entries.iter_mut().enumerate() {
+                    if !entry.is_enabled() || entry.policy_action.is_some() {
+                        continue;
+                    }
+                    if let Some(dye) = entry.dye.as_mut() {
+                        for rule in dye.request.iter_mut().chain(dye.response.iter_mut()) {
+                            if let Some(conds) = rule.conditions.as_mut() {
+                                if let Err(errs) = conds.compile() {
+                                    for e in errs {
+                                        errors.push(format!("{}[{}] dye conditions regex: {}", $label, i, e));
+                                    }
+                                }
+                                if let Err(errs) = conds.validate() {
+                                    for e in errs {
+                                        errors.push(format!("{}[{}] dye conditions: {}", $label, i, e));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    }
+    compile_dye_entries!(ep.spec.request_plugins, "requestPlugins");
+    compile_dye_entries!(
+        ep.spec.upstream_response_filter_plugins,
+        "upstreamResponseFilterPlugins"
+    );
+    compile_dye_entries!(
+        ep.spec.upstream_response_body_filter_plugins,
+        "upstreamResponseBodyFilterPlugins"
+    );
+    compile_dye_entries!(ep.spec.upstream_response_plugins, "upstreamResponsePlugins");
 }
 
 /// Type alias for the compiled-plugin map (key: namespace/name)
@@ -662,6 +727,37 @@ mod compile_plugins_tests {
         );
     }
 
+    #[test]
+    fn unresolved_entry_condition_seals_resource_fail_closed() {
+        let mut entry = RequestFilterEntry::new(header_modifier());
+        entry.conditions = Some(
+            serde_json::from_value(serde_json::json!({
+                "run": [{
+                    "type": "remoteIpMatch",
+                    "ipRefs": [{ "name": "missing" }],
+                    "negate": true
+                }]
+            }))
+            .unwrap(),
+        );
+        let ep = EdgionPlugins {
+            metadata: Default::default(),
+            spec: EdgionPluginsSpec {
+                request_plugins: Some(vec![entry]),
+                ..Default::default()
+            },
+            status: None,
+        };
+
+        let compiled = compile_plugins(&ep);
+        assert!(!compiled.is_activatable);
+        assert!(compiled
+            .preparse_errors
+            .iter()
+            .any(|error| error.contains("conditions contain unresolved references")));
+        assert_eq!(compiled.plugin_runtime.request_plugins_count(), 2);
+    }
+
     /// C1 regression test: a hard-blocklisted `accessLogExtern` declaration must
     /// be dropped from the *stored* spec by `compile_plugins`, not merely reported.
     /// Without the `retain` in `compile_plugins`, `authorization` would survive
@@ -861,18 +957,19 @@ mod compile_plugins_tests {
         // `body conditions regex` compilation parity (F3).
         fn with_bad_body_regex(mut e: RequestFilterEntry) -> RequestFilterEntry {
             use edgion_resources::resources::edgion_plugins::conditions::{
-                Condition, IncludeCondition, PluginConditions,
+                Condition, KeyMatchCondition, PluginConditions,
             };
             e.body = Some(edgion_resources::resources::edgion_plugins::BodyRequirement {
                 conditions: Some(PluginConditions {
                     skip: None,
-                    run: Some(vec![Condition::Include(IncludeCondition {
+                    run: Some(vec![Condition::KeyMatch(KeyMatchCondition {
                         key: edgion_resources::common::KeyGet::Header { name: "x".to_string() },
-                        values: None,
-                        regex: Some(vec!["[".to_string()]),
-                        values_set: None,
-                        wildcard_patterns: None,
-                        compiled_regex: None,
+                        core: edgion_resources::resources::edgion_plugins::conditions::MatchCore {
+                            regex: Some(vec!["[".to_string()]),
+                            ..Default::default()
+                        },
+                        negate: false,
+                        descriptor: Box::from(""),
                     })]),
                 }),
                 ..Default::default()

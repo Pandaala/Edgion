@@ -537,7 +537,7 @@ whether `target.url` names a hostname or an IP literal:
   behavior for Service targets — most webhooks legitimately point at an internal artifact repository
   or SaaS reachable only over a private network.
 
-A rejected address surfaces as a connect failure for that call (`key_get` returns `None`, same
+A rejected address surfaces as a connect failure for that call (WebhookKeyGet writes no value, same
 as any other webhook failure). Rejections increment the
 `edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` counter, but only
 on the **hostname** path (`EgressResolver`, which records all three reasons). On the **IP-literal**
@@ -650,9 +650,9 @@ If you instead want the **current** (possibly rewritten) view of a header, use a
 |--------|-----------------------------------|-------------|
 | `skipIfMissing` (default) | The field is silently omitted from the outbound request; no log. | Optional enrichment where absence is normal. |
 | `warnIfMissing` | The field is omitted, a PluginLog alert is written, and the request continues. | Fields that *should* be present — you want visibility without failing the call. |
-| `required` | The webhook call is treated as failed: `key_get` returns `None` (no value), same as any other webhook failure. | Fields the backend cannot function without. |
+| `required` | The webhook call is treated as failed: WebhookKeyGet writes no value, same as any other webhook failure. | Fields the backend cannot function without. |
 
-`statusOnError` is declared on this connector's schema (it shares `ExternalHttpConnection` with the ForwardAuth plugin), but the **webhook connector itself does not read it**: on any failure — including a missing `presence: required` field — `key_get` simply returns `None`, and it is the *consuming* plugin's own fallback logic that decides what happens next (e.g. ctx-set leaves the target variable unset and the request continues). Setting this field on a webhook `LinkSys` has no effect; it is meaningful only when the same struct is embedded directly in a ForwardAuth plugin config.
+`statusOnError` is declared on this connector's schema (it shares `ExternalHttpConnection` with the ForwardAuth plugin), but the **webhook connector itself does not read it**: on any failure — including a missing `presence: required` field — WebhookKeyGet writes no value (or its `default`), and the request continues. Setting this field on a webhook `LinkSys` has no effect; it is meaningful only when the same struct is embedded directly in a ForwardAuth plugin config.
 
 #### Custom field sources
 
@@ -978,7 +978,7 @@ spec:
         origin:
           - name: X-Trace-Id                       # default: skipIfMissing
           - name: X-User-Id
-            presence: required                     # missing → key_get returns None
+            presence: required                     # missing → WebhookKeyGet writes no value
           - name: X-Org-Id
             presence: warnIfMissing                # missing → PluginLog alert, continues
 ```
@@ -1026,16 +1026,22 @@ spec:
           - name: X-User-Id
             template: "${ctx:user_id}"
 ---
-# Consuming plugin (ctx-set) on an HTTPRoute filter
-type: ctx-set
-vars:
-  - { name: user_id, template: "${header:X-User-Id}" }
-  - { name: action, value: "get-user" }
-  - name: resolved_user
-    from:
-      type: webhook
-      webhookRef: production/user-resolver
-      pathOverride: "/special/path"   # honored only because allowOverride: true
+# Consuming plugins on an HTTPRoute filter.
+# CtxSet MUST run first: webhook templates read ${ctx:user_id} / ${ctx:action}.
+- type: CtxSet
+  config:
+    vars:
+      - { name: user_id, template: "${header:X-User-Id}" }
+      - { name: action, value: "get-user" }
+- type: WebhookKeyGet
+  config:
+    vars:
+      - name: resolved_user
+        webhookRef: production/user-resolver
+        pathOverride: "/special/path"   # honored only because allowOverride: true
+        extract:
+          source: body
+          path: "data.user"
 ```
 
 #### Example: Resilient webhook with retry and health checks
@@ -1145,7 +1151,7 @@ spec:
               prefix: "Bearer "
 ```
 
-Consumer-side, `pathSuffix` and `forwardHeaders` are removed:
+Consumer-side, `pathSuffix` and `forwardHeaders` are removed. The operator-facing consumer is the `WebhookKeyGet` plugin (not a KeyGet `type: webhook` source):
 
 ```yaml
 # Old
@@ -1157,13 +1163,23 @@ Consumer-side, `pathSuffix` and `forwardHeaders` are removed:
         pathSuffix: "/special/path"
         forwardHeaders: ["X-Tenant-Id", "X-User-Id"]
 
-# New — declare path/headers on the webhook resource; consumer only overrides the path
-- type: key-auth
+# New — declare path/headers on the webhook resource; WebhookKeyGet writes ctx;
+# KeyAuth (or any later plugin) reads { type: ctx, name: … }.
+# WebhookKeyGet MUST run before KeyAuth; a reversed list is a silent auth bypass.
+- type: WebhookKeyGet
   config:
-    keys:
-      - type: webhook
+    vars:
+      - name: resolved_key
         webhookRef: production/user-resolver
         pathOverride: "/special/path"   # honored only if allowOverride: true on the webhook
+        extract:
+          source: body
+          path: "data.key"
+- type: KeyAuth
+  config:
+    keySources:
+      - type: ctx
+        name: resolved_key
 ```
 
 > **External endpoints.** `target.type: uri` and `kind: ExternalName` are not supported. Front the external host with a proxy Service (LoadBalancer, or ClusterIP behind an ingress controller) and reference that Service by name.
@@ -1177,7 +1193,7 @@ Verify the Service fields under `target` (`name`/`namespace`/`port`/`kind`): the
 Only `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, and empty are valid. `ExternalName` and `ServiceImport` are rejected — use a proxy Service instead.
 
 **Required-field error / key resolves to nothing.**
-An `origin` field with `presence: required` was missing from the incoming request, which counts as a webhook failure: `key_get` returns `None` and the consuming plugin's own fallback logic decides what happens (e.g. ctx-set leaves the target variable unset). Confirm the client actually sends the header/arg/cookie (mind case: headers are case-insensitive, args and cookies are case-sensitive), or use `presence: warnIfMissing` to merely log instead of failing.
+An `origin` field with `presence: required` was missing from the incoming request, which counts as a webhook failure: WebhookKeyGet writes no value (or its `default`). Confirm the client actually sends the header/arg/cookie (mind case: headers are case-insensitive, args and cookies are case-sensitive), or use `presence: warnIfMissing` to merely log instead of failing.
 
 **Template variable resolves to empty.**
 `${ctx:NAME}` returns empty when the variable was never set. Ensure a ctx-set step sets it before the webhook is called, and check the `${type:name}` spelling. To enforce presence, prefer `presence: required` on an `origin` field over a template.

@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::KeyGet;
 
+use super::upstream_fallback::{default_upstream_fallback, default_upstream_reject, UpstreamFallback};
+
 /// DirectEndpoint plugin configuration
 ///
 /// Routes the request to a specific endpoint IP extracted from request metadata,
@@ -45,16 +47,16 @@ pub struct DirectEndpointConfig {
     ///
     /// - `fallback` (default): proceed with normal LB selection (no direct routing)
     /// - `reject`: return 400 Bad Request
-    #[serde(default)]
-    pub on_missing: DirectEndpointOnMissing,
+    #[serde(default = "default_upstream_fallback")]
+    pub on_missing: UpstreamFallback,
 
     /// Behavior when the resolved endpoint fails security validation
     /// (not found in any backend_ref's endpoints).
     ///
     /// - `reject` (default): return 403 Forbidden
     /// - `fallback`: ignore and proceed with normal LB
-    #[serde(default)]
-    pub on_invalid: DirectEndpointOnInvalid,
+    #[serde(default = "default_upstream_reject")]
+    pub on_invalid: UpstreamFallback,
 
     /// Whether to inherit TLS configuration from the matched backend_ref's
     /// BackendTLSPolicy when connecting to the direct endpoint.
@@ -82,28 +84,6 @@ pub struct EndpointExtract {
     pub group: usize,
 }
 
-/// Behavior when endpoint value is missing
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum DirectEndpointOnMissing {
-    /// Proceed with normal load balancing (default)
-    #[default]
-    Fallback,
-    /// Return 400 Bad Request
-    Reject,
-}
-
-/// Behavior when endpoint fails validation
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum DirectEndpointOnInvalid {
-    /// Return 403 Forbidden (default)
-    #[default]
-    Reject,
-    /// Proceed with normal load balancing
-    Fallback,
-}
-
 fn default_true() -> bool {
     true
 }
@@ -119,8 +99,8 @@ impl Default for DirectEndpointConfig {
             },
             extract: None,
             port: None,
-            on_missing: DirectEndpointOnMissing::default(),
-            on_invalid: DirectEndpointOnInvalid::default(),
+            on_missing: default_upstream_fallback(),
+            on_invalid: default_upstream_reject(),
             inherit_tls: true,
             compiled_regex: None,
         }

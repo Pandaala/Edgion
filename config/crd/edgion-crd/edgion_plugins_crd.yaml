@@ -73,7 +73,7 @@ spec:
                                 type:
                                   type: string
                                   description: "Condition type"
-                                  enum: [keyExist, keyMatch, timeRange, probability, include, exclude]
+                                  enum: [keyExist, keyMatch, timeRange, probability, directPeerIpMatch, remoteIpMatch, secretMatch, hmacAuth, jwtClaimMatch, mtlsMatch]
                                 key: &keyGetSchema
                                   type: object
                                   description: "Key accessor (KeyGet) - source for reading values"
@@ -81,40 +81,26 @@ spec:
                                     type:
                                       type: string
                                       description: "Key source type"
-                                      enum: [remoteIp, header, cookie, query, path, method, ctx, remoteIpAndPath, webhook]
+                                      enum: [remoteIp, header, cookie, query, path, method, ctx, remoteIpAndPath, requestPath]
                                     name:
                                       type: string
                                       description: "Key name (required for header, cookie, query, ctx)"
-                                    webhookRef:
-                                      type: string
-                                      description: "Reference to LinkSys Webhook resource: 'namespace/name' (required for webhook type)"
-                                    extract:
-                                      type: object
-                                      description: "How to extract key value from webhook response (required for webhook type)"
-                                      properties:
-                                        source:
-                                          type: string
-                                          description: "Extraction source"
-                                          enum: [header, cookie, body, bodyText]
-                                        name:
-                                          type: string
-                                          description: "Header or cookie name (required for header/cookie source)"
-                                        path:
-                                          type: string
-                                          description: "JSON dot-path (required for body source)"
-                                value:
-                                  type: string
-                                  description: "Exact value to match (keyMatch)"
                                 values:
                                   type: array
-                                  description: "Multiple values to match (keyMatch, include, exclude)"
+                                  description: "Exact values to match (keyMatch)"
                                   items:
                                     type: string
                                 regex:
                                   type: array
-                                  description: "Regex patterns to match (keyMatch, include, exclude)"
+                                  description: "Regex patterns to match (keyMatch)"
                                   items:
                                     type: string
+                                caseSensitive:
+                                  type: boolean
+                                  description: "Case sensitivity for exact values (default true; regex uses (?i) if needed)"
+                                negate:
+                                  type: boolean
+                                  description: "Invert the condition result after the missing-value check (default false)"
                                 after:
                                   type: string
                                   description: "Time after which condition is true (RFC3339)"
@@ -126,6 +112,66 @@ spec:
                                   description: "Probability ratio 0.0-1.0"
                                   minimum: 0.0
                                   maximum: 1.0
+                                ips:
+                                  type: array
+                                  description: "Inline IPs or CIDRs (directPeerIpMatch / remoteIpMatch)"
+                                  items:
+                                    type: string
+                                ipRefs:
+                                  type: array
+                                  description: "EdgionConfigData IpList references (directPeerIpMatch / remoteIpMatch)"
+                                  items:
+                                    type: object
+                                    x-kubernetes-preserve-unknown-fields: true
+                                secretRef:
+                                  type: object
+                                  description: "Secret reference (secretMatch)"
+                                  x-kubernetes-preserve-unknown-fields: true
+                                secretKey:
+                                  type: string
+                                  description: "Exact Secret data key to compare (secretMatch)"
+                                secretGroups:
+                                  type: array
+                                  description: "HMAC credential Secret groups (hmacAuth)"
+                                  items:
+                                    type: object
+                                    x-kubernetes-preserve-unknown-fields: true
+                                algorithms:
+                                  type: array
+                                  description: "Allowed HMAC algorithms (hmacAuth)"
+                                  items:
+                                    type: string
+                                clockSkew:
+                                  type: integer
+                                  description: "Maximum HMAC clock skew in seconds (hmacAuth)"
+                                enforceHeaders:
+                                  type: array
+                                  description: "Headers that must appear in the signed header list (hmacAuth)"
+                                  items:
+                                    type: string
+                                validateRequestBody:
+                                  type: boolean
+                                  description: "Verify the request body digest (hmacAuth). Valid only inside RequestAccessPolicy allOf (or RequestRestriction)."
+                                minSecretLength:
+                                  type: integer
+                                  description: "Minimum HMAC secret length in bytes (hmacAuth)"
+                                secretField:
+                                  type: string
+                                  description: "Credential field name for the HMAC secret (hmacAuth)"
+                                usernameField:
+                                  type: string
+                                  description: "Credential field name for the HMAC username (hmacAuth)"
+                                claim:
+                                  type: string
+                                  description: "Dot-nested JWT claim path (jwtClaimMatch)"
+                                field:
+                                  type: string
+                                  description: "mTLS certificate field (mtlsMatch): subject, cn, or san"
+                                  enum: [subject, cn, san]
+                                sanType:
+                                  type: string
+                                  description: "SAN type filter for mtlsMatch field san (DNS, URI, Email)"
+                                  enum: [DNS, URI, Email]
                           run:
                             type: array
                             description: "Conditions that must be satisfied to run (AND logic)"
@@ -180,6 +226,7 @@ spec:
                           - Cors
                           - Csrf
                           - CtxSet
+                          - WebhookKeyGet
                           - ForwardAuth
                           - IpRestriction
                           - JwtAuth
@@ -232,14 +279,14 @@ spec:
                           # --- KeyAuth config fields ---
                           keySources:
                             type: array
-                            description: "Key source list (header, query, cookie, ctx, webhook)"
+                            description: "Key source list (header, query, cookie, ctx)"
                             items:
                               type: object
                               x-kubernetes-preserve-unknown-fields: true
                               properties:
                                 type:
                                   type: string
-                                  enum: [header, query, cookie, ctx, webhook]
+                                  enum: [header, query, cookie, ctx]
                                 name:
                                   type: string
                               required: [type]

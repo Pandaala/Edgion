@@ -49,7 +49,7 @@ spec:
 | `key` | Array\<Object\> | `[{type: remoteIp}]` | Rate limiting key configuration (a single key is used verbatim; multiple keys are combined, see below) |
 | `scope` | Enum | `Instance` | Rate limiting scope. Values: `Instance` | `Cluster` |
 | `skewTolerance` | Float | `1.2` | Traffic skew tolerance (Cluster mode only, range 1.0~2.0) |
-| `onMissingKey` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` | `Deny` |
+| `onKeyMiss` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` | `Deny` |
 | `defaultKey` | String | none | Default key when extraction fails |
 | `rejectStatus` | Integer | `429` | HTTP status code on rejection (100~599) |
 | `rejectMessage` | String | `"Rate limit exceeded"` | Response message on rejection |
@@ -88,7 +88,7 @@ The rate limiting key determines which dimension to rate limit on. Supported key
 | `path` | Rate limit by request path | No |
 | `remoteIpAndPath` | Rate limit by resolved IP + Path combination | No |
 
-**Empty key list**: omitting `key` applies the default `[{type: remoteIp}]`. An explicitly empty `key: []` means "one global bucket" — every request composes to the same empty key and is still rate limited. It is **not** treated as a key extraction failure, so `onMissingKey` / `defaultKey` do not apply to it.
+**Empty key list**: omitting `key` applies the default `[{type: remoteIp}]`. An explicitly empty `key: []` means "one global bucket" — every request composes to the same empty key and is still rate limited. It is **not** treated as a key extraction failure, so `onKeyMiss` / `defaultKey` do not apply to it.
 
 **Multi-key composition**: A single configured key is used as the rate limiting key verbatim. When multiple keys are configured, each value is length-prefixed as `<byte-length>:<value>` and the parts are joined with `_`, one slot per configured key in configuration order (`-` for a key that could not be extracted). The length prefix is what makes the composite key unambiguous: without it, values that themselves contain `_` (or a key that resolves for one request but not the next) could make two different clients share the same rate limiting bucket.
 
@@ -273,7 +273,7 @@ spec:
         key:
           - type: header
             name: "X-API-Key"
-        onMissingKey: Deny
+        onKeyMiss: Deny
         rejectMessage: "API key required and rate limit exceeded"
 ```
 

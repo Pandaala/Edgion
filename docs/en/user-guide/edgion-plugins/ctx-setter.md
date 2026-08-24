@@ -56,7 +56,7 @@ CtxSet supports extracting data from multiple sources (Header, Query, Cookie, Pa
 | `method` | — | The HTTP method |
 | `ctx` | `name` | An existing context variable set by an earlier rule or plugin |
 
-For a fixed literal, use the top-level `value` field instead of `from`. For a composite string built from multiple sources, use `template`.
+For a fixed literal, use the top-level `value` field instead of `from`. For a composite string built from multiple sources, use `template`. To resolve a value from a LinkSys webhook, use [WebhookKeyGet](../http-route/filters/edgion-plugins/webhook-key-get.md) — not a CtxSet `from` source.
 
 ### `template` variables
 
@@ -315,5 +315,6 @@ spec:
 ## Related Documentation
 
 - [CtxSet (HTTPRoute filter view)](../http-route/filters/edgion-plugins/ctx-setter.md) - Using CtxSet within an HTTPRoute filter
+- [Webhook KeyGet](../http-route/filters/edgion-plugins/webhook-key-get.md) - Resolve a LinkSys webhook value into context
 - [RateLimit Plugin](rate-limit.md) - Can use CtxSet to construct rate limiting keys
 - [HTTPRoute Overview](../http-route/overview.md) - HTTPRoute configuration overview

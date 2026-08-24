@@ -13,7 +13,8 @@ use super::plugin_configs::{
     HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig,
     LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig,
     RealIpConfig, RegionRouteConfig, RequestAccessPolicyConfig, RequestBodyBufferConfig, RequestMirrorPluginConfig,
-    RequestRestrictionConfig, ResponseRewriteConfig, TraceContextConfig, WasmConfig, DEFAULT_INSTANCE_MAX_BYTES,
+    RequestRestrictionConfig, ResponseRewriteConfig, TraceContextConfig, WasmConfig, WebhookKeyGetConfig,
+    DEFAULT_INSTANCE_MAX_BYTES,
 };
 use crate::resources::http_route::{HTTPHeaderFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter};
 
@@ -93,6 +94,8 @@ pub enum EdgionPlugin {
     RateLimitRedis(RateLimitRedisConfig),
     /// CtxSet filter (set context variables from various sources with extraction, transformation, and mapping)
     CtxSet(CtxSetConfig),
+    /// WebhookKeyGet filter (resolve webhook vars into request context once per request)
+    WebhookKeyGet(WebhookKeyGetConfig),
     /// RealIp filter (extract real client IP from headers with trusted proxy support)
     RealIp(RealIpConfig),
     /// ForwardAuth filter (forward request to external auth service for authentication)
@@ -165,6 +168,9 @@ impl EdgionPlugin {
                 Some(BodyRequirement::fail_close())
             }
             RequestAccessPolicy(cfg) if cfg.validates_request_body() && stage == BodyStage::Request => {
+                Some(BodyRequirement::fail_close())
+            }
+            RequestRestriction(cfg) if cfg.validates_request_body() && stage == BodyStage::Request => {
                 Some(BodyRequirement::fail_close())
             }
             ForwardAuth(cfg) if cfg.forward_body && stage == BodyStage::Request => Some(BodyRequirement::fail_close()),
@@ -248,6 +254,7 @@ impl EdgionPlugin {
             | RateLimit(_)
             | RateLimitRedis(_)
             | CtxSet(_)
+            | WebhookKeyGet(_)
             | RealIp(_)
             | FaultInjection(_)
             | ForwardAuth(_)
@@ -314,6 +321,7 @@ impl EdgionPlugin {
             EdgionPlugin::RateLimit(_) => "RateLimit",
             EdgionPlugin::RateLimitRedis(_) => "RateLimitRedis",
             EdgionPlugin::CtxSet(_) => "CtxSet",
+            EdgionPlugin::WebhookKeyGet(_) => "WebhookKeyGet",
             EdgionPlugin::RealIp(_) => "RealIp",
             EdgionPlugin::FaultInjection(_) => "FaultInjection",
             EdgionPlugin::ForwardAuth(_) => "ForwardAuth",
@@ -390,6 +398,7 @@ impl EdgionPlugin {
             | EdgionPlugin::ResponseRewrite(_)
             | EdgionPlugin::RateLimit(_)
             | EdgionPlugin::CtxSet(_)
+            | EdgionPlugin::WebhookKeyGet(_)
             | EdgionPlugin::RealIp(_)
             | EdgionPlugin::BandwidthLimit(_)
             | EdgionPlugin::AllEndpointStatus(_)
@@ -447,6 +456,7 @@ impl EdgionPlugin {
             | EdgionPlugin::ResponseRewrite(_)
             | EdgionPlugin::RateLimit(_)
             | EdgionPlugin::CtxSet(_)
+            | EdgionPlugin::WebhookKeyGet(_)
             | EdgionPlugin::RealIp(_)
             | EdgionPlugin::BandwidthLimit(_)
             | EdgionPlugin::AllEndpointStatus(_)
@@ -532,6 +542,7 @@ impl EdgionPlugin {
             | EdgionPlugin::RateLimit(_)
             | EdgionPlugin::RateLimitRedis(_)
             | EdgionPlugin::CtxSet(_)
+            | EdgionPlugin::WebhookKeyGet(_)
             | EdgionPlugin::RealIp(_)
             | EdgionPlugin::ForwardAuth(_)
             | EdgionPlugin::OpenidConnect(_)
@@ -557,6 +568,7 @@ impl EdgionPlugin {
         use crate::resources::edgion_plugins::PluginValidation;
         match self {
             EdgionPlugin::CtxSet(c) => c.validation_error(),
+            EdgionPlugin::WebhookKeyGet(c) => c.validation_error(),
             EdgionPlugin::AiProxy(c) => c.validation_error(),
             EdgionPlugin::A2aGateway(c) => c.validation_error(),
             EdgionPlugin::DirectEndpoint(c) => c.validation_error(),
@@ -780,7 +792,7 @@ mod request_access_policy_variant_tests {
 #[cfg(test)]
 mod canary_variant_tests {
     use super::*;
-    use crate::resources::edgion_plugins::plugin_configs::{CanaryConfig, DynUpstreamTarget};
+    use crate::resources::edgion_plugins::plugin_configs::{CanaryConfig, DynUpstreamTarget, UpstreamFallback};
     use std::collections::HashMap;
 
     fn target(name: &str) -> DynUpstreamTarget {
@@ -813,7 +825,7 @@ mod canary_variant_tests {
             active_profile: "ghost".to_string(),
             profiles: HashMap::from([("stable".to_string(), target("app-v1"))]),
             active_profile_ref: None,
-            on_invalid: Default::default(),
+            on_invalid: UpstreamFallback::Reject,
         };
         let p = EdgionPlugin::Canary(cfg);
         assert!(p.validation_error().unwrap().contains("activeProfile"));
@@ -827,7 +839,7 @@ mod dye_capability_tests {
 
     #[test]
     fn selection_plugins_declare_success() {
-        use crate::resources::plugin_configs::{CanaryConfig, DynUpstreamTarget};
+        use crate::resources::plugin_configs::{CanaryConfig, DynUpstreamTarget, UpstreamFallback};
         use std::collections::HashMap;
 
         // CanaryConfig has no `Default` impl; construct directly (mirrors the
@@ -843,7 +855,7 @@ mod dye_capability_tests {
                 },
             )]),
             active_profile_ref: None,
-            on_invalid: Default::default(),
+            on_invalid: UpstreamFallback::Reject,
         };
         let p = EdgionPlugin::Canary(cfg);
         assert!(p.dye_capabilities().contains(&DyeOutcome::Success));

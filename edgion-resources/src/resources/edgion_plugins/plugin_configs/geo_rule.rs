@@ -22,9 +22,11 @@
 //!    NOTHING, consistent with the `cidr` arm, which already yields `false`
 //!    when no matcher was compiled.
 //! 2. **A dimension the record cannot supply makes the rule NOT match.**
-//!    Absence is ordinary missingness, not an error — the same rule the
-//!    HTTP-side `RestrictionRule` applies via `onMissing`, simplified here to
-//!    a fixed "absent => false" because `GeoRule` has no `onMissing` knob.
+//!    Absence is ordinary missingness, not an error. This follows the shared
+//!    HTTP [`Condition`](crate::resources::edgion_plugins::conditions::Condition)
+//!    model: a missing value gives `KeyMatch` or `keyExist` a base result of
+//!    `false`, and `negate` is applied only afterward. `GeoRule` has no
+//!    `negate` field, so its missing-dimension result remains `false`.
 //!
 //! Every struct here is `deny_unknown_fields`: this is a security control, and
 //! a silently-swallowed typo (`denyRuleGroup` for `denyRuleGroups`,

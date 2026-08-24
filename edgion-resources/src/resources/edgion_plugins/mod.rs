@@ -14,6 +14,8 @@ pub mod custom_plugins;
 pub mod dye;
 pub mod edgion_plugin;
 pub mod entry;
+pub mod hmac_match;
+pub mod mtls_field;
 
 pub mod access_decision;
 pub mod plugin_configs;
@@ -45,27 +47,25 @@ pub use plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, BasicAuthSecretGroup, CaseType, CertHeaderFormat,
     CertSourceMode, CompiledJsonBodyRewrite, CompiledJsonPatchOperation, CompiledJsonPatchValue, CompiledTemplate,
     ConsumerBy, CorsConfig, CsrfConfig, CtxSetConfig, CtxVarRule, DebugAccessLogToHeaderConfig, DefaultAction,
-    DirectEndpointConfig, DirectEndpointOnInvalid, DirectEndpointOnMissing, DomainTarget, DslConfig,
-    DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch, DynamicExternalUpstreamConfig,
-    DynamicInternalUpstreamConfig, EndpointAuthMethod, EndpointExtract, ExtProcConfig, ExtUpstreamExtract,
-    ExtUpstreamOnMissing, ExtUpstreamOnNoMatch, ExtractConfig, FaultHeaderEntry, FaultInjectionConfig,
-    FormJsonDirection, FormJsonTransformConfig, ForwardAuthConfig, ForwardAuthDecision, GuardrailConfig, HashAlgorithm,
-    HashCalcConfig, HeaderActions, HeaderCertAuthConfig, HeaderEntry, HeaderRename, HmacAlgorithm, HmacAuthConfig,
-    HmacAuthSecretGroup, HmacCredential, HmacMatchConfig, HttpMethod, InstanceValidationError, IpRestrictionConfig,
-    IpSource, JsonBodyRewrite, JsonLiteralValue, JsonPatchOperation, JsonSchemaValidationConfig, JsonValueProfile,
-    JweContentEncryption, JweDecryptConfig, JweKeyManagement, JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup,
-    KeyAuthConfig, KeyMetadata, LdapAuthConfig, LimitHeaderNames, LogExtSource, LruCacheConfig, MappingConfig,
-    MockConfig, OnMissing, OnMissingKey, OnRedisFailure, OnUnknownModel, OpenidConnectConfig, ProxyRewriteConfig,
-    RateLimitAlgorithm, RateLimitConfig, RateLimitPolicy, RateLimitRedisConfig, RealIpConfig, RegexUri, RegionDef,
-    RegionRouteConfig, ReplaceConfig, RequestBodyBufferConfig, RequestRestrictionConfig, ResolvedBasicAuthUser,
-    ResolvedJweCredential, ResolvedJwtCredential, ResolvedJwtIssuerGroup, ResponseHeaderActions, ResponseHeaderEntry,
-    ResponseRewriteConfig, RestrictionMode, RestrictionRule, RestrictionSource, RouteRule, RuleGroup, SanType,
-    SchemaComplexityProfile, StrictJsonError, TemplateSegment, TemplateVarType, TinyUfoTtlCacheConfig, TransformConfig,
-    TransformType, UnauthAction, UpstreamHeaderConfig, VerificationMode, A2A_AGENT_CARD_MAX_BYTES,
-    ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES, MAX_JSON_INSTANCE_DEPTH, MAX_JSON_INSTANCE_NODES,
-    MAX_JSON_PATCH_OPERATIONS, MAX_JSON_PATCH_PLAN_BYTES, MAX_JSON_POINTER_BYTES, MAX_JSON_POINTER_TOKENS,
-    MAX_LRU_CACHE_CAPACITY, MAX_LRU_CACHE_SHARDS, MAX_TINY_UFO_CACHE_ENTRIES, MAX_TINY_UFO_LOGICAL_BYTES,
-    TINY_UFO_WEIGHT_UNIT_BYTES,
+    DirectEndpointConfig, DomainTarget, DslConfig, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig,
+    EndpointAuthMethod, EndpointExtract, ExtProcConfig, ExtUpstreamExtract, ExtractConfig, FaultHeaderEntry,
+    FaultInjectionConfig, FormJsonDirection, FormJsonTransformConfig, ForwardAuthConfig, ForwardAuthDecision,
+    GuardrailConfig, HashAlgorithm, HashCalcConfig, HeaderActions, HeaderCertAuthConfig, HeaderEntry, HeaderRename,
+    HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup, HmacCredential, HmacMatchConfig, HttpMethod,
+    InstanceValidationError, IpRestrictionConfig, IpSource, JsonBodyRewrite, JsonLiteralValue, JsonPatchOperation,
+    JsonSchemaValidationConfig, JsonValueProfile, JweContentEncryption, JweDecryptConfig, JweKeyManagement,
+    JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup, KeyAuthConfig, KeyMetadata, LdapAuthConfig, LimitHeaderNames,
+    LogExtSource, LruCacheConfig, MappingConfig, MockConfig, OnKeyMiss, OnRedisFailure, OnUnknownModel,
+    OpenidConnectConfig, ProxyRewriteConfig, RateLimitAlgorithm, RateLimitConfig, RateLimitPolicy,
+    RateLimitRedisConfig, RealIpConfig, RegexUri, RegionDef, RegionRouteConfig, ReplaceConfig, RequestBodyBufferConfig,
+    RequestRestrictionConfig, ResolvedBasicAuthUser, ResolvedJweCredential, ResolvedJwtCredential,
+    ResolvedJwtIssuerGroup, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionMode,
+    RouteRule, RuleGroup, SanType, SchemaComplexityProfile, StrictJsonError, TemplateSegment, TemplateVarType,
+    TinyUfoTtlCacheConfig, TransformConfig, TransformType, UnauthAction, UpstreamFallback, UpstreamHeaderConfig,
+    VerificationMode, WebhookKeyGetConfig, WebhookVar, A2A_AGENT_CARD_MAX_BYTES, ABSOLUTE_INSTANCE_MAX_BYTES,
+    DEFAULT_INSTANCE_MAX_BYTES, MAX_JSON_INSTANCE_DEPTH, MAX_JSON_INSTANCE_NODES, MAX_JSON_PATCH_OPERATIONS,
+    MAX_JSON_PATCH_PLAN_BYTES, MAX_JSON_POINTER_BYTES, MAX_JSON_POINTER_TOKENS, MAX_LRU_CACHE_CAPACITY,
+    MAX_LRU_CACHE_SHARDS, MAX_TINY_UFO_CACHE_ENTRIES, MAX_TINY_UFO_LOGICAL_BYTES, TINY_UFO_WEIGHT_UNIT_BYTES,
 };
 pub use plugin_validation::PluginValidation;
 pub use validate::{applicable_stages_by_name, StageSet, HTTP_PLUGIN_STAGE_EXCEPTIONS};

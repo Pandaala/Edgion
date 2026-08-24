@@ -442,7 +442,7 @@ High-frequency APIs:
 - `set_upstream_uri()` / `set_upstream_host()` / `set_upstream_method()`
 - `write_response_header()` / `write_response_body()` / `shutdown()`
 - `set_ctx_var()` / `get_ctx_var()`
-- `key_get()` / `key_get_local()` / `key_set()`
+- `key_get()` / `key_set()`
 
 If the plugin will call external HTTP services, prefer reusing:
 
@@ -566,7 +566,7 @@ Cover these four layers in priority order:
 
 ### If the plugin supports hot reload (`partial_update` / `full_set`)
 
-Verifying initial state is not enough — add a dynamic scenario that exercises the "YAML update → runtime behavior change" path. Templates: remove a credential (BasicAuth) or switch an enum field (RateLimit `onMissingKey`).
+Verifying initial state is not enough — add a dynamic scenario that exercises the "YAML update → runtime behavior change" path. Templates: remove a credential (BasicAuth) or switch an enum field (RateLimit `onKeyMiss`).
 
 - Look at existing scenarios to get started: `edgion-tests/src/client/dynamic/scenarios/basic_auth_dynamic.rs` / `rate_limit_dynamic.rs`.
 - conf directory convention: `edgion-tests/integration/conf/EdgionPlugins/<Plugin>/DynamicTest/{initial,updates}/` (`load_conf.sh` automatically skips `updates/` and `delete/`).

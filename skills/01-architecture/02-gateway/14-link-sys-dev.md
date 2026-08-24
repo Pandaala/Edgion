@@ -101,7 +101,7 @@ Module layout:
 - `providers/webhook/runtime.rs`: compiled request, resolved target, client, and health state.
 - `providers/webhook/health.rs`: active + passive health checks.
 - `providers/webhook/call.rs`: bounded provider call implementation.
-- `providers/webhook/resolver.rs`: `KeyGet::Webhook` consumer adapter.
+- `providers/webhook/resolver.rs`: `resolve_webhook_key` consumer adapter used by `WebhookKeyGet`.
 - `providers/webhook/client.rs`: HTTP client construction and TLS material.
 
 Key points:

@@ -5,11 +5,13 @@ description: Webhook LinkSys provider after the target-unification + request-tem
 
 # Webhook provider — target unification + request templating
 
-> The webhook LinkSys provider lets gateway plugins (ctx-set, key-auth, DSL, ...)
-> call an external HTTP service to resolve a value (a key, an identity, an
-> enrichment field). This document describes the provider **after the
+> The webhook LinkSys provider lets the `WebhookKeyGet` plugin (and other
+> gateway callers) call an external HTTP service to resolve a value (a key, an
+> identity, an enrichment field). This document describes the provider **after the
 > target-unification + request-templating redesign**. For the field-by-field
 > CRD schema see [02-features/03-resources/18-link-sys.md § `type: webhook`](../../02-features/03-resources/18-link-sys.md).
+> Operator-facing consumption is the `WebhookKeyGet` plugin; downstream plugins
+> read the written ctx var.
 
 ## What changed (redesign summary)
 
@@ -78,18 +80,20 @@ description: Webhook LinkSys provider after the target-unification + request-tem
 
 ## Consumer API change
 
-The consumer-facing entry is `resolve_webhook_key()` (`providers/webhook/resolver.rs`), dispatched from `session_adapter` on a `KeyGet::Webhook` key.
+The consumer-facing entry is `resolve_webhook_key()` (`providers/webhook/resolver.rs`), called by the `WebhookKeyGet` plugin.
 
 **Old:** consumer passed `forward_headers` + `path_suffix` (appended to the webhook's base URI), plus method/headers/body.
 
 **New:** consumer passes only `session` (a `SessionSnapshot` for origin lookups and `${...}` template evaluation) and an optional `path_override`.
 
 ```rust
-// edgion-resources/src/common/key_accessor.rs — KeyGet::Webhook variant
-KeyGet::Webhook {
+// edgion-resources/.../plugin_configs/webhook_key_get.rs — WebhookVar
+WebhookVar {
+    name: String,
     webhook_ref: String,
     path_override: Option<String>,   // replaces forward_headers + path_suffix
     extract: WebhookExtract,         // response-side extractor — unchanged
+    default: Option<String>,
 }
 
 // edgion-gateway/.../webhook/resolver.rs — consumer entry
@@ -105,7 +109,7 @@ pub async fn resolve_webhook_key(
 - `forward_headers` / `path_suffix` are **removed** from consumer config. Headers to forward must be declared on the webhook resource's `request.headers.origin` allow-list; per-call paths use `path_override`.
 - `path_override` is **only honored** when the webhook resource declares `request.path.allowOverride: true`. Otherwise it is silently ignored (not an error).
 - `extract` (response-side header/cookie/body extractor) is **kept** — it parses the response, unrelated to outbound construction.
-- Consumers that need dynamic per-call values set them into the gateway context first (via ctx-set `vars`), then reference them from the webhook templates with `${ctx:NAME}`. No new "invoker arg" concept was added.
+- Consumers that need dynamic per-call values set them into the gateway context first (via a preceding CtxSet entry), then WebhookKeyGet runs and the webhook templates read `${ctx:NAME}`. CtxSet local vars and WebhookKeyGet vars must not share one plugin entry. No new "invoker arg" concept was added.
 
 ## Template engine reference
 
@@ -133,9 +137,9 @@ Webhook templates reuse the ctx-set engine (`CompiledTemplate` in `edgion-resour
 |-------|--------------------------------------------------------------------|
 | `skipIfMissing` (**default**) | field omitted from the outbound request, no log |
 | `warnIfMissing` | field omitted, a PluginLog alert is written, request continues |
-| `required` | the webhook call is treated as **failed**, and the consuming plugin's fallback logic decides what happens (e.g., ctx-set leaves the target variable unset) |
+| `required` | the webhook call is treated as **failed**, and WebhookKeyGet writes `default` or leaves the target variable unset |
 
-Note: webhook connector has no fail-open mode. When a webhook call fails for any reason, `key_get` returns `None`, and it is the consuming plugin's own fallback behavior that takes over — there is no `statusOnError` or automatic bypass.
+Note: webhook connector has no fail-open mode. When a webhook call fails for any reason, `resolve_webhook_key` returns `None`, and WebhookKeyGet writes `default` or leaves the var unset — there is no `statusOnError` or automatic bypass.
 
 ## Health state semantics
 
@@ -175,7 +179,8 @@ edgion-resources/src/resources/link_sys/webhook.rs   # WebhookServiceConfig, Web
                                                       #   ListFields, OriginField, PresencePolicy,
                                                       #   CustomField, CustomSource, ResolvedSecrets,
                                                       #   validate_config / validate_request_fields
-edgion-resources/src/common/key_accessor.rs          # KeyGet::Webhook { webhook_ref, path_override, extract }
+edgion-resources/src/resources/edgion_plugins/
+    plugin_configs/webhook_key_get.rs                # WebhookKeyGetConfig / WebhookVar / WebhookExtract
 edgion-gateway/src/link_sys/providers/webhook/
 ├── manager.rs          # WebhookManager.upsert() — builds runtime, resolves secrets, resets health
 ├── compiled_request.rs # CompiledOutboundRequest::{from_spec, build_request}
@@ -196,7 +201,8 @@ Integration suite: `edgion-tests/src/client/suites/edgion_plugins/webhook_key_ge
 - **Custom fields** — `value` (literal), `template` (`${ctx:...}` / `${header:...}`), `secret` (resolved + `prefix`).
 - **Presence policies** — `skipIfMissing` (silent), `warnIfMissing` (alert + continue), `required` (webhook failure; consuming plugin handles fallback).
 - **Path override** — honored only with `path.allowOverride: true`; ignored otherwise.
-- **ctx-set integration** — consumer sets `ctx` vars, webhook template reads `${ctx:...}`.
+- **ctx-set integration** — CtxSet writes local vars first; WebhookKeyGet runs after; webhook templates read `${ctx:...}`.
+- **WebhookKeyGet then KeyAuth** — WebhookKeyGet writes a ctx key; KeyAuth reads `{ type: ctx, name: … }`. Reverse order is a silent auth bypass.
 - **Template substitution** — literal, single-var, multi-var, frozen-path/method reuse when `path`/`method` omitted.
 - **Health semantics** — `request.*` edit resets health; EndpointSlice churn preserves it.
 

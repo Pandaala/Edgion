@@ -15,7 +15,7 @@ description: LinkSys external system integration — CRD connector variants, run
 | Elasticsearch | `providers/elasticsearch/` | `EsLinkClient` | HTTP bulk API | Bulk indexing, data send |
 | Etcd | `providers/etcd/` | `EtcdLinkClient` | gRPC (v3 API) | KV read/write |
 | Redis | `providers/redis/` | `RedisLinkClient` | standalone / sentinel / cluster (fred) | Data read/write, distributed rate limiting support |
-| Webhook | `providers/webhook/` | WebhookManager | HTTP | External service calls, KeyGet::Webhook resolution |
+| Webhook | `providers/webhook/` | WebhookManager | HTTP | External service calls, WebhookKeyGet resolution |
 | Kafka | `providers/kafka/` | `KafkaLinkClient` | Kafka producer | Persistent runtime client and log delivery |
 | HttpDns | resource + DNS resolver service | resolver configuration | HTTP DNS | DNS-resolution configuration; not a LinkSys runtime-client store |
 
@@ -69,7 +69,7 @@ providers/webhook/
 ├── manager.rs           # WebhookManager.upsert() — builds runtime, compiles request, resolves secrets, resets health
 ├── compiled_request.rs  # CompiledOutboundRequest::{from_spec, build_request} (request templating)
 ├── runtime.rs           # WebhookRuntime (compiled_request + health atomics + resolved_target)
-├── resolver.rs          # KeyGet::Webhook resolver — consumer entry, response extract
+├── resolver.rs          # resolve_webhook_key — WebhookKeyGet consumer entry, response extract
 ├── call.rs              # webhook_call(runtime, session, path_override, max_bytes)
 ├── client.rs            # reqwest client construction (TLS material)
 ├── health.rs            # active / passive health check
@@ -175,7 +175,7 @@ impl ConfHandler<LinkSys> for Arc<LinkSysStore> {
 
 - **AccessLog output** — AccessLogger registers a LocalFileWriter or an ES DataSender.
 - **Distributed rate limiting** — the `rate_limit_redis` plugin obtains a Redis client via `get_redis_client()`.
-- **External authentication** — the Webhook provider supports KeyGet::Webhook resolution (used by plugins such as key_auth).
+- **External authentication** — the Webhook provider supports WebhookKeyGet resolution (KeyAuth and others then read the written ctx var).
 - **Custom integrations** — declare a connection via the LinkSys CRD; business logic obtains the client and uses it.
 
 ## Directory layout

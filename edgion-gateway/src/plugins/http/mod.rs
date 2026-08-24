@@ -45,6 +45,7 @@ pub mod request_restriction;
 pub mod response_rewrite;
 pub mod trace_context;
 pub mod wasm;
+pub mod webhook_key_get;
 
 pub use a2a_gateway::A2aGateway;
 pub use ai_guard::AiGuard;
@@ -84,6 +85,7 @@ pub use request_mirror::RequestMirrorPlugin;
 pub use request_restriction::RequestRestriction;
 pub use response_rewrite::ResponseRewrite;
 pub use wasm::WasmPlugin;
+pub use webhook_key_get::WebhookKeyGet;
 
 // Re-export plugin configs from types
 pub use edgion_resources::resources::edgion_plugins::{

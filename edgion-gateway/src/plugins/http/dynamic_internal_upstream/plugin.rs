@@ -3,9 +3,7 @@ use async_trait::async_trait;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::{InternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::{
-    DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch, DynamicInternalUpstreamConfig,
-};
+use edgion_resources::resources::edgion_plugins::{DynamicInternalUpstreamConfig, UpstreamFallback};
 use edgion_resources::HTTPBackendRefKind;
 
 pub struct DynamicInternalUpstream {
@@ -38,16 +36,16 @@ impl RequestFilter for DynamicInternalUpstream {
         }
 
         // 1. Extract raw routing key via KeyGet
-        let raw_value = match session.key_get(&self.config.from).await {
+        let raw_value = match session.key_get(&self.config.from) {
             Some(v) if !v.is_empty() => v,
             _ => {
                 return match self.config.on_missing {
-                    DynUpstreamOnMissing::Fallback => {
+                    UpstreamFallback::Fallback => {
                         session.record_outcome(DyeOutcome::Fallback, "on-missing");
                         log.push("upstream miss");
                         PluginRunningResult::GoodNext
                     }
-                    DynUpstreamOnMissing::Reject => {
+                    UpstreamFallback::Reject => {
                         session.record_outcome(DyeOutcome::Reject, "on-missing");
                         log.push_err("no routing key");
                         PluginRunningResult::ErrResponse {
@@ -66,12 +64,12 @@ impl RequestFilter for DynamicInternalUpstream {
                     Some(m) => m.as_str().to_string(),
                     None => {
                         return match self.config.on_missing {
-                            DynUpstreamOnMissing::Fallback => {
+                            UpstreamFallback::Fallback => {
                                 session.record_outcome(DyeOutcome::Fallback, "on-missing");
                                 log.push("upstream miss");
                                 PluginRunningResult::GoodNext
                             }
-                            DynUpstreamOnMissing::Reject => {
+                            UpstreamFallback::Reject => {
                                 session.record_outcome(DyeOutcome::Reject, "on-missing");
                                 log.push_err("regex extract fail");
                                 PluginRunningResult::ErrResponse {
@@ -95,12 +93,12 @@ impl RequestFilter for DynamicInternalUpstream {
             None => {
                 // Rules mode: no rule matched
                 return match self.config.on_no_match {
-                    DynUpstreamOnNoMatch::Fallback => {
+                    UpstreamFallback::Fallback => {
                         session.record_outcome(DyeOutcome::Fallback, "on-no-match");
                         log.push("upstream miss");
                         PluginRunningResult::GoodNext
                     }
-                    DynUpstreamOnNoMatch::Reject => {
+                    UpstreamFallback::Reject => {
                         session.record_outcome(DyeOutcome::Reject, "on-no-match");
                         log.push_err("no matching rule");
                         PluginRunningResult::ErrResponse {
@@ -149,14 +147,14 @@ impl RequestFilter for DynamicInternalUpstream {
         if !found {
             log.push_err("backend ref not found");
             return match self.config.on_invalid {
-                DynUpstreamOnInvalid::Reject => {
+                UpstreamFallback::Reject => {
                     session.record_outcome(DyeOutcome::Reject, "on-invalid");
                     PluginRunningResult::ErrResponse {
                         status: 403,
                         body: Some("Target backend not allowed".to_string()),
                     }
                 }
-                DynUpstreamOnInvalid::Fallback => {
+                UpstreamFallback::Fallback => {
                     session.record_outcome(DyeOutcome::Fallback, "on-invalid");
                     PluginRunningResult::GoodNext
                 }
@@ -287,9 +285,9 @@ mod tests {
             },
             extract: None,
             rules: None,
-            on_missing: DynUpstreamOnMissing::default(),
-            on_no_match: DynUpstreamOnNoMatch::default(),
-            on_invalid: DynUpstreamOnInvalid::default(),
+            on_missing: UpstreamFallback::Fallback,
+            on_no_match: UpstreamFallback::Fallback,
+            on_invalid: UpstreamFallback::Reject,
             compiled_regex: None,
         }
     }
@@ -327,7 +325,7 @@ mod tests {
     #[tokio::test]
     async fn diu_records_reject_outcome_on_missing_key() {
         let config = DynamicInternalUpstreamConfig {
-            on_missing: DynUpstreamOnMissing::Reject,
+            on_missing: UpstreamFallback::Reject,
             ..direct_mode_config()
         };
         let plugin = DynamicInternalUpstream {
@@ -360,7 +358,7 @@ mod tests {
     #[tokio::test]
     async fn diu_records_fallback_outcome_on_invalid_backend() {
         let config = DynamicInternalUpstreamConfig {
-            on_invalid: DynUpstreamOnInvalid::Fallback,
+            on_invalid: UpstreamFallback::Fallback,
             ..direct_mode_config()
         };
         let plugin = DynamicInternalUpstream {

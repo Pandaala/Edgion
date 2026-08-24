@@ -124,18 +124,18 @@ path:
   value: "/admin"
 ```
 
-### 3. `RestrictionSource::Path` configuration
+### 3. `keyMatch` + `key: { type: path }` configuration
 
-A `Path`-source rule's `values` are normalized at config load time (so they live in the same normalized space as request-side matching). Things like `/admin/` (trailing slash) are normalized to `/admin` — an INFO log records the transformation, never silent.
+A path-key `keyMatch` condition's `values` are normalized at config load time (so they live in the same normalized space as request-side matching). Things like `/admin/` (trailing slash) are normalized to `/admin`.
 
-If you need literal raw rejection, switch to `RestrictionSource::RequestPath`.
+If you need literal raw rejection, switch to `keyMatch` + `key: { type: requestPath }`.
 
 ### 4. `;param` side effect on allow-mode rules
 
 Path normalization strips `;param=...` from each segment (defends against `..;/` bypass).
 
-- Affects **deny-mode groups** (`mode: Deny`): `/admin/..;jsessionid=x/secret` becomes `/secret` in the ACL view, correctly matching a `Path` rule with `values: ["/secret"]` ✓
-- Affects **allow-mode groups** (`mode: Allow`): a request `/api/users;v=1/data` becomes `/api/users/data` in the ACL view — if you configured a `Path` rule with `values: ["/api/users"]` (exact), it **won't match**
+- Affects **deny-mode groups** (`mode: Deny`): `/admin/..;jsessionid=x/secret` becomes `/secret` in the ACL view, correctly matching a path `keyMatch` with `values: ["/secret"]` ✓
+- Affects **allow-mode groups** (`mode: Allow`): a request `/api/users;v=1/data` becomes `/api/users/data` in the ACL view — if you configured a path `keyMatch` with `values: ["/api/users"]` (exact), it **won't match**
 
 The upstream still receives the raw path with `;param` intact; applications relying on `;jsessionid` are unaffected.
 
@@ -149,14 +149,14 @@ The upstream still receives the raw path with `;param` intact; applications rely
 - type: RequestRestriction
   config:
     mode: Deny
-    ruleGroups:
-      - rules:
-          - name: block-admin
-            source: Path             # current view, covers all encoding variants
+    anyOf:
+      - allOf:
+          - type: keyMatch
+            key:
+              type: path             # current view, covers all encoding variants
             values:
               - "/admin"
               - "/internal"
-            onMissing: NoMatch
 ```
 
 ### Audit log records client raw URI
@@ -224,7 +224,7 @@ path_normalization:
   preserve_path_parameters: true
 ```
 
-**Note**: enabling this opt-out removes the `..;/` style bypass from Edgion's default protection scope (see spec §14.4). It is recommended to additionally use `RestrictionSource::RequestPath` regex rules to reject suspicious patterns containing `;`.
+**Note**: enabling this opt-out removes the `..;/` style bypass from Edgion's default protection scope (see spec §14.4). It is recommended to additionally use `keyMatch` + `key: { type: requestPath }` regex conditions to reject suspicious patterns containing `;`.
 
 ---
 

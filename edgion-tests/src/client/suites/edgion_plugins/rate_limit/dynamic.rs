@@ -1,7 +1,7 @@
 // RateLimit dynamic hot-reload test suites.
 //
-// Initial (onMissingKey=Allow): request without X-Rate-Key → 200
-// Update  (onMissingKey=Deny):  request without X-Rate-Key → 429
+// Initial (onKeyMiss=Allow): request without X-Rate-Key → 200
+// Update  (onKeyMiss=Deny):  request without X-Rate-Key → 429
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -31,7 +31,7 @@ impl RateLimitDynamicInitialTestSuite {
     fn missing_key_allow_200() -> TestCase {
         TestCase::new(
             "rate_limit_dyn_initial_missing_key_200",
-            "[INITIAL] missing X-Rate-Key with onMissingKey=Allow → 200",
+            "[INITIAL] missing X-Rate-Key with onKeyMiss=Allow → 200",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -66,7 +66,7 @@ impl RateLimitDynamicUpdateTestSuite {
     fn missing_key_deny_429() -> TestCase {
         TestCase::new(
             "rate_limit_dyn_update_missing_key_429",
-            "[UPDATE] missing X-Rate-Key with onMissingKey=Deny → 429",
+            "[UPDATE] missing X-Rate-Key with onKeyMiss=Deny → 429",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();

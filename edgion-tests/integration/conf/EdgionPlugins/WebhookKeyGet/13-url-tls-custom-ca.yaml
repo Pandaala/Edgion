@@ -15,7 +15,7 @@
 # itself is driven by the URL scheme (`https://`), so no `blockPrivate` or
 # service target is involved here.
 #
-# Flow: HTTPRoute -> EdgionPlugins(CtxSet webhook KeyGet) -> LinkSys webhook
+# Flow: HTTPRoute -> EdgionPlugins(WebhookKeyGet) -> LinkSys webhook
 #       -> https://localhost:30051/webhook/resolve (test_server HTTPS backend)
 apiVersion: edgion.io/v1
 kind: LinkSys
@@ -55,16 +55,14 @@ spec:
       name: wh13_user_id
   requestPlugins:
     - enable: true
-      type: CtxSet
+      type: WebhookKeyGet
       config:
         vars:
           - name: wh13_user_id
-            from:
-              type: webhook
-              webhookRef: "edgion-default/wh13-resolver"
-              extract:
-                source: body
-                path: "data.user_id"
+            webhookRef: "edgion-default/wh13-resolver"
+            extract:
+              source: body
+              path: "data.user_id"
             default: "fallback-user"
 ---
 apiVersion: gateway.networking.k8s.io/v1

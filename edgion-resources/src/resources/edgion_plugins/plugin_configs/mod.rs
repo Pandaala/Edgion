@@ -40,15 +40,18 @@ mod real_ip;
 mod region_route;
 mod request_access_policy;
 mod request_body_buffer;
-mod request_match;
 mod request_mirror;
 mod request_restriction;
 mod response_rewrite;
 mod tiny_ufo_ttl_cache_config;
 mod trace_context;
+mod upstream_fallback;
 mod wasm;
 mod wasm_oci;
+mod webhook_key_get;
 
+pub use super::conditions::{Condition, IpAccessMatch, RuleGroup, SecretMatchCondition};
+pub use super::mtls_field::SanType;
 pub use a2a_gateway::{A2aGatewayConfig, A2A_AGENT_CARD_MAX_BYTES};
 pub use access_log_extern::{is_blocked, AccessLogExternField, LogExtSource, ACCESS_LOG_BLOCKED_CTX_KEYS};
 pub use ai_guard::{
@@ -76,14 +79,11 @@ pub use ctx_set::{
     TemplateSegment, TemplateVarType, TransformConfig, TransformType,
 };
 pub use debug_access_log::DebugAccessLogToHeaderConfig;
-pub use direct_endpoint::{DirectEndpointConfig, DirectEndpointOnInvalid, DirectEndpointOnMissing, EndpointExtract};
+pub use direct_endpoint::{DirectEndpointConfig, EndpointExtract};
 pub use dsl::{DslConfig, DslErrorPolicy};
-pub use dynamic_external_upstream::{
-    DomainTarget, DynamicExternalUpstreamConfig, ExtUpstreamExtract, ExtUpstreamOnMissing, ExtUpstreamOnNoMatch,
-};
+pub use dynamic_external_upstream::{DomainTarget, DynamicExternalUpstreamConfig, ExtUpstreamExtract};
 pub use dynamic_internal_upstream::{
-    DynUpstreamExtract, DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch, DynUpstreamRule,
-    DynUpstreamTarget, DynamicInternalUpstreamConfig,
+    DynUpstreamExtract, DynUpstreamRule, DynUpstreamTarget, DynamicInternalUpstreamConfig,
 };
 pub use ext_proc::{BodySendMode, ExtProcConfig, GrpcServiceConfig, HeaderSendMode, ProcessingMode};
 pub use fault_injection::{
@@ -119,35 +119,35 @@ pub use proxy_rewrite::{
     HttpMethod, JsonBodyRewrite, JsonLiteralValue, JsonPatchOperation, ProxyRewriteConfig, RegexUri,
     MAX_JSON_PATCH_OPERATIONS, MAX_JSON_PATCH_PLAN_BYTES, MAX_JSON_POINTER_BYTES, MAX_JSON_POINTER_TOKENS,
 };
-pub use rate_limit::{LimitHeaderNames, OnMissingKey, RateLimitConfig, RateLimitScope};
+pub use rate_limit::{LimitHeaderNames, OnKeyMiss, RateLimitConfig, RateLimitScope};
 pub use rate_limit_redis::{OnRedisFailure, RateLimitAlgorithm, RateLimitPolicy, RateLimitRedisConfig};
 pub use real_ip::RealIpConfig;
 pub use region_route::{
     HashAlgorithm, HashCalcConfig, RegionDef, RegionRouteConfig, RouteByKeyConfMatchMeta, RouteRule,
 };
 pub use request_access_policy::{
-    AccessCondition, AccessPathMatch, AccessPathMatchType, IpAccessMatch, IpAccessRuleConfig,
-    RequestAccessPolicyConfig, RequestAccessProfile, RequestAccessRule, RequestAccessRuleType,
-    RequestAccessUrlAllowListRef, RequiredRuleGroup, SecretMatchCondition, UrlAccessCandidate, UrlAccessRuleConfig,
-    UrlAllowListRefValidation, DEFAULT_MAX_REFERENCED_IP_RULES, DEFAULT_MAX_REFERENCED_URL_RULES,
+    AccessPathMatch, AccessPathMatchType, IpAccessRuleConfig, RequestAccessPolicyConfig, RequestAccessProfile,
+    RequestAccessRule, RequestAccessRuleType, RequestAccessUrlAllowListRef, RequiredRuleGroup, UrlAccessCandidate,
+    UrlAccessRuleConfig, UrlAllowListRefValidation, DEFAULT_MAX_REFERENCED_IP_RULES, DEFAULT_MAX_REFERENCED_URL_RULES,
     MAX_REFERENCED_IP_RULES, MAX_REFERENCED_URL_RULES,
 };
 pub use request_body_buffer::RequestBodyBufferConfig;
-pub use request_match::{OnMissing, RestrictionRule, RestrictionSource, SanType};
 pub use request_mirror::RequestMirrorPluginConfig;
-pub use request_restriction::{RequestRestrictionConfig, RestrictionMode, RuleGroup};
+pub use request_restriction::{RequestRestrictionConfig, RestrictionMode};
 pub use response_rewrite::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig};
 pub use tiny_ufo_ttl_cache_config::{
     validate_tiny_ufo_effective_limits, TinyUfoTtlCacheConfig, MAX_TINY_UFO_CACHE_ENTRIES, MAX_TINY_UFO_LOGICAL_BYTES,
     TINY_UFO_WEIGHT_UNIT_BYTES,
 };
 pub use trace_context::TraceContextConfig;
+pub use upstream_fallback::UpstreamFallback;
 pub use wasm::{
     normalize_callout_origin, normalize_callout_origin_quiet, WasmAuthHeaderSecretRef, WasmConfig, WasmFetchRetry,
     WasmFetchSpec, WasmRawBase64, WasmRawConfig, WasmRawJson, WasmRawString, WasmSourceSpec, INLINE_WARN_DECODED_BYTES,
     MAX_INLINE_DECODED_BYTES, MAX_WASM_RAW_CONFIG_BYTES,
 };
 pub use wasm_oci::{OciImageRef, OciPullPolicy, WasmOciSpec};
+pub use webhook_key_get::{WebhookExtract, WebhookKeyGetConfig, WebhookVar};
 
 /// Validate a security-sensitive template against the restricted variable
 /// allow-list: only controller-resolved or non-client-controlled variables.

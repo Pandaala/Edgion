@@ -3,9 +3,9 @@
 # A required origin header (X-Auth) with presence: required. The
 # statusOnError field below is part of the shared ExternalHttpConnection
 # schema but is NOT honored by the webhook connector (only forward_auth
-# reads it) -- key_get simply returns None on any failure, including a
+# reads it) -- WebhookKeyGet writes no value (or `default`) on any failure, including a
 # missing required field. Missing X-Auth is treated as a
-# webhook call failure -> key_get returns None -> the consuming CtxSet plugin
+# webhook call failure -> WebhookKeyGet writes no value -> WebhookKeyGet
 # falls back to its `default` and the request continues (no 403, no
 # gateway-side status override).
 # Backend via Service (real selector) + auto EndpointSlice.
@@ -60,16 +60,14 @@ metadata:
 spec:
   requestPlugins:
     - enable: true
-      type: CtxSet
+      type: WebhookKeyGet
       config:
         vars:
           - name: wh7_user_id
-            from:
-              type: webhook
-              webhookRef: "edgion-default/wh7-resolver"
-              extract:
-                source: body
-                path: "data.user_id"
+            webhookRef: "edgion-default/wh7-resolver"
+            extract:
+              source: body
+              path: "data.user_id"
             default: "degraded-fallback"
 ---
 apiVersion: gateway.networking.k8s.io/v1

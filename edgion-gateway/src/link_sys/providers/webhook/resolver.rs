@@ -1,7 +1,6 @@
 //! Webhook key resolver — resolve key values by calling external webhook services.
 //!
-//! This is the main entry point called from session_adapter's key_get for
-//! KeyGet::Webhook variants.
+//! This is the main entry point called by the WebhookKeyGet plugin.
 
 use crate::observe::metrics::record_webhook_resolve_error;
 use crate::plugins::http::common::outbound::call::{outbound_call, OutboundCallError, OutboundResponse};
@@ -12,7 +11,7 @@ use super::manager::{get_webhook_global_max, get_webhook_manager};
 
 /// Resolve a key value by calling an external webhook service.
 ///
-/// This is the main entry point called from session_adapter's key_get.
+/// This is the main entry point called by the WebhookKeyGet plugin.
 ///
 /// The outbound request shape (method, path, query args, headers, cookies) is
 /// now defined entirely by the webhook resource's `request` block and applied

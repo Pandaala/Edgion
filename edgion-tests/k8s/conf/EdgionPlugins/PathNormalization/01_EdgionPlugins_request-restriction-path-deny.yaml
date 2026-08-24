@@ -9,18 +9,18 @@ spec:
     type: RequestRestriction
     config:
       mode: Deny
-      ruleGroups:
-      - rules:
-        - name: block-admin-normalized
-          source: Path
+      anyOf:
+      - allOf:
+        - type: keyMatch
+          key:
+            type: path
           values:
           - /admin
-          onMissing: NoMatch
-      - rules:
-        - name: block-literal-encoded-slash
-          source: RequestPath
+      - allOf:
+        - type: keyMatch
+          key:
+            type: requestPath
           regex:
           - '%2[fF]'
-          onMissing: NoMatch
       status: 403
       message: Access denied by path normalization policy

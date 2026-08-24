@@ -1,4 +1,4 @@
-# RateLimit dynamic test - initial phase: onMissingKey=Allow.
+# RateLimit dynamic test - initial phase: onKeyMiss=Allow.
 # Request without X-Rate-Key header → 200 (bypass).
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -15,7 +15,7 @@ spec:
         key:
           - type: header
             name: "X-Rate-Key"
-        onMissingKey: Allow
+        onKeyMiss: Allow
         rejectStatus: 429
         rejectMessage: "Rate limit exceeded"
         showLimitHeaders: false

@@ -80,22 +80,18 @@ impl KeyAuth {
     /// Extract API key from request using configured key sources (tried in order)
     ///
     /// Returns the first non-empty value found from the configured sources.
-    /// Supports all KeyGet variants including Webhook for remote key resolution.
-    async fn extract_key(&self, session: &dyn PluginSession) -> Option<(String, &KeyGet)> {
+    /// Supports header, query, cookie, and ctx KeyGet sources.
+    fn extract_key(&self, session: &dyn PluginSession) -> Option<(String, &KeyGet)> {
         for source in &self.config.key_sources {
             match source {
-                KeyGet::Header { .. }
-                | KeyGet::Query { .. }
-                | KeyGet::Cookie { .. }
-                | KeyGet::Ctx { .. }
-                | KeyGet::Webhook { .. } => {
-                    if let Some(value) = session.key_get(source).await {
+                KeyGet::Header { .. } | KeyGet::Query { .. } | KeyGet::Cookie { .. } | KeyGet::Ctx { .. } => {
+                    if let Some(value) = session.key_get(source) {
                         if !value.is_empty() {
                             return Some((value, source));
                         }
                     }
                 }
-                // Ignore unsupported sources (RemoteIp, Path, Method, etc.)
+                // Ignore unsupported sources (RemoteIp, Path, Method, RequestPath, etc.)
                 _ => {}
             }
         }
@@ -135,8 +131,6 @@ impl KeyAuth {
             KeyGet::Cookie { name } => {
                 strip_cookie(session, name);
             }
-            // Webhook keys are resolved server-side and never travel in the
-            // forwarded request, so there is nothing to strip.
             _ => {}
         }
     }
@@ -157,7 +151,7 @@ impl RequestFilter for KeyAuth {
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // 1. Extract key from request using configured sources
-        let (key, used_source) = match self.extract_key(session).await {
+        let (key, used_source) = match self.extract_key(session) {
             Some((k, s)) => (k, s.clone()),
             None => {
                 // No key provided - check anonymous access
@@ -200,7 +194,6 @@ impl RequestFilter for KeyAuth {
             KeyGet::Query { .. } => "key query",
             KeyGet::Cookie { .. } => "key cookie",
             KeyGet::Ctx { .. } => "key ctx",
-            KeyGet::Webhook { .. } => "key webhook",
             _ => "key other",
         };
         plugin_log.push(key_source_label);
@@ -285,14 +278,14 @@ mod tests {
         auth
     }
 
-    #[tokio::test]
-    async fn test_extract_key_none() {
+    #[test]
+    fn test_extract_key_none() {
         let auth = create_key_auth_with_keys();
         let mut mock_session = MockPluginSession::new();
 
         mock_session.expect_key_get().returning(|_| None);
 
-        let result = auth.extract_key(&mock_session).await;
+        let result = auth.extract_key(&mock_session);
         assert!(result.is_none());
     }
 

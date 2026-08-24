@@ -141,7 +141,7 @@ impl RateLimitRedis {
         // RFC 7231 §7.1.3: Retry-After is a delta-seconds integer; "0" tells
         // RFC-compliant clients to retry immediately and risks a hot-loop under
         // pressure. Omit the header for Duration::ZERO (Redis-failure Deny and
-        // OnMissingKey::Deny paths) and ceil any positive sub-second value to 1.
+        // OnKeyMiss::Deny paths) and ceil any positive sub-second value to 1.
         if !retry_after.is_zero() {
             let secs = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
             resp.insert_header("Retry-After", secs.to_string()).ok();
@@ -243,11 +243,9 @@ impl RequestFilter for RateLimitRedis {
             session,
             &self.config.key,
             self.config.default_key.as_deref(),
-            &self.config.on_missing_key,
+            &self.config.on_key_miss,
             plugin_log,
-        )
-        .await
-        {
+        ) {
             RateLimitKey::Resolved(k) => k,
             RateLimitKey::Allow => return PluginRunningResult::GoodNext,
             RateLimitKey::Deny => return self.reject_request(session, Duration::ZERO, None).await,
@@ -499,7 +497,7 @@ mod tests {
             key: vec![edgion_resources::common::KeyGet::Header {
                 name: "x-missing".to_string(),
             }],
-            on_missing_key: edgion_resources::resources::edgion_plugins::OnMissingKey::Deny,
+            on_key_miss: edgion_resources::resources::edgion_plugins::OnKeyMiss::Deny,
             ..Default::default()
         };
         let plugin = RateLimitRedis::create(&config, "default/test-plugins/#0");

@@ -33,6 +33,7 @@ spec:
                           key:
                             type: header
                             name: X-CF-Secret
+                          secretKey: token
                           secretRef:
                             name: gac-origin-secret
                             namespace: edgion-test

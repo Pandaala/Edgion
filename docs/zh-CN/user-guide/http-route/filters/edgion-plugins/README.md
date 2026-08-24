@@ -11,9 +11,11 @@ Edgion 提供的 HTTP Route 级别插件，通过 `EdgionPlugins` CRD 配置。
 | [bandwidth-limit.md](bandwidth-limit.md) | 带宽限制 |
 | [basic-auth.md](basic-auth.md) | HTTP Basic 认证 |
 | [canary.md](canary.md) | 全量切换、可远程切换的金丝雀流量插件 |
+| [conditions.md](conditions.md) | 插件 `run`/`skip` 条件（`keyExist`、`keyMatch`、`timeRange`、`probability`） |
 | [cors.md](cors.md) | 跨域资源共享（CORS） |
 | [csrf.md](csrf.md) | CSRF 防护 |
 | [ctx-setter.md](ctx-setter.md) | 上下文变量提取 |
+| [webhook-key-get.md](webhook-key-get.md) | 将 LinkSys webhook 的值解析进请求上下文 |
 | [direct-endpoint.md](direct-endpoint.md) | 直连指定 Endpoint |
 | [dsl/README.md](dsl/README.md) | DSL 脚本引擎 |
 | [dye.md](dye.md) | 流量标记请求头（条目级 `dye`——结果词表、value 模板、防伪造剥离） |

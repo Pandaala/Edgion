@@ -55,7 +55,7 @@ spec:
                         Variant-specific configuration. Shape depends on `type`:
                           - KeyList: { matchMode?: "exact"|"regex", items: [{ name, description?, items: [{ key, code?, priority?, id?, behavior? }] }] }
                           - IpList: { items: [{ name, description?, cidrs: string[] }] }   (grouped CIDRs / bare IPs, v4/v6)
-                          - RequestAccessUrlAllowList: { items: [{ name, hosts?, paths, allOf? }] }; data-only URL allow candidates bound and expanded by the referring RequestAccessPolicy
+                          - RequestAccessUrlAllowList: { items: [{ name, hosts?, paths, allOf? }] }; data-only URL allow candidates bound and expanded by the referring RequestAccessPolicy. allOf uses the same Condition enum as plugin conditions (keyExist, keyMatch, timeRange, probability, directPeerIpMatch, remoteIpMatch, secretMatch, hmacAuth)
                           - Selector: active-profile selector — { active?: string, description?: string }; referenced via activeProfileRef in EdgionStreamPlugins GlobalConnectionIpRestriction configs. `active` names one of the plugin's git-owned profiles; `active: null`/absent is a no-op (base default). Switches among profiles only — never disables filtering
                           - RegionRouteOverride: all-Optional overlay for RegionRoute — { enable?, active?, regions? }; referenced via overrideRef in EdgionPlugins RegionRoute configs
                           - Misc: open payload (x-kubernetes-preserve-unknown-fields); escape hatch for third-party or unknown payloads only

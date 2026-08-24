@@ -184,8 +184,8 @@ spec:
 | `from` | Object | **必填** | 值来源（见子字段） |
 | `extract` | Object | 无 | 提取规则，包含 `regex` 和 `group`（默认 group `1`） |
 | `domainMap` | Object | **必填** | 域名映射白名单（不能为空） |
-| `onMissing` | Enum | `Skip` | 路由 key 缺失时的行为。允许值：`Skip` / `Reject`（400） |
-| `onNoMatch` | Enum | `Skip` | key 无法匹配任何 `domainMap` 条目时的行为。允许值：`Skip` / `Reject`（400） |
+| `onMissing` | Enum | `Fallback` | 路由 key 缺失时的行为。允许值：`Fallback` / `Reject`（400） |
+| `onNoMatch` | Enum | `Fallback` | key 无法匹配任何 `domainMap` 条目时的行为。允许值：`Fallback` / `Reject`（400） |
 
 `dye` 是**条目级（entry-level）**字段——与 `type`/`config`/`enable` 同级，不属于 `config` 的成员：
 
@@ -235,7 +235,7 @@ requestPlugins:
           domain: ap-east.api.internal
           port: 443
           tls: true
-      onMissing: skip
+      onMissing: fallback
 ```
 
 #### 第三方 API 代理（覆盖 Host + SNI）
@@ -293,14 +293,14 @@ requestPlugins:
 ```
 
 - `success` 上不设置 `value` 时携带已解析的选择结果：**`DynamicInternalUpstream`** 使用目标 backendRef 的 `[ns/]name`；**`DynamicExternalUpstream`** 使用目标的 `domain:port`。
-- 两个插件都支持 `success`、`fallback`、`reject` 三种染色能力——`fallback`/`reject` 规则还会给 `onMissing`/`onNoMatch` 分支染色（取决于配置的是 `fallback`/`skip` 还是 `reject`），以及（仅 `DynamicInternalUpstream`）`onInvalid` 分支（`DynamicExternalUpstream` 没有 `onInvalid`，因为 `domainMap` 的归属校验本身就内含在匹配过程中）。默认 `on`（即 `success`）不会在这些路径上触发。
+- 两个插件都支持 `success`、`fallback`、`reject` 三种染色能力——`fallback`/`reject` 规则还会给 `onMissing`/`onNoMatch` 分支染色（取决于配置的是 `fallback` 还是 `reject`），以及（仅 `DynamicInternalUpstream`）`onInvalid` 分支（`DynamicExternalUpstream` 没有 `onInvalid`，因为 `domainMap` 的归属校验本身就内含在匹配过程中）。默认 `on`（即 `success`）不会在这些路径上触发。
 - 协议限定沿用两个插件已有的 gRPC 跳过逻辑：两者都不会给 gRPC 流量*染色*，因为它们在到达记录结果的调用点之前，就已经在 gRPC 匹配的路由上提前返回。但**剥离**依然会作用于 gRPC 流量——剥离是运行时统一负责、无条件执行的（见[染色（Dye）](./dye.md)），因此客户端无法借助 gRPC 请求，在同时承载 HTTP 流量的路由上偷渡伪造的染色头。
 
 ## 行为细节
 
 - **DynamicInternalUpstream**：选择的目标必须存在于当前路由的 `backendRefs` 中，否则视为无效。
 - **DynamicExternalUpstream**：只能路由到 `domainMap` 白名单中的域名，防止 SSRF。
-- 在 `Skip` / `Fallback` 模式下，未匹配的请求使用正常路由逻辑。
+- 在 `Fallback` 模式下，未匹配的请求使用正常路由逻辑。
 - `dye` 的行为两个子插件共用，详见上方[染色请求头](#染色请求头)。
 
 ---
@@ -313,7 +313,7 @@ requestPlugins:
 
 ### Q2：为什么 DynamicExternalUpstream 的请求走到了正常后端而不是外部域名？
 
-**A**：默认的 `onMissing` 和 `onNoMatch` 均为 `Skip`，即静默走正常后端选择而非拒绝。若路由 key 缺失或无法匹配 `domainMap` 条目，请求会静默使用路由的 `backendRefs`。若需 fail-close，请将两者均设为 `Reject`，或配置 `dye` 确认是否发生了跳转。
+**A**：默认的 `onMissing` 和 `onNoMatch` 均为 `Fallback`，即静默走正常后端选择而非拒绝。若路由 key 缺失或无法匹配 `domainMap` 条目，请求会静默使用路由的 `backendRefs`。若需 fail-close，请将两者均设为 `Reject`，或配置 `dye` 确认是否发生了跳转。
 
 ### Q3：DynamicExternalUpstream 能访问任意域名吗？
 
