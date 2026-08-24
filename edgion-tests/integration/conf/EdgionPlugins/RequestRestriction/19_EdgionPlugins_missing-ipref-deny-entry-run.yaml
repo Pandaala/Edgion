@@ -1,0 +1,28 @@
+# A resolved false entry-level run must not bypass a sealed RequestRestriction runtime.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-missing-ipref-deny-entry-run
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      conditions:
+        run:
+          allOf:
+            - type: keyExist
+              key:
+                type: header
+                name: X-Enable-Restriction
+      config:
+        mode: Deny
+        conditions:
+          anyOf:
+            - allOf:
+                - type: directPeerIpMatch
+                  ipRefs:
+                    - name: rr-missing-ip-list-entry-run
+                  negate: true
+        status: 403
+        message: "This configured response must not mask a sealed runtime"

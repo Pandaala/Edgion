@@ -10,6 +10,7 @@ mod bandwidth_limit;
 mod basic_auth;
 mod body_plugins;
 mod canary;
+mod condition_refs_dynamic;
 mod cors;
 mod csrf;
 mod ctx_set;
@@ -72,6 +73,9 @@ pub use body_plugins::{
     BodyPluginsTestSuite,
 };
 pub use canary::{CanaryHotSwapFinalTestSuite, CanaryHotSwapInitialTestSuite, CanaryTestSuite};
+pub use condition_refs_dynamic::{
+    ConditionRefsDynamicDeletedTestSuite, ConditionRefsDynamicInitialTestSuite, ConditionRefsDynamicUpdatedTestSuite,
+};
 pub use cors::CorsPluginTestSuite;
 pub use csrf::CsrfTestSuite;
 pub use ctx_set::CtxSetTestSuite;

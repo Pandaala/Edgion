@@ -876,6 +876,79 @@ impl RequestRestrictionTestSuite {
         )
     }
 
+    fn test_missing_ipref_deny_entry_skip_cannot_bypass_seal() -> TestCase {
+        TestCase::new(
+            "missing_ipref_deny_entry_skip_cannot_bypass_seal",
+            "unresolved Deny ipRefs => generic 500 before a true entry-level skip",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/test/missing-ipref-deny-entry-skip/api", ctx.http_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", RR_HOST)
+                        .header("X-Bypass-Restriction", "true")
+                        .send()
+                        .await
+                    {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            let body = response.text().await.unwrap_or_default();
+                            if status == 500 && body.contains("plugin configuration error") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "sealed runtime took precedence over entry-level skip".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected plugin configuration error 500, got status {status} body {body:?}"
+                                    ),
+                                )
+                            }
+                        }
+                        Err(error) => TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_missing_ipref_deny_entry_run_cannot_bypass_seal() -> TestCase {
+        TestCase::new(
+            "missing_ipref_deny_entry_run_cannot_bypass_seal",
+            "unresolved Deny ipRefs => generic 500 before a false entry-level run",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/test/missing-ipref-deny-entry-run/api", ctx.http_url());
+                    match ctx.http_client.get(&url).header("host", RR_HOST).send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            let body = response.text().await.unwrap_or_default();
+                            if status == 500 && body.contains("plugin configuration error") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "sealed runtime took precedence over entry-level run".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected plugin configuration error 500, got status {status} body {body:?}"
+                                    ),
+                                )
+                            }
+                        }
+                        Err(error) => TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
+                    }
+                })
+            },
+        )
+    }
+
     fn test_rr_hmac_valid_allowed() -> TestCase {
         TestCase::new(
             "rr_hmac_valid_allowed",
@@ -1018,6 +1091,8 @@ impl TestSuite for RequestRestrictionTestSuite {
             // cl-01: unresolved references must not become negatable false.
             Self::test_missing_ipref_deny_fails_closed(),
             Self::test_missing_ipref_entry_run_seals_resource(),
+            Self::test_missing_ipref_deny_entry_skip_cannot_bypass_seal(),
+            Self::test_missing_ipref_deny_entry_run_cannot_bypass_seal(),
             // S14: RR HMAC resolved credentials
             Self::test_rr_hmac_valid_allowed(),
             Self::test_rr_hmac_unsigned_denied(),

@@ -90,6 +90,7 @@ impl DslBodyTestSuite {
                         .http_client
                         .post(&url)
                         .header("host", "dsl-late-body-buffered.example.com")
+                        .header("X-Capture-Body", "yes")
                         .body("late-body")
                         .send()
                         .await;
@@ -138,6 +139,42 @@ impl DslBodyTestSuite {
                                 "Expected buffered=200/matched and unbuffered=500 with the generic body, got buffered={buffered_status}/{buffered_marker:?}, unbuffered={unbuffered_status}/{unbuffered_body:?}"
                             ),
                         )
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_late_body_read_respects_body_conditions() -> TestCase {
+        TestCase::new(
+            "dsl_late_body_read_respects_body_conditions",
+            "A false RequestBodyBuffer body condition leaves no cache for a late reader",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match ctx
+                        .http_client
+                        .post(format!("http://{}:31180/echo", ctx.target_host))
+                        .header("host", "dsl-late-body-buffered.example.com")
+                        .body("late-body")
+                        .send()
+                        .await
+                    {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            let body = response.text().await.unwrap_or_default();
+                            if status == 500 && body == "Request body processing failed" {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected skipped capture to fail the late reader with generic 500, got {status}: {body:?}"
+                                    ),
+                                )
+                            }
+                        }
+                        Err(error) => TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
                     }
                 })
             },
@@ -1006,6 +1043,7 @@ impl TestSuite for DslBodyTestSuite {
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_late_body_read_requires_explicit_prebuffer(),
+            Self::test_late_body_read_respects_body_conditions(),
             Self::test_body_read_methods_preserve_replay(),
             Self::test_body_definite_json_selection(),
             Self::test_body_json_multi_select_uses_one_scan_for_memory_and_spill(),
