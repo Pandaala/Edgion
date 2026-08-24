@@ -71,12 +71,14 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     // Session Persistence step 1 of 2: extract token + set initial state
     // (mirrors select_http_backend). The `selected_grpc_backend.is_some()`
     // early return above guarantees this never re-runs on a retry attempt.
-    let sp_token = sp_extract_token(
-        session,
-        &mut ctx.sp_state,
-        grpc_route_unit.rule.session_persistence.as_ref(),
-        crate::routes::http::session_persistence::now_unix_secs(),
-    );
+    let sp_token = grpc_route_unit.rule.session_persistence.as_ref().and_then(|sp| {
+        sp_extract_token(
+            session,
+            &mut ctx.ensure_session_persistence().state,
+            Some(sp),
+            crate::routes::http::session_persistence::now_unix_secs(),
+        )
+    });
 
     // Session Persistence step 2 of 2: resolve the token BEFORE weighted
     // backendRef selection, across ALL of the rule's backendRefs (GEP-1619:
@@ -100,9 +102,10 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
             // The sticky backendRef's cross-namespace reference is now denied:
             // treat as a miss — drop the sticky target, refresh the token, and
             // fall back to weighted selection below.
-            ctx.sp_target_addr = None;
-            ctx.sp_sticky_addr = None;
-            ctx.sp_state = crate::SessionPersistenceState::InjectNew;
+            let persistence = ctx.ensure_session_persistence();
+            persistence.target_addr = None;
+            persistence.sticky_addr = None;
+            persistence.state = crate::SessionPersistenceState::InjectNew;
             None
         }
     });

@@ -194,11 +194,14 @@ pub async fn response_filter(
     // response plugin and framing repair, and immediately before Pingora runs
     // the downstream modules' response-header filters.
     ctx.response_stream_kind = classify_response_stream_kind(upstream_response);
-    ctx.final_response_eligibility = Some(final_response_eligibility(
+    let eligibility = final_response_eligibility(
         &session.req_header().method,
         upstream_response.status,
         ctx.response_stream_kind,
-    ));
+    );
+    if let Some(state) = ctx.ai_state_mut() {
+        state.final_response_eligibility = Some(eligibility);
+    }
     if let Some(compression_ctx) = session.downstream_modules_ctx.get_mut::<ResponseCompression>() {
         let level = response_compression_level(
             enable_compression(edgion_http),

@@ -13,6 +13,7 @@ use crate::backends::{get_peer, try_get_peer};
 use crate::backends::{SelectedHttpBackend, SelectedLogicalBackend, SelectedServiceBackend};
 use crate::ctx::BackendSource;
 use crate::observe::metrics::record_authority_rejected;
+use crate::plugins::http::common::outbound::egress::{default_block_private, filter_resolved_addrs, EgressPolicy};
 use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::routes::grpc::handle_grpc_upstream;
@@ -23,6 +24,7 @@ use crate::util::net::{classify_backend_addr, resolve_domain, BlockedBackendReas
 use crate::{end_response_500, end_response_503, end_response_grpc_unavailable, terminate_with_fallback};
 use crate::{EdgionHttpContext, SessionPersistenceState, UpstreamJumpTarget};
 use bytes::Bytes;
+use edgion_common::dns::resolve;
 use edgion_resources::err::EdError;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::path_normalization::get_path_normalization_config;
@@ -33,7 +35,6 @@ use pingora_core::upstreams::peer::Peer;
 use pingora_core::{BError, Error as PingoraError, ErrorType};
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
-use std::sync::Arc;
 
 fn ai_predispatch_error(error: AiDispatchError) -> Option<AiProxyError> {
     match error {
@@ -75,8 +76,10 @@ fn ai_predispatch_deadline_response(error: &AiDispatchError, ctx: &mut EdgionHtt
 async fn stop_ai_predispatch_if_expired(ctx: &mut EdgionHttpContext) -> Option<BError> {
     let error = ai_predispatch_deadline(ctx)?;
     let response = ai_predispatch_deadline_response(&error, ctx)?;
-    ctx.ai_attempt_runtime.finish_predispatch();
-    ctx.ai_attempt_runtime.drain_pending().await;
+    if let Some(state) = ctx.ai_state_mut() {
+        state.attempt_runtime.finish_predispatch();
+        state.attempt_runtime.drain_pending().await;
+    }
     Some(response)
 }
 
@@ -492,7 +495,10 @@ pub async fn upstream_peer_grpc(
     // target, route through the SP fallback helper; otherwise refresh the token
     // when a cross-attempt retry re-selects via plain LB.
     sp_repin_on_strict_retry(ctx);
-    let mut peer = if ctx.sp_target_addr.is_some() {
+    let mut peer = if ctx
+        .session_persistence()
+        .is_some_and(|persistence| persistence.target_addr.is_some())
+    {
         get_peer_with_sp_fallback(edgion_http, session, ctx, true, None).await?
     } else {
         sp_refresh_on_cross_attempt_retry(ctx);
@@ -519,7 +525,7 @@ pub async fn upstream_peer_http(
 
     // AI forwarding owns a typed external peer path and never writes the
     // generic first-write-wins upstream-jump slot.
-    if ctx.ai_attempt_plan.is_some() {
+    if ctx.has_ai_attempt_plan() {
         let entropy = ctx
             .request_info
             .x_trace_id
@@ -528,7 +534,9 @@ pub async fn upstream_peer_http(
             .map(|trace_id| trace_id.as_u128())
             .unwrap_or_else(|| uuid::Uuid::new_v4().as_u128());
         let route_retry_cap = ctx.retry_attempts();
-        ctx.ai_attempt_runtime.drain_pending().await;
+        if let Some(state) = ctx.ai_state_mut() {
+            state.attempt_runtime.drain_pending().await;
+        }
         loop {
             let mut target = match prepare_first_attempt(
                 session,
@@ -553,7 +561,8 @@ pub async fn upstream_peer_http(
             let selected_identity = target.selected.logical().identity();
             let selected_backend_key = format!("{}/{}", selected_identity.namespace, selected_identity.name);
             let admission = ctx
-                .ai_attempt_runtime
+                .ensure_ai_state()
+                .attempt_runtime
                 .admit(crate::ai::attempt_runtime::AiAttemptAdmissionInput {
                     namespace: selected_identity.namespace.clone(),
                     backend_uid: target.selected.backend.uid.clone(),
@@ -580,7 +589,7 @@ pub async fn upstream_peer_http(
                 .await;
             match admission {
                 crate::ai::attempt_runtime::AiAttemptAdmission::Ready(runtime) => {
-                    ctx.ai_attempt_runtime.install(runtime);
+                    ctx.ensure_ai_state().attempt_runtime.install(runtime);
                     if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
                         return Err(response);
                     }
@@ -599,7 +608,9 @@ pub async fn upstream_peer_http(
                                 end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
                                 return Err(PingoraError::new(ErrorType::InternalError));
                             }
-                            ctx.ai_attempt_runtime.drain_pending().await;
+                            if let Some(state) = ctx.ai_state_mut() {
+                                state.attempt_runtime.drain_pending().await;
+                            }
                         }
                     }
                 }
@@ -674,7 +685,10 @@ pub async fn upstream_peer_http(
     // re-pins to the same backend (and fail-closes if it is now unhealthy)
     // instead of migrating via plain LB.
     sp_repin_on_strict_retry(ctx);
-    let mut peer = if ctx.sp_target_addr.is_some() {
+    let mut peer = if ctx
+        .session_persistence()
+        .is_some_and(|persistence| persistence.target_addr.is_some())
+    {
         get_peer_with_sp_fallback(edgion_http, session, ctx, false, selected_logical.as_ref()).await?
     } else {
         // A retry that re-selects via plain LB after an earlier attempt consumed
@@ -696,26 +710,6 @@ pub async fn upstream_peer_http(
     Ok(peer)
 }
 
-fn routed_external_resolver(
-    ctx: &mut EdgionHttpContext,
-) -> Arc<crate::plugins::http::common::outbound::egress::EgressResolver> {
-    if let Some(resolver) = ctx.routed_external_resolver.as_ref() {
-        return Arc::clone(resolver);
-    }
-    let resolver = Arc::new(
-        crate::plugins::http::common::outbound::egress::EgressResolver::new_routed(
-            crate::backends::compute_routed_external_resolver(ctx),
-            crate::plugins::http::common::outbound::egress::EgressPolicy {
-                block_private: crate::plugins::http::common::outbound::egress::default_block_private(),
-            },
-            crate::plugins::http::common::outbound::egress::egress_dns_cache_ttl(),
-            ctx.allow_loopback_upstream,
-        ),
-    );
-    ctx.routed_external_resolver = Some(Arc::clone(&resolver));
-    resolver
-}
-
 /// Select HTTP backend from route (extracted from upstream_peer)
 #[inline]
 pub async fn select_http_backend(
@@ -735,12 +729,14 @@ pub async fn select_http_backend(
     };
 
     // Session Persistence step 1 of 2: extract token + set initial state.
-    let sp_token = session_persistence::sp_extract_token(
-        session,
-        &mut ctx.sp_state,
-        route_unit.rule.session_persistence.as_ref(),
-        session_persistence::now_unix_secs(),
-    );
+    let sp_token = route_unit.rule.session_persistence.as_ref().and_then(|sp| {
+        session_persistence::sp_extract_token(
+            session,
+            &mut ctx.ensure_session_persistence().state,
+            Some(sp),
+            session_persistence::now_unix_secs(),
+        )
+    });
 
     // Session Persistence step 2 of 2: resolve the token BEFORE weighted
     // backendRef selection, across ALL of the rule's backendRefs (GEP-1619:
@@ -770,9 +766,10 @@ pub async fn select_http_backend(
             // The sticky backendRef's cross-namespace reference is now denied:
             // treat as a miss — drop the sticky target, refresh the token, and
             // fall back to weighted selection below.
-            ctx.sp_target_addr = None;
-            ctx.sp_sticky_addr = None;
-            ctx.sp_state = SessionPersistenceState::InjectNew;
+            let persistence = ctx.ensure_session_persistence();
+            persistence.target_addr = None;
+            persistence.sticky_addr = None;
+            persistence.state = SessionPersistenceState::InjectNew;
             None
         }
     });
@@ -834,16 +831,16 @@ fn sticky_candidate(
     }
 }
 
-/// Get peer when session persistence resolved a sticky target (`sp_target_addr` is set).
+/// Get peer when session persistence resolved a sticky target (`target_addr` is set).
 ///
-/// Caller must have checked `ctx.sp_target_addr.is_some()` — this function assumes the
+/// Caller must have checked the session-persistence `target_addr` — this function assumes the
 /// SP-affinity branch and only routes its three outcomes:
 ///
 /// - `try_get_peer` succeeds → use the sticky target.
 /// - `try_get_peer` rejects with SSRF (loopback / link-local) or DNS resolution failure
 ///   → write 503 and abort; never fall back, since retrying would hit the same error.
 /// - `try_get_peer` fails for any other reason → fall back to normal LB unless the route
-///   declared `session_persistence.strict = true`. On fallback, mark `sp_state` as
+///   declared `session_persistence.strict = true`. On fallback, mark the state as
 ///   `InjectUpdate` so the response refreshes the cookie/header pointing at the new pick.
 ///
 /// Strict mode keeps the original `try_get_peer` error from `get_peer`'s second call,
@@ -885,8 +882,9 @@ async fn get_peer_with_sp_fallback(
         }
         Err(_) if !sp_strict => {
             // Sticky target unhealthy → drop the SP target and refresh the token in the response.
-            ctx.sp_target_addr = None; // already consumed by try_get_peer, but be explicit
-            ctx.sp_state = SessionPersistenceState::InjectUpdate;
+            let persistence = ctx.ensure_session_persistence();
+            persistence.target_addr = None; // already consumed by try_get_peer, but be explicit
+            persistence.state = SessionPersistenceState::InjectUpdate;
             get_peer(session, ctx, is_grpc, selected_http, &edgion_http.server_header_opts).await
         }
         Err(status) => {
@@ -902,7 +900,7 @@ async fn get_peer_with_sp_fallback(
     }
 }
 
-/// On a plain-LB peer selection, arm `sp_state = InjectUpdate` when this is a
+/// On a plain-LB peer selection, arm `state = InjectUpdate` when this is a
 /// cross-attempt retry whose earlier attempt consumed the SP sticky target.
 /// Reads the inputs off `ctx` and defers the decision to the pure
 /// `sp_should_refresh_on_cross_attempt_retry`.
@@ -912,19 +910,23 @@ fn sp_refresh_on_cross_attempt_retry(ctx: &mut EdgionHttpContext) {
     let sp_configured = sp.is_some();
     let strict = sp.and_then(|sp| sp.strict).unwrap_or(false);
 
+    let try_cnt = ctx.try_cnt;
+    let Some(persistence) = ctx.session_persistence_mut() else {
+        return;
+    };
     if sp_should_refresh_on_cross_attempt_retry(
-        ctx.sp_sticky_consumed,
-        ctx.try_cnt,
+        persistence.sticky_consumed,
+        try_cnt,
         sp_configured,
         strict,
-        &ctx.sp_state,
+        &persistence.state,
     ) {
-        ctx.sp_state = SessionPersistenceState::InjectUpdate;
+        persistence.state = SessionPersistenceState::InjectUpdate;
     }
 }
 
 /// On a strict cross-attempt retry whose earlier attempt consumed the sticky
-/// target, restore `sp_target_addr` from the retained mirror so the retry
+/// target, restore `target_addr` from the retained mirror so the retry
 /// re-pins to the same backend (and fail-closes via `get_peer_with_sp_fallback`
 /// if it is now unhealthy) instead of migrating via plain LB. Defers the
 /// decision to the pure `sp_should_repin_on_strict_retry`.
@@ -934,14 +936,18 @@ fn sp_repin_on_strict_retry(ctx: &mut EdgionHttpContext) {
     let sp_configured = sp.is_some();
     let strict = sp.and_then(|sp| sp.strict).unwrap_or(false);
 
+    let try_cnt = ctx.try_cnt;
+    let Some(persistence) = ctx.session_persistence_mut() else {
+        return;
+    };
     if sp_should_repin_on_strict_retry(
-        ctx.sp_sticky_consumed,
-        ctx.try_cnt,
+        persistence.sticky_consumed,
+        try_cnt,
         sp_configured,
         strict,
-        ctx.sp_sticky_addr.is_some(),
+        persistence.sticky_addr.is_some(),
     ) {
-        ctx.sp_target_addr = ctx.sp_sticky_addr;
+        persistence.target_addr = persistence.sticky_addr;
     }
 }
 
@@ -1264,7 +1270,7 @@ fn selected_effective_policy(
     ctx: &EdgionHttpContext,
 ) -> Option<&std::sync::Arc<crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy>> {
     match ctx.selected_backend.as_ref()?.routed()? {
-        SelectedLogicalBackend::Ai(_) => ctx.ai_effective_policy.as_ref(),
+        SelectedLogicalBackend::Ai(_) => ctx.ai_state().and_then(|state| state.effective_policy.as_ref()),
         SelectedLogicalBackend::Service(_) => None,
     }
 }
@@ -1309,14 +1315,7 @@ async fn try_ai_backend_peer(
     target: &PreparedAiAttempt,
 ) -> Result<Box<HttpPeer>, AiPeerPredispatchFailure> {
     let endpoint = &target.selected.backend.endpoint;
-    let resolver = routed_external_resolver(ctx);
-    let addr = resolver
-        .resolve_socket_addrs(&endpoint.domain, endpoint.port)
-        .await
-        .map_err(|_| AiPeerPredispatchFailure::Endpoint)?
-        .into_iter()
-        .next()
-        .ok_or(AiPeerPredispatchFailure::Endpoint)?;
+    let addr = resolve_ai_endpoint(ctx, &endpoint.domain, endpoint.port).await?;
     let (namespace, name) = match target.selected.logical().target() {
         CompiledBackendTarget::EdgionBackend { namespace, name } => (namespace.as_str(), name.as_str()),
         CompiledBackendTarget::Service { .. } | CompiledBackendTarget::Invalid { .. } => {
@@ -1332,7 +1331,7 @@ async fn try_ai_backend_peer(
         current_upstream_id: None,
         backend_ref_idx: Some(target.selected.logical().slot()),
     });
-    ctx.ai_effective_policy = target.selected.effective_policy.clone();
+    ctx.ensure_ai_state().effective_policy = target.selected.effective_policy.clone();
 
     if target.selected.backend_tls_policy.is_some() && !endpoint.use_tls {
         return Err(AiPeerPredispatchFailure::Endpoint);
@@ -1358,6 +1357,28 @@ async fn try_ai_backend_peer(
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
     backfill_upstream_addr(&peer, ctx);
     Ok(peer)
+}
+
+async fn resolve_ai_endpoint(
+    ctx: &EdgionHttpContext,
+    domain: &str,
+    port: u16,
+) -> Result<std::net::SocketAddr, AiPeerPredispatchFailure> {
+    let spec = crate::backends::compute_routed_external_resolver(ctx);
+    let addrs = resolve(&spec, domain)
+        .await
+        .map_err(|_| AiPeerPredispatchFailure::Endpoint)?;
+    filter_resolved_addrs(
+        addrs,
+        EgressPolicy {
+            block_private: default_block_private(),
+        },
+        ctx.allow_loopback_upstream,
+    )
+    .into_iter()
+    .next()
+    .map(|ip| std::net::SocketAddr::new(ip, port))
+    .ok_or(AiPeerPredispatchFailure::Endpoint)
 }
 
 /// Record pre-connect AI peer selection without crossing the AI dispatch or
@@ -1633,13 +1654,13 @@ fn decide_want_raw(annotation: Option<bool>, external_jump_preserve_raw: bool, c
 /// (mirrors the `decide_want_raw` pattern). Returns `true` only when ALL hold:
 ///
 /// - `sticky_consumed` — an earlier attempt consumed the sticky target
-///   (`sp_sticky_consumed`), i.e. direct evidence rather than inference from
+///   (`sticky_consumed`), i.e. direct evidence rather than inference from
 ///   `Inactive`;
 /// - `try_cnt >= 2` — `begin_upstream_attempt` already incremented, so this is a
 ///   retry attempt, not the first;
 /// - `sp_configured` — the route has `session_persistence`;
 /// - `!strict` — strict mode keeps the in-attempt fallback semantics untouched;
-/// - `sp_state == Inactive` — never downgrade an already-armed
+/// - `state == Inactive` — never downgrade an already-armed
 ///   `InjectNew` / `InjectUpdate`.
 #[inline]
 fn sp_should_refresh_on_cross_attempt_retry(

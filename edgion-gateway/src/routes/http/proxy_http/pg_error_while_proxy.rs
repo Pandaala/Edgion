@@ -97,7 +97,7 @@ pub fn error_while_proxy(
     // the local decision (and its logging) consistent.
     let buffer_ok = !session.as_ref().retry_buffer_truncated() && !ctx.request_body_stream_active;
 
-    if ctx.ai_attempt_plan.is_some() {
+    if ctx.has_ai_attempt_plan() {
         // A status retry was decided and transitioned exactly once in the
         // response-header hook. This callback only asks Pingora to re-enter
         // upstream_peer; it must not touch scheduler or budget state again.
@@ -126,14 +126,16 @@ pub fn error_while_proxy(
             gates_allow_retry,
             failure_class == AiProxyFailureClass::AmbiguousUpstream,
         );
-        ctx.ai_attempt_runtime.finish_failure(match failure_class {
-            AiProxyFailureClass::BackendRequestTimeout => {
-                crate::ai::attempt_runtime::AiAttemptFailure::BackendRequestTimeout
-            }
-            AiProxyFailureClass::AmbiguousUpstream => {
-                crate::ai::attempt_runtime::AiAttemptFailure::Ambiguous(crate::backends::FailureClass::LocalOrigin)
-            }
-        });
+        if let Some(state) = ctx.ai_state_mut() {
+            state.attempt_runtime.finish_failure(match failure_class {
+                AiProxyFailureClass::BackendRequestTimeout => {
+                    crate::ai::attempt_runtime::AiAttemptFailure::BackendRequestTimeout
+                }
+                AiProxyFailureClass::AmbiguousUpstream => {
+                    crate::ai::attempt_runtime::AiAttemptFailure::Ambiguous(crate::backends::FailureClass::LocalOrigin)
+                }
+            });
+        }
         match decision {
             Ok(crate::ai::dispatch::AiRetryDecision::Retry) => {
                 if let Some(upstream) = ctx.get_current_upstream_mut() {

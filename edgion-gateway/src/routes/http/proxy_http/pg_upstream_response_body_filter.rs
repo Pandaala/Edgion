@@ -20,9 +20,13 @@ struct ResponseProcessorRunSet {
 
 impl ResponseProcessorRunSet {
     fn take(ctx: &mut EdgionHttpContext) -> Self {
+        let (ai, semantic) = match ctx.ai_state_mut() {
+            Some(state) => (state.stream_processor.take(), state.semantic_processor.take()),
+            None => (None, None),
+        };
         Self {
-            ai: ctx.ai_stream_processor.take(),
-            semantic: ctx.semantic_response_processor.take(),
+            ai,
+            semantic,
             ordinary: std::mem::take(&mut ctx.stream_processors),
             released: false,
         }
@@ -47,8 +51,10 @@ impl ResponseProcessorRunSet {
     }
 
     fn restore(mut self, ctx: &mut EdgionHttpContext) {
-        ctx.ai_stream_processor = self.ai.take();
-        ctx.semantic_response_processor = self.semantic.take();
+        if let Some(state) = ctx.ai_state_mut() {
+            state.stream_processor = self.ai.take();
+            state.semantic_processor = self.semantic.take();
+        }
         ctx.stream_processors = std::mem::take(&mut self.ordinary);
         self.released = true;
     }
@@ -84,7 +90,9 @@ fn settle_driver_terminal(ctx: &mut EdgionHttpContext, winner: ResponseProcessor
         processor.finalize_incomplete("fail-close", cause.as_str());
         processor.release_inflight();
     }
-    ctx.canonical_record_batch = None;
+    if let Some(state) = ctx.ai_state_mut() {
+        state.canonical_record_batch = None;
+    }
     ctx.response_terminal_state.close_gateway();
     processors.restore(ctx);
     ctx.active_response_processor_slot = None;
@@ -93,11 +101,13 @@ fn settle_driver_terminal(ctx: &mut EdgionHttpContext, winner: ResponseProcessor
 /// Run private response-processor header callbacks after raw response retry
 /// arbitration. The processor set is fixed during the request stage.
 pub(crate) fn run_stream_processor_headers(response: &mut ResponseHeader, ctx: &mut EdgionHttpContext) {
-    if let Some(processor) = ctx.ai_stream_processor.as_mut() {
-        processor.on_response_header(response);
-    }
-    if let Some(processor) = ctx.semantic_response_processor.as_mut() {
-        processor.on_response_header(response);
+    if let Some(state) = ctx.ai_state_mut() {
+        if let Some(processor) = state.stream_processor.as_mut() {
+            processor.on_response_header(response);
+        }
+        if let Some(processor) = state.semantic_processor.as_mut() {
+            processor.on_response_header(response);
+        }
     }
     let mut processors = std::mem::take(&mut ctx.stream_processors);
     for processor in processors.iter_mut() {
@@ -111,18 +121,19 @@ pub(crate) fn run_stream_processor_headers(response: &mut ResponseHeader, ctx: &
 /// call lets H1 choose chunked framing, and the second prevents later async
 /// plugins from restoring a stale length.
 pub(crate) fn enforce_stream_processor_framing(response: &mut ResponseHeader, ctx: &EdgionHttpContext) {
-    if ctx
-        .ai_stream_processor
-        .as_ref()
-        .is_some_and(|processor| processor.changes_body_length())
-        || ctx
-            .semantic_response_processor
+    if ctx.ai_state().is_some_and(|state| {
+        state
+            .stream_processor
             .as_ref()
             .is_some_and(|processor| processor.changes_body_length())
-        || ctx
-            .stream_processors
-            .iter()
-            .any(|processor| processor.changes_body_length())
+            || state
+                .semantic_processor
+                .as_ref()
+                .is_some_and(|processor| processor.changes_body_length())
+    }) || ctx
+        .stream_processors
+        .iter()
+        .any(|processor| processor.changes_body_length())
         || ctx.attached_response_framing_reservations > 0
     {
         let _ = response.remove_header("content-length");
@@ -146,7 +157,7 @@ pub(crate) async fn run_stream_processors(
     sink: &mut ResponseBodySink,
 ) {
     ctx.response_body_processing_started = true;
-    if ctx.semantic_response_guard_claimed
+    if ctx.ai_state().is_some_and(|state| state.semantic_guard_claimed)
         && body
             .as_ref()
             .is_some_and(|chunk| chunk.len() > MAX_CANONICAL_SOURCE_CHUNK_BYTES)
@@ -159,7 +170,10 @@ pub(crate) async fn run_stream_processors(
         sink.terminate();
         return;
     }
-    if ctx.semantic_response_guard_claimed && ctx.canonical_record_batch.take().is_some() {
+    if ctx
+        .ai_state_mut()
+        .is_some_and(|state| state.semantic_guard_claimed && state.canonical_record_batch.take().is_some())
+    {
         settle_driver_terminal(
             ctx,
             ResponseProcessorSlot::Semantic,
@@ -170,8 +184,9 @@ pub(crate) async fn run_stream_processors(
         return;
     }
     if ctx.stream_processors.is_empty()
-        && ctx.ai_stream_processor.is_none()
-        && ctx.semantic_response_processor.is_none()
+        && ctx
+            .ai_state()
+            .is_none_or(|state| state.stream_processor.is_none() && state.semantic_processor.is_none())
     {
         return;
     }
@@ -232,7 +247,9 @@ pub(crate) async fn run_stream_processors(
             .winner_cause()
             .unwrap_or(ResponseTerminalCause::LegacyProcessor);
         processors.preempt(winner_slot, cause);
-        ctx.canonical_record_batch = None;
+        if let Some(state) = ctx.ai_state_mut() {
+            state.canonical_record_batch = None;
+        }
         if !sink.is_terminated() {
             ctx.response_terminal_state.settle_pending_without_event();
             sink.terminate();
@@ -243,7 +260,10 @@ pub(crate) async fn run_stream_processors(
     }
     processors.restore(ctx);
     ctx.active_response_processor_slot = None;
-    if ctx.semantic_response_guard_claimed && ctx.canonical_record_batch.take().is_some() {
+    if ctx
+        .ai_state_mut()
+        .is_some_and(|state| state.semantic_guard_claimed && state.canonical_record_batch.take().is_some())
+    {
         settle_driver_terminal(
             ctx,
             ResponseProcessorSlot::Semantic,
@@ -794,10 +814,8 @@ mod tests {
     async fn semantic_withholding_does_not_expose_empty_callbacks_to_ext_proc_slot() {
         let mut session = test_session().await;
         let ran = Arc::new(Mutex::new(false));
-        let mut ctx = crate::EdgionHttpContext {
-            semantic_response_guard_claimed: true,
-            ..Default::default()
-        };
+        let mut ctx = crate::EdgionHttpContext::default();
+        ctx.ensure_ai_state().semantic_guard_claimed = true;
         ctx.stream_processors.push(Box::new(MarkRan { ran: Arc::clone(&ran) }));
         let mut sink = ResponseBodySink::new();
         let mut body = None;
@@ -837,7 +855,7 @@ mod tests {
         let ran = Arc::new(Mutex::new(false));
 
         let mut ctx = crate::EdgionHttpContext::default();
-        ctx.ai_stream_processor = Some(Box::new(Terminator));
+        ctx.ensure_ai_state().stream_processor = Some(Box::new(Terminator));
         ctx.stream_processors.push(Box::new(MarkRan { ran: ran.clone() }));
         let mut sink = ResponseBodySink::new();
         let mut body = Some(Bytes::from_static(b"orig"));
@@ -856,11 +874,11 @@ mod tests {
         let mut session = test_session().await;
         let order = Arc::new(Mutex::new(Vec::new()));
         let mut ctx = crate::EdgionHttpContext::default();
-        ctx.ai_stream_processor = Some(Box::new(OrderMarker {
+        ctx.ensure_ai_state().stream_processor = Some(Box::new(OrderMarker {
             label: "ai",
             order: Arc::clone(&order),
         }));
-        ctx.semantic_response_processor = Some(Box::new(OrderMarker {
+        ctx.ensure_ai_state().semantic_processor = Some(Box::new(OrderMarker {
             label: "guardrail",
             order: Arc::clone(&order),
         }));
@@ -874,8 +892,8 @@ mod tests {
         run_stream_processors(&mut session, &mut ctx, &mut body, false, &mut sink).await;
 
         assert_eq!(&*order.lock(), &["ai", "guardrail", "ext-proc"]);
-        assert!(ctx.ai_stream_processor.is_some());
-        assert!(ctx.semantic_response_processor.is_some());
+        assert!(ctx.ai_state().unwrap().stream_processor.is_some());
+        assert!(ctx.ai_state().unwrap().semantic_processor.is_some());
         assert_eq!(ctx.stream_processors.len(), 1);
     }
 
@@ -932,16 +950,16 @@ mod tests {
         let ordinary = Arc::new(Mutex::new(LifecycleCounts::default()));
         let mut ctx = crate::EdgionHttpContext {
             response_stream_kind: ResponseStreamKind::Sse,
-            semantic_response_guard_claimed: true,
             ..Default::default()
         };
-        ctx.ai_stream_processor = Some(Box::new(UsageExtractionProcessor::new_with_quota(
+        ctx.ensure_ai_state().semantic_guard_claimed = true;
+        ctx.ensure_ai_state().stream_processor = Some(Box::new(UsageExtractionProcessor::new_with_quota(
             Arc::clone(&shared),
             Some(quota),
             true,
             true,
         )));
-        ctx.semantic_response_processor = Some(Box::new(LifecycleMarker {
+        ctx.ensure_ai_state().semantic_processor = Some(Box::new(LifecycleMarker {
             counts: Arc::clone(&semantic),
             terminate: false,
         }));
@@ -971,7 +989,7 @@ mod tests {
             let counts = ordinary.lock();
             assert_eq!((counts.ran, counts.preempted), (0, 1));
         }
-        assert!(ctx.canonical_record_batch.is_none());
+        assert!(ctx.ai_state().unwrap().canonical_record_batch.is_none());
         assert!(shared.gateway_terminated());
         assert!(matches!(
             ctx.response_terminal_state,
@@ -1008,14 +1026,15 @@ mod tests {
         let semantic = Arc::new(Mutex::new(LifecycleCounts::default()));
         let mut ctx = crate::EdgionHttpContext {
             response_stream_kind: ResponseStreamKind::Sse,
-            semantic_response_guard_claimed: true,
-            ai_stream_processor: Some(Box::new(anthropic_streaming_processor(Some(quota)))),
-            semantic_response_processor: Some(Box::new(LifecycleMarker {
-                counts: Arc::clone(&semantic),
-                terminate: false,
-            })),
             ..Default::default()
         };
+        let state = ctx.ensure_ai_state();
+        state.semantic_guard_claimed = true;
+        state.stream_processor = Some(Box::new(anthropic_streaming_processor(Some(quota))));
+        state.semantic_processor = Some(Box::new(LifecycleMarker {
+            counts: Arc::clone(&semantic),
+            terminate: false,
+        }));
         let mut body = Some(Bytes::from_static(b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"id\":\"msg_1\",\"model\":\"claude-provider\",\"role\":\"assistant\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n"));
         let mut sink = ResponseBodySink::new();
 
@@ -1030,7 +1049,7 @@ mod tests {
             .any(|part| part == b"claude-provider"));
         assert_eq!(sink.peek_extra().len(), 1);
         assert!(sink.is_terminated());
-        assert!(ctx.canonical_record_batch.is_none());
+        assert!(ctx.ai_state().unwrap().canonical_record_batch.is_none());
         let counts = semantic.lock();
         assert_eq!((counts.ran, counts.preempted), (0, 1));
     }
@@ -1041,14 +1060,15 @@ mod tests {
         let semantic = Arc::new(Mutex::new(LifecycleCounts::default()));
         let mut ctx = crate::EdgionHttpContext {
             response_stream_kind: ResponseStreamKind::Sse,
-            semantic_response_guard_claimed: true,
-            ai_stream_processor: Some(Box::new(anthropic_streaming_processor(None))),
-            semantic_response_processor: Some(Box::new(LifecycleMarker {
-                counts: Arc::clone(&semantic),
-                terminate: false,
-            })),
             ..Default::default()
         };
+        let state = ctx.ensure_ai_state();
+        state.semantic_guard_claimed = true;
+        state.stream_processor = Some(Box::new(anthropic_streaming_processor(None)));
+        state.semantic_processor = Some(Box::new(LifecycleMarker {
+            counts: Arc::clone(&semantic),
+            terminate: false,
+        }));
         let mut body = Some(Bytes::from_static(
             b"event: error\ndata: {\"type\":\"error\",\"private\":\"provider-payload\"}\n\n",
         ));
@@ -1065,7 +1085,7 @@ mod tests {
             .any(|part| part == b"provider-payload"));
         assert!(sink.peek_extra().is_empty());
         assert!(sink.is_terminated());
-        assert!(ctx.canonical_record_batch.is_none());
+        assert!(ctx.ai_state().unwrap().canonical_record_batch.is_none());
         let counts = semantic.lock();
         assert_eq!((counts.ran, counts.preempted), (0, 1));
     }
@@ -1103,7 +1123,7 @@ mod tests {
     async fn driver_natural_eos_and_logging_are_idempotent_for_bodyless_output() {
         let mut session = test_session().await;
         let mut ctx = crate::EdgionHttpContext::default();
-        ctx.ai_stream_processor = Some(Box::new(UsageExtractionProcessor::new(Arc::new(
+        ctx.ensure_ai_state().stream_processor = Some(Box::new(UsageExtractionProcessor::new(Arc::new(
             AiUsageShared::default(),
         ))));
         let mut body = None;
@@ -1132,7 +1152,7 @@ mod tests {
     async fn claimed_terminal_is_force_terminated_when_winner_returns_early() {
         let mut session = test_session().await;
         let mut ctx = crate::EdgionHttpContext::default();
-        ctx.semantic_response_processor = Some(Box::new(ClaimWithoutTerminate));
+        ctx.ensure_ai_state().semantic_processor = Some(Box::new(ClaimWithoutTerminate));
         let mut body = Some(Bytes::from_static(b"rejected"));
         let mut sink = ResponseBodySink::new();
 
@@ -1179,11 +1199,11 @@ mod tests {
         let semantic = Arc::new(Mutex::new(LifecycleCounts::default()));
         let ordinary = Arc::new(Mutex::new(LifecycleCounts::default()));
         let mut ctx = crate::EdgionHttpContext::default();
-        ctx.ai_stream_processor = Some(Box::new(LifecycleMarker {
+        ctx.ensure_ai_state().stream_processor = Some(Box::new(LifecycleMarker {
             counts: Arc::clone(&ai),
             terminate: false,
         }));
-        ctx.semantic_response_processor = Some(Box::new(LifecycleMarker {
+        ctx.ensure_ai_state().semantic_processor = Some(Box::new(LifecycleMarker {
             counts: Arc::clone(&semantic),
             terminate: false,
         }));
@@ -1197,18 +1217,16 @@ mod tests {
         assert_eq!(ai.lock().released, 1);
         assert_eq!(semantic.lock().released, 1);
         assert_eq!(ordinary.lock().released, 1);
-        assert!(ctx.ai_stream_processor.is_none());
-        assert!(ctx.semantic_response_processor.is_none());
+        assert!(ctx.ai_state().unwrap().stream_processor.is_none());
+        assert!(ctx.ai_state().unwrap().semantic_processor.is_none());
         assert!(ctx.stream_processors.is_empty());
     }
 
     #[tokio::test]
     async fn guarded_physical_callback_limit_is_inclusive_and_stale_handoff_fails_closed() {
         let mut session = test_session().await;
-        let mut ctx = crate::EdgionHttpContext {
-            semantic_response_guard_claimed: true,
-            ..Default::default()
-        };
+        let mut ctx = crate::EdgionHttpContext::default();
+        ctx.ensure_ai_state().semantic_guard_claimed = true;
         let mut exact = Some(Bytes::from(vec![b'x'; MAX_CANONICAL_SOURCE_CHUNK_BYTES]));
         let mut sink = ResponseBodySink::new();
         run_stream_processors(&mut session, &mut ctx, &mut exact, false, &mut sink).await;
@@ -1221,16 +1239,15 @@ mod tests {
         assert!(plus_one.is_none());
         assert!(sink.is_terminated());
 
-        let mut stale_ctx = crate::EdgionHttpContext {
-            semantic_response_guard_claimed: true,
-            canonical_record_batch: Some(crate::ai::canonical_sse::CanonicalRecordBatch::new()),
-            ..Default::default()
-        };
+        let mut stale_ctx = crate::EdgionHttpContext::default();
+        let state = stale_ctx.ensure_ai_state();
+        state.semantic_guard_claimed = true;
+        state.canonical_record_batch = Some(crate::ai::canonical_sse::CanonicalRecordBatch::new());
         let mut body = None;
         let mut sink = ResponseBodySink::new();
         run_stream_processors(&mut session, &mut stale_ctx, &mut body, true, &mut sink).await;
         assert!(sink.is_terminated());
-        assert!(stale_ctx.canonical_record_batch.is_none());
+        assert!(stale_ctx.ai_state().unwrap().canonical_record_batch.is_none());
     }
 
     #[test]

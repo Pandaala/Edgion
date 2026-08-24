@@ -1071,22 +1071,25 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn semantic_guard_active(&self) -> bool {
-        self.ctx.semantic_response_guard_claimed
+        self.ctx.ai_state().is_some_and(|state| state.semantic_guard_claimed)
     }
 
     fn publish_canonical_records(
         &mut self,
         batch: crate::ai::canonical_sse::CanonicalRecordBatch,
     ) -> Result<(), crate::ai::canonical_sse::CanonicalRecordBatch> {
-        if !self.ctx.semantic_response_guard_claimed || self.ctx.canonical_record_batch.is_some() {
+        let state = self.ctx.ensure_ai_state();
+        if !state.semantic_guard_claimed || state.canonical_record_batch.is_some() {
             return Err(batch);
         }
-        self.ctx.canonical_record_batch = Some(batch);
+        state.canonical_record_batch = Some(batch);
         Ok(())
     }
 
     fn take_canonical_records(&mut self) -> Option<crate::ai::canonical_sse::CanonicalRecordBatch> {
-        self.ctx.canonical_record_batch.take()
+        self.ctx
+            .ai_state_mut()
+            .and_then(|state| state.canonical_record_batch.take())
     }
 
     fn try_claim_response_terminal(&mut self, cause: crate::ai::terminal::ResponseTerminalCause) -> bool {
@@ -1105,14 +1108,17 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         crate::ai::terminal::AiClientStreamDialect,
         crate::ai::terminal::FinalResponseEligibility,
     )> {
-        Some((self.ctx.ai_client_stream_dialect?, self.ctx.final_response_eligibility?))
+        let state = self.ctx.ai_state()?;
+        Some((state.client_stream_dialect?, state.final_response_eligibility?))
     }
 
     fn disable_semantic_guard(&mut self) {
         if !self.ctx.response_body_processing_started {
-            self.ctx.semantic_response_guard_claimed = false;
-            self.ctx.canonical_record_batch = None;
-            self.ctx.semantic_response_processor = None;
+            if let Some(state) = self.ctx.ai_state_mut() {
+                state.semantic_guard_claimed = false;
+                state.canonical_record_batch = None;
+                state.semantic_processor = None;
+            }
         }
     }
 
@@ -1120,10 +1126,15 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
     ) -> bool {
-        if self.ctx.response_body_processing_started || self.ctx.semantic_response_processor.is_some() {
+        if self.ctx.response_body_processing_started
+            || self
+                .ctx
+                .ai_state()
+                .is_some_and(|state| state.semantic_processor.is_some())
+        {
             return false;
         }
-        self.ctx.semantic_response_processor = Some(processor);
+        self.ctx.ensure_ai_state().semantic_processor = Some(processor);
         true
     }
 
@@ -1156,11 +1167,13 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         identity: String,
         owner: std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>,
     ) -> bool {
-        if self.ctx.attached_guardrail.is_some() || self.ctx.semantic_response_guard_claimed {
+        if self.ctx.attached_guardrail.is_some()
+            || self.ctx.ai_state().is_some_and(|state| state.semantic_guard_claimed)
+        {
             return false;
         }
         self.ctx.attached_guardrail = Some((identity, owner));
-        self.ctx.semantic_response_guard_claimed = true;
+        self.ctx.ensure_ai_state().semantic_guard_claimed = true;
         self.ctx.attached_response_framing_reservations =
             self.ctx.attached_response_framing_reservations.saturating_add(1);
         true
@@ -1334,11 +1347,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn record_ai_guard_decision(&mut self, identity: String, generation: Option<u64>) {
-        if !self.ctx.ai_guard_decided.iter().any(|existing| existing == &identity) {
-            self.ctx.ai_guard_decided.push(identity);
+        let state = self.ctx.ensure_ai_state();
+        if !state.guard_decided.iter().any(|existing| existing == &identity) {
+            state.guard_decided.push(identity);
         }
         if generation.is_some() {
-            self.ctx.ai_guard_body_generation = generation;
+            state.guard_body_generation = generation;
         }
     }
 

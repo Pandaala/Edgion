@@ -231,7 +231,7 @@ impl<'a> AccessLogEntry<'a> {
             stage_logs: &ctx.stage_logs,
             conn_est: None,
             upstream_authority: ctx.upstream_authority.as_deref(),
-            genai: ctx.genai_summary.as_ref(),
+            genai: ctx.ai_state().and_then(|state| state.summary.as_ref()),
             geo,
             ext: LogExt::default(),
         }

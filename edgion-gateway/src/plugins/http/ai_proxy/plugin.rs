@@ -236,7 +236,7 @@ impl AiProxy {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
-        if session.ctx().ai_attempt_plan.is_some() {
+        if session.ctx().has_ai_attempt_plan() {
             return Self::reject(session, log, "duplicate-ai-proxy", AiProxyError::BackendUnavailable);
         }
 
@@ -281,7 +281,7 @@ impl AiProxy {
         // body is derived from the canonical bytes captured below. This is the
         // exact, scope-independent ordering guarantee; plugin ordering alone
         // cannot provide it.
-        if let Some(expected) = session.ctx().ai_guard_body_generation {
+        if let Some(expected) = session.ctx().ai_state().and_then(|state| state.guard_body_generation) {
             if session.ctx().request_body.generation() != Some(expected) {
                 session.add_error(edgion_resources::EdgionStatus::BodyMutationConflict);
                 return Self::reject(session, log, "guard body changed", AiProxyError::BackendUnavailable);

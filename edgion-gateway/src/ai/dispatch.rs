@@ -50,14 +50,14 @@ pub fn commit_ai_attempt_context(
     ctx: &mut EdgionHttpContext,
     target: &mut PreparedAiAttempt,
 ) -> Result<(), AiDispatchError> {
-    let quota = match ctx.ai_attempt_plan.as_mut() {
+    let quota = match ctx.ensure_ai_state().attempt_plan.as_mut() {
         Some(AiAttemptPlan::Ready(plan)) => plan.quota.take(),
         _ => None,
     };
     let mut context = target.ai_context.take().ok_or(AiDispatchError::InvalidConfiguration)?;
     context.quota = quota;
     ctx.replace_ai_attempt_context(context);
-    ctx.ai_stream_processor = target.response_processor.take();
+    ctx.ensure_ai_state().stream_processor = target.response_processor.take();
     Ok(())
 }
 
@@ -97,7 +97,9 @@ pub enum AiPeerPredispatchFailure {
 impl AiPeerPredispatchFailure {
     /// Release predispatch accounting and advance at the failure's scope.
     pub fn finish(self, ctx: &mut EdgionHttpContext) -> bool {
-        ctx.ai_attempt_runtime.finish_predispatch();
+        if let Some(state) = ctx.ai_state_mut() {
+            state.attempt_runtime.finish_predispatch();
+        }
         match self {
             Self::Endpoint => handle_ai_predispatch_service_failure(ctx),
         }
@@ -142,7 +144,7 @@ pub fn prepare_first_attempt(
     if let Some(error) = ai_predispatch_deadline(ctx) {
         return Err(error);
     }
-    let Some(mut plan) = ctx.ai_attempt_plan.take() else {
+    let Some(mut plan) = ctx.take_ai_attempt_plan() else {
         return Err(AiDispatchError::InvalidConfiguration);
     };
     let result = match &mut plan {
@@ -153,7 +155,7 @@ pub fn prepare_first_attempt(
             prepare_ready_attempt(session, ctx, ready, entropy)
         }
     };
-    ctx.ai_attempt_plan = Some(plan);
+    ctx.restore_ai_attempt_plan(plan);
     result
 }
 
@@ -161,7 +163,7 @@ pub fn prepare_first_attempt(
 /// to write the upstream request. Pre-connect failures consume no scheduler
 /// attempt, quota reservation, or retry-budget denominator sample.
 pub fn mark_ai_dispatch_started(ctx: &mut EdgionHttpContext) -> Result<(), AiDispatchError> {
-    let Some(mut plan) = ctx.ai_attempt_plan.take() else {
+    let Some(mut plan) = ctx.take_ai_attempt_plan() else {
         return Ok(());
     };
     let mut newly_dispatched = false;
@@ -182,23 +184,24 @@ pub fn mark_ai_dispatch_started(ctx: &mut EdgionHttpContext) -> Result<(), AiDis
         },
     };
     if newly_dispatched {
-        ctx.ai_attempt_runtime.mark_dispatched();
+        let state = ctx.ensure_ai_state();
+        state.attempt_runtime.mark_dispatched();
         if let Some(budget) = ctx
-            .ai_effective_policy
-            .as_ref()
+            .ai_state()
+            .and_then(|state| state.effective_policy.as_ref())
             .and_then(|policy| policy.retry_budget.as_ref())
         {
             budget.on_attempt();
         }
     }
-    ctx.ai_attempt_plan = Some(plan);
+    ctx.restore_ai_attempt_plan(plan);
     result
 }
 
 /// Handle a failure before the first upstream byte can be written. This skips
 /// the candidate without consuming scheduler capacity or retry budget.
 pub fn handle_ai_predispatch_failure(ctx: &mut EdgionHttpContext, gates_allow_retry: bool) -> bool {
-    let Some(mut plan) = ctx.ai_attempt_plan.take() else {
+    let Some(mut plan) = ctx.take_ai_attempt_plan() else {
         return false;
     };
     let retry = match &mut plan {
@@ -209,12 +212,12 @@ pub fn handle_ai_predispatch_failure(ctx: &mut EdgionHttpContext, gates_allow_re
         }
         _ => false,
     };
-    ctx.ai_attempt_plan = Some(plan);
+    ctx.restore_ai_attempt_plan(plan);
     retry
 }
 
 pub fn handle_ai_predispatch_service_failure(ctx: &mut EdgionHttpContext) -> bool {
-    let Some(mut plan) = ctx.ai_attempt_plan.take() else {
+    let Some(mut plan) = ctx.take_ai_attempt_plan() else {
         return false;
     };
     let retry = match &mut plan {
@@ -223,7 +226,7 @@ pub fn handle_ai_predispatch_service_failure(ctx: &mut EdgionHttpContext) -> boo
         }
         _ => false,
     };
-    ctx.ai_attempt_plan = Some(plan);
+    ctx.restore_ai_attempt_plan(plan);
     retry
 }
 
@@ -253,7 +256,7 @@ fn handle_dispatched_outcome(
     ambiguous: bool,
     transport_failure: bool,
 ) -> Result<AiRetryDecision, AiDispatchError> {
-    let Some(mut plan) = ctx.ai_attempt_plan.take() else {
+    let Some(mut plan) = ctx.take_ai_attempt_plan() else {
         return Err(AiDispatchError::InvalidConfiguration);
     };
     let result = match &mut plan {
@@ -287,8 +290,8 @@ fn handle_dispatched_outcome(
         }
         AiAttemptPlan::Ready(ready) => {
             let budget_allowed = ctx
-                .ai_effective_policy
-                .as_ref()
+                .ai_state()
+                .and_then(|state| state.effective_policy.as_ref())
                 .and_then(|policy| policy.retry_budget.as_ref())
                 .is_none_or(|budget| budget.try_retry());
             if !budget_allowed {
@@ -316,7 +319,7 @@ fn handle_dispatched_outcome(
             }
         }
     };
-    ctx.ai_attempt_plan = Some(plan);
+    ctx.restore_ai_attempt_plan(plan);
     result
 }
 
@@ -334,7 +337,7 @@ fn prepare_ready_attempt(
     plan: &mut ReadyAiAttemptPlan,
     entropy: u128,
 ) -> Result<PreparedAiAttempt, AiDispatchError> {
-    if let Some(baseline) = ctx.ai_request_baseline.clone() {
+    if let Some(baseline) = ctx.ai_state().and_then(|state| state.request_baseline.clone()) {
         *session.req_header_mut() = baseline;
         let config = edgion_resources::path_normalization::get_path_normalization_config();
         ctx.refresh_normalized_path(session.req_header(), config);
@@ -400,8 +403,8 @@ fn prepare_ready_attempt(
     ctx.overwrite_request_body(body)
         .map_err(|_| AiDispatchError::InvalidConfiguration)?;
 
-    if ctx.ai_request_baseline.is_none() {
-        ctx.ai_request_baseline = Some(session.req_header().clone());
+    if ctx.ai_state().is_none_or(|state| state.request_baseline.is_none()) {
+        ctx.ensure_ai_state().request_baseline = Some(session.req_header().clone());
     }
     apply_backend_request_headers(session, ctx, &selected_route_backend)?;
     let uri = provider_uri(
@@ -455,8 +458,8 @@ fn prepare_ready_attempt(
     usage.set_input_chars(plan.input_chars);
     let eos = crate::ai::attempt_runtime::new_eos_latch();
     let quota_accumulator = plan.quota.as_ref().map(|quota| quota.accumulator()).or_else(|| {
-        ctx.ai
-            .as_ref()
+        ctx.ai_state()
+            .and_then(|state| state.request.as_ref())
             .and_then(|ai| ai.quota.as_ref())
             .map(|quota| quota.accumulator())
     });
@@ -1112,7 +1115,7 @@ mod tests {
             target_name: "provider".to_string(),
             reason: Some("NoMatchingReferenceGrant".to_string()),
         }));
-        ctx.ai_attempt_plan = Some(AiAttemptPlan::Ready(plan));
+        ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(plan));
         let mut session = test_session().await;
 
         assert!(matches!(
@@ -1120,7 +1123,7 @@ mod tests {
             Err(AiDispatchError::InvalidConfiguration)
         ));
         assert!(ctx.selected_backend.is_none());
-        assert!(ctx.ai_request_baseline.is_none());
+        assert!(ctx.ai_state().unwrap().request_baseline.is_none());
         assert!(ctx.request_body.read_all().await.unwrap().is_none());
         assert!(session.req_header().headers.get("authorization").is_none());
     }
@@ -1141,7 +1144,7 @@ mod tests {
         // This route generation contains a denied slot. The captured plan owns
         // an earlier permitted logical handle and must not re-read this route.
         ctx.route_unit = Some(denied_route_unit());
-        ctx.ai_attempt_plan = Some(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
+        ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
         let mut session = test_session().await;
 
         let prepared = prepare_first_attempt(&mut session, &mut ctx, 0, None, 0).unwrap();
@@ -1165,14 +1168,14 @@ mod tests {
         let mut ctx = EdgionHttpContext::new();
         ctx.route_unit = Some(request_deadline_route_unit(Duration::from_millis(1)));
         ctx.start_time = Instant::now() - Duration::from_secs(1);
-        ctx.ai_attempt_plan = Some(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
+        ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
         let mut session = test_session().await;
 
         assert!(matches!(
             prepare_first_attempt(&mut session, &mut ctx, 0, None, 0),
             Err(AiDispatchError::RequestDeadlineExceeded)
         ));
-        let Some(AiAttemptPlan::Ready(plan)) = ctx.ai_attempt_plan.as_ref() else {
+        let Some(AiAttemptPlan::Ready(plan)) = ctx.ai_state().unwrap().attempt_plan.as_ref() else {
             panic!("deadline gate must preserve the ready plan");
         };
         assert_eq!(plan.scheduler.dispatch_count(), 0);
@@ -1189,14 +1192,14 @@ mod tests {
         };
         let mut ctx = EdgionHttpContext::new();
         ctx.request_info.grpc_client_deadline = Some(Instant::now() - Duration::from_secs(1));
-        ctx.ai_attempt_plan = Some(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
+        ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
         let mut session = test_session().await;
 
         assert!(matches!(
             prepare_first_attempt(&mut session, &mut ctx, 0, None, 0),
             Err(AiDispatchError::GrpcDeadlineExceeded)
         ));
-        let Some(AiAttemptPlan::Ready(plan)) = ctx.ai_attempt_plan.as_ref() else {
+        let Some(AiAttemptPlan::Ready(plan)) = ctx.ai_state().unwrap().attempt_plan.as_ref() else {
             panic!("deadline gate must preserve the ready plan");
         };
         assert_eq!(plan.scheduler.dispatch_count(), 0);
@@ -1309,10 +1312,10 @@ mod tests {
     #[test]
     fn dispatch_mark_is_idempotent() {
         let mut ctx = EdgionHttpContext::new();
-        ctx.ai_attempt_plan = Some(AiAttemptPlan::Ready(candidate_plan()));
+        ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan()));
         mark_ai_dispatch_started(&mut ctx).unwrap();
         mark_ai_dispatch_started(&mut ctx).unwrap();
-        let Some(AiAttemptPlan::Ready(plan)) = ctx.ai_attempt_plan.as_ref() else {
+        let Some(AiAttemptPlan::Ready(plan)) = ctx.ai_state().unwrap().attempt_plan.as_ref() else {
             panic!("ready plan must remain installed");
         };
         assert_eq!(plan.scheduler.dispatch_count(), 1);
@@ -1321,14 +1324,14 @@ mod tests {
     #[test]
     fn dispatch_retry_budget_denies_and_counts_each_dispatch_once() {
         let mut denied = EdgionHttpContext::new();
-        denied.ai_attempt_plan = Some(AiAttemptPlan::Ready(candidate_plan_with_retries(1)));
-        denied.ai_effective_policy = Some(retry_policy(0).0);
+        denied.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan_with_retries(1)));
+        denied.ensure_ai_state().effective_policy = Some(retry_policy(0).0);
         mark_ai_dispatch_started(&mut denied).unwrap();
         assert_eq!(
             handle_ai_transport_failure(&mut denied, true, true, false),
             Ok(AiRetryDecision::BudgetDenied)
         );
-        let Some(AiAttemptPlan::Ready(plan)) = denied.ai_attempt_plan.as_ref() else {
+        let Some(AiAttemptPlan::Ready(plan)) = denied.ai_state().unwrap().attempt_plan.as_ref() else {
             panic!("ready plan must remain installed");
         };
         assert_eq!(
@@ -1337,9 +1340,9 @@ mod tests {
         );
 
         let mut sampled_once = EdgionHttpContext::new();
-        sampled_once.ai_attempt_plan = Some(AiAttemptPlan::Ready(candidate_plan()));
+        sampled_once.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan()));
         let (policy, budget) = retry_policy(51);
-        sampled_once.ai_effective_policy = Some(policy);
+        sampled_once.ensure_ai_state().effective_policy = Some(policy);
         mark_ai_dispatch_started(&mut sampled_once).unwrap();
         mark_ai_dispatch_started(&mut sampled_once).unwrap();
         assert!(budget.try_retry(), "one sampled dispatch permits the first retry");
@@ -1352,7 +1355,7 @@ mod tests {
     #[test]
     fn rejected_plan_never_crosses_dispatch_boundary() {
         let mut ctx = EdgionHttpContext::new();
-        ctx.ai_attempt_plan = Some(AiAttemptPlan::Rejected(crate::ai::AiPlanError::InvalidBackend));
+        ctx.restore_ai_attempt_plan(AiAttemptPlan::Rejected(crate::ai::AiPlanError::InvalidBackend));
         assert_eq!(mark_ai_dispatch_started(&mut ctx), Err(AiDispatchError::Rejected));
     }
 
@@ -1497,10 +1500,10 @@ mod tests {
         plan.scheduler.select_backend(0).unwrap();
         plan.scheduler.select_credential(u16::MAX, 0).unwrap();
         let mut ctx = EdgionHttpContext::new();
-        ctx.ai_attempt_plan = Some(AiAttemptPlan::Ready(plan));
+        ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(plan));
 
         assert!(AiPeerPredispatchFailure::Endpoint.finish(&mut ctx));
-        let Some(AiAttemptPlan::Ready(ready)) = ctx.ai_attempt_plan.as_mut() else {
+        let Some(AiAttemptPlan::Ready(ready)) = ctx.ensure_ai_state().attempt_plan.as_mut() else {
             panic!("ready plan must remain installed");
         };
         assert!(matches!(ready.scheduler.next_step(), NextStep::PickBackend(_)));
@@ -1515,13 +1518,13 @@ mod tests {
     #[test]
     fn ambiguous_failure_replays_only_when_explicitly_requested() {
         let mut denied_ctx = EdgionHttpContext::new();
-        denied_ctx.ai_attempt_plan = Some(AiAttemptPlan::Ready(candidate_plan_with_retries(1)));
+        denied_ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan_with_retries(1)));
         mark_ai_dispatch_started(&mut denied_ctx).unwrap();
         assert_eq!(
             handle_ai_transport_failure(&mut denied_ctx, false, true, true),
             Ok(AiRetryDecision::Final)
         );
-        let Some(AiAttemptPlan::Ready(denied)) = denied_ctx.ai_attempt_plan.as_ref() else {
+        let Some(AiAttemptPlan::Ready(denied)) = denied_ctx.ai_state().unwrap().attempt_plan.as_ref() else {
             panic!("ready plan must remain installed");
         };
         assert_eq!(
@@ -1531,13 +1534,13 @@ mod tests {
         assert_eq!(denied.scheduler.failures()[0].kind, DispatchFailureKind::Ambiguous);
 
         let mut allowed_ctx = EdgionHttpContext::new();
-        allowed_ctx.ai_attempt_plan = Some(AiAttemptPlan::Ready(candidate_plan_with_retries(1)));
+        allowed_ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(candidate_plan_with_retries(1)));
         mark_ai_dispatch_started(&mut allowed_ctx).unwrap();
         assert_eq!(
             handle_ai_transport_failure(&mut allowed_ctx, true, true, true),
             Ok(AiRetryDecision::Retry)
         );
-        let Some(AiAttemptPlan::Ready(allowed)) = allowed_ctx.ai_attempt_plan.as_ref() else {
+        let Some(AiAttemptPlan::Ready(allowed)) = allowed_ctx.ai_state().unwrap().attempt_plan.as_ref() else {
             panic!("ready plan must remain installed");
         };
         assert!(matches!(allowed.scheduler.next_step(), NextStep::PickCredential(_)));

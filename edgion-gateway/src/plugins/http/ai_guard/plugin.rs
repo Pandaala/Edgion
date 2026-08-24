@@ -160,7 +160,11 @@ impl RequestFilter for AiGuard {
         // Re-entry latch. The backendRef-scoped chain re-runs on every upstream
         // attempt, and a published mask is not rolled back by rewind, so a
         // second pass would mask its own output.
-        if session.ctx().ai_guard_decided.iter().any(|id| id == &self.identity) {
+        if session
+            .ctx()
+            .ai_state()
+            .is_some_and(|state| state.guard_decided.iter().any(|id| id == &self.identity))
+        {
             return PluginRunningResult::GoodNext;
         }
 
@@ -174,7 +178,7 @@ impl RequestFilter for AiGuard {
 
         // Ordering fault: AiProxy already captured the canonical body, so a
         // mask published now could never reach the provider.
-        if session.ctx().ai_attempt_plan.is_some() {
+        if session.ctx().has_ai_attempt_plan() {
             return Self::configuration_fault(session, log, "guard after ai proxy", EdgionStatus::BodyMutationConflict);
         }
 
@@ -457,7 +461,7 @@ mod tests {
         for mode in ["error", "contentFilter"] {
             let guard = guard(reject_rule(), &format!("rejectionMode: {mode}\nfailOpen: true\n"));
             let mut ctx = ctx_with_body();
-            ctx.ai_attempt_plan = Some(AiAttemptPlan::Rejected(AiPlanError::InvalidBackend));
+            ctx.restore_ai_attempt_plan(AiAttemptPlan::Rejected(AiPlanError::InvalidBackend));
 
             let mut session = MockPluginSession::new();
             session.expect_ctx().return_const(ctx);
@@ -486,7 +490,9 @@ mod tests {
     async fn a_re_entered_guard_short_circuits_without_masking_again() {
         let guard = guard(mask_rule(), "");
         let mut ctx = ctx_with_body();
-        ctx.ai_guard_decided.push("test/requestPlugins/#0".to_string());
+        ctx.ensure_ai_state()
+            .guard_decided
+            .push("test/requestPlugins/#0".to_string());
 
         let mut session = MockPluginSession::new();
         session.expect_ctx().return_const(ctx);

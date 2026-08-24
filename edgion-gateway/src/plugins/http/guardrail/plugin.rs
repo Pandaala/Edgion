@@ -149,7 +149,10 @@ impl UpstreamResponse for Guardrail {
         let encoding_ok = session
             .get_response_header("content-encoding")
             .is_none_or(|value| value.eq_ignore_ascii_case("identity"));
-        let canonical_ai = session.ctx().ai_stream_processor.is_some();
+        let canonical_ai = session
+            .ctx()
+            .ai_state()
+            .is_some_and(|state| state.stream_processor.is_some());
         if !(200..300).contains(&status) || !content_type_ok || !encoding_ok || !canonical_ai {
             return self.precommit_failure(session, &owner, "response-not-applicable", log);
         }

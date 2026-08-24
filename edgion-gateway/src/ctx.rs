@@ -825,6 +825,34 @@ pub enum SessionPersistenceState {
     InjectUpdate,
 }
 
+/// Session-persistence-only state allocated when the matched route enables
+/// session persistence.
+#[derive(Debug)]
+pub(crate) struct SessionPersistenceContext {
+    /// Response action settled by token extraction and fallback handling.
+    pub(crate) state: SessionPersistenceState,
+    /// Sticky endpoint for the next attempt. Consumed on first use.
+    pub(crate) target_addr: Option<std::net::SocketAddr>,
+    /// Sticky endpoint retained across retries for strict mode.
+    pub(crate) sticky_addr: Option<std::net::SocketAddr>,
+    /// Optional typed scope used by the canonical affinity token/map.
+    pub(crate) token_scope: Option<String>,
+    /// Whether an earlier attempt consumed the sticky endpoint.
+    pub(crate) sticky_consumed: bool,
+}
+
+impl Default for SessionPersistenceContext {
+    fn default() -> Self {
+        Self {
+            state: SessionPersistenceState::Inactive,
+            target_addr: None,
+            sticky_addr: None,
+            token_scope: None,
+            sticky_consumed: false,
+        }
+    }
+}
+
 /// Stored internal jump target info (lightweight, survives retries via Clone)
 ///
 /// Unlike DirectEndpointPreset which specifies an exact endpoint address,
@@ -1119,6 +1147,47 @@ pub enum ResponseStreamKind {
     Sse,
 }
 
+/// AI-only state allocated on first effective AI plugin action.
+///
+/// Keep this boxed from [`EdgionHttpContext`]: several payloads have large
+/// inline representations even while wrapped in `Option`, especially
+/// `AiAttemptPlan`. The box keeps ordinary HTTP requests independent of that
+/// storage cost while retaining one allocation and one ownership boundary for
+/// the complete AI exchange.
+#[derive(Default)]
+pub(crate) struct AiHttpState {
+    /// Bounded request metadata and shared atomic usage counters. Contains no
+    /// prompt or credential.
+    pub(crate) request: Option<AiRequestContext>,
+    /// Immutable canonical request and candidate snapshot for forwarding. The
+    /// canonical body is never rendered by Debug or access logging.
+    pub(crate) attempt_plan: Option<AiAttemptPlan>,
+    /// Request-body generation observed by `AiGuard` when its decision settled.
+    pub(crate) guard_body_generation: Option<u64>,
+    /// Guard entries that already decided; prevents retry re-entry.
+    pub(crate) guard_decided: Vec<String>,
+    /// Active-attempt and pending Redis settlement state.
+    pub(crate) attempt_runtime: crate::ai::attempt_runtime::AiAttemptRuntimeState,
+    /// Request-captured typed destination policy for the selected AI backend.
+    pub(crate) effective_policy: Option<Arc<crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy>>,
+    /// Pristine post-rule request used to rebuild later AI attempts.
+    pub(crate) request_baseline: Option<pingora_http::RequestHeader>,
+    /// Replaceable provider-aware response processor for the active attempt.
+    pub(crate) stream_processor: Option<Box<dyn StreamingResponseProcessor>>,
+    /// Client-facing stream dialect selected at canonical AI ingress.
+    pub(crate) client_stream_dialect: Option<AiClientStreamDialect>,
+    /// Final method/status/media eligibility captured after the response onion.
+    pub(crate) final_response_eligibility: Option<FinalResponseEligibility>,
+    /// Immutable GenAI usage summary committed once during final logging.
+    pub(crate) summary: Option<GenAiSummary>,
+    /// Whether a semantic response guard claimed the canonical AI source.
+    pub(crate) semantic_guard_claimed: bool,
+    /// Same-callback handoff from the canonical source to the semantic guard.
+    pub(crate) canonical_record_batch: Option<crate::ai::canonical_sse::CanonicalRecordBatch>,
+    /// Canonical semantic guard, run after the AI source processor.
+    pub(crate) semantic_processor: Option<Box<dyn StreamingResponseProcessor>>,
+}
+
 pub struct EdgionHttpContext {
     /// Request start time for latency calculation
     pub start_time: Instant,
@@ -1273,27 +1342,9 @@ pub struct EdgionHttpContext {
     /// Per-request mirror state for RequestMirror plugin.
     pub mirror_state: Option<MirrorState>,
 
-    /// Session persistence state (set during request phase).
-    /// When InjectNew or InjectUpdate, upstream_response_filter will inject a token.
-    pub sp_state: SessionPersistenceState,
-
-    /// Session persistence: resolved target endpoint from affinity map lookup.
-    /// When Some, try_get_peer will route directly to this addr instead of running LB.
-    pub sp_target_addr: Option<std::net::SocketAddr>,
-
-    /// Session persistence: the sticky target resolved from the affinity map,
-    /// retained across attempts so a strict-mode retry can re-pin to the same
-    /// backend (`sp_target_addr` is consumed by `take()` on the first attempt).
-    /// Plain field, no serde attribute (`EdgionHttpContext` has no serde derive).
-    pub sp_sticky_addr: Option<std::net::SocketAddr>,
-    /// Optional typed scope used by the canonical affinity token/map.
-    pub sp_token_scope: Option<String>,
-
-    /// Direct evidence that an earlier attempt consumed the SP sticky target
-    /// (`sp_target_addr.take()` returned `Some`). Drives the cross-attempt token
-    /// refresh in `upstream_peer_http`. Plain field, no serde attribute
-    /// (`EdgionHttpContext` has no serde derive).
-    pub sp_sticky_consumed: bool,
+    /// Lazily allocated state for routes that enable session persistence.
+    /// Ordinary routes retain only this nullable pointer.
+    pub(crate) session_persistence: Option<Box<SessionPersistenceContext>>,
 
     /// Per-Gateway operator override for loopback upstream addresses.
     /// Link-local / metadata ranges are never allowed by this switch.
@@ -1397,51 +1448,9 @@ pub struct EdgionHttpContext {
     /// via `PluginSession::resolved_route_ext_ref(index)`.
     pub resolved_route_ext_refs: Option<Arc<Vec<Option<Arc<PluginRuntime>>>>>,
 
-    /// Bounded AI request metadata and shared atomic usage counters. Set once
-    /// by the first effective AiProxy entry; contains no prompt or credential.
-    pub ai: Option<AiRequestContext>,
-
-    /// Immutable canonical request and candidate snapshot for AI forwarding.
-    /// The canonical body is never rendered by Debug or access logging.
-    pub ai_attempt_plan: Option<AiAttemptPlan>,
-
-    /// Request-body generation observed by `AiGuard` when it settled its
-    /// decision, and the identities of guard entries that already decided.
-    ///
-    /// `AiProxy` compares the generation against the current one after reading
-    /// the body: a difference means something mutated the body between the
-    /// guard and the proxy, so the guard's mask is not what the provider would
-    /// receive. This is the exact, scope-independent ordering guarantee;
-    /// plugin ordering alone cannot provide it.
-    pub ai_guard_body_generation: Option<u64>,
-    /// One-shot latch so a re-entered guard (the backendRef chain re-runs on
-    /// every upstream attempt) never selects, evaluates, or masks twice.
-    pub ai_guard_decided: Vec<String>,
-
-    /// Bounded active-attempt and pending Redis settlement state. Async work is
-    /// drained only at the next-attempt and universal logging seams.
-    pub ai_attempt_runtime: crate::ai::attempt_runtime::AiAttemptRuntimeState,
-
-    /// Attempt-owned aggregate permit for a non-AI logical backend.
-
-    /// Request-captured canonical DNS and dial-time egress classifier for a
-    /// routed external backend. Retries share its bounded resolver memo.
-    pub(crate) routed_external_resolver: Option<Arc<crate::plugins::http::common::outbound::egress::EgressResolver>>,
-
-    /// Request-captured typed destination policy for the selected AI backend.
-    pub ai_effective_policy: Option<Arc<crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy>>,
-
-    /// Pristine post-rule request used to rebuild later AI attempts.
-    pub ai_request_baseline: Option<pingora_http::RequestHeader>,
-
-    /// Replaceable provider-aware response processor for the active AI attempt.
-    pub ai_stream_processor: Option<Box<dyn StreamingResponseProcessor>>,
-
-    /// Client-facing AI stream dialect selected at canonical AI ingress.
-    pub(crate) ai_client_stream_dialect: Option<AiClientStreamDialect>,
-
-    /// Final method/status/media eligibility captured after the response onion.
-    pub(crate) final_response_eligibility: Option<FinalResponseEligibility>,
+    /// Lazily allocated AI-only request, attempt, response, and accounting
+    /// state. Ordinary HTTP requests retain only this nullable pointer.
+    pub(crate) ai_state: Option<Box<AiHttpState>>,
 
     /// Stable processor instance currently executing in the response driver.
     pub(crate) active_response_processor_slot: Option<ResponseProcessorSlot>,
@@ -1449,27 +1458,11 @@ pub struct EdgionHttpContext {
     /// First-wins request-local terminal and close ownership.
     pub(crate) response_terminal_state: ResponseTerminalState,
 
-    /// Immutable GenAI usage summary committed once during final logging.
-    /// `Some` is also the idempotence sentinel for metric emission.
-    pub genai_summary: Option<GenAiSummary>,
-
     /// Streaming-response processors installed for this request by request-stage
     /// plugins (e.g. AiProxy's usage extractor). Run in installation order from
     /// `pg_upstream_response_body_filter`, before the read-only body-filter
     /// chains. Not operator-facing; not a plugin stage.
     pub stream_processors: Vec<Box<dyn StreamingResponseProcessor>>,
-
-    /// Whether one request-stage semantic response guard claimed the canonical
-    /// AI source. The first matching guard wins for the request lifetime.
-    pub semantic_response_guard_claimed: bool,
-
-    /// Same-callback handoff from the canonical AI source to the dedicated
-    /// semantic guard. It is never a cross-request or detached queue.
-    pub canonical_record_batch: Option<crate::ai::canonical_sse::CanonicalRecordBatch>,
-
-    /// Dedicated canonical semantic guard. It runs after the AI source and
-    /// before every ordinary writable response processor.
-    pub semantic_response_processor: Option<Box<dyn StreamingResponseProcessor>>,
 
     /// Request-scoped ExtProc transactions keyed by the compiled request-entry
     /// identity. The request filter and its internal response companion share
@@ -1612,12 +1605,30 @@ impl EdgionHttpContext {
         }
     }
 
+    #[inline]
+    pub(crate) fn session_persistence(&self) -> Option<&SessionPersistenceContext> {
+        self.session_persistence.as_deref()
+    }
+
+    #[inline]
+    pub(crate) fn session_persistence_mut(&mut self) -> Option<&mut SessionPersistenceContext> {
+        self.session_persistence.as_deref_mut()
+    }
+
+    #[inline]
+    pub(crate) fn ensure_session_persistence(&mut self) -> &mut SessionPersistenceContext {
+        self.session_persistence
+            .get_or_insert_with(|| Box::new(SessionPersistenceContext::default()))
+            .as_mut()
+    }
+
     pub(crate) fn try_set_ai_request_context(&mut self, context: AiRequestContext) -> bool {
-        if self.ai.is_some() {
+        let state = self.ensure_ai_state();
+        if state.request.is_some() {
             false
         } else {
-            self.ai = Some(context);
-            self.ai_client_stream_dialect = Some(AiClientStreamDialect::OpenAiCompatibleSse);
+            state.request = Some(context);
+            state.client_stream_dialect = Some(AiClientStreamDialect::OpenAiCompatibleSse);
             true
         }
     }
@@ -1625,8 +1636,9 @@ impl EdgionHttpContext {
     /// Replace attempt-local provider/usage state while retaining the one
     /// request-wide quota handle across AI failover attempts.
     pub(crate) fn replace_ai_attempt_context(&mut self, mut context: AiRequestContext) {
-        self.ai_client_stream_dialect = Some(AiClientStreamDialect::OpenAiCompatibleSse);
-        if let Some(mut previous) = self.ai.take() {
+        let state = self.ensure_ai_state();
+        state.client_stream_dialect = Some(AiClientStreamDialect::OpenAiCompatibleSse);
+        if let Some(mut previous) = state.request.take() {
             if context.quota.is_none() {
                 context.quota = previous.quota.take();
             }
@@ -1634,16 +1646,49 @@ impl EdgionHttpContext {
                 context.quota_status = previous.quota_status;
             }
         }
-        self.ai = Some(context);
+        state.request = Some(context);
     }
 
     pub(crate) fn try_set_ai_attempt_plan(&mut self, plan: AiAttemptPlan) -> bool {
-        if self.ai_attempt_plan.is_some() {
+        let state = self.ensure_ai_state();
+        if state.attempt_plan.is_some() {
             false
         } else {
-            self.ai_attempt_plan = Some(plan);
+            state.attempt_plan = Some(plan);
             true
         }
+    }
+
+    #[inline]
+    pub(crate) fn ai_state(&self) -> Option<&AiHttpState> {
+        self.ai_state.as_deref()
+    }
+
+    #[inline]
+    pub(crate) fn ai_state_mut(&mut self) -> Option<&mut AiHttpState> {
+        self.ai_state.as_deref_mut()
+    }
+
+    #[inline]
+    pub(crate) fn ensure_ai_state(&mut self) -> &mut AiHttpState {
+        self.ai_state
+            .get_or_insert_with(|| Box::new(AiHttpState::default()))
+            .as_mut()
+    }
+
+    #[inline]
+    pub(crate) fn has_ai_attempt_plan(&self) -> bool {
+        self.ai_state().is_some_and(|state| state.attempt_plan.is_some())
+    }
+
+    #[inline]
+    pub(crate) fn take_ai_attempt_plan(&mut self) -> Option<AiAttemptPlan> {
+        self.ai_state_mut()?.attempt_plan.take()
+    }
+
+    #[inline]
+    pub(crate) fn restore_ai_attempt_plan(&mut self, plan: AiAttemptPlan) {
+        self.ensure_ai_state().attempt_plan = Some(plan);
     }
 
     /// Drain queued response-header ops onto the given real `ResponseHeader`,
@@ -1709,11 +1754,7 @@ impl EdgionHttpContext {
             current_dye_plan: None,
             dye_handled_request_names: Vec::new(),
             mirror_state: None,
-            sp_state: SessionPersistenceState::Inactive,
-            sp_target_addr: None,
-            sp_sticky_addr: None,
-            sp_token_scope: None,
-            sp_sticky_consumed: false,
+            session_persistence: None,
             allow_loopback_upstream: false,
             request_body_config: crate::request_body::ResolvedRequestBodyConfig::default(),
             remote_ip_header: http::HeaderName::from_static("x-real-ip"),
@@ -1725,24 +1766,10 @@ impl EdgionHttpContext {
             resolved_global_plugins: None,
             resolved_gateway_plugins: None,
             resolved_route_ext_refs: None,
-            ai: None,
-            ai_attempt_plan: None,
-            ai_guard_body_generation: None,
-            ai_guard_decided: Vec::new(),
-            ai_attempt_runtime: crate::ai::attempt_runtime::AiAttemptRuntimeState::default(),
-            routed_external_resolver: None,
-            ai_effective_policy: None,
-            ai_request_baseline: None,
-            ai_stream_processor: None,
-            ai_client_stream_dialect: None,
-            final_response_eligibility: None,
+            ai_state: None,
             active_response_processor_slot: None,
             response_terminal_state: ResponseTerminalState::Open,
-            genai_summary: None,
             stream_processors: Vec::new(),
-            semantic_response_guard_claimed: false,
-            canonical_record_batch: None,
-            semantic_response_processor: None,
             attached_ext_proc: std::collections::HashMap::new(),
             attached_guardrail: None,
             attached_response_framing_reservations: 0,
@@ -2738,6 +2765,29 @@ mod json_schema_validation_claim_tests {
 }
 
 #[cfg(test)]
+mod session_persistence_context_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_context_keeps_session_persistence_unallocated() {
+        let ctx = EdgionHttpContext::new();
+        assert!(ctx.session_persistence().is_none());
+    }
+
+    #[test]
+    fn first_session_persistence_use_allocates_default_state() {
+        let mut ctx = EdgionHttpContext::new();
+        let persistence = ctx.ensure_session_persistence();
+
+        assert_eq!(persistence.state, SessionPersistenceState::Inactive);
+        assert!(persistence.target_addr.is_none());
+        assert!(persistence.sticky_addr.is_none());
+        assert!(persistence.token_scope.is_none());
+        assert!(!persistence.sticky_consumed);
+    }
+}
+
+#[cfg(test)]
 mod ai_context_claim_tests {
     use std::sync::Arc;
 
@@ -2759,9 +2809,15 @@ mod ai_context_claim_tests {
     #[test]
     fn first_ai_context_writer_wins() {
         let mut ctx = EdgionHttpContext::new();
+        assert!(ctx.ai_state().is_none());
         assert!(ctx.try_set_ai_request_context(context("model-a")));
         assert!(!ctx.try_set_ai_request_context(context("model-b")));
-        assert_eq!(ctx.ai.as_ref().map(|ai| ai.model.as_str()), Some("model-a"));
+        assert_eq!(
+            ctx.ai_state()
+                .and_then(|state| state.request.as_ref())
+                .map(|ai| ai.model.as_str()),
+            Some("model-a")
+        );
     }
 
     #[test]
@@ -2770,9 +2826,23 @@ mod ai_context_claim_tests {
         assert!(ctx.try_set_ai_attempt_plan(AiAttemptPlan::Rejected(AiPlanError::InvalidBackend)));
         assert!(!ctx.try_set_ai_attempt_plan(AiAttemptPlan::Rejected(AiPlanError::InvalidRouteConfiguration,)));
         assert!(matches!(
-            ctx.ai_attempt_plan,
+            ctx.ai_state().and_then(|state| state.attempt_plan.as_ref()),
             Some(AiAttemptPlan::Rejected(AiPlanError::InvalidBackend))
         ));
+    }
+
+    #[test]
+    fn ordinary_context_keeps_ai_state_unallocated() {
+        let ctx = EdgionHttpContext::new();
+        assert!(ctx.ai_state().is_none());
+    }
+
+    #[test]
+    fn ordinary_context_size_stays_within_budget() {
+        assert!(
+            std::mem::size_of::<EdgionHttpContext>() <= 2752,
+            "EdgionHttpContext grew beyond the ordinary-request hot-path size budget"
+        );
     }
 }
 

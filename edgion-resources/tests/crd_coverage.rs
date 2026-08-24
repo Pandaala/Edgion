@@ -323,7 +323,7 @@ fn assert_declared_objects_are_structural(node: &Value, path: &str) {
                 );
                 assert!(
                     map.get("additionalProperties").is_none(),
-                    "Kubernetes 1.26 forbids additionalProperties beside declared properties at {path}"
+                    "structural schemas must not combine additionalProperties with declared properties at {path}"
                 );
             }
             for (name, child) in map {

@@ -39,7 +39,9 @@ pub async fn logging(
     }
 
     let ai_ttft_ms = ctx.get_current_upstream().and_then(|upstream| upstream.bt);
-    ctx.ai_attempt_runtime.finalize(ai_ttft_ms).await;
+    if let Some(state) = ctx.ai_state_mut() {
+        state.attempt_runtime.finalize(ai_ttft_ms).await;
+    }
     finalize_ai_usage(ctx);
     finalize_ai_quota(ctx).await;
     record_request_metrics(ctx, _e);
@@ -51,7 +53,7 @@ pub async fn logging(
     // stage logs before the access-log entry is assembled.
     super::pg_request_body_filter_action::drain_leftover_stream_logs(ctx);
     super::pg_request_body_filter_action::drain_request_body_observer_logs(ctx);
-    if let Some(processor) = ctx.semantic_response_processor.as_mut() {
+    if let Some(processor) = ctx.ai_state_mut().and_then(|state| state.semantic_processor.as_mut()) {
         let (outcome, reason) = match _e.map(PingoraError::esource) {
             Some(ErrorSource::Upstream) => ("upstream-abort", "stream-error"),
             Some(ErrorSource::Downstream) | None => ("cancelled", "downstream-cancel"),
@@ -181,13 +183,18 @@ fn finalize_ai_usage(ctx: &mut EdgionHttpContext) {
 /// avoiding process-global `OnceLock` mutation in parallel unit tests.
 #[inline]
 fn finalize_ai_usage_with_metrics_enabled(ctx: &mut EdgionHttpContext, metrics_enabled: bool) {
-    if ctx.genai_summary.is_some() {
+    let streaming = ctx.response_stream_kind == ResponseStreamKind::Sse;
+    let ttft_ms = ctx.get_current_upstream().and_then(|upstream| upstream.bt);
+    let Some(state) = ctx.ai_state_mut() else {
+        return;
+    };
+    if state.summary.is_some() {
         return;
     }
-    if ctx.ai_attempt_plan.is_some() && !ctx.ai_attempt_runtime.ever_dispatched() {
+    if state.attempt_plan.is_some() && !state.attempt_runtime.ever_dispatched() {
         return;
     }
-    let Some(ai) = ctx.ai.as_ref() else {
+    let Some(ai) = state.request.as_ref() else {
         return;
     };
 
@@ -205,12 +212,9 @@ fn finalize_ai_usage_with_metrics_enabled(ctx: &mut EdgionHttpContext, metrics_e
             GenAiUsageSource::Estimated,
         ),
     };
-    let streaming = ctx.response_stream_kind == ResponseStreamKind::Sse;
-    let ttft_ms = ctx.get_current_upstream().and_then(|upstream| upstream.bt);
-
     // Store the immutable summary before metric emission. Its presence is the
     // commit sentinel, so re-entry can never increment the counters twice.
-    ctx.genai_summary = Some(GenAiSummary {
+    let summary = GenAiSummary {
         provider: provider.as_str(),
         model,
         input_tokens: usage.input_tokens,
@@ -222,11 +226,12 @@ fn finalize_ai_usage_with_metrics_enabled(ctx: &mut EdgionHttpContext, metrics_e
         estimated_cost_usd: ai.pricing.map(|pricing| estimated_cost_usd(pricing, usage)),
         quota_status: ai.quota_status,
         ttft_ms,
-        attempts: ctx.ai_attempt_runtime.attempts().to_vec(),
-        attempts_truncated: ctx.ai_attempt_runtime.attempts_truncated(),
-    });
-    if ctx.ai_attempt_runtime.ever_dispatched() {
-        if let Ok(totals) = ctx.ai_attempt_runtime.metric_totals() {
+        attempts: state.attempt_runtime.attempts().to_vec(),
+        attempts_truncated: state.attempt_runtime.attempts_truncated(),
+    };
+    state.summary = Some(summary);
+    if state.attempt_runtime.ever_dispatched() {
+        if let Ok(totals) = state.attempt_runtime.metric_totals() {
             for total in totals {
                 let source = match total.usage_source {
                     GenAiAttemptUsageSource::Reported => GenAiUsageSource::Reported,
@@ -253,26 +258,29 @@ fn finalize_ai_usage_with_metrics_enabled(ctx: &mut EdgionHttpContext, metrics_e
 }
 
 async fn finalize_ai_quota(ctx: &mut EdgionHttpContext) {
-    let Some(summary) = ctx.genai_summary.as_ref() else {
+    let Some(state) = ctx.ai_state_mut() else {
         return;
     };
-    let authoritative_total = if ctx.ai_attempt_runtime.ever_dispatched() {
-        ctx.ai_attempt_runtime.charged_request_tokens().ok()
+    let Some(summary) = state.summary.as_ref() else {
+        return;
+    };
+    let authoritative_total = if state.attempt_runtime.ever_dispatched() {
+        state.attempt_runtime.charged_request_tokens().ok()
     } else {
         summary.input_tokens.checked_add(summary.output_tokens)
     };
     let Some(authoritative_total) = authoritative_total else {
-        if let Some(summary) = ctx.genai_summary.as_mut() {
+        if let Some(summary) = state.summary.as_mut() {
             summary.quota_status = Some("accounting_overflow");
         }
         ctx.add_error(edgion_resources::EdgionStatus::AiQuotaReconciliationFailed);
         return;
     };
-    let Some(quota) = ctx.ai.as_mut().and_then(|ai| ai.quota.as_mut()) else {
+    let Some(quota) = state.request.as_mut().and_then(|ai| ai.quota.as_mut()) else {
         return;
     };
     let status = quota.finalize(authoritative_total).await;
-    if let Some(summary) = ctx.genai_summary.as_mut() {
+    if let Some(summary) = state.summary.as_mut() {
         summary.quota_status = Some(status.as_str());
     }
     if matches!(
@@ -797,7 +805,7 @@ mod genai_tests {
 
     fn ai_context(provider: AiProviderLabel, model: &str, requested_streaming: bool) -> EdgionHttpContext {
         let mut ctx = EdgionHttpContext::new();
-        ctx.ai = Some(AiRequestContext {
+        ctx.ensure_ai_state().request = Some(AiRequestContext {
             provider,
             model: model.to_string(),
             pricing: None,
@@ -810,7 +818,7 @@ mod genai_tests {
     }
 
     async fn observe_response(ctx: &EdgionHttpContext, body: &[u8], eos: bool, kind: ResponseStreamKind) {
-        let shared = ctx.ai.as_ref().unwrap().usage.clone();
+        let shared = ctx.ai_state().unwrap().request.as_ref().unwrap().usage.clone();
         let mut processor = UsageExtractionProcessor::new(shared);
         let mut chunk = Some(Bytes::copy_from_slice(body));
         let mut session = MockPluginSession::new();
@@ -854,7 +862,7 @@ mod genai_tests {
         ctx.response_stream_kind = ResponseStreamKind::Sse;
         finalize_ai_usage_with_metrics_enabled(&mut ctx, false);
 
-        let summary = ctx.genai_summary.as_ref().unwrap();
+        let summary = ctx.ai_state().unwrap().summary.as_ref().unwrap();
         assert_eq!((summary.input_tokens, summary.output_tokens), (12, 7));
         assert!(!summary.usage_estimated);
         assert!(
@@ -866,7 +874,7 @@ mod genai_tests {
     #[tokio::test]
     async fn finalize_prices_ordinary_cached_and_output_tokens_without_float() {
         let mut ctx = ai_context(AiProviderLabel::OpenAi, "gpt-declared", false);
-        ctx.ai.as_mut().unwrap().pricing = Some(
+        ctx.ensure_ai_state().request.as_mut().unwrap().pricing = Some(
             AiModelPricing {
                 input_per_million_usd: "10".to_string(),
                 output_per_million_usd: "20".to_string(),
@@ -885,7 +893,7 @@ mod genai_tests {
         .await;
         finalize_ai_usage_with_metrics_enabled(&mut ctx, false);
 
-        let summary = ctx.genai_summary.as_ref().unwrap();
+        let summary = ctx.ai_state().unwrap().summary.as_ref().unwrap();
         assert_eq!(summary.cache_read_input_tokens, 20);
         assert_eq!(summary.cache_write_input_tokens, 10);
         assert_eq!(summary.estimated_cost_usd.as_deref(), Some("0.00084"));
@@ -896,13 +904,16 @@ mod genai_tests {
     #[test]
     fn finalize_preserves_quota_admission_bypass_status() {
         let mut ctx = ai_context(AiProviderLabel::OpenAi, "model-a", false);
-        let ai = ctx.ai.as_mut().unwrap();
+        let ai = ctx.ensure_ai_state().request.as_mut().unwrap();
         ai.quota_status = Some("fail_open");
         ai.usage.observe_reported_usage(2, 3, 0, 0);
 
         finalize_ai_usage_with_metrics_enabled(&mut ctx, false);
 
-        assert_eq!(ctx.genai_summary.unwrap().quota_status, Some("fail_open"));
+        assert_eq!(
+            ctx.ai_state().unwrap().summary.as_ref().unwrap().quota_status,
+            Some("fail_open")
+        );
     }
 
     #[tokio::test]
@@ -910,7 +921,13 @@ mod genai_tests {
         let recorder = PrometheusBuilder::new().build_recorder();
         let handle = recorder.handle();
         let mut ctx = ai_context(AiProviderLabel::OpenAiCompatible, "other", true);
-        ctx.ai.as_ref().unwrap().usage.set_input_chars(5);
+        ctx.ai_state()
+            .unwrap()
+            .request
+            .as_ref()
+            .unwrap()
+            .usage
+            .set_input_chars(5);
         observe_response(&ctx, b"data: hello", false, ResponseStreamKind::Sse).await;
         ctx.response_stream_kind = ResponseStreamKind::Sse;
         metrics::with_local_recorder(&recorder, || {
@@ -918,7 +935,7 @@ mod genai_tests {
             finalize_ai_usage_with_metrics_enabled(&mut ctx, true);
         });
 
-        let summary = ctx.genai_summary.as_ref().unwrap();
+        let summary = ctx.ai_state().unwrap().summary.as_ref().unwrap();
         assert_eq!((summary.input_tokens, summary.output_tokens), (2, 2));
         assert!(summary.usage_estimated);
         assert!(summary.streaming);
@@ -944,7 +961,7 @@ mod genai_tests {
         ctx.get_current_upstream_mut().unwrap().bt = Some(10);
         ctx.push_upstream(None, None);
         finalize_ai_usage_with_metrics_enabled(&mut ctx, false);
-        assert_eq!(ctx.genai_summary.as_ref().unwrap().ttft_ms, None);
+        assert_eq!(ctx.ai_state().unwrap().summary.as_ref().unwrap().ttft_ms, None);
 
         let mut with_body = ai_context(AiProviderLabel::OpenAi, "gpt-declared", false);
         init_backend_context(&mut with_body);
@@ -953,7 +970,10 @@ mod genai_tests {
         with_body.push_upstream(None, None);
         with_body.get_current_upstream_mut().unwrap().bt = Some(23);
         finalize_ai_usage_with_metrics_enabled(&mut with_body, false);
-        assert_eq!(with_body.genai_summary.as_ref().unwrap().ttft_ms, Some(23));
+        assert_eq!(
+            with_body.ai_state().unwrap().summary.as_ref().unwrap().ttft_ms,
+            Some(23)
+        );
     }
 
     #[tokio::test]
@@ -971,9 +991,9 @@ mod genai_tests {
 
         metrics::with_local_recorder(&recorder, || {
             finalize_ai_usage_with_metrics_enabled(&mut ctx, true);
-            let first = ctx.genai_summary.clone();
+            let first = ctx.ai_state().unwrap().summary.clone();
             finalize_ai_usage_with_metrics_enabled(&mut ctx, true);
-            assert_eq!(ctx.genai_summary, first);
+            assert_eq!(ctx.ai_state().unwrap().summary, first);
         });
         let rendered = handle.render();
         let samples: Vec<&str> = rendered
@@ -997,7 +1017,7 @@ mod genai_tests {
         for (number, input_tokens, output_tokens, failure) in
             [(1, 3, 4, Some(GenAiAttemptFailure::RetryableStatus)), (2, 5, 7, None)]
         {
-            ctx.ai_attempt_runtime.record_test_attempt(
+            ctx.ensure_ai_state().attempt_runtime.record_test_attempt(
                 GenAiAttempt {
                     number,
                     backend: "service-a".to_string(),
@@ -1046,7 +1066,7 @@ mod genai_tests {
             finalize_ai_usage_with_metrics_enabled(&mut ai, false);
             let mut ordinary = EdgionHttpContext::new();
             finalize_ai_usage_with_metrics_enabled(&mut ordinary, true);
-            assert!(ordinary.genai_summary.is_none());
+            assert!(ordinary.ai_state().is_none());
         });
         assert!(!handle
             .render()
@@ -1059,14 +1079,16 @@ mod genai_tests {
         let completion = "COMPLETION-FIXTURE-DO-NOT-LOG";
         let api_key = "API-KEY-FIXTURE-DO-NOT-LOG";
         let mut ctx = ai_context(AiProviderLabel::OpenAi, "gpt-declared", false);
-        ctx.ai
+        ctx.ai_state()
+            .unwrap()
+            .request
             .as_ref()
             .unwrap()
             .usage
             .set_input_chars(prompt.chars().count() as u64);
         let event = format!("data: {completion}");
         observe_response(&ctx, event.as_bytes(), false, ResponseStreamKind::Sse).await;
-        ctx.ai_attempt_runtime.record_test_attempt(
+        ctx.ensure_ai_state().attempt_runtime.record_test_attempt(
             GenAiAttempt {
                 number: 1,
                 backend: "default/service-a".to_string(),

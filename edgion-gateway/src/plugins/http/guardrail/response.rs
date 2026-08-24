@@ -1135,13 +1135,14 @@ mod tests {
         .unwrap();
         let mut ctx = crate::EdgionHttpContext {
             response_stream_kind: ResponseStreamKind::Sse,
-            semantic_response_guard_claimed: true,
-            ai_stream_processor: Some(Box::new(crate::ai::UsageExtractionProcessor::new(Arc::new(
-                crate::ai::AiUsageShared::default(),
-            )))),
-            semantic_response_processor: Some(Box::new(processor)),
             ..Default::default()
         };
+        let state = ctx.ensure_ai_state();
+        state.semantic_guard_claimed = true;
+        state.stream_processor = Some(Box::new(crate::ai::UsageExtractionProcessor::new(Arc::new(
+            crate::ai::AiUsageShared::default(),
+        ))));
+        state.semantic_processor = Some(Box::new(processor));
         let mut session = live_session().await;
         let mut body = Some(Bytes::from_static(
             b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"cancel-driver\"}}]}\n\n",
@@ -1154,8 +1155,8 @@ mod tests {
             .await
             .is_err());
         assert_eq!(permits.available_permits(), 1);
-        assert!(ctx.semantic_response_processor.is_none());
-        assert!(ctx.canonical_record_batch.is_none());
+        assert!(ctx.ai_state().unwrap().semantic_processor.is_none());
+        assert!(ctx.ai_state().unwrap().canonical_record_batch.is_none());
         let summary = owner.take_summary_line().unwrap();
         assert!(summary.contains("outcome=cancelled"));
         assert!(summary.contains("reason=callback-dropped"));

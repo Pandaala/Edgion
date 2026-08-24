@@ -133,24 +133,10 @@ jobs:
       - name: Run tests
         run: cargo test --locked --all
 
-  edgion-backend-k8s-126:
-    name: EdgionBackend Kubernetes 1.26
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install kind
-        uses: helm/kind-action@v1.12.0
-        with:
-          install_only: true
-
-      - name: Verify strict admission at the Kubernetes floor
-        run: bash cicd/checks/check_edgion_backend_k8s_126.sh
-
   # Summary job for branch protection
   ci-success:
     name: CI Success
-    needs: [check, gateway-build, fmt, agent-docs, clippy, test, edgion-backend-k8s-126]
+    needs: [check, gateway-build, fmt, agent-docs, clippy, test]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -161,8 +147,7 @@ jobs:
              [[ "${{ needs.fmt.result }}" != "success" ]] || \
              [[ "${{ needs.agent-docs.result }}" != "success" ]] || \
              [[ "${{ needs.clippy.result }}" != "success" ]] || \
-             [[ "${{ needs.test.result }}" != "success" ]] || \
-             [[ "${{ needs.edgion-backend-k8s-126.result }}" != "success" ]]; then
+             [[ "${{ needs.test.result }}" != "success" ]]; then
             echo "One or more jobs failed"
             exit 1
           fi

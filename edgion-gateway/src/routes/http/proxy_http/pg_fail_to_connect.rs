@@ -62,8 +62,10 @@ pub fn fail_to_connect(
         return e;
     }
 
-    if ctx.ai_attempt_plan.is_some() {
-        ctx.ai_attempt_runtime.finish_predispatch();
+    if ctx.has_ai_attempt_plan() {
+        if let Some(state) = ctx.ai_state_mut() {
+            state.attempt_runtime.finish_predispatch();
+        }
         // The typed predispatch hook consumes no scheduler dispatch slot,
         // failure-ledger entry, or retry-budget numerator. The bounded Redis
         // release is drained before the next selection or at final logging.

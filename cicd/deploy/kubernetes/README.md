@@ -4,7 +4,7 @@ Deploy Edgion API Gateway to a Kubernetes cluster using Gateway API.
 
 ## Prerequisites
 
-- Kubernetes 1.26+
+- Kubernetes 1.31+ (required by the Gateway API v1.5 TLSRoute CRD validation)
 - `kubectl` configured with cluster access
 - Cluster admin permissions (for CRD and RBAC installation)
 

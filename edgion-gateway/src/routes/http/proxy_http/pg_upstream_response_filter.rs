@@ -143,7 +143,7 @@ pub fn upstream_response_filter(
         }
     }
 
-    if ctx.ai_attempt_plan.is_some() {
+    if ctx.has_ai_attempt_plan() {
         let wants_retry = status_code != 101
             && ctx
                 .route_unit
@@ -160,14 +160,16 @@ pub fn upstream_response_filter(
                 .filter(|value| value.len() <= MAX_PROVIDER_RESET_HINT_BYTES)
                 .map(str::to_owned);
             let reset_hint = ctx
-                .ai
-                .as_ref()
+                .ai_state()
+                .and_then(|state| state.request.as_ref())
                 .and_then(|ai| provider_reset_hint(&upstream_response.headers, ai.provider, now));
-            let cooldown = ctx.ai_attempt_runtime.active_mut().and_then(|active| {
-                retry_after
-                    .as_deref()
-                    .and_then(|value| active.apply_retry_after(value, now))
-                    .or_else(|| reset_hint.and_then(|hint| active.apply_cooldown(hint)))
+            let cooldown = ctx.ai_state_mut().and_then(|state| {
+                state.attempt_runtime.active_mut().and_then(|active| {
+                    retry_after
+                        .as_deref()
+                        .and_then(|value| active.apply_retry_after(value, now))
+                        .or_else(|| reset_hint.and_then(|hint| active.apply_cooldown(hint)))
+                })
             });
 
             // Only an accepted, bounded hint is forwarded. Retried responses
@@ -181,7 +183,7 @@ pub fn upstream_response_filter(
         }
         let failure_class = crate::backends::FailureClass::from_http_status(status_code)
             .or_else(|| (status_code == 429 || wants_retry).then_some(crate::backends::FailureClass::Application));
-        if let Some(active) = ctx.ai_attempt_runtime.active_mut() {
+        if let Some(active) = ctx.ai_state_mut().and_then(|state| state.attempt_runtime.active_mut()) {
             active.record_response(status_code, failure_class);
         }
         let buffer_ok = !session.as_ref().retry_buffer_truncated() && !ctx.request_body_stream_active;
@@ -194,10 +196,13 @@ pub fn upstream_response_filter(
             .map_err(|_| pingora_core::Error::new(pingora_core::ErrorType::InternalError))?
         {
             crate::ai::dispatch::AiRetryDecision::Retry => {
-                ctx.ai_attempt_runtime
-                    .finish_failure(crate::ai::attempt_runtime::AiAttemptFailure::Known(
-                        failure_class.unwrap_or(crate::backends::FailureClass::Application),
-                    ));
+                if let Some(state) = ctx.ai_state_mut() {
+                    state
+                        .attempt_runtime
+                        .finish_failure(crate::ai::attempt_runtime::AiAttemptFailure::Known(
+                            failure_class.unwrap_or(crate::backends::FailureClass::Application),
+                        ));
+                }
                 ctx.retry_on_status = true;
                 if let Some(upstream) = ctx.get_current_upstream_mut() {
                     upstream.err.push("AiRetryOnStatus".to_string());
@@ -208,10 +213,13 @@ pub fn upstream_response_filter(
                 ));
             }
             crate::ai::dispatch::AiRetryDecision::BudgetDenied => {
-                ctx.ai_attempt_runtime
-                    .finish_failure(crate::ai::attempt_runtime::AiAttemptFailure::Known(
-                        failure_class.unwrap_or(crate::backends::FailureClass::Application),
-                    ));
+                if let Some(state) = ctx.ai_state_mut() {
+                    state
+                        .attempt_runtime
+                        .finish_failure(crate::ai::attempt_runtime::AiAttemptFailure::Known(
+                            failure_class.unwrap_or(crate::backends::FailureClass::Application),
+                        ));
+                }
                 crate::observe::metrics::record_retry_budget_denied();
                 ctx.add_error(EdgionStatus::RetryBudgetExhausted);
                 return Err(pingora_core::Error::explain(
@@ -302,8 +310,8 @@ pub fn upstream_response_filter(
     // top); the `!is_informational()` guard excludes it from SP injection —
     // a protocol-upgrade response does not need a sticky Set-Cookie.
     if !upstream_response.status.is_informational() {
-        match ctx.sp_state {
-            SessionPersistenceState::InjectNew | SessionPersistenceState::InjectUpdate => {
+        match ctx.session_persistence().map(|persistence| persistence.state.clone()) {
+            Some(SessionPersistenceState::InjectNew | SessionPersistenceState::InjectUpdate) => {
                 // Read the effective rule config (HTTP or gRPC route unit) so
                 // GRPCRoute responses inject tokens too. Placement is unchanged:
                 // still after the retry-on-status decision, so a discarded
@@ -327,8 +335,10 @@ pub fn upstream_response_filter(
                     });
 
                     if let Some(addr) = backend_addr {
-                        let addrhash =
-                            session_persistence::generate_scoped_session_token(ctx.sp_token_scope.as_deref(), &addr);
+                        let token_scope = ctx
+                            .session_persistence()
+                            .and_then(|persistence| persistence.token_scope.as_deref());
+                        let addrhash = session_persistence::generate_scoped_session_token(token_scope, &addr);
                         // Freeze the absolute expiry at issuance: compute the ttl
                         // once (GEP-2257) and feed both the wire token and the
                         // Cookie Max-Age so the browser hint can never desync from
@@ -364,9 +374,11 @@ pub fn upstream_response_filter(
                         }
                     }
                 }
-                ctx.sp_state = SessionPersistenceState::Inactive;
+                if let Some(persistence) = ctx.session_persistence_mut() {
+                    persistence.state = SessionPersistenceState::Inactive;
+                }
             }
-            SessionPersistenceState::Inactive => {} // no injection needed
+            Some(SessionPersistenceState::Inactive) | None => {} // no injection needed
         }
     }
 

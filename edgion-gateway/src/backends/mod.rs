@@ -486,12 +486,12 @@ async fn resolve_external_ips(
 
 /// Session-persistence-aware backend pick for the LB-based service kinds.
 ///
-/// If `ctx.sp_target_addr` is set (the request carried a sticky-session token resolved
+/// If session-persistence `target_addr` is set (the request carried a sticky-session token resolved
 /// to a known backend), use that target directly — skipping LB — provided the target
 /// is still healthy. The address is `take()`-d unconditionally so a follow-up retry on
 /// this request does not double-consume it.
 ///
-/// If `sp_target_addr` is unset, or the sticky target is unhealthy, fall back to the
+/// If `target_addr` is unset, or the sticky target is unhealthy, fall back to the
 /// caller-supplied `select_fn` (the kind's normal LB path).
 ///
 /// Note: an unhealthy sticky target returns `StickyBackendUnhealthy` rather than calling
@@ -505,11 +505,14 @@ fn take_sp_target_or_select<F>(
 where
     F: FnOnce() -> Result<Arc<crate::lb::EdgionBackend>, EdgionStatus>,
 {
-    if let Some(target_addr) = ctx.sp_target_addr.take() {
+    if let Some(target_addr) = ctx
+        .session_persistence_mut()
+        .and_then(|persistence| persistence.target_addr.take())
+    {
         // Mark consumption regardless of the taken target's health: the
         // healthy/unhealthy outcomes are handled by the in-attempt fallback
         // state machine, while this flag is the cross-attempt refresh evidence.
-        ctx.sp_sticky_consumed = true;
+        ctx.ensure_session_persistence().sticky_consumed = true;
         // Look up the live Arc from the cell so inc_conn/dec_conn/update_ewma
         // operate on the same object that the selector tracks. Wrapping a fresh
         // EdgionBackend here would create an orphan: metric calls would be on a

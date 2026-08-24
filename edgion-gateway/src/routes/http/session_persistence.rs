@@ -182,7 +182,7 @@ fn sp_apply_extracted_token(raw: Option<String>, sp_state: &mut SessionPersisten
 /// case both resolve to the same pod, matching Envoy Gateway semantics.
 ///
 /// - Token absent → `None`, state untouched (step 1 already set `InjectNew`).
-/// - Token hits some backendRef's Service affinity map → set `sp_target_addr`
+/// - Token hits some backendRef's Service affinity map → set `target_addr`
 ///   so `try_get_peer` routes directly to it; return that backendRef's index
 ///   so the caller selects the SAME backendRef (TLS policy + backend plugins
 ///   must follow the sticky Service, not a fresh WRR pick).
@@ -216,12 +216,13 @@ pub(crate) fn sp_resolve_target_rule_scoped_indexed<'a>(
     let token = token?;
     match sp_lookup_rule_scoped_indexed(backends, route_ns, token) {
         Some((idx, addr)) => {
-            ctx.sp_target_addr = Some(addr);
-            ctx.sp_sticky_addr = Some(addr);
+            let persistence = ctx.ensure_session_persistence();
+            persistence.target_addr = Some(addr);
+            persistence.sticky_addr = Some(addr);
             Some(idx)
         }
         None => {
-            ctx.sp_state = SessionPersistenceState::InjectNew;
+            ctx.ensure_session_persistence().state = SessionPersistenceState::InjectNew;
             None
         }
     }
@@ -281,13 +282,14 @@ pub(crate) fn sp_resolve_typed_candidates(
             || crate::backends::selector::get_backends_for_service_key(&candidate.service_key),
         );
         if let Some(&addr) = affinity_map.get(token) {
-            ctx.sp_target_addr = Some(addr);
-            ctx.sp_sticky_addr = Some(addr);
-            ctx.sp_token_scope = candidate.scope.clone();
+            let persistence = ctx.ensure_session_persistence();
+            persistence.target_addr = Some(addr);
+            persistence.sticky_addr = Some(addr);
+            persistence.token_scope = candidate.scope.clone();
             return Some(candidate.slot);
         }
     }
-    ctx.sp_state = SessionPersistenceState::InjectNew;
+    ctx.ensure_session_persistence().state = SessionPersistenceState::InjectNew;
     None
 }
 
