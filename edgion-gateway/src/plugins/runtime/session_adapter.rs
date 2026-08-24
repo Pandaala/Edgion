@@ -1025,7 +1025,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             self.ctx.request_info.remote_ip = canonical;
             // A RealIp plugin may run after an earlier GeoIpLocation consumer.
             // Never retain facts resolved for the previous RemoteIp.
-            self.ctx.remote_geo.take();
+            self.ctx.request_info.invalidate_remote_geo();
         }
         Ok(())
     }
@@ -2416,7 +2416,8 @@ mod record_outcome_tests {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.remote_ip = "192.0.2.1".to_string();
-        ctx.remote_geo.set(crate::geoip::GeoLookup::NotFound).unwrap();
+        let _ = ctx.remote_geo();
+        assert!(ctx.request_info.resolved_geo().0.is_some());
 
         {
             let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
@@ -2424,7 +2425,7 @@ mod record_outcome_tests {
         }
 
         assert_eq!(ctx.request_info.remote_ip, "203.0.113.9");
-        assert!(ctx.remote_geo.get().is_none());
+        assert!(ctx.request_info.resolved_geo().0.is_none());
     }
 
     #[tokio::test]

@@ -615,6 +615,44 @@ pub struct RequestInfo {
     /// `request_timeout` semantics.
     #[serde(skip)]
     pub grpc_client_deadline: Option<Instant>,
+
+    /// Lazily allocated GeoIP facts derived from the downstream identities.
+    /// Ordinary requests retain only the empty `OnceLock`; the first GeoIP
+    /// consumer performs one allocation for both independently cached views.
+    #[serde(skip)]
+    pub(crate) geo: std::sync::OnceLock<Box<RequestGeoInfo>>,
+}
+
+/// GeoIP facts derived from the two downstream client identities.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RequestGeoInfo {
+    /// Geo for the physical direct peer (`RequestInfo::direct_peer_ip`).
+    pub(crate) direct_peer: std::sync::OnceLock<crate::geoip::GeoLookup>,
+    /// Geo for the resolved client (`RequestInfo::remote_ip`).
+    pub(crate) remote: std::sync::OnceLock<crate::geoip::GeoLookup>,
+}
+
+impl RequestInfo {
+    #[inline]
+    fn geo(&self) -> &RequestGeoInfo {
+        self.geo.get_or_init(|| Box::new(RequestGeoInfo::default())).as_ref()
+    }
+
+    /// Return only already-resolved GeoIP facts. Access-log construction must
+    /// not turn logging into a GeoIP lookup or allocate the optional cache.
+    pub(crate) fn resolved_geo(&self) -> (Option<&crate::geoip::GeoLookup>, Option<&crate::geoip::GeoLookup>) {
+        self.geo
+            .get()
+            .map(|geo| (geo.remote.get(), geo.direct_peer.get()))
+            .unwrap_or((None, None))
+    }
+
+    /// Invalidate facts derived from `remote_ip` after RealIp rewrites it.
+    pub(crate) fn invalidate_remote_geo(&mut self) {
+        if let Some(geo) = self.geo.get_mut() {
+            geo.remote.take();
+        }
+    }
 }
 
 /// Backend TLS connection information
@@ -1519,24 +1557,6 @@ pub struct EdgionHttpContext {
     /// client disconnect, cancellation). `None` when no cap applies or admission
     /// was not attempted (bypass paths, no policy).
     pub cb_permit: Option<crate::backends::circuit_breaker::CbPermit>,
-
-    /// Geo for the physical direct peer (`request_info.direct_peer_ip`).
-    ///
-    /// `OnceLock` rather than `RefCell`: `extract_rule_values` and other geo
-    /// consumers take `&self`, and this context must stay `Send + Sync`
-    /// (Pingora requires the per-request CTX type to be `Send + Sync`; see the
-    /// `cached_query_cell` comment above for the same reasoning). Set-once is
-    /// exactly the semantics needed — a resolved lookup, including a
-    /// `NotFound`, is never re-queried.
-    pub direct_peer_geo: std::sync::OnceLock<crate::geoip::GeoLookup>,
-
-    /// Geo for the resolved client (`request_info.remote_ip`).
-    ///
-    /// Filled lazily by its first consumer, never eagerly at request entry:
-    /// the `real_ip` plugin can overwrite `remote_ip` after the
-    /// listener-level extractor runs, and an eager fill would cache the
-    /// pre-plugin address.
-    pub remote_geo: std::sync::OnceLock<crate::geoip::GeoLookup>,
 }
 
 /// Parse a `RequestInfo` address field as an `IpAddr`, tolerating either a
@@ -1780,8 +1800,6 @@ impl EdgionHttpContext {
             response_denial: None,
             response_stream_kind: ResponseStreamKind::None,
             cb_permit: None,
-            direct_peer_geo: std::sync::OnceLock::new(),
-            remote_geo: std::sync::OnceLock::new(),
         }
     }
 
@@ -1819,10 +1837,11 @@ impl EdgionHttpContext {
     /// plugin can rewrite `remote_ip` after the listener-level extractor
     /// runs, so filling this at request entry would cache the wrong address.
     pub fn remote_geo(&self) -> &crate::geoip::GeoLookup {
-        self.remote_geo.get_or_init(|| {
+        let geo = self.request_info.geo();
+        geo.remote.get_or_init(|| {
             self.resolve_geo(
                 &self.request_info.remote_ip,
-                &self.direct_peer_geo,
+                &geo.direct_peer,
                 &self.request_info.direct_peer_ip,
             )
         })
@@ -1831,10 +1850,11 @@ impl EdgionHttpContext {
     /// Geo for the physical direct peer (`request_info.direct_peer_ip`). Resolves
     /// on first call, then caches.
     pub fn direct_peer_geo(&self) -> &crate::geoip::GeoLookup {
-        self.direct_peer_geo.get_or_init(|| {
+        let geo = self.request_info.geo();
+        geo.direct_peer.get_or_init(|| {
             self.resolve_geo(
                 &self.request_info.direct_peer_ip,
-                &self.remote_geo,
+                &geo.remote,
                 &self.request_info.remote_ip,
             )
         })
@@ -2706,9 +2726,11 @@ mod geo_context_tests {
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.direct_peer_ip = "203.0.113.7".to_string();
         ctx.request_info.remote_ip = "203.0.113.7".to_string();
+        assert!(ctx.request_info.geo.get().is_none());
 
         // No database loaded in this test process.
         assert_eq!(*ctx.remote_geo(), GeoLookup::Unavailable);
+        assert!(ctx.request_info.geo.get().is_some());
         // Second call returns the cached value, not a second lookup.
         assert_eq!(*ctx.remote_geo(), GeoLookup::Unavailable);
     }

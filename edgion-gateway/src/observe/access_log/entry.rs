@@ -218,7 +218,8 @@ impl<'a> AccessLogEntry<'a> {
 
         // `.get()`, never the accessors: the accessors are `get_or_init` and
         // would make every request pay a lookup just to build its log line.
-        let geo = GeoLogBlock::from_slots(ctx.remote_geo.get(), ctx.direct_peer_geo.get());
+        let (remote_geo, direct_peer_geo) = ctx.request_info.resolved_geo();
+        let geo = GeoLogBlock::from_slots(remote_geo, direct_peer_geo);
 
         Self {
             timestamp: chrono::Utc::now().timestamp_millis(),
