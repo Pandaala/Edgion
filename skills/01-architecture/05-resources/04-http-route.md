@@ -43,29 +43,6 @@ HTTPRoute's `preparse()` method builds runtime structures at the type level:
 4. **Resolve resolved_hostnames**: compute the intersection of the route's hostnames with the Gateway Listener's hostnames
 5. (ReferenceGrant `ref_denied` marking happens in step 0, before the flatten — see above)
 
-#### MCP direct-rule classification
-
-An HTTPRoute rule is MCP-evident only when its sole permitted typed backendRef resolves from the
-current raw generation to a structurally valid sole `EdgionBackend.spec.mcp` variant. The
-Controller publishes no MCP marker or placement object. It applies the shared
-`validate_mcp_http_route_rule` shape contract only after that current-generation proof:
-
-- exactly one positive-weight `edgion.io/EdgionBackend` backendRef, with no port;
-- exactly one explicit `Exact` match with no method, header, or query predicates;
-- a stable ASCII absolute path with no parameters, escapes, repeated/trailing slash, query, or
-  fragment;
-- no session persistence and no delegation composition.
-
-An invalid direct MCP rule enters the existing `invalid_rule_indices` path. A surviving sibling
-produces `PartiallyInvalid=True/RuleInvalid`; when no rule survives, the route produces
-`Accepted=False/UnsupportedValue`. A missing, denied, deleted, invalid, AI, or A2A backend is not
-cached as MCP evidence: reconciliation falls back to the ordinary route/reference result. This is
-why an MCP-to-A2A change clears the MCP shape finding, while A2A-to-MCP restores it.
-
-This Controller classification and conf_sync publication do not activate an MCP request path.
-Gateway recognition, Origin enforcement, selection, transport, and public activation are separate
-WP10 stages.
-
 ### on_change
 
 1. Register into `GatewayRouteIndex` (Gateway changes will requeue this route)
@@ -113,6 +90,6 @@ HTTPRoute's ConfHandler implements route compilation and registration:
 | HTTPRoute → HTTPRoute | HTTPRoute | delegation backendRef (`kind: HTTPRoute`) + `RouteDelegationIndex` | Parent flattens child rules into `resolved_rules`; child changes requeue parents (named + wildcard-namespace edges, transitively registered at the root) |
 | HTTPRoute → Service | Service | backendRef | Route's backend target service |
 | HTTPRoute → EdgionPlugins | EdgionPlugins | ExtensionRef filter | Plugin configuration referenced via ExtensionRef |
-| HTTPRoute → EdgionBackend | EdgionBackend | shared `backend_ref_mgr` | Current variant drives AI/A2A/MCP rule validation; apply/delete requeues the route |
+| HTTPRoute → EdgionBackend | EdgionBackend | shared `backend_ref_mgr` | Current variant drives AI/A2A rule validation; apply/delete requeues the route |
 | HTTPRoute → Secret | Secret | indirect, via plugins | Plugins such as JWT/BasicAuth reference Secrets |
 | HTTPRoute ← ReferenceGrant | ReferenceGrant | cross-namespace backendRef | Authorizes cross-namespace backend references |

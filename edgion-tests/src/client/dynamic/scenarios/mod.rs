@@ -18,8 +18,6 @@ pub mod gateway_class_params_flap;
 pub mod gateway_dynamic;
 pub mod grpc_route_delegation_dynamic;
 pub mod json_schema_validation;
-pub mod mcp_backend_lifecycle;
-pub mod mcp_route_lifecycle;
 pub mod observed_gen_high_freq;
 pub mod rate_limit_dynamic;
 pub mod request_access_policy_hmac_dynamic;

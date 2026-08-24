@@ -6,12 +6,28 @@ on responses (bounded hold-and-release), matching agentgateway's `llm/policy/`
 capability using our stronger primitives (DFA streaming matcher + mid-stream
 terminate).
 
-**Depends on:** WS-06 (SseDecoder v2 windows + invariant clarification note)
-for the response side. The request side has no dependency and can start
-immediately. Note: bounded hold-and-release is already within invariant 2's
+**Depends on:** WS-00 F1 for the stable `EdgionBackend.spec.ai` identity and
+WS-06 for response-side windows. Request-side design can start earlier, but
+implementation must not overlap the repository-wide backend rename in the same
+AI/plugin files. Note: bounded hold-and-release is already within invariant 2's
 letter (shipped precedent: the Anthropic translator's partial-event
 withholding) — WS-06 supplies the shared primitive and settled review wording,
 not a rule change.
+
+**Current transport schedule:** Stream Processing Work Package 1 (ExtProc) is
+complete. WS-06 and Stream Processing Work Package 2 have also delivered the
+canonical window and unary HTTP Pass/Replace/Reject callout. The active
+response-side package is
+`tasks/pending/streaming-response-guards/`: it composes those mechanisms and
+must not implement another ExtProc client, Guardrail plugin, decoder/window, or
+response-window HTTP transport.
+
+The architecture sketch below predates the delivered `Guardrail` plugin. Its
+request-side `AiGuard` regex/PII model remains future Work Package 16 scope.
+For the current response package, Guardrail `Replace` is the external mask/
+rewrite contract and Guardrail `Reject` is the external policy decision; only
+provider-aware terminal framing, precedence, and composition gaps are in
+scope.
 
 ## Architecture
 
@@ -39,9 +55,14 @@ not a rule change.
     evaluated per released window (bounded) with the standard `regex` crate.
   - PII ruleset: curated regex pack shipped as data (start from agentgateway's
     `policy/pii/` category list for coverage parity; our own patterns).
-  - Webhook guard: bounded outbound exchange via `build_outbound_client`
-    (1 MiB cap, `tokio::time::timeout`), per-guard failure policy knob
-    (non-auth ⇒ explicit knob, default fail-close — rule 10).
+  - Unary external guard: use the separately scheduled Guardrail unary-callout
+    work package at `tasks/plan/stream-processing/02-guardrail-unary-callout.md`:
+    one bounded HTTP moderation/webhook decision per held window, with the
+    canonical outbound client/TLS/egress path and the existing non-auth failure
+    shape defaulting close.
+  - Stateful high-frequency external processing is not another webhook mode;
+    it is the existing ExtProc plugin extended by
+    `tasks/plan/stream-processing/01-ext-proc-attached-response-stream.md`.
 - **Moderation providers** (OpenAI moderation / Bedrock Guardrails / Model
   Armor / Azure Content Safety): same webhook seam with provider adapters;
   phase 3, one adapter each, gated on demand.
@@ -61,7 +82,7 @@ edgion-gateway/src/plugins/http/ai_guard/request_eval.rs  # span extraction from
 edgion-gateway/src/plugins/http/ai_guard/response_eval.rs # StreamingResponseProcessor:
                                                         #   window mgmt + release/mask/
                                                         #   terminate
-edgion-gateway/src/plugins/http/ai_guard/webhook.rs     # bounded external guard call
+stream-processing WP2 owned module(s)                   # bounded response-window HTTP decision
 edgion-gateway/src/plugins/http/ai_guard/pii.rs         # builtin ruleset registry
 edgion-resources/.../plugin_configs/ai_guard.rs         # config schema + validation
                                                         #   (window size caps, rule
@@ -103,8 +124,10 @@ Source: `../archive/program-origin/04-guardrails.md`:
 - **Parallel guard execution**: independent guards run concurrently with
   per-guard timeouts; chain latency = max, not sum.
 - **PII-aware data-residency routing** (later phase): per-rule action
-  `block | mask | route-to <backend>`; unreachable route-to target is
-  fail-close — never mask-and-send-external as a fallback.
+  `block | mask | route-to <backend>`; the target is a compatible typed
+  `EdgionBackend.spec.ai` reference compiled through the canonical logical
+  backend path. An unreachable or wrong-variant target is fail-close — never
+  rerun route weighting or mask-and-send-external as a fallback.
 
 ## Notes
 

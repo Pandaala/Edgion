@@ -1,6 +1,6 @@
 ---
 name: edgion-backend-features
-description: Canonical EdgionBackend exactly-one AI/A2A/MCP schema, typed HTTPRoute contract, status, policy attachment, and examples.
+description: Canonical EdgionBackend exactly-one AI/A2A schema, typed HTTPRoute contract, status, policy attachment, and examples.
 ---
 
 # EdgionBackend resource
@@ -9,12 +9,8 @@ description: Canonical EdgionBackend exactly-one AI/A2A/MCP schema, typed HTTPRo
 > Internal processing: [../../01-architecture/05-resources/22-edgion-backend.md](../../01-architecture/05-resources/22-edgion-backend.md)
 
 `EdgionBackend` is a typed HTTP backend with exactly one configured variant: `spec.ai` defines an
-AI provider, `spec.a2a` defines an A2A transport, and `spec.mcp` defines a stateless MCP upstream.
-An HTTPRoute references the direct EdgionBackend identity. AiProxy accepts only AI variants and
-ordinary forwarding supports A2A. The Controller may classify a strict direct HTTPRoute rule as
-MCP-eligible. MCP uses no separate McpGateway resource: eligibility is derived from the current
-backend variant and route shape rather than a persisted marker. Eligibility alone is not a
-client-facing MCP wire implementation.
+AI provider and `spec.a2a` defines an A2A transport. An HTTPRoute references the direct
+EdgionBackend identity. AiProxy accepts only AI variants and ordinary forwarding supports A2A.
 
 ## Full schema
 
@@ -94,12 +90,12 @@ spec:
 ```
 
 Input handling differs by config-center mode. On Kubernetes, requests using
-`fieldValidation=Strict` reject undeclared fields throughout `spec.ai`, `spec.a2a`, and `spec.mcp`; Warn/Ignore
+`fieldValidation=Strict` reject undeclared fields throughout `spec.ai` and `spec.a2a`; Warn/Ignore
 clients may allow the API server to prune a misspelled optional field into a silent no-op. Filesystem and etcd
 input is deserialized directly and always rejects unknown fields in the strict `spec` tree.
-Resolved Secret objects, `resolvedA2a`, and `resolvedMcp` are Controller-filled transport fields excluded from the
+Resolved Secret objects and `resolvedA2a` are Controller-filled transport fields excluded from the
 CRD schema. Secret values are redacted from Admin configuration output. Users must configure
-exactly one of `spec.ai`, `spec.a2a`, and `spec.mcp`; zero or multiple variants are invalid.
+exactly one of `spec.ai` and `spec.a2a`; zero or multiple variants are invalid.
 
 ## `spec` fields
 
@@ -137,70 +133,6 @@ dependencies and publishes a transport-only `resolvedA2a` only after the Service
 are proved. A missing Service/port or denied reference leaves the Gateway runtime inactive until a
 later watch event self-heals it. For an external target, the Gateway resolves at dial time through
 the canonical routed-external egress policy and uses canonical TLS/SNI/authority handling.
-
-### `spec.mcp`
-
-WP9 supports only stateless Streamable HTTP at the fixed product revision `2026-07-28`:
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionBackend
-metadata:
-  name: tools
-  namespace: production
-spec:
-  mcp:
-    target:
-      serviceRef:
-        name: tools
-        namespace: tool-servers
-        port: 8080
-      path: /mcp
-    transport:
-      type: StreamableHTTP
-    authentication:
-      bearerToken:
-        secretRef:
-          name: tools-bearer
-```
-
-Alternatively, use `target.endpoint: https://tools.example.com/mcp`; its URL owns the MCP path and
-`target.path` must be absent. Service targets require an absolute normalized `target.path` and
-`allowInsecureHttp` must remain false. External HTTP requires `allowInsecureHttp: true`; redundant
-opt-in on HTTPS is rejected. Both target shapes reject user information, query, fragment, port 0,
-control characters, ambiguous separators/dot segments, non-HTTP(S) schemes, and unknown fields.
-
-`authentication` is optional. When present, it contains the shared `SecretSlot` under
-`bearerToken`; the referenced `Opaque` Secret must contain a non-empty RFC 6750 bearer value at the
-fixed `bearerToken` data key. Inline tokens and configurable Secret keys are unsupported. Target
-and credential resolution is all-or-nothing: missing, denied, malformed, or wrong-type material
-withdraws the complete MCP runtime. Service, Secret, and ReferenceGrant changes, including delete
-and recreate, requeue the backend. Resolved material remains available to conf_sync, is excluded
-from the CRD schema, and is redacted from Admin serialization, Debug output, status, and errors.
-
-WP9 does not implement protocol sessions, `initialize`, `initialized`, `Mcp-Session-Id`,
-`Last-Event-ID`, GET event streams, SSE response handling, JSON-RPC dispatch, tool discovery/calls,
-or a client-facing MCP route. WP10 derives that route from an ordinary HTTPRoute under the strict
-contract below. The `transport.type` identifies the MCP protocol transport; it does not choose
-HTTP/1.1 versus HTTP/2.
-
-### MCP HTTPRoute eligibility contract
-
-An MCP-eligible direct HTTPRoute rule has exactly one positive-weight
-`edgion.io/EdgionBackend` backendRef resolving to the current sole `spec.mcp` variant. The rule
-requires exactly one explicit `Exact` match, no method/header/query predicates, no session
-persistence, and a stable ASCII absolute path without parameters, escapes, repeated/trailing
-slashes, query, or fragment. Delegated composition is unsupported.
-
-Invalid MCP-evident rules use normal HTTPRoute status: `PartiallyInvalid=True/RuleInvalid` when a
-sibling survives, or `Accepted=False/UnsupportedValue` when no rule survives. Replacing the backend
-with AI/A2A or deleting it removes MCP evidence on the next ordinary backend dependency requeue;
-there is no marker or tombstone. Missing references continue to report
-`ResolvedRefs=False/BackendNotFound`.
-
-This section describes Controller classification and status. Gateway request recognition, Origin
-validation, protocol handling, and public activation are later WP10 stages and are not implied by
-an eligible route appearing in the config cache.
 
 ### A2A HTTPRoute contract
 

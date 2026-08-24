@@ -35,18 +35,12 @@ The field matrix is atomic:
 | AI `EdgionBackend` | `connection`, `retryConstraint`, `circuitBreaker`, `outlierDetection` |
 | A2A Service `EdgionBackend` | `connection`, `retryConstraint`, `circuitBreaker`, `loadBalancer` without `panicThreshold`, and `upstreamAuthority` |
 | A2A external `EdgionBackend` | `connection`, `retryConstraint`, `circuitBreaker` |
-| MCP Service `EdgionBackend` | `connection`, `circuitBreaker`, `loadBalancer` without `panicThreshold`, and `upstreamAuthority` |
-| MCP external `EdgionBackend` | `connection`, `circuitBreaker` |
 
 For AI targets, `loadBalancer`, `healthCheck`, and `upstreamAuthority` reject the whole policy. A2A
 Service targets reject `healthCheck`, `outlierDetection`, and `loadBalancer.panicThreshold` because
 WP4 has no canonical captured health population for that nested Service. A2A external targets also
 reject load balancing and authority override. Cross-service AI choice belongs to AiProxy; Edgion
 does not invent an unauthenticated public-provider health-probe contract.
-MCP rejects `healthCheck`, `outlierDetection`, and `retryConstraint` for both target shapes. A tool
-call is never a health probe, and the existing retry budget does not prove that an MCP request was
-unwritten or replay-safe. MCP external also rejects load balancing and authority override.
-
 ## Controller
 
 - Validation calls the canonical target parser plus `spec.get_validation_errors()`.

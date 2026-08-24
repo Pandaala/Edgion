@@ -67,29 +67,6 @@ elif case == "valid_a2a_external":
     obj["spec"] = {
         "a2a": {"target": {"endpoint": "https://agent.example.com/base"}}
     }
-elif case == "valid_mcp_service":
-    obj["spec"] = {
-        "mcp": {
-            "target": {"serviceRef": {"name": "tools", "port": 8080}, "path": "/mcp"},
-            "transport": {"type": "StreamableHTTP"},
-            "authentication": {"bearerToken": {"secretRef": {"name": "tools-token"}}},
-        }
-    }
-elif case == "valid_mcp_external":
-    obj["spec"] = {
-        "mcp": {
-            "target": {"endpoint": "https://tools.example.com/base/mcp"},
-            "transport": {"type": "StreamableHTTP"},
-        }
-    }
-elif case == "valid_mcp_external_http":
-    obj["spec"] = {
-        "mcp": {
-            "target": {"endpoint": "http://tools.example.com/mcp"},
-            "allowInsecureHttp": True,
-            "transport": {"type": "StreamableHTTP"},
-        }
-    }
 elif case == "missing_spec":
     del obj["spec"]
 elif case == "empty_spec":
@@ -98,25 +75,6 @@ elif case == "unknown_spec":
     obj["spec"]["unknownField"] = True
 elif case == "both_variants":
     obj["spec"]["a2a"] = {"target": {"endpoint": "https://agent.example.com"}}
-elif case == "ai_and_mcp":
-    obj["spec"]["mcp"] = {
-        "target": {"endpoint": "https://tools.example.com/mcp"},
-        "transport": {"type": "StreamableHTTP"},
-    }
-elif case == "a2a_and_mcp":
-    obj["spec"] = {
-        "a2a": {"target": {"endpoint": "https://agent.example.com"}},
-        "mcp": {
-            "target": {"endpoint": "https://tools.example.com/mcp"},
-            "transport": {"type": "StreamableHTTP"},
-        },
-    }
-elif case == "all_variants":
-    obj["spec"]["a2a"] = {"target": {"endpoint": "https://agent.example.com"}}
-    obj["spec"]["mcp"] = {
-        "target": {"endpoint": "https://tools.example.com/mcp"},
-        "transport": {"type": "StreamableHTTP"},
-    }
 elif case == "empty_a2a_target":
     obj["spec"] = {"a2a": {"target": {}}}
 elif case == "both_a2a_targets":
@@ -163,88 +121,6 @@ elif case == "invalid_a2a_endpoint":
     obj["spec"] = {"a2a": {"target": {"endpoint": "https://user@agent.example.com/?query=yes"}}}
 elif case == "insecure_a2a_endpoint":
     obj["spec"] = {"a2a": {"target": {"endpoint": "http://agent.example.com"}}}
-elif case.startswith("mcp_") or case.startswith("unknown_mcp"):
-    obj["spec"] = {
-        "mcp": {
-            "target": {"serviceRef": {"name": "tools", "port": 8080}, "path": "/mcp"},
-            "transport": {"type": "StreamableHTTP"},
-            "authentication": {"bearerToken": {"secretRef": {"name": "tools-token"}}},
-        }
-    }
-    mcp = obj["spec"]["mcp"]
-    if case == "mcp_empty_target":
-        mcp["target"] = {}
-    elif case == "mcp_both_targets":
-        mcp["target"]["endpoint"] = "https://tools.example.com/mcp"
-    elif case == "mcp_missing_service_path":
-        del mcp["target"]["path"]
-    elif case == "mcp_external_with_path":
-        mcp["target"] = {"endpoint": "https://tools.example.com/mcp", "path": "/other"}
-    elif case == "mcp_invalid_path":
-        mcp["target"]["path"] = "/base//mcp"
-    elif case == "mcp_control_path":
-        mcp["target"]["path"] = "/base\nmcp"
-    elif case == "mcp_invalid_service_name":
-        mcp["target"]["serviceRef"]["name"] = "Invalid_Name"
-    elif case == "mcp_invalid_service_port":
-        mcp["target"]["serviceRef"]["port"] = 0
-    elif case == "mcp_insecure_service":
-        mcp["allowInsecureHttp"] = True
-    elif case == "mcp_insecure_external":
-        mcp["target"] = {"endpoint": "http://tools.example.com/mcp"}
-    elif case == "mcp_insecure_https":
-        mcp["target"] = {"endpoint": "https://tools.example.com/mcp"}
-        mcp["allowInsecureHttp"] = True
-    elif case == "mcp_invalid_endpoint":
-        mcp["target"] = {"endpoint": "https://user@tools.example.com/mcp?q=1"}
-    elif case == "mcp_endpoint_port_zero":
-        mcp["target"] = {"endpoint": "https://tools.example.com:0/mcp"}
-    elif case == "mcp_endpoint_padded_port_zero":
-        mcp["target"] = {"endpoint": "https://tools.example.com:000/mcp"}
-    elif case == "mcp_endpoint_empty_host":
-        mcp["target"] = {"endpoint": "https://:443/mcp"}
-    elif case == "mcp_endpoint_colon_only_host":
-        mcp["target"] = {"endpoint": "https://:/mcp"}
-    elif case == "mcp_endpoint_control":
-        mcp["target"] = {"endpoint": "https://tools.example.com/mcp\nrest"}
-    elif case == "mcp_endpoint_repeated_slash":
-        mcp["target"] = {"endpoint": "https://tools.example.com/base//mcp"}
-    elif case == "mcp_endpoint_encoded_dot":
-        mcp["target"] = {"endpoint": "https://tools.example.com/base/%2e%2e/mcp"}
-    elif case == "mcp_endpoint_backslash":
-        mcp["target"] = {"endpoint": "https://tools.example.com/base\\mcp"}
-    elif case == "mcp_missing_transport":
-        del mcp["transport"]
-    elif case == "mcp_invalid_transport":
-        mcp["transport"]["type"] = "HTTP2"
-    elif case == "mcp_empty_authentication":
-        mcp["authentication"] = {}
-    elif case == "mcp_missing_secret_name":
-        del mcp["authentication"]["bearerToken"]["secretRef"]["name"]
-    elif case == "mcp_invalid_secret_group":
-        mcp["authentication"]["bearerToken"]["secretRef"]["group"] = "external.example"
-    elif case == "mcp_invalid_secret_kind":
-        mcp["authentication"]["bearerToken"]["secretRef"]["kind"] = "ConfigMap"
-    elif case == "mcp_invalid_secret_name":
-        mcp["authentication"]["bearerToken"]["secretRef"]["name"] = "Invalid_Name"
-    elif case == "mcp_invalid_secret_namespace":
-        mcp["authentication"]["bearerToken"]["secretRef"]["namespace"] = "Invalid_Namespace"
-    elif case == "unknown_mcp":
-        mcp["unknownField"] = True
-    elif case == "unknown_mcp_target":
-        mcp["target"]["unknownField"] = True
-    elif case == "unknown_mcp_service_ref":
-        mcp["target"]["serviceRef"]["unknownField"] = True
-    elif case == "unknown_mcp_transport":
-        mcp["transport"]["version"] = "2026-07-28"
-    elif case == "unknown_mcp_authentication":
-        mcp["authentication"]["unknownField"] = True
-    elif case == "unknown_mcp_bearer":
-        mcp["authentication"]["bearerToken"]["key"] = "token"
-    elif case == "unknown_mcp_secret_ref":
-        mcp["authentication"]["bearerToken"]["secretRef"]["unknownField"] = True
-    else:
-        raise SystemExit(f"unknown MCP test case: {case}")
 elif case == "unknown_ai":
     ai["unknownField"] = True
 elif case == "unknown_pool":
@@ -342,9 +218,6 @@ apply_dry_run() {
 resource_json valid | apply_dry_run >/dev/null
 resource_json valid_a2a_service | apply_dry_run >/dev/null
 resource_json valid_a2a_external | apply_dry_run >/dev/null
-resource_json valid_mcp_service | apply_dry_run >/dev/null
-resource_json valid_mcp_external | apply_dry_run >/dev/null
-resource_json valid_mcp_external_http | apply_dry_run >/dev/null
 
 expect_rejected() {
     local case_name="$1"
@@ -369,9 +242,6 @@ expect_rejected() {
 expect_rejected missing_spec 'spec: Required value'
 expect_rejected empty_spec 'spec must configure exactly one backend variant'
 expect_rejected both_variants 'spec must configure exactly one backend variant'
-expect_rejected ai_and_mcp 'spec must configure exactly one backend variant'
-expect_rejected a2a_and_mcp 'spec must configure exactly one backend variant'
-expect_rejected all_variants 'spec must configure exactly one backend variant'
 expect_rejected empty_a2a_target 'a2a.target must configure exactly one of serviceRef or endpoint'
 expect_rejected both_a2a_targets 'a2a.target must configure exactly one of serviceRef or endpoint'
 
@@ -379,12 +249,6 @@ for case_name in \
     unknown_spec unknown_ai unknown_pool unknown_credential unknown_secret_ref \
     unknown_limits unknown_model unknown_pricing unknown_defaults unknown_a2a \
     unknown_a2a_target unknown_service_ref; do
-    expect_rejected "${case_name}" 'unknown field'
-done
-
-for case_name in \
-    unknown_mcp unknown_mcp_target unknown_mcp_service_ref unknown_mcp_transport \
-    unknown_mcp_authentication unknown_mcp_bearer unknown_mcp_secret_ref; do
     expect_rejected "${case_name}" 'unknown field'
 done
 
@@ -398,19 +262,6 @@ for case_name in \
     missing_price invalid_max_output invalid_service_name invalid_service_name_label_length invalid_service_name_numeric_start \
     invalid_service_name_dot invalid_service_namespace \
     invalid_service_port insecure_service_target invalid_a2a_endpoint insecure_a2a_endpoint; do
-    expect_rejected "${case_name}" 'EdgionBackend'
-done
-
-
-for case_name in \
-    mcp_empty_target mcp_both_targets mcp_missing_service_path mcp_external_with_path \
-    mcp_invalid_path mcp_control_path mcp_invalid_service_name mcp_invalid_service_port mcp_insecure_service \
-    mcp_insecure_external mcp_insecure_https mcp_invalid_endpoint mcp_endpoint_port_zero \
-    mcp_endpoint_padded_port_zero \
-    mcp_endpoint_empty_host mcp_endpoint_colon_only_host mcp_endpoint_control \
-    mcp_endpoint_repeated_slash mcp_endpoint_encoded_dot mcp_endpoint_backslash mcp_missing_transport \
-    mcp_invalid_transport mcp_empty_authentication mcp_missing_secret_name \
-    mcp_invalid_secret_group mcp_invalid_secret_kind mcp_invalid_secret_name mcp_invalid_secret_namespace; do
     expect_rejected "${case_name}" 'EdgionBackend'
 done
 
@@ -429,7 +280,5 @@ fi
 
 kubectl --context "${CONTEXT}" explain \
     edgionbackend.spec.ai.credentialPool.credentials.secretRef >/dev/null
-kubectl --context "${CONTEXT}" explain \
-    edgionbackend.spec.mcp.authentication.bearerToken.secretRef >/dev/null
 
 echo 'EdgionBackend Kubernetes v1.26.15 admission contract passed'

@@ -1,5 +1,9 @@
 # WS-06: SSE Decoder v2 — Zero-Copy Slice Chain + Hold-and-Release Windows
 
+**Status:** ready for kickoff under `tasks/pending/sse-decoder-v2/`. ExtProc
+attached response streaming is accepted. This workstream's hold-and-release
+window is the hard gate for Stream Processing Work Package 2.
+
 **Goal:** Replace the byte-at-a-time `SseDecoder` with a `Bytes`-slice-retaining
 incremental decoder, add a bounded hold-and-release window primitive (unblocking
 WS-03 response guards), eliminate the Anthropic double-decode, and add the
@@ -12,6 +16,12 @@ stage) — that file carries the verified facts (F1-F3), constraints, and prior
 art; this file locks scope and sequencing. It also resolves decoder-adjacent
 open issue D5 from
 `tasks/ai-gateway/todo/response-body-pipeline-hardening.md`.
+
+**Ownership interaction:** this workstream is backend-resource-identity
+independent, but it touches AI dispatch, response processor, SSE, and Anthropic
+files that may overlap the active ExtProc package. Parallel execution requires
+an explicit non-overlapping file handoff; otherwise run it after ExtProc
+acceptance. Backend Phase 1 is already complete.
 
 ## Why (from the comparison, §6)
 
@@ -53,7 +63,7 @@ open issue D5 from
    *unbounded* state, and the shipped Anthropic translator withholds
    partial-event bytes across chunks (`ai/anthropic/response.rs:351`
    `chunk.take()` + bounded decoder pending). Add a canonical note to
-   CLAUDE.md + skills body docs stating the agreed conditions for a window:
+   `AGENTS.md` + skills body docs stating the agreed conditions for a window:
    bounded and admission-validated, policy-declared, hold-and-release (no
    full-stream accumulation), flushed at eos, default-off. Window×terminate
    ordering (release-before-terminate for masking; discard-on-terminate for
@@ -77,7 +87,7 @@ Create:  edgion-gateway/src/sse/window.rs     (hold-and-release window)
 Modify:  edgion-gateway/src/ai/usage.rs       (lazy extraction; preserve D1b gate)
 Modify:  edgion-gateway/src/ai/anthropic/response.rs  (event-emitting mode; D5)
 Modify:  edgion-gateway/src/ai/dispatch.rs    (event-pipeline composition)
-Modify:  CLAUDE.md + skills body-invariant docs (amendment)
+Modify:  AGENTS.md + skills body-invariant docs (clarification)
 Tests:   sse unit suite ports 1:1 + new chain-boundary property tests
          (cross-chunk field splits, CRLF splits, BOM, degrade/malformed parity);
          ai integration: quota termination + Anthropic translation regressions

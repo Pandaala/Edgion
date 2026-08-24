@@ -435,7 +435,7 @@ struct SimpleCountStats {
 
 /// Unified EdgionBackend runtime index stats.
 ///
-/// The store is process-global and shared by every AI/A2A/MCP resource, so a
+/// The store is process-global and shared by every AI/A2A resource, so a
 /// bare total cannot tell a caller whether one specific backend compiled into
 /// the activatable index. `keys` names the resident entries so a test can
 /// assert its own backend directly instead of doing arithmetic on a total that
@@ -1787,9 +1787,7 @@ mod edgion_backend_admin_tests {
                 defaults: AiBackendDefaults::default(),
             }),
             a2a: None,
-            mcp: None,
             resolved_a2a: None,
-            resolved_mcp: None,
             reconcile_outcome: None,
         };
         let mut service = EdgionBackend::new(name, spec);

@@ -135,23 +135,6 @@ spec:
 
 Multiple matches have an **OR** relationship; the path/headers/queryParams/method inside a single match have an **AND** relationship.
 
-### MCP direct-route subset
-
-When the sole backendRef resolves to the current `spec.mcp` variant of an EdgionBackend, the rule
-uses a deliberately narrower subset than general HTTP routing:
-
-- one positive-weight `group: edgion.io`, `kind: EdgionBackend` backendRef with no port;
-- one explicit `Exact` path match and no method, header, or query predicates;
-- `/` or slash-separated non-empty ASCII segments containing only letters, digits, `-`, `.`, `_`,
-  or `~`; `.` and `..` segments are invalid;
-- no path parameters or escaped literal colon syntax, percent escapes, repeated/trailing slash,
-  query, fragment, session persistence, or delegation.
-
-The Controller derives this classification from the current backend generation and publishes no
-MCP marker. Invalid rules use the normal `invalidRuleIndices` and HTTPRoute status model. This
-eligibility classification does not activate an MCP listener or wire protocol; Gateway recognition,
-Origin validation, transport, and public activation are later WP10 stages.
-
 #### path
 
 | Field | Type | Description |

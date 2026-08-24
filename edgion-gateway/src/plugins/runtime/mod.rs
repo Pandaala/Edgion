@@ -23,7 +23,6 @@ pub use dye_plan::{CompiledDyePlan, CompiledDyeRule};
 pub use gateway_api_filters::RequestHeaderModifierFilter;
 pub use log::{EdgionPluginsLog, PluginLog, StageLogs};
 pub(crate) use plugin_runtime::InvalidUpdatePolicy;
-pub(crate) use plugin_runtime::McpCorsEvidence;
 pub use plugin_runtime::PluginRuntime;
 pub use session_adapter::PingoraSessionAdapter;
 pub use traits::{

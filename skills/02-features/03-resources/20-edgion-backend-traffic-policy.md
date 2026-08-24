@@ -269,32 +269,6 @@ BackendTLSPolicy on a cleartext A2A external endpoint fails closed. When an A2A 
 hostname; otherwise the EBTP is rejected. Retry permission still comes from HTTPRoute, and the
 existing session-persistence and accounting semantics are unchanged.
 
-## MCP policy and BackendTLSPolicy semantics
-
-Policy always targets the directly routed `edgion.io/EdgionBackend`; a wrapped Service supplies
-EndpointSlice discovery only and contributes no inherited policy.
-
-| EBTP field | MCP Service | MCP external |
-|------------|-------------|--------------|
-| `loadBalancer.type`, `consistentHash` | Supported | Rejected |
-| `loadBalancer.panicThreshold` | Rejected | Rejected |
-| `healthCheck` | Rejected | Rejected |
-| `outlierDetection` | Rejected | Rejected |
-| `upstreamAuthority` | Supported | Rejected |
-| `retryConstraint` | Rejected | Rejected |
-| `circuitBreaker` | Supported | Supported |
-| `connection.connectTimeout` | Supported | Supported |
-
-Every present rejected field rejects the complete policy; the Gateway repeats capability checks
-before atomic publication. Active health checks have no MCP-safe probe. Retry remains rejected
-until a later frontend can prove safe no-write/replay semantics; a budget alone is not permission
-to replay. Session persistence is not an EBTP field and is inactive for MCP in WP9.
-
-BackendTLSPolicy supports its complete validation, CA, SAN, system-CA, and client-certificate
-contract for MCP Service and HTTPS external targets. It rejects EdgionBackend `sectionName`, unknown
-options, and every attachment to a cleartext external target. The Gateway checks the current MCP
-runtime shape so stale or forged `McpExternal` markers cannot attach TLS to HTTP.
-
 ## Conflict resolution and status
 
 Arbitration runs independently for each typed target. Oldest `creationTimestamp` wins; missing

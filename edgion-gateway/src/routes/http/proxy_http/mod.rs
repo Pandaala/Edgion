@@ -170,7 +170,7 @@ impl ProxyHttp for EdgionHttpProxy {
         // The latch is monotonic by construction (set once, never cleared),
         // as the contract requires — the handler vector is not, because the
         // hook takes it across await points and the future may be dropped.
-        ctx.main_proxy_replay_allowed()
+        !ctx.request_body_stream_active
     }
 
     async fn upstream_request_filter(
@@ -263,7 +263,7 @@ impl ProxyHttp for EdgionHttpProxy {
     fn suppress_error_log(&self, _session: &Session, ctx: &Self::CTX, _error: &Error) -> bool {
         // filter-04b: the sentinel abort from a written local reply is not a real
         // error; hide its error-log line (the access log still records the reply).
-        ctx.local_reply_written || ctx.mcp_log_redaction_required()
+        ctx.local_reply_written
     }
 
     fn request_summary(&self, session: &Session, ctx: &Self::CTX) -> String {

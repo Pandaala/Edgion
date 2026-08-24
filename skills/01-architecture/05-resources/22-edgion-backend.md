@@ -1,6 +1,6 @@
 ---
 name: resource-edgion-backend
-description: EdgionBackend AI/A2A/MCP variants, Controller resolution, route dependencies, conf_sync transport, and unified Gateway snapshots.
+description: EdgionBackend AI/A2A variants, Controller resolution, route dependencies, conf_sync transport, and unified Gateway snapshots.
 ---
 
 # EdgionBackend resource
@@ -9,12 +9,8 @@ description: EdgionBackend AI/A2A/MCP variants, Controller resolution, route dep
 > External schema and complete examples: [../../02-features/03-resources/22-edgion-backend.md](../../02-features/03-resources/22-edgion-backend.md)
 
 `EdgionBackend` is a namespaced, typed `HTTPRoute.backendRef` with an exactly-one variant union:
-`spec.ai` describes an AI provider, `spec.a2a` describes an A2A transport target, and `spec.mcp`
-describes a stateless Streamable HTTP upstream. Configuring zero or multiple variants is invalid.
-`AiProxy` consumes only AI and ordinary forwarding consumes A2A. The Controller classifies a direct
-HTTPRoute as MCP-eligible when its sole rule satisfies the strict exact-path contract; no separate
-McpGateway resource or placement marker is used. This eligibility stage does not by itself activate
-client-facing MCP traffic.
+`spec.ai` describes an AI provider and `spec.a2a` describes an A2A transport target. Configuring
+zero or multiple variants is invalid. `AiProxy` consumes only AI and ordinary forwarding consumes A2A.
 
 ## Controller processing
 
@@ -32,10 +28,7 @@ client-facing MCP traffic.
    Service targets, it registers the Service dependency, authorizes a cross-Namespace reference,
    and proves that the named Service and numeric port exist. Missing, denied, or missing-port
    targets leave `resolvedA2a` absent so the Gateway cannot activate stale transport state.
-5. For MCP, parse registers the Service and optional bearer Secret before resolving either one.
-   It publishes `resolvedMcp` only when the complete target and credential are valid. The fixed
-   Secret key is `bearerToken`; the shared bearer resolver enforces RFC 6750 header-safe material.
-6. `on_delete` clears all variant dependency edges and requeues typed dependents through their own
+5. `on_delete` clears all variant dependency edges and requeues typed dependents through their own
    workqueues.
 
 An EdgionBackend apply or delete requeues referencing HTTPRoutes and
@@ -64,11 +57,6 @@ Controller-proved Service identity or normalized external endpoint. It is recomp
 generation and is never accepted from the CRD. WP4 adds no credentials, Agent Card retrieval,
 request-body observation, JSON-RPC observation, or response observability.
 
-For MCP, `resolvedMcp` carries either the Controller-proved Service identity plus absolute MCP path
-or the normalized external HTTP(S) endpoint. The optional resolved bearer Secret follows the same
-schemars-skip, conf_sync-preservation, and Admin-redaction contract as other `SecretSlot` users.
-MCP resolution is fail-close and all-or-nothing rather than AI's partial-good pool behavior.
-
 ## Status
 
 - `Accepted=False/Invalid` reports structural validation errors.
@@ -83,9 +71,6 @@ MCP resolution is fail-close and all-or-nothing rather than AI's partial-good po
   no object reference and resolve during parse. Invalid exactly-one, target-union, endpoint, or
   Service-reference configuration produces `Accepted=False/Invalid` and
   `ResolvedRefs=False/Invalid`.
-- For MCP, `ResolvedRefs=False` distinguishes a denied/missing target or Secret from malformed
-  bearer material without putting dependency details or Secret values in status. `Accepted=False`
-  remains reserved for the strict schema and static protocol/target contract.
 
 Route `ResolvedRefs` is intentionally separate from the EdgionBackend's own status. An existing and
 authorized backendRef is resolved at the route layer even when its selected variant cannot publish
@@ -95,7 +80,7 @@ Controller-to-Gateway generation becomes usable.
 ## Gateway runtime
 
 `EdgionBackendStore` is the sole writer and publishes one immutable ArcSwap snapshot containing
-`RuntimeEdgionBackend::{Ai,A2a,Mcp}`. The existing `AiBackendStore` name is only a compatibility type
+`RuntimeEdgionBackend::{Ai,A2a}`. The existing `AiBackendStore` name is only a compatibility type
 alias to that same store. Variant switches, invalidations, deletes, and recreates replace one entry
 atomically; no request can observe both variants from one generation. Cold-path compilation:
 
@@ -109,9 +94,6 @@ atomically; no request can observe both variants from one generation. Cold-path 
 - for A2A, accepts only Controller-proved `resolvedA2a`, retains the stable logical EdgionBackend
   identity, and compiles either a typed Service/port or the external endpoint's dial address,
   TLS/SNI, HTTP authority, and confined path prefix.
-- for MCP, requires exact `resolvedMcp` proof, compiles the Service/path or shared external endpoint
-  transport, parses the optional bearer through the canonical resolver again, and exposes only a
-  redacted header-injection value.
 
 Equivalent updates reuse stable runtime and backend-policy handles. Invalid, unresolved, or
 zero-credential updates remove the previous activatable generation rather than serving stale
@@ -120,10 +102,7 @@ generations across attempts.
 
 The snapshot starts at generation zero and advances exactly once for each semantic runtime-map
 change. Empty, invalid-absent, and equivalent updates retain the exact snapshot Arc; changed target,
-UID, or bearer material replaces it. A standalone snapshot-bound `SelectedMcpBackend` proves the
-selected logical slot, direct policy identity, runtime UID, transport, credential seam, and
-generation. Later WP10 runtime stages consume that proof only after the HTTPRoute exact-shape and
-current-variant gates; WP9 and the Controller eligibility stage do not activate HTTP dispatch.
+UID, or credential material replaces it.
 
 `defaults.timeout` does not exist. `HTTPRoute.timeouts` owns request and per-attempt deadlines;
 EdgionBackendTrafficPolicy `connection.connectTimeout` owns connection establishment.

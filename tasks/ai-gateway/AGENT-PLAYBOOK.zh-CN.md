@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 • WP2 尚未进入实现阶段，当前被一个真实的 Pingora fork 前置条件阻塞。
 
   已完成：
@@ -54,3 +55,65 @@
     → ...
 
   类似 Envoy ext_proc，适合每个 SSE 请求需要反复检查很多窗口。
+=======
+# AI Gateway Agent Playbook
+
+> The filename is retained for link stability. Repository task content is
+> English-only; user-facing Chinese documentation belongs under `docs/zh-CN/`.
+
+## Current launch order
+
+Do not launch A2A, model virtualization, or provider-expansion code work
+against the old backend identity. Use this order:
+
+1. **Backend Phase 0/1** — create the formal Phase 1 task, freeze the nested
+   `spec.ai` contract, complete independent design review, then replace the AI
+   backend resource repository-wide. **Completed.**
+2. **Stream Processing 01** — complete the in-progress ExtProc attached
+   response stream using one request-scoped gRPC Process logical stream.
+3. After ExtProc acceptance, run two ownership-safe branches:
+   - **Backend Phase 2 redesign** — retain only one-time logical backend
+     selection, canonical target resolution, and peer/accounting factoring with
+     concrete routed-backend consumers. Do not restore the withdrawn
+     selected-backend bounded exchange or shared connector.
+   - **WS-06 SSE Decoder v2** — deliver the canonical bounded hold-and-release
+     window without adding Guardrail behavior.
+4. **Stream Processing 02** — after the SSE window is accepted, implement one
+   bounded HTTP Pass/Replace/Reject decision per window for the simple
+   Guardrail mode.
+5. **Backend Phase 3** — generalize typed BackendTLSPolicy and
+   EdgionBackendTrafficPolicy attachment with per-variant capability matrices.
+6. **Backend Phase 4/5** — add `spec.a2a`, then the generic optional
+   request-body observer.
+7. **WS-04 A2A Phase 1** — first freeze a new Agent Card fetch transport, then
+   implement card rewriting and method observation on the completed foundation.
+8. Continue LLM ingress breadth, prompt guards, model routing,
+   and parity-tail items according to `roadmap/00-overview.md`.
+
+## Context to give every feature agent
+
+- Read root `AGENTS.md`, `skills/00-design-rules.md`, and the complete
+  new-feature workflow before editing.
+- Treat `tasks/plan/edgion-backend-unification.md` as the authoritative
+  architecture contract.
+- Run `git status --short` and preserve unrelated worktree changes.
+- Load architecture and external resource contracts progressively from
+  `skills/01-architecture/05-resources/` and
+  `skills/02-features/03-resources/`.
+- Do not create compatibility aliases, duplicate resolvers/dialers, a second
+  request body cache, response-side BodyStorage, or a new failure-policy shape.
+- Do not commit or push without explicit user authorization.
+
+## Stop conditions
+
+Stop after design review and report the blocker instead of implementing when a
+proposal would require any of the following:
+
+- rerunning HTTPRoute weighting for a protocol-owned exchange;
+- a plugin-local backend resolver or HTTP/TLS client;
+- implicit policy inheritance from a wrapped Kubernetes Service;
+- mandatory body capture for observational parsing;
+- mixed old/new resource identities or binaries;
+- silent acceptance of a backend variant that does not match the frontend
+  protocol plugin.
+>>>>>>> Stashed changes

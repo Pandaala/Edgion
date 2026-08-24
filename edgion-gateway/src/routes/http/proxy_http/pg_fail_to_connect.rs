@@ -40,7 +40,7 @@ pub fn fail_to_connect(
         ctx.selected_backend
             .as_ref()
             .and_then(crate::backends::SelectedHttpBackend::routed),
-        Some(crate::backends::SelectedLogicalBackend::A2a(_) | crate::backends::SelectedLogicalBackend::Mcp(_))
+        Some(crate::backends::SelectedLogicalBackend::A2a(_))
     ) {
         if let Some(upstream) = ctx.get_current_upstream() {
             if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
@@ -55,11 +55,6 @@ pub fn fail_to_connect(
         }
     }
 
-    // MCP is non-replayable even when Pingora handed this callback a retry
-    // decision already set by the transport. Clamp it before every early
-    // return and before any retry-budget or retry-reason side effect.
-    let mcp_no_replay = ctx.force_mcp_no_replay(&mut e.retry);
-
     // Check request timeout dynamically before allowing retry
     // If timeout is exceeded, block all retries and return 504. Both the
     // route-level `request_timeout` and a client-supplied `grpc-timeout`
@@ -70,11 +65,7 @@ pub fn fail_to_connect(
         if let Some(upstream) = ctx.get_current_upstream_mut() {
             upstream.status = Some(504);
         }
-        // The MCP clamp above also clears a transport-preselected retry.
-        return e;
-    }
-
-    if mcp_no_replay {
+        // Do not set retry flag - this blocks any further retries
         return e;
     }
 

@@ -22,8 +22,8 @@ use edgion_resources::resources::common::{ParentReference, RefDenied};
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::resources::edgion_plugins::{AiProxyConfig, EdgionPlugin, EdgionPlugins};
 use edgion_resources::resources::http_route::{
-    logical_backend_slot_identities, validate_mcp_http_route_rule, DelegationIssue, HTTPBackendRefKind,
-    HTTPRouteFilterType, HTTPRouteRule, HTTPRouteStatus, RouteParentStatus, GATEWAY_API_GROUP,
+    logical_backend_slot_identities, DelegationIssue, HTTPBackendRefKind, HTTPRouteFilterType, HTTPRouteRule,
+    HTTPRouteStatus, RouteParentStatus, GATEWAY_API_GROUP,
 };
 use edgion_resources::resources::plugin_policy::PluginPolicyAction;
 use edgion_resources::ResourceKind;
@@ -204,7 +204,7 @@ impl HttpRouteHandler {
         let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
         // Keep dependencies declared on the operator route as well as those
         // inherited by flattened child rules. This runs before protocol
-        // filtering, so a withdrawn MCP rule can still be restored when its
+        // filtering so a withdrawn rule can still be restored when its
         // PluginPolicy changes again.
         for rules in [route.spec.rules.as_deref(), route.spec.resolved_rules.as_deref()]
             .into_iter()
@@ -397,11 +397,10 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // the dependency that can make it eligible again on a later reconcile.
         Self::register_plugin_refs(&route, _ctx);
 
-        let has_delegation = route.spec.resolved_rules.is_some();
         if let Some(rules) = &mut route.spec.resolved_rules {
             let mut resolved_index = 0usize;
             rules.retain(|rule| {
-                let reason = protocol_rule_invalid_reason_with_runtime(rule, route_ns, _ctx.runtime(), has_delegation);
+                let reason = protocol_rule_invalid_reason_with_runtime(rule, route_ns, _ctx.runtime());
                 let keep = reason.is_none();
                 if let Some(reason) = reason {
                     delegation_outcome.issues.push(DelegationIssue::RuleDropped {
@@ -632,13 +631,8 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             .flatten()
             .enumerate()
             .filter_map(|(index, rule)| {
-                protocol_rule_invalid_reason_with_runtime(
-                    rule,
-                    route_ns,
-                    _ctx.runtime(),
-                    route.spec.resolved_rules.is_some(),
-                )
-                .map(|message| (index, message))
+                protocol_rule_invalid_reason_with_runtime(rule, route_ns, _ctx.runtime())
+                    .map(|message| (index, message))
             })
             .collect();
 
@@ -1281,7 +1275,6 @@ enum ForwardingBackendClass {
     Service,
     Ai,
     A2a,
-    Mcp,
     Missing,
     Denied,
     Invalid,
@@ -1372,40 +1365,14 @@ fn runtime_ai_rule_invalid_reason(
                         {
                             Some(backend) if backend.spec.validate().is_err() => ForwardingBackendClass::Invalid,
                             Some(backend)
-                                if matches!(
-                                    (
-                                        backend.spec.ai.is_some(),
-                                        backend.spec.a2a.is_some(),
-                                        backend.spec.mcp.is_some()
-                                    ),
-                                    (true, false, false)
-                                ) =>
+                                if matches!((backend.spec.ai.is_some(), backend.spec.a2a.is_some()), (true, false)) =>
                             {
                                 ForwardingBackendClass::Ai
                             }
                             Some(backend)
-                                if matches!(
-                                    (
-                                        backend.spec.ai.is_some(),
-                                        backend.spec.a2a.is_some(),
-                                        backend.spec.mcp.is_some()
-                                    ),
-                                    (false, true, false)
-                                ) =>
+                                if matches!((backend.spec.ai.is_some(), backend.spec.a2a.is_some()), (false, true)) =>
                             {
                                 ForwardingBackendClass::A2a
-                            }
-                            Some(backend)
-                                if matches!(
-                                    (
-                                        backend.spec.ai.is_some(),
-                                        backend.spec.a2a.is_some(),
-                                        backend.spec.mcp.is_some()
-                                    ),
-                                    (false, false, true)
-                                ) =>
-                            {
-                                ForwardingBackendClass::Mcp
                             }
                             Some(_) => ForwardingBackendClass::Invalid,
                             None => ForwardingBackendClass::Missing,
@@ -1443,10 +1410,7 @@ fn runtime_ai_rule_invalid_reason(
     if classes.iter().any(|(_, _, class)| {
         matches!(
             class,
-            ForwardingBackendClass::Service
-                | ForwardingBackendClass::A2a
-                | ForwardingBackendClass::Mcp
-                | ForwardingBackendClass::Invalid
+            ForwardingBackendClass::Service | ForwardingBackendClass::A2a | ForwardingBackendClass::Invalid
         )
     }) {
         return Some("AI EdgionBackend slots must not be mixed with other forwarding backend variants".to_string());
@@ -1545,40 +1509,14 @@ fn runtime_a2a_rule_invalid_reason(
                         {
                             Some(backend) if backend.spec.validate().is_err() => ForwardingBackendClass::Invalid,
                             Some(backend)
-                                if matches!(
-                                    (
-                                        backend.spec.ai.is_some(),
-                                        backend.spec.a2a.is_some(),
-                                        backend.spec.mcp.is_some()
-                                    ),
-                                    (true, false, false)
-                                ) =>
+                                if matches!((backend.spec.ai.is_some(), backend.spec.a2a.is_some()), (true, false)) =>
                             {
                                 ForwardingBackendClass::Ai
                             }
                             Some(backend)
-                                if matches!(
-                                    (
-                                        backend.spec.ai.is_some(),
-                                        backend.spec.a2a.is_some(),
-                                        backend.spec.mcp.is_some()
-                                    ),
-                                    (false, true, false)
-                                ) =>
+                                if matches!((backend.spec.ai.is_some(), backend.spec.a2a.is_some()), (false, true)) =>
                             {
                                 ForwardingBackendClass::A2a
-                            }
-                            Some(backend)
-                                if matches!(
-                                    (
-                                        backend.spec.ai.is_some(),
-                                        backend.spec.a2a.is_some(),
-                                        backend.spec.mcp.is_some()
-                                    ),
-                                    (false, false, true)
-                                ) =>
-                            {
-                                ForwardingBackendClass::Mcp
                             }
                             Some(_) => ForwardingBackendClass::Invalid,
                             None => ForwardingBackendClass::Missing,
@@ -1635,10 +1573,7 @@ fn runtime_a2a_rule_invalid_reason(
     if classes.iter().any(|class| {
         matches!(
             class,
-            ForwardingBackendClass::Service
-                | ForwardingBackendClass::Ai
-                | ForwardingBackendClass::Mcp
-                | ForwardingBackendClass::Invalid
+            ForwardingBackendClass::Service | ForwardingBackendClass::Ai | ForwardingBackendClass::Invalid
         )
     }) {
         return Some(
@@ -1808,48 +1743,15 @@ fn plugin_policy_blocks_rule(rule: &HTTPRouteRule, route_namespace: &str, runtim
     })
 }
 
-fn runtime_mcp_rule_invalid_reason(
-    rule: &HTTPRouteRule,
-    route_namespace: &str,
-    runtime: &ControllerRuntime,
-    has_delegation: bool,
-) -> Option<String> {
-    let processor = runtime.processor_registry.get("EdgionBackend")?;
-    let has_current_mcp_backend = rule
-        .backend_refs
-        .iter()
-        .flatten()
-        .filter(|backend_ref| {
-            backend_ref.ref_denied.is_none() && backend_ref.backend_kind() == HTTPBackendRefKind::EdgionBackend
-        })
-        .any(|backend_ref| {
-            let namespace = backend_ref.namespace.as_deref().unwrap_or(route_namespace);
-            let key = format!("{namespace}/{}", backend_ref.name);
-            processor
-                .get_raw_any(&key)
-                .and_then(|raw| raw.downcast::<EdgionBackend>().ok())
-                .is_some_and(|backend| backend.spec.validate().is_ok() && backend.spec.mcp.is_some())
-        });
-    if !has_current_mcp_backend {
-        return None;
-    }
-    if has_delegation {
-        return Some("MCP rules do not support HTTPRoute delegation".to_string());
-    }
-    validate_mcp_http_route_rule(rule).err().map(|error| error.to_string())
-}
-
 fn protocol_rule_invalid_reason_with_runtime(
     rule: &HTTPRouteRule,
     route_namespace: &str,
     runtime: &ControllerRuntime,
-    has_delegation: bool,
 ) -> Option<String> {
     protocol_rule_invalid_reason_after_policy(
         rule,
         route_namespace,
         runtime,
-        has_delegation,
         plugin_policy_blocks_rule(rule, route_namespace, runtime),
     )
 }
@@ -1858,7 +1760,6 @@ fn protocol_rule_invalid_reason_after_policy(
     rule: &HTTPRouteRule,
     route_namespace: &str,
     runtime: &ControllerRuntime,
-    has_delegation: bool,
     policy_blocked: bool,
 ) -> Option<String> {
     // A PluginPolicy Block is a fail-close request gate. No backend admission
@@ -1868,7 +1769,6 @@ fn protocol_rule_invalid_reason_after_policy(
     }
     runtime_ai_rule_invalid_reason(rule, route_namespace, runtime)
         .or_else(|| runtime_a2a_rule_invalid_reason(rule, route_namespace, runtime))
-        .or_else(|| runtime_mcp_rule_invalid_reason(rule, route_namespace, runtime, has_delegation))
         .or_else(|| backend_variant_invalid_reason(rule, route_namespace, runtime))
         .or_else(|| model_route_context_invalid_reason(rule, route_namespace, runtime))
 }
@@ -1884,9 +1784,7 @@ fn find_controller_invalid_rule_details(
         if already_invalid.contains(&index) {
             continue;
         }
-        if let Some(reason) =
-            protocol_rule_invalid_reason_with_runtime(rule, route_ns, runtime, route.spec.resolved_rules.is_some())
-        {
+        if let Some(reason) = protocol_rule_invalid_reason_with_runtime(rule, route_ns, runtime) {
             details.push((index, reason));
         }
     }
@@ -2218,15 +2116,6 @@ mod tests {
                     }
                 }),
             ),
-            (
-                "tools",
-                serde_json::json!({
-                    "mcp": {
-                        "target": {"endpoint": "https://tools.example.test/mcp"},
-                        "transport": {"type": "StreamableHTTP"}
-                    }
-                }),
-            ),
         ]);
         let rpc_matches = serde_json::json!([{"method": "POST"}]);
         let backend = |name: &str, extra: serde_json::Value| {
@@ -2274,7 +2163,6 @@ mod tests {
 
         for (label, backends) in [
             ("AI", serde_json::json!([backend("model", serde_json::json!({}))])),
-            ("MCP", serde_json::json!([backend("tools", serde_json::json!({}))])),
             (
                 "mixed",
                 serde_json::json!([
@@ -2731,9 +2619,7 @@ modelRoutes:
                 spec: EdgionBackendSpec {
                     ai: None,
                     a2a: None,
-                    mcp: None,
                     resolved_a2a: None,
-                    resolved_mcp: None,
                     reconcile_outcome: None,
                 },
                 status: None,
@@ -2792,9 +2678,7 @@ modelRoutes:
                     },
                     allow_insecure_http: false,
                 }),
-                mcp: None,
                 resolved_a2a: None,
-                resolved_mcp: None,
                 reconcile_outcome: None,
             },
             status: None,
@@ -2824,7 +2708,7 @@ modelRoutes:
             }]),
             serde_json::json!([]),
         );
-        assert!(protocol_rule_invalid_reason_with_runtime(&rule, "apps", &runtime, false).is_none());
+        assert!(protocol_rule_invalid_reason_with_runtime(&rule, "apps", &runtime).is_none());
     }
 
     #[tokio::test]
@@ -2853,9 +2737,7 @@ modelRoutes:
                 spec: EdgionBackendSpec {
                     ai: None,
                     a2a: None,
-                    mcp: None,
                     resolved_a2a: None,
-                    resolved_mcp: None,
                     reconcile_outcome: None,
                 },
                 status: None,
@@ -2915,9 +2797,9 @@ modelRoutes:
                 candidate_config("", "Service", "models", 0),
             ),
             (
-                "MCP",
-                serde_json::json!({"group": "edgion.io", "kind": "MCPBackend", "name": "models"}),
-                candidate_config("edgion.io", "MCPBackend", "models", 0),
+                "unsupported",
+                serde_json::json!({"group": "edgion.io", "kind": "UnsupportedBackend", "name": "models"}),
+                candidate_config("edgion.io", "UnsupportedBackend", "models", 0),
             ),
         ] {
             let rule = ai_rule(serde_json::json!([backend]), serde_json::json!([]));
@@ -2940,302 +2822,6 @@ modelRoutes:
         let config = candidate_config("edgion.io", "EdgionBackend", "models", 1);
         let reason = model_route_context_invalid_reason_for_config(&rule, "apps", &runtime, &config).unwrap();
         assert!(reason.contains("without spec.ai"), "{reason}");
-    }
-
-    #[tokio::test]
-    async fn mcp_shape_uses_current_raw_backend_variant() {
-        let runtime = runtime_with_a2a_plugin(&[
-            (
-                "tools",
-                serde_json::json!({
-                    "mcp": {
-                        "target": {"endpoint": "https://tools.example.test/mcp"},
-                        "transport": {"type": "StreamableHTTP"}
-                    }
-                }),
-            ),
-            (
-                "agent",
-                serde_json::json!({
-                    "a2a": {"target": {"endpoint": "https://agent.example.test"}}
-                }),
-            ),
-            (
-                "tools-ready",
-                serde_json::json!({
-                    "mcp": {
-                        "target": {"endpoint": "https://tools.example.test/mcp"},
-                        "transport": {"type": "StreamableHTTP"}
-                    },
-                    "resolvedMcp": {
-                        "target": {"type": "external", "normalized_endpoint": "https://tools.example.test/mcp"}
-                    }
-                }),
-            ),
-        ]);
-        let rule = |name: &str, path_type: &str, path: &str| {
-            serde_json::from_value::<HTTPRouteRule>(serde_json::json!({
-                "matches": [{"path": {"type": path_type, "value": path}}],
-                "backendRefs": [{
-                    "group": "edgion.io", "kind": "EdgionBackend", "name": name
-                }]
-            }))
-            .expect("MCP route fixture must deserialize")
-        };
-
-        assert!(runtime_mcp_rule_invalid_reason(&rule("tools", "Exact", "/mcp"), "apps", &runtime, false).is_none());
-        assert!(
-            runtime_mcp_rule_invalid_reason(&rule("tools-ready", "Exact", "/mcp"), "apps", &runtime, false).is_none(),
-            "resolvedMcp readiness must not change route-shape intent"
-        );
-        assert!(
-            runtime_mcp_rule_invalid_reason(&rule("tools", "PathPrefix", "/mcp"), "apps", &runtime, false)
-                .is_some_and(|reason| reason.contains("path type Exact"))
-        );
-        let invalid = rule("tools", "PathPrefix", "/mcp");
-        assert!(protocol_rule_invalid_reason_after_policy(&invalid, "apps", &runtime, false, true).is_none());
-        assert!(protocol_rule_invalid_reason_after_policy(&invalid, "apps", &runtime, false, false).is_some());
-        assert!(protocol_rule_invalid_reason_after_policy(&invalid, "apps", &runtime, false, true).is_none());
-        assert!(
-            runtime_mcp_rule_invalid_reason(&rule("tools", "Exact", "/mcp"), "apps", &runtime, true)
-                .is_some_and(|reason| reason.contains("delegation"))
-        );
-
-        // Ordinary A2A or missing targets are not implicit MCP evidence.
-        assert!(runtime_mcp_rule_invalid_reason(&rule("agent", "PathPrefix", "/"), "apps", &runtime, false).is_none());
-        assert!(
-            runtime_mcp_rule_invalid_reason(&rule("missing", "PathPrefix", "/"), "apps", &runtime, false).is_none()
-        );
-
-        let mut denied = rule("tools", "PathPrefix", "/");
-        denied.backend_refs.as_mut().unwrap()[0].ref_denied = Some(RefDenied {
-            target_namespace: "apps".to_string(),
-            target_name: "tools".to_string(),
-            reason: Some("NoMatchingReferenceGrant".to_string()),
-        });
-        assert!(runtime_mcp_rule_invalid_reason(&denied, "apps", &runtime, false).is_none());
-    }
-
-    #[tokio::test]
-    async fn mcp_raw_variant_delete_recreate_and_readiness_transitions_are_current() {
-        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendHandler;
-        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
-
-        let runtime = Arc::new(ControllerRuntime::default());
-        let processor = Arc::new(ResourceProcessor::<EdgionBackend>::new(
-            "EdgionBackend",
-            16,
-            Arc::new(EdgionBackendHandler::new()),
-            runtime.clone(),
-        ));
-        let raw = Arc::new(LocalRawStore::new());
-        processor.set_raw_store(raw.clone());
-        runtime.processor_registry.register(processor);
-        let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
-            "matches": [{"path": {"type": "PathPrefix", "value": "/mcp"}}],
-            "backendRefs": [{
-                "group": "edgion.io", "kind": "EdgionBackend", "name": "target"
-            }]
-        }))
-        .expect("MCP transition route fixture must deserialize");
-        let backend = |spec: serde_json::Value| {
-            serde_json::from_value::<EdgionBackend>(serde_json::json!({
-                "apiVersion": "edgion.io/v1",
-                "kind": "EdgionBackend",
-                "metadata": {"namespace": "apps", "name": "target"},
-                "spec": spec
-            }))
-            .expect("backend transition fixture must deserialize")
-        };
-        let mcp = || {
-            backend(serde_json::json!({
-                "mcp": {
-                    "target": {"endpoint": "https://tools.example.test/mcp"},
-                    "transport": {"type": "StreamableHTTP"}
-                }
-            }))
-        };
-
-        assert!(runtime_mcp_rule_invalid_reason(&rule, "apps", &runtime, false).is_none());
-        raw.upsert("apps/target".to_string(), Arc::new(mcp()));
-        assert!(runtime_mcp_rule_invalid_reason(&rule, "apps", &runtime, false).is_some());
-
-        raw.upsert(
-            "apps/target".to_string(),
-            Arc::new(backend(serde_json::json!({
-                "a2a": {"target": {"endpoint": "https://agent.example.test"}}
-            }))),
-        );
-        assert!(runtime_mcp_rule_invalid_reason(&rule, "apps", &runtime, false).is_none());
-
-        let mut ready = mcp();
-        ready.spec.resolved_mcp = Some(edgion_resources::resources::edgion_backend::ResolvedMcpBackend {
-            target: edgion_resources::resources::edgion_backend::ResolvedMcpTarget::External {
-                normalized_endpoint: "https://tools.example.test/mcp".to_string(),
-            },
-        });
-        raw.upsert("apps/target".to_string(), Arc::new(ready));
-        assert!(runtime_mcp_rule_invalid_reason(&rule, "apps", &runtime, false).is_some());
-
-        raw.remove("apps/target");
-        assert!(runtime_mcp_rule_invalid_reason(&rule, "apps", &runtime, false).is_none());
-        raw.upsert("apps/target".to_string(), Arc::new(mcp()));
-        assert!(runtime_mcp_rule_invalid_reason(&rule, "apps", &runtime, false).is_some());
-    }
-
-    #[tokio::test]
-    async fn invalid_mcp_rule_uses_existing_partial_and_route_rejection_status() {
-        let runtime = runtime_with_a2a_plugin(&[(
-            "tools",
-            serde_json::json!({
-                "mcp": {
-                    "target": {"endpoint": "https://tools.example.test/mcp"},
-                    "transport": {"type": "StreamableHTTP"}
-                }
-            }),
-        )]);
-        let ctx = HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime);
-        let handler = HttpRouteHandler::default();
-        let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
-            "apiVersion": "gateway.networking.k8s.io/v1",
-            "kind": "HTTPRoute",
-            "metadata": {"namespace": "apps", "name": "mcp"},
-            "spec": {
-                "parentRefs": [{"name": "gateway"}],
-                "rules": [
-                    {
-                        "matches": [{"path": {"type": "PathPrefix", "value": "/mcp"}}],
-                        "backendRefs": [{
-                            "group": "edgion.io", "kind": "EdgionBackend", "name": "tools"
-                        }]
-                    },
-                    {
-                        "matches": [{"path": {"type": "Exact", "value": "/health"}}],
-                        "backendRefs": [{"name": "service", "port": 8080}]
-                    }
-                ]
-            }
-        }))
-        .expect("HTTPRoute fixture must deserialize");
-
-        handler.update_status(&mut route, &ctx, &[]);
-        assert_eq!(route.spec.invalid_rule_indices.as_deref(), Some(&[0][..]));
-        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
-        assert!(conditions
-            .iter()
-            .any(|condition| condition.type_ == "PartiallyInvalid" && condition.status == "True"));
-
-        route.spec.rules.as_mut().unwrap().truncate(1);
-        handler.update_status(&mut route, &ctx, &[]);
-        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
-        assert!(conditions.iter().any(|condition| {
-            condition.type_ == "Accepted"
-                && condition.status == "False"
-                && condition.message.contains("path type Exact")
-        }));
-        assert!(conditions
-            .iter()
-            .any(|condition| condition.type_ == "PartiallyInvalid" && condition.status == "False"));
-    }
-
-    #[tokio::test]
-    async fn mcp_cross_namespace_grant_allowed_and_revoked_recomputes_route() {
-        use edgion_resources::resources::reference_grant::{
-            ReferenceGrant, ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo,
-        };
-        use kube::api::ObjectMeta;
-
-        let runtime = runtime_with_a2a_plugin(&[(
-            "tools",
-            serde_json::json!({
-                "mcp": {
-                    "target": {"endpoint": "https://tools.example.test/mcp"},
-                    "transport": {"type": "StreamableHTTP"}
-                }
-            }),
-        )]);
-        let ctx = HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime.clone());
-        let route = || {
-            serde_json::from_value::<HTTPRoute>(serde_json::json!({
-                "apiVersion": "gateway.networking.k8s.io/v1",
-                "kind": "HTTPRoute",
-                "metadata": {"namespace": "infra", "name": "mcp"},
-                "spec": {
-                    "parentRefs": [{"name": "gateway"}],
-                    "rules": [{
-                        "matches": [{"path": {"type": "PathPrefix", "value": "/mcp"}}],
-                        "backendRefs": [{
-                            "group": "edgion.io", "kind": "EdgionBackend",
-                            "namespace": "apps", "name": "tools"
-                        }]
-                    }]
-                }
-            }))
-            .expect("cross-namespace MCP route fixture must deserialize")
-        };
-        let handler = HttpRouteHandler::default();
-
-        let ProcessResult::Continue(denied) = handler.parse(route(), &ctx).await else {
-            panic!("denied route parse must continue");
-        };
-        assert!(denied.spec.rules.as_ref().unwrap()[0].backend_refs.as_ref().unwrap()[0]
-            .ref_denied
-            .is_some());
-        assert!(
-            runtime_mcp_rule_invalid_reason(&denied.spec.rules.as_ref().unwrap()[0], "infra", &runtime, false)
-                .is_none()
-        );
-
-        let grant = ReferenceGrant {
-            metadata: ObjectMeta {
-                namespace: Some("apps".to_string()),
-                name: Some("allow-infra-mcp".to_string()),
-                ..Default::default()
-            },
-            spec: ReferenceGrantSpec {
-                from: vec![ReferenceGrantFrom {
-                    group: "gateway.networking.k8s.io".to_string(),
-                    kind: "HTTPRoute".to_string(),
-                    namespace: "infra".to_string(),
-                }],
-                to: vec![ReferenceGrantTo {
-                    group: "edgion.io".to_string(),
-                    kind: "EdgionBackend".to_string(),
-                    name: Some("tools".to_string()),
-                }],
-            },
-        };
-        runtime
-            .ref_grant_store
-            .upsert("apps/allow-infra-mcp".to_string(), Arc::new(grant));
-        let ProcessResult::Continue(mut allowed) = handler.parse(route(), &ctx).await else {
-            panic!("allowed route parse must continue");
-        };
-        assert!(
-            allowed.spec.rules.as_ref().unwrap()[0].backend_refs.as_ref().unwrap()[0]
-                .ref_denied
-                .is_none()
-        );
-        assert!(
-            runtime_mcp_rule_invalid_reason(&allowed.spec.rules.as_ref().unwrap()[0], "infra", &runtime, false)
-                .is_some_and(|reason| reason.contains("path type Exact"))
-        );
-        HttpRouteHandler::default().update_status(&mut allowed, &ctx, &[]);
-        assert_eq!(allowed.spec.invalid_rule_indices.as_deref(), Some(&[0][..]));
-
-        runtime.ref_grant_store.remove("apps/allow-infra-mcp");
-        let ProcessResult::Continue(revoked) = handler.parse(route(), &ctx).await else {
-            panic!("revoked route parse must continue");
-        };
-        assert!(
-            revoked.spec.rules.as_ref().unwrap()[0].backend_refs.as_ref().unwrap()[0]
-                .ref_denied
-                .is_some()
-        );
-        assert!(
-            runtime_mcp_rule_invalid_reason(&revoked.spec.rules.as_ref().unwrap()[0], "infra", &runtime, false)
-                .is_none()
-        );
     }
 
     #[tokio::test]
@@ -3357,9 +2943,7 @@ modelRoutes:
                 spec: EdgionBackendSpec {
                     ai: None,
                     a2a: None,
-                    mcp: None,
                     resolved_a2a: None,
-                    resolved_mcp: None,
                     reconcile_outcome: None,
                 },
                 status: None,
@@ -3368,7 +2952,7 @@ modelRoutes:
         backend_processor.set_raw_store(backend_raw_store);
         runtime.processor_registry.register(backend_processor);
         assert!(
-            protocol_rule_invalid_reason_with_runtime(&rule, "apps", &runtime, false).is_some(),
+            protocol_rule_invalid_reason_with_runtime(&rule, "apps", &runtime).is_some(),
             "a stale processed Block must not override the current raw, canonically stamped plugin generation"
         );
 
@@ -3627,209 +3211,6 @@ modelRoutes:
                 .get_dependencies(&HttpRouteHandler::create_resource_ref(&route).key()),
             delta.affected
         );
-    }
-
-    #[tokio::test]
-    async fn delegated_mcp_withdrawal_retains_dependencies_and_requeues_parent() {
-        use crate::conf_mgr::sync_runtime::resource_processor::handlers::{EdgionBackendHandler, EdgionPluginsHandler};
-        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
-        use edgion_resources::resources::edgion_plugins::EdgionPluginsSpec;
-        use std::sync::atomic::Ordering;
-
-        let runtime = runtime_with_a2a_plugin(&[(
-            "tools",
-            serde_json::json!({
-                "mcp": {
-                    "target": {"endpoint": "https://tools.example.test/mcp"},
-                    "transport": {"type": "StreamableHTTP"}
-                }
-            }),
-        )]);
-        let route_processor = Arc::new(ResourceProcessor::<HTTPRoute>::new(
-            "HTTPRoute",
-            32,
-            Arc::new(HttpRouteHandler::default()),
-            runtime.clone(),
-        ));
-        let child: HTTPRoute = serde_json::from_value(serde_json::json!({
-            "apiVersion": "gateway.networking.k8s.io/v1",
-            "kind": "HTTPRoute",
-            "metadata": {"namespace": "apps", "name": "child"},
-            "spec": {
-                "parentRefs": [{
-                    "group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-                    "namespace": "apps", "name": "parent"
-                }],
-                "rules": [
-                    {
-                        "matches": [{"path": {"type": "Exact", "value": "/api/mcp"}}],
-                        "filters": [{
-                            "type": "ExtensionRef",
-                            "extensionRef": {
-                                "group": "edgion.io", "kind": "EdgionPlugins", "name": "child-plugins"
-                            }
-                        }],
-                        "backendRefs": [{
-                            "group": "edgion.io", "kind": "EdgionBackend", "name": "tools"
-                        }]
-                    },
-                    {
-                        "matches": [{"path": {"type": "Exact", "value": "/api/health"}}],
-                        "backendRefs": [{"name": "health", "port": 8080}]
-                    }
-                ]
-            }
-        }))
-        .expect("child route fixture must deserialize");
-        let child_raw = Arc::new(LocalRawStore::new());
-        child_raw.upsert("apps/child".to_string(), Arc::new(child.clone()));
-        route_processor.set_raw_store(child_raw);
-        route_processor.save(child, None);
-        runtime.processor_registry.register(route_processor.clone());
-
-        let parent: HTTPRoute = serde_json::from_value(serde_json::json!({
-            "apiVersion": "gateway.networking.k8s.io/v1",
-            "kind": "HTTPRoute",
-            "metadata": {"namespace": "apps", "name": "parent"},
-            "spec": {
-                "parentRefs": [{"name": "gateway"}],
-                "rules": [
-                    {
-                        "matches": [{"path": {"type": "PathPrefix", "value": "/api"}}],
-                        "filters": [{
-                            "type": "ExtensionRef",
-                            "extensionRef": {
-                                "group": "edgion.io", "kind": "EdgionPlugins", "name": "parent-plugins"
-                            }
-                        }],
-                        "backendRefs": [{
-                            "group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
-                            "namespace": "apps", "name": "child"
-                        }]
-                    },
-                    {
-                        "matches": [{"path": {"type": "Exact", "value": "/direct-mcp"}}],
-                        "backendRefs": [{
-                            "group": "edgion.io", "kind": "EdgionBackend", "name": "tools"
-                        }]
-                    }
-                ]
-            }
-        }))
-        .expect("parent route fixture must deserialize");
-        let ctx = HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime.clone());
-        let ProcessResult::Continue(mut parsed) = HttpRouteHandler::default().parse(parent, &ctx).await else {
-            panic!("parent parse must continue");
-        };
-
-        let resolved = parsed.spec.resolved_rules.as_ref().expect("delegation must flatten");
-        assert_eq!(resolved.len(), 1, "only the ordinary child sibling should survive");
-        assert_eq!(
-            resolved[0].matches.as_ref().unwrap()[0]
-                .path
-                .as_ref()
-                .unwrap()
-                .value
-                .as_deref(),
-            Some("/api/health")
-        );
-        assert!(parsed.spec.delegation_issues.iter().any(|issue| {
-            matches!(issue, DelegationIssue::RuleDropped { message } if message.contains("MCP rules do not support HTTPRoute delegation"))
-        }));
-        let parent_ref = HttpRouteHandler::create_resource_ref(&parsed);
-        let mut plugin_dependencies = runtime.plugin_ref_mgr.get_dependencies(&parent_ref.key());
-        plugin_dependencies.sort();
-        assert_eq!(
-            plugin_dependencies,
-            vec!["apps/child-plugins".to_string(), "apps/parent-plugins".to_string()]
-        );
-        assert_eq!(
-            runtime.backend_ref_mgr.get_dependencies(&parent_ref.key()),
-            vec!["edgion.io/EdgionBackend/apps/tools".to_string()]
-        );
-
-        HttpRouteHandler::default().update_status(&mut parsed, &ctx, &[]);
-        let conditions = &parsed.status.as_ref().unwrap().parents[0].conditions;
-        assert!(conditions
-            .iter()
-            .any(|condition| condition.type_ == "PartiallyInvalid" && condition.status == "True"));
-        assert!(!conditions.iter().any(|condition| {
-            condition.type_ == "Accepted"
-                && condition.status == "False"
-                && condition.reason == "UnsupportedValue"
-                && condition.message.contains("MCP")
-        }));
-
-        // Parsing registers delegation and schedules one child-route refresh.
-        // Drain that unrelated item before observing dependency-triggered
-        // parent requeues below.
-        tokio::time::timeout(std::time::Duration::from_secs(1), route_processor.workqueue().dequeue())
-            .await
-            .expect("parse-triggered route requeue should become ready")
-            .expect("HTTPRoute workqueue should stay open");
-
-        let plugin_handler = EdgionPluginsHandler::default();
-        for (namespace, name) in [("apps", "child-plugins"), ("apps", "parent-plugins")] {
-            let before = route_processor
-                .workqueue()
-                .metrics()
-                .delayed_total
-                .load(Ordering::Relaxed);
-            let mut plugins = EdgionPlugins::new(name, EdgionPluginsSpec::default());
-            plugins.metadata.namespace = Some(namespace.to_string());
-            plugin_handler.on_change(&plugins, &ctx).await;
-            assert_eq!(
-                route_processor
-                    .workqueue()
-                    .metrics()
-                    .delayed_total
-                    .load(Ordering::Relaxed),
-                before + 1,
-                "plugin change must schedule the parent route"
-            );
-            tokio::time::timeout(std::time::Duration::from_secs(1), route_processor.workqueue().dequeue())
-                .await
-                .expect("plugin-triggered parent requeue should become ready")
-                .expect("HTTPRoute workqueue should stay open");
-        }
-
-        let backend: EdgionBackend = serde_json::from_value(serde_json::json!({
-            "apiVersion": "edgion.io/v1",
-            "kind": "EdgionBackend",
-            "metadata": {"namespace": "apps", "name": "tools"},
-            "spec": {
-                "mcp": {
-                    "target": {"endpoint": "https://tools.example.test/mcp"},
-                    "transport": {"type": "StreamableHTTP"}
-                }
-            }
-        }))
-        .expect("MCP backend fixture must deserialize");
-        let backend_handler = EdgionBackendHandler::new();
-        for event in ["change", "delete", "recreate"] {
-            let before = route_processor
-                .workqueue()
-                .metrics()
-                .delayed_total
-                .load(Ordering::Relaxed);
-            match event {
-                "delete" => backend_handler.on_delete(&backend, &ctx).await,
-                _ => backend_handler.on_change(&backend, &ctx).await,
-            }
-            assert_eq!(
-                route_processor
-                    .workqueue()
-                    .metrics()
-                    .delayed_total
-                    .load(Ordering::Relaxed),
-                before + 1,
-                "backend {event} must schedule the withdrawn parent route"
-            );
-            tokio::time::timeout(std::time::Duration::from_secs(1), route_processor.workqueue().dequeue())
-                .await
-                .expect("backend-triggered parent requeue should become ready")
-                .expect("HTTPRoute workqueue should stay open");
-        }
     }
 
     #[tokio::test]

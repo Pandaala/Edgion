@@ -282,8 +282,6 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 | `RouteDelegationDynamic` | `HTTPRoute/Delegation/DynamicTest` | Delegation child rule moves /pay → /pay2; parent re-flattens and gateway hot-swaps routing |
 | `SpBackendChange` | `HTTPRoute/Backend/SessionPersistenceBackendChange/DynamicTest` | SessionPersistence cookie re-routes to a healthy backend after backend-a is drained |
 | `TcpEspReload` | `TCPRoute/StreamPlugins/DynamicTest` | Hot-reload of EdgionStreamPlugins allow-list on a TCPRoute listener (allow→deny→allow) |
-| `McpBackendLifecycle` | `EdgionBackend/Mcp/DynamicTest` | MCP target, credential, ReferenceGrant, variant, redaction, and runtime publication lifecycle without a frontend |
-| `McpRouteLifecycle` | `HTTPRoute/Mcp/DynamicTest` | MCP route shape, MCP↔A2A recomputation, exact-path repair, and backend delete/recreate in Controller and Gateway config; sends no MCP traffic |
 
 ### Where the framework lives
 

@@ -1,11 +1,6 @@
 //! Typed immutable runtime store for `BackendTLSPolicy` resources.
 
 use arc_swap::ArcSwap;
-use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
-use edgion_resources::resources::backend_tls_policy::{
-    backend_tls_identity_validation_errors, parse_client_certificate_option, WellKnownCACertificates,
-    OPTION_CLIENT_CERTIFICATE_REF,
-};
 use edgion_resources::resources::edgion_backend_traffic_policy::precedence_key;
 use edgion_resources::resources::edgion_backend_traffic_policy::{
     PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass,
@@ -92,18 +87,12 @@ impl BackendTLSPolicySnapshot {
 }
 
 pub struct BackendTLSPolicyStore {
-    backend_store: Arc<crate::ai::EdgionBackendStore>,
     snapshot: ArcSwap<BackendTLSPolicySnapshotData>,
 }
 
 impl BackendTLSPolicyStore {
     pub fn new() -> Self {
-        Self::with_backend_store(crate::ai::get_global_edgion_backend_store())
-    }
-
-    pub(crate) fn with_backend_store(backend_store: Arc<crate::ai::EdgionBackendStore>) -> Self {
         Self {
-            backend_store,
             snapshot: ArcSwap::from_pointee(BackendTLSPolicySnapshotData {
                 generation: 0,
                 policies: HashMap::new(),
@@ -209,8 +198,6 @@ impl BackendTLSPolicyStore {
                     | (ResolvedPolicyTargetClass::Ai, PolicyTargetKind::EdgionBackend)
                     | (ResolvedPolicyTargetClass::A2aService, PolicyTargetKind::EdgionBackend)
                     | (ResolvedPolicyTargetClass::A2aExternal, PolicyTargetKind::EdgionBackend)
-                    | (ResolvedPolicyTargetClass::McpService, PolicyTargetKind::EdgionBackend)
-                    | (ResolvedPolicyTargetClass::McpExternal, PolicyTargetKind::EdgionBackend)
             )
         });
         let section_supported = policy.spec.target_refs.iter().all(|target| {
@@ -219,107 +206,9 @@ impl BackendTLSPolicyStore {
                     .first()
                     .is_some_and(|key| key.target_kind == PolicyTargetKind::Service)
         });
-        let mcp_runtime_supported = keys
-            .first()
-            .is_none_or(|key| self.mcp_runtime_supported(policy, resolved_class, key));
-        (all_refs_valid && class_matches && section_supported && mcp_runtime_supported)
+        (all_refs_valid && class_matches && section_supported)
             .then_some(keys)
             .unwrap_or_default()
-    }
-
-    fn mcp_runtime_supported(
-        &self,
-        policy: &BackendTLSPolicy,
-        class: ResolvedPolicyTargetClass,
-        target: &PolicyTargetKey,
-    ) -> bool {
-        if !matches!(
-            class,
-            ResolvedPolicyTargetClass::McpService | ResolvedPolicyTargetClass::McpExternal
-        ) {
-            return true;
-        }
-        if !backend_tls_identity_validation_errors(&policy.spec.validation).is_empty() {
-            return false;
-        }
-        if policy
-            .spec
-            .options
-            .as_ref()
-            .is_some_and(|options| options.keys().any(|key| key != OPTION_CLIENT_CERTIFICATE_REF))
-        {
-            return false;
-        }
-        let policy_namespace = policy.metadata.namespace.as_deref().unwrap_or_default();
-        let ca_refs = policy.spec.validation.ca_certificate_refs.as_deref();
-        let well_known = policy.spec.validation.well_known_ca_certificates.as_ref();
-        let ca_ready = match (ca_refs, well_known) {
-            (Some(_), Some(_)) => false,
-            (None, Some(WellKnownCACertificates::System)) => {
-                policy.spec.use_system_ca && policy.spec.resolved_ca_certificates.is_none()
-            }
-            (Some(refs), None) if !refs.is_empty() && !policy.spec.use_system_ca => {
-                let reference_names = refs
-                    .iter()
-                    .map(|reference| reference.name.as_str())
-                    .collect::<HashSet<_>>();
-                reference_names.len() == refs.len()
-                    && refs.iter().all(|reference| {
-                        matches!(reference.group.as_str(), "" | "core")
-                            && matches!(reference.kind.as_str(), "Secret" | "ConfigMap")
-                            && reference.namespace.is_none()
-                            && valid_kube_name(&reference.name)
-                    })
-                    && policy.spec.resolved_ca_certificates.as_ref().is_some_and(|resolved| {
-                        let resolved_names = resolved
-                            .iter()
-                            .filter_map(|secret| secret.metadata.name.as_deref())
-                            .collect::<HashSet<_>>();
-                        resolved.len() == refs.len()
-                            && resolved_names.len() == resolved.len()
-                            && resolved_names == reference_names
-                            && resolved.iter().all(|secret| {
-                                secret.metadata.namespace.as_deref() == Some(policy_namespace)
-                                    && secret
-                                        .data
-                                        .as_ref()
-                                        .and_then(|data| data.get(CA_CERT))
-                                        .is_some_and(|value| !value.0.is_empty())
-                            })
-                    })
-            }
-            _ => false,
-        };
-        let client_ready = match parse_client_certificate_option(policy.spec.options.as_ref()) {
-            Ok(Some(reference)) => policy.spec.resolved_client_certificate.as_ref().is_some_and(|secret| {
-                secret.metadata.name.as_deref() == Some(reference.name.as_str())
-                    && secret.metadata.namespace.as_deref() == Some(policy_namespace)
-                    && secret.data.as_ref().is_some_and(|data| {
-                        data.get(CERT).is_some_and(|value| !value.0.is_empty())
-                            && data.get(KEY).is_some_and(|value| !value.0.is_empty())
-                    })
-            }),
-            Ok(None) => policy.spec.resolved_client_certificate.is_none(),
-            Err(_) => false,
-        };
-        if !ca_ready || !client_ready {
-            return false;
-        }
-        let key = format!("{}/{}", target.namespace, target.name);
-        let snapshot = self.backend_store.edgion_backend_snapshot();
-        let Some(runtime) = snapshot.get_mcp_by_key(&key) else {
-            return false;
-        };
-        matches!(
-            (class, &runtime.target),
-            (
-                ResolvedPolicyTargetClass::McpService,
-                crate::ai::RuntimeMcpTarget::Service { .. }
-            ) | (
-                ResolvedPolicyTargetClass::McpExternal,
-                crate::ai::RuntimeMcpTarget::External(crate::ai::RuntimeExternalHttpEndpoint { use_tls: true, .. })
-            )
-        )
     }
 
     fn sort_policies_by_precedence(policies: &mut [Arc<BackendTLSPolicy>]) {
@@ -422,20 +311,6 @@ impl BackendTLSPolicyStore {
     }
 }
 
-fn valid_kube_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 253
-        && value.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-                && label.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
-                && label.as_bytes().last().is_some_and(u8::is_ascii_alphanumeric)
-        })
-}
-
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BackendTLSPolicyStoreStats {
     pub policies: usize,
@@ -451,18 +326,10 @@ impl Default for BackendTLSPolicyStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgion_common::conf_sync::traits::ConfHandler;
     use edgion_resources::resources::backend_tls_policy::{
-        BackendTLSPolicyCACertificateRef, BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation,
-        SubjectAltName, SubjectAltNameType, WellKnownCACertificates,
-    };
-    use edgion_resources::resources::edgion_backend::{
-        BackendServiceReference, EdgionBackend, EdgionBackendSpec, McpBackendSpec, McpBackendTarget, McpTransport,
-        McpTransportType, ResolvedMcpBackend, ResolvedMcpTarget,
+        BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation,
     };
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-    use k8s_openapi::{api::core::v1::Secret, ByteString};
-    use std::collections::BTreeMap;
 
     fn policy(
         resource_name: &str,
@@ -511,87 +378,6 @@ mod tests {
             namespace: "tenant".to_string(),
             name: "shared".to_string(),
         }
-    }
-
-    fn mcp_backend(endpoint: &str) -> Arc<EdgionBackend> {
-        let normalized_endpoint = endpoint.trim_end_matches('/').to_string();
-        let mut backend = EdgionBackend::new(
-            "shared",
-            EdgionBackendSpec {
-                ai: None,
-                a2a: None,
-                mcp: Some(McpBackendSpec {
-                    target: McpBackendTarget {
-                        service_ref: None,
-                        endpoint: Some(endpoint.to_string()),
-                        path: None,
-                    },
-                    allow_insecure_http: endpoint.starts_with("http://"),
-                    transport: McpTransport {
-                        r#type: McpTransportType::StreamableHTTP,
-                    },
-                    authentication: None,
-                }),
-                resolved_a2a: None,
-                resolved_mcp: Some(ResolvedMcpBackend {
-                    target: ResolvedMcpTarget::External { normalized_endpoint },
-                }),
-                reconcile_outcome: None,
-            },
-        );
-        backend.metadata.namespace = Some("tenant".to_string());
-        Arc::new(backend)
-    }
-
-    fn mcp_service_backend() -> Arc<EdgionBackend> {
-        let mut backend = EdgionBackend::new(
-            "shared",
-            EdgionBackendSpec {
-                ai: None,
-                a2a: None,
-                mcp: Some(McpBackendSpec {
-                    target: McpBackendTarget {
-                        service_ref: Some(BackendServiceReference {
-                            name: "tools-service".to_string(),
-                            namespace: Some("tenant".to_string()),
-                            port: 8080,
-                        }),
-                        endpoint: None,
-                        path: Some("/mcp".to_string()),
-                    },
-                    allow_insecure_http: false,
-                    transport: McpTransport {
-                        r#type: McpTransportType::StreamableHTTP,
-                    },
-                    authentication: None,
-                }),
-                resolved_a2a: None,
-                resolved_mcp: Some(ResolvedMcpBackend {
-                    target: ResolvedMcpTarget::Service {
-                        namespace: "tenant".to_string(),
-                        name: "tools-service".to_string(),
-                        port: 8080,
-                        path: "/mcp".to_string(),
-                    },
-                }),
-                reconcile_outcome: None,
-            },
-        );
-        backend.metadata.namespace = Some("tenant".to_string());
-        Arc::new(backend)
-    }
-
-    fn mcp_tls_policy() -> Arc<BackendTLSPolicy> {
-        let mut policy = policy(
-            "mcp-tls",
-            PolicyTargetKind::EdgionBackend,
-            "shared",
-            None,
-            Some(ResolvedPolicyTargetClass::McpExternal),
-        );
-        let spec = &mut Arc::get_mut(&mut policy).expect("new policy fixture").spec;
-        spec.validation.well_known_ca_certificates = Some(WellKnownCACertificates::System);
-        policy
     }
 
     #[test]
@@ -696,263 +482,6 @@ mod tests {
             .snapshot()
             .get_policy(&target(PolicyTargetKind::Service), None)
             .is_none());
-    }
-
-    #[test]
-    fn mcp_external_tls_policy_fails_closed_against_current_runtime_scheme() {
-        let backend_store = Arc::new(crate::ai::EdgionBackendStore::new());
-        let store = BackendTLSPolicyStore::with_backend_store(Arc::clone(&backend_store));
-        let target = target(PolicyTargetKind::EdgionBackend);
-
-        backend_store.full_set(&HashMap::from([(
-            "tenant/shared".to_string(),
-            mcp_backend("https://backend.example.com/mcp"),
-        )]));
-        store.replace_all(HashMap::from([("tenant/mcp-tls".to_string(), mcp_tls_policy())]));
-        assert!(store.snapshot().get_policy(&target, None).is_some());
-
-        backend_store.full_set(&HashMap::from([(
-            "tenant/shared".to_string(),
-            mcp_backend("http://backend.example.com/mcp"),
-        )]));
-        store.replace_all(HashMap::from([("tenant/mcp-tls".to_string(), mcp_tls_policy())]));
-        assert!(
-            store.snapshot().get_policy(&target, None).is_none(),
-            "an external HTTP runtime must withdraw a forged MCP TLS attachment"
-        );
-
-        backend_store.full_set(&HashMap::from([(
-            "tenant/shared".to_string(),
-            mcp_backend("https://backend.example.com/mcp"),
-        )]));
-        store.replace_all(HashMap::from([("tenant/mcp-tls".to_string(), mcp_tls_policy())]));
-        assert!(
-            store.snapshot().get_policy(&target, None).is_some(),
-            "HTTP-to-HTTPS transition must make the current external class eligible"
-        );
-
-        backend_store.full_set(&HashMap::from([("tenant/shared".to_string(), mcp_service_backend())]));
-        store.replace_all(HashMap::from([("tenant/mcp-tls".to_string(), mcp_tls_policy())]));
-        assert!(
-            store.snapshot().get_policy(&target, None).is_none(),
-            "an external marker must not attach to an MCP Service runtime"
-        );
-        let mut service_tls = (*mcp_tls_policy()).clone();
-        service_tls.spec.resolved_target_class = Some(ResolvedPolicyTargetClass::McpService);
-        store.replace_all(HashMap::from([("tenant/mcp-tls".to_string(), Arc::new(service_tls))]));
-        assert!(
-            store.snapshot().get_policy(&target, None).is_some(),
-            "MCP Service accepts its direct typed TLS policy"
-        );
-
-        backend_store.full_set(&HashMap::new());
-        store.replace_all(HashMap::from([("tenant/mcp-tls".to_string(), mcp_tls_policy())]));
-        assert!(store.snapshot().get_policy(&target, None).is_none());
-    }
-
-    #[test]
-    fn mcp_tls_policy_rejects_forged_or_incomplete_resolved_material() {
-        let backend_store = Arc::new(crate::ai::EdgionBackendStore::new());
-        backend_store.full_set(&HashMap::from([(
-            "tenant/shared".to_string(),
-            mcp_backend("https://backend.example.com/mcp"),
-        )]));
-        let store = BackendTLSPolicyStore::with_backend_store(backend_store);
-        let target = target(PolicyTargetKind::EdgionBackend);
-        let publish = |store: &BackendTLSPolicyStore, policy: Arc<BackendTLSPolicy>| {
-            store.replace_all(HashMap::from([("tenant/mcp-tls".to_string(), policy)]));
-            store.snapshot().get_policy(&target, None).is_some()
-        };
-
-        let ca_ref = BackendTLSPolicyCACertificateRef {
-            group: String::new(),
-            kind: "Secret".to_string(),
-            name: "backend-ca".to_string(),
-            namespace: None,
-        };
-        let secret = |name: &str, entries: &[(&str, &[u8])]| Secret {
-            metadata: ObjectMeta {
-                name: Some(name.to_string()),
-                namespace: Some("tenant".to_string()),
-                ..Default::default()
-            },
-            data: Some(
-                entries
-                    .iter()
-                    .map(|(key, value)| ((*key).to_string(), ByteString(value.to_vec())))
-                    .collect::<BTreeMap<_, _>>(),
-            ),
-            ..Default::default()
-        };
-
-        let mut both_modes = (*mcp_tls_policy()).clone();
-        both_modes.spec.validation.ca_certificate_refs = Some(vec![ca_ref.clone()]);
-        assert!(!publish(&store, Arc::new(both_modes)));
-
-        for forged_ref in [
-            BackendTLSPolicyCACertificateRef {
-                group: "external.example".to_string(),
-                ..ca_ref.clone()
-            },
-            BackendTLSPolicyCACertificateRef {
-                kind: "Deployment".to_string(),
-                ..ca_ref.clone()
-            },
-            BackendTLSPolicyCACertificateRef {
-                namespace: Some("other".to_string()),
-                ..ca_ref.clone()
-            },
-            BackendTLSPolicyCACertificateRef {
-                name: "Invalid_Name".to_string(),
-                ..ca_ref.clone()
-            },
-        ] {
-            let mut forged = (*mcp_tls_policy()).clone();
-            forged.spec.validation.well_known_ca_certificates = None;
-            forged.spec.use_system_ca = false;
-            forged.spec.validation.ca_certificate_refs = Some(vec![forged_ref]);
-            forged.spec.resolved_ca_certificates = Some(vec![secret("backend-ca", &[(CA_CERT, b"ca")])]);
-            assert!(!publish(&store, Arc::new(forged)));
-        }
-
-        let mut ca_policy = (*mcp_tls_policy()).clone();
-        ca_policy.spec.validation.well_known_ca_certificates = None;
-        ca_policy.spec.use_system_ca = false;
-        ca_policy.spec.validation.ca_certificate_refs = Some(vec![ca_ref.clone()]);
-        for resolved in [
-            None,
-            Some(vec![secret("other-ca", &[(CA_CERT, b"ca")])]),
-            Some(vec![secret("backend-ca", &[(CA_CERT, b"")])]),
-        ] {
-            ca_policy.spec.resolved_ca_certificates = resolved;
-            assert!(!publish(&store, Arc::new(ca_policy.clone())));
-        }
-        ca_policy.spec.resolved_ca_certificates = Some(vec![secret("backend-ca", &[(CA_CERT, b"ca")])]);
-        assert!(publish(&store, Arc::new(ca_policy)));
-
-        let mut duplicate_ref_with_extra_ca = (*mcp_tls_policy()).clone();
-        duplicate_ref_with_extra_ca.spec.validation.well_known_ca_certificates = None;
-        duplicate_ref_with_extra_ca.spec.use_system_ca = false;
-        duplicate_ref_with_extra_ca.spec.validation.ca_certificate_refs = Some(vec![ca_ref.clone(), ca_ref.clone()]);
-        duplicate_ref_with_extra_ca.spec.resolved_ca_certificates = Some(vec![
-            secret("backend-ca", &[(CA_CERT, b"ca")]),
-            secret("extra-ca", &[(CA_CERT, b"extra")]),
-        ]);
-        assert!(!publish(&store, Arc::new(duplicate_ref_with_extra_ca)));
-
-        let mut wrong_ca_namespace = (*mcp_tls_policy()).clone();
-        wrong_ca_namespace.spec.validation.well_known_ca_certificates = None;
-        wrong_ca_namespace.spec.use_system_ca = false;
-        wrong_ca_namespace.spec.validation.ca_certificate_refs = Some(vec![BackendTLSPolicyCACertificateRef {
-            group: String::new(),
-            kind: "Secret".to_string(),
-            name: "backend-ca".to_string(),
-            namespace: None,
-        }]);
-        let mut wrong_namespace_secret = secret("backend-ca", &[(CA_CERT, b"ca")]);
-        wrong_namespace_secret.metadata.namespace = Some("other".to_string());
-        wrong_ca_namespace.spec.resolved_ca_certificates = Some(vec![wrong_namespace_secret]);
-        assert!(!publish(&store, Arc::new(wrong_ca_namespace)));
-
-        let mut client_policy = (*mcp_tls_policy()).clone();
-        client_policy.spec.options = Some(HashMap::from([(
-            OPTION_CLIENT_CERTIFICATE_REF.to_string(),
-            "client-cert".to_string(),
-        )]));
-        for resolved in [
-            None,
-            Some(secret("other-cert", &[(CERT, b"cert"), (KEY, b"key")])),
-            Some(secret("client-cert", &[(CERT, b"cert")])),
-            Some(secret("client-cert", &[(CERT, b""), (KEY, b"key")])),
-        ] {
-            client_policy.spec.resolved_client_certificate = resolved;
-            assert!(!publish(&store, Arc::new(client_policy.clone())));
-        }
-        client_policy.spec.resolved_client_certificate = Some(secret("client-cert", &[(CERT, b"cert"), (KEY, b"key")]));
-        assert!(publish(&store, Arc::new(client_policy)));
-
-        let mut wrong_client_namespace = (*mcp_tls_policy()).clone();
-        wrong_client_namespace.spec.options = Some(HashMap::from([(
-            OPTION_CLIENT_CERTIFICATE_REF.to_string(),
-            "client-cert".to_string(),
-        )]));
-        let mut wrong_namespace_secret = secret("client-cert", &[(CERT, b"cert"), (KEY, b"key")]);
-        wrong_namespace_secret.metadata.namespace = Some("other".to_string());
-        wrong_client_namespace.spec.resolved_client_certificate = Some(wrong_namespace_secret);
-        assert!(!publish(&store, Arc::new(wrong_client_namespace)));
-
-        for (options, resolved_client_certificate) in [
-            (
-                HashMap::from([("example.io/unknown".to_string(), "value".to_string())]),
-                None,
-            ),
-            (
-                HashMap::from([(OPTION_CLIENT_CERTIFICATE_REF.to_string(), String::new())]),
-                None,
-            ),
-            (
-                HashMap::from([(OPTION_CLIENT_CERTIFICATE_REF.to_string(), "   ".to_string())]),
-                None,
-            ),
-            (
-                HashMap::from([(OPTION_CLIENT_CERTIFICATE_REF.to_string(), "Invalid_Name".to_string())]),
-                Some(secret("Invalid_Name", &[(CERT, b"cert"), (KEY, b"key")])),
-            ),
-        ] {
-            let mut forged = (*mcp_tls_policy()).clone();
-            forged.spec.options = Some(options);
-            forged.spec.resolved_client_certificate = resolved_client_certificate;
-            assert!(!publish(&store, Arc::new(forged)));
-        }
-
-        let mut valid_sans = (*mcp_tls_policy()).clone();
-        valid_sans.spec.validation.subject_alt_names = Some(vec![
-            SubjectAltName {
-                san_type: SubjectAltNameType::Hostname,
-                hostname: Some("*.example.com".to_string()),
-                uri: None,
-            },
-            SubjectAltName {
-                san_type: SubjectAltNameType::URI,
-                hostname: None,
-                uri: Some("spiffe://trust.example/workload".to_string()),
-            },
-        ]);
-        assert!(publish(&store, Arc::new(valid_sans)));
-
-        for (hostname, sans) in [
-            ("", None),
-            ("backend.example.com", Some(Vec::new())),
-            (
-                "backend.example.com",
-                Some(vec![SubjectAltName {
-                    san_type: SubjectAltNameType::Hostname,
-                    hostname: None,
-                    uri: Some("spiffe://trust.example/workload".to_string()),
-                }]),
-            ),
-            (
-                "backend.example.com",
-                Some(vec![SubjectAltName {
-                    san_type: SubjectAltNameType::URI,
-                    hostname: Some("backend.example.com".to_string()),
-                    uri: Some("spiffe://trust.example/workload".to_string()),
-                }]),
-            ),
-            (
-                "backend.example.com",
-                Some(vec![SubjectAltName {
-                    san_type: SubjectAltNameType::URI,
-                    hostname: None,
-                    uri: Some(format!("https://example.com/{}", "a".repeat(240))),
-                }]),
-            ),
-        ] {
-            let mut forged = (*mcp_tls_policy()).clone();
-            forged.spec.validation.hostname = hostname.to_string();
-            forged.spec.validation.subject_alt_names = sans;
-            assert!(!publish(&store, Arc::new(forged)));
-        }
     }
 
     #[test]

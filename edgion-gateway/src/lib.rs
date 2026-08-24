@@ -125,7 +125,6 @@ pub mod ctx;
 pub mod geoip;
 pub mod lb;
 pub mod link_sys;
-pub(crate) mod mcp;
 pub mod observe;
 pub mod plugins;
 pub mod request_body;

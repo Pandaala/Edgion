@@ -2,6 +2,10 @@
 
 **Goal:** The remaining small parity items.
 
+**Backend dependency:** resource/config items wait for WS-00 F1 and use
+`EdgionBackend.spec.ai`. Nothing here may reintroduce the removed AI resource
+or bypass canonical backend and policy mechanisms.
+
 **Scope decision (user, 2026-08-09): no comparative benchmarking.** The
 originally proposed A/B harness against agentgateway is dropped. Quality and
 efficiency are assured by our own integration tests plus the architectural
@@ -13,7 +17,7 @@ its integration coverage, not a benchmark number.
 ### 7.1 AI integration-test coverage consolidation
 - Ensure every WS lands with integration scenarios in the existing suite
   (`edgion-tests/integration/`): streaming passthrough, translation pairs,
-  quota termination, MCP federation round trips, A2A card rewrite, guard
+  quota termination, A2A card rewrite, guard
   reject/mask — extending the test_server mocks as each WS specifies.
 - One sweep item: a token-rate-controlled SSE stream mode on the test_server
   OpenAI mock (useful for long-stream/stall scenarios across WS-03/06 tests,
@@ -28,14 +32,14 @@ its integration coverage, not a benchmark number.
 
 ### 7.3 Tokenizer-accurate pre-count (optional accuracy upgrade)
 - Feature-gated `tiktoken-rs` (or `tokenizers`) behind
-  `EdgionAIService.spec.tokenization: {enabled, encoding}`; replaces the
+  `EdgionBackend.spec.ai.tokenization: {enabled, encoding}`; replaces the
   chars÷4 estimate in `dispatch.rs:479` for admission/pre-reservation only —
   settlement stays provider-authoritative. Binary-size and build-time impact
   assessed at kickoff; default off.
 
 ### 7.4 Price catalog auto-refresh
 - Optional controller-side fetcher for a models.dev-compatible price catalog
-  (outbound rules apply), merging into `EdgionAIService` pricing defaults with
+  (outbound rules apply), merging into `EdgionBackend.spec.ai` pricing defaults with
   CR-explicit values always winning (operator-owns-config principle). Ships
   with a vendored snapshot; refresh is opt-in.
 
@@ -45,16 +49,17 @@ its integration coverage, not a benchmark number.
   update, no new metrics.
 
 ### 7.6 LiteLLM config import (migration tooling)
-- `edgion-cli ai import --from litellm <file>` generating `EdgionAIService` +
-  `HTTPRoute` + `AiProxy` YAML. Pure CLI codegen, no gateway change.
+- `edgion-cli ai import --from litellm <file>` generating `EdgionBackend` with
+  `spec.ai` + `HTTPRoute` + `AiProxy` YAML. Pure CLI codegen, no gateway change.
 
-### 7.7 ExtProc response streaming (deliberate re-evaluation, not a commitment)
-- agentgateway supports Envoy FULL_DUPLEX_STREAMED response bodies; we reject
-  response body modes by invariant. After WS-06's bounded window exists,
-  re-evaluate exposing ExtProc response STREAMED with per-chunk exchange +
-  bounded in-flight window. Requires its own design review against invariants;
-  parked here so it is not forgotten (relates to
-  `todo/ext-proc-envoy-parity.md`).
+### 7.7 ExtProc response streaming (scheduled separately)
+- Status: complete under
+  `tasks/pending/ext-proc-attached-response-stream/`.
+- The re-evaluation selected the existing ExtProc plugin and ordinary
+  lockstep `STREAMED`, not `FULL_DUPLEX_STREAMED` and not a new generic plugin.
+  Execution is now owned by
+  `tasks/plan/stream-processing/01-ext-proc-attached-response-stream.md`; the
+  detailed scope remains in `tasks/todo/ext-proc-attached-response-stream.md`.
 
 ### 7.8 Backlog absorbed from ws4 AI-2 (each needs user opt-in before scheduling)
 - Virtual API keys + org/team/user budget hierarchy (architecture options

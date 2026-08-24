@@ -121,4 +121,4 @@ CRD 加入 `crd_coverage.rs` 守卫(第四个结构化 CRD)。
 
 依赖顺序:AI-1b(schema 转换)→ AI-2(计价/token 限流)→ AI-3(多 provider 韧性)
 → AI-4(护栏,需先给 fork 加响应流 Terminate)→ AI-5(语义层,需解锁新依赖)。
-AI-6(MCP)独立支线;AI-7(推理路由)依赖 AI-1。各自任务文件在本目录。
+AI-7(推理路由)依赖 AI-1。各自任务文件在本目录。

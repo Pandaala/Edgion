@@ -38,11 +38,11 @@ Legend for the Edgion column: ✅ have (functional parity) · 🟡 partial · �
 | Feature | agentgateway | Edgion | Gap notes |
 |---|---|---|---|
 | Client-facing endpoint classes | chat completions, **/v1/messages (Anthropic-native clients)**, /v1/models, **/v1/responses**, /v1/embeddings, **/v1/realtime WS**, count_tokens, /v2/rerank, Passthrough, Detect (`crates/llm/src/lib.rs:85 RouteType`) | 🟡 OpenAI `/chat/completions` only (`ai_proxy/plugin.rs:130-132`) | **Major gap**: Anthropic-native ingress, /v1/models synthesis, embeddings, responses API, realtime WS |
-| Providers (egress) | OpenAI, Anthropic, Gemini, Vertex, Bedrock (SigV4+event-stream), Azure (Entra), Copilot + 13 OpenAI-compat presets | 🟡 OpenAI, OpenAICompatible, Anthropic (`edgion_ai_service.rs:99-104`) | Gap: Bedrock/Vertex/Azure native signing & framing; presets are trivial for us (OpenAICompatible + endpoint) |
+| Providers (egress) | OpenAI, Anthropic, Gemini, Vertex, Bedrock (SigV4+event-stream), Azure (Entra), Copilot + 13 OpenAI-compat presets | 🟡 OpenAI, OpenAICompatible, Anthropic (`edgion_backend.rs:99-104`) | Gap: Bedrock/Vertex/Azure native signing & framing; presets are trivial for us (OpenAICompatible + endpoint) |
 | Schema translation | N×M matrix incl. streaming variants (completions↔messages↔responses↔Converse↔Gemini) (`crates/llm/src/conversion/`) | 🟡 OpenAI↔Anthropic both directions, request + streaming response (`ai/anthropic/`) | Gap grows with providers; our per-pair translator design matches theirs |
-| Model aliasing / routing | Wildcard aliases; **virtual models** (Weighted/Failover/CEL-Conditional); model-centric `AgentgatewayModel` CRD; header-based selection; PreRouting body-derived route selection | 🟡 alias→canonical per service (`edgion_ai_service.rs:106-222`); 5 backendSelection algorithms incl. CostWeighted/LowestLatency (richer than theirs); no virtual-model indirection; no /v1/models listing | Gap: model-level routing indirection & conditional routing; strength: adaptive latency/cost algorithms they lack |
+| Model aliasing / routing | Wildcard aliases; **virtual models** (Weighted/Failover/CEL-Conditional); model-centric `AgentgatewayModel` CRD; header-based selection; PreRouting body-derived route selection | 🟡 alias→canonical per service (`edgion_backend.rs:106-222`); 5 backendSelection algorithms incl. CostWeighted/LowestLatency (richer than theirs); no virtual-model indirection; no /v1/models listing | Gap: model-level routing indirection & conditional routing; strength: adaptive latency/cost algorithms they lack |
 | Failover / retries | Generic retry with body replay; virtual-model failover; EWMA locality LB; outlier detection | ✅ ≤7 retries/8 dispatches, credential-rotation-before-service-failover, credential outlier ejection, circuit breaker, adaptive telemetry (`ai/attempt.rs`, `ai/credential_outlier.rs`) | Edgion equal or ahead on resilience mechanics |
-| Credential management | `BackendAuth` passthrough/key/OAuth; Azure/Bedrock credential caches; virtual API keys with metadata | 🟡 credential pools (≤16) with per-credential RPM/TPM Redis reservations + weights (`edgion_ai_service.rs:53-97`) — richer pooling; ❌ no OAuth-to-provider, no virtual API keys issued to clients | Gap: gateway-issued virtual keys; provider OAuth |
+| Credential management | `BackendAuth` passthrough/key/OAuth; Azure/Bedrock credential caches; virtual API keys with metadata | 🟡 credential pools (≤16) with per-credential RPM/TPM Redis reservations + weights (`edgion_backend.rs:53-97`) — richer pooling; ❌ no OAuth-to-provider, no virtual API keys issued to clients | Gap: gateway-issued virtual keys; provider OAuth |
 | Token rate limiting | Local token bucket `limit_type: tokens` + **tiktoken pre-tokenization** + post-response true-up; Envoy RLS remote | ✅ Redis tumbling-window token quota, two-phase admission + cumulative mid-stream reconciliation + **mid-stream terminate** (`ai/quota/`) — stronger enforcement; ❌ no real tokenizer (chars÷4 estimate, `dispatch.rs:479`) | Edgion enforcement is stronger (they cannot cut a stream); gap: accurate pre-count via tokenizer is optional/cheap to add |
 | Quota exceeded actions | reject (429) | ✅ Reject / Throttle / Downgrade-model + mid-stream termination | Edgion ahead |
 | Prompt guard | Regex + PII rulesets, webhook, OpenAI moderation, Bedrock Guardrails, Model Armor, Azure Content Safety; mask/reject; **streaming windowed guardrails with overlap tails**; realtime WS guarding (`llm/policy/`) | ❌ nothing LLM-content-specific today (WAF task is generic HTTP) | **Major gap**; windowed streaming evaluation needs the SSE zero-copy/window work (`todo/sse-decoder-zero-copy-stream.md` already cites agentgateway/NeMo prior art) |
@@ -124,6 +124,13 @@ our strength — do not regress it while adding features; (3) streaming guardrai
 are the only feature where they have a bounded-state streaming mechanism we lack.
 
 ## 7. Gap summary → roadmap input
+
+> Architecture update, 2026-08-12: the ranking below remains product-gap
+> evidence, but it is no longer execution order. Backend-dependent work first
+> goes through the `EdgionBackend` foundation in
+> `../roadmap/00-backend-foundation.md`. In particular, A2A waits for
+> `spec.a2a`, canonical selected-slot transport, typed policy attachment, and
+> optional request-body observation; MCP uses `spec.mcp`, not a separate CRD.
 
 Ranked by (user value × distance):
 

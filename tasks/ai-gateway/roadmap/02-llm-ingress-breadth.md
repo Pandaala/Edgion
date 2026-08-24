@@ -11,12 +11,16 @@ collapsing to the existing canonical-OpenAI internal form.
 and Vertex-OAuth are deferred until demanded (Azure is a cheap URI/auth
 mapping whenever needed; OpenAICompatible already covers many endpoints).
 
-**Reference:** agentgateway `RouteType` (crates/llm/src/lib.rs:85) and
-`conversion/` matrix.
+**Depends on:** WS-00 F1. Provider and model configuration must be read from
+`EdgionBackend.spec.ai`; do not extend the removed AI-specific resource.
+
+**Reference:** agentgateway `RouteType` and `conversion/` matrix for capability
+comparison only.
 
 **Today:** ingress is hard-gated to `POST */chat/completions`
-(`ai_proxy/plugin.rs:130-132`); providers are OpenAI / OpenAICompatible /
-Anthropic (`edgion_ai_service.rs:99-104`); translation exists only as
+(`ai_proxy/plugin.rs`); providers are OpenAI / OpenAICompatible / Anthropic in
+the currently shipped resource and move under `EdgionBackend.spec.ai` in
+WS-00 F1; translation exists only as
 OpenAI-canonical → Anthropic (`ai/anthropic/`).
 
 ## Architecture
@@ -24,10 +28,10 @@ OpenAI-canonical → Anthropic (`ai/anthropic/`).
 - **One canonical internal request** (the existing `canonical_openai_request`
   product) stays the pivot. New edge dialects translate *into* it at the plugin;
   new providers translate *out of* it at dispatch. Never add pairwise paths.
-- New module `edgion-gateway/src/ai/ingress/` for edge dialects; provider
-  translators join `ai/anthropic/` as sibling modules (`ai/vertex/`,
-  `ai/azure/`, `ai/bedrock/`).
-- `EdgionAIService.spec.provider` enum grows per provider; each provider module
+- New module `edgion-gateway/src/ai/ingress/` for edge dialects; the Gemini
+  provider translator joins `ai/anthropic/` as a sibling module. Azure,
+  Vertex, and Bedrock modules are not precreated.
+- `EdgionBackend.spec.ai.provider` grows per provider; each provider module
   owns request mapping, response mapping (non-streaming + streaming), error
   normalization, and credential injection — the seams `dispatch.rs:330-455`
   already defines (model rewrite hook, URI mapping :719-738, processor
@@ -50,9 +54,9 @@ edgion-gateway/src/ai/ingress/models.rs        # GET /v1/models synthesis from t
                                                #   route's candidate model set (local
                                                #   response; no upstream call)
 edgion-gateway/src/ai/ingress/embeddings.rs    # /v1/embeddings passthrough class:
-                                               #   canonical embeddings request (no
-                                               #   translation phase 1 — OpenAI-shape
-                                               #   providers only), usage extraction
+                                               #   canonical request (OpenAI-shape
+                                               #   providers only), streaming main
+                                               #   response + bounded side extraction
 edgion-gateway/src/ai/gemini/{request,response}.rs   # Gemini API generateContent /
                                                #   streamGenerateContent mapping
                                                #   (API-key auth; plain SSE stream)
@@ -62,7 +66,7 @@ edgion-gateway/src/plugins/http/ai_proxy/plugin.rs   # endpoint gate -> dialect
     classifier; per-dialect body handling (models = no body)
 edgion-gateway/src/ai/dispatch.rs              # provider match arms; processor
     selection per (ingress dialect × provider)
-edgion-resources/src/resources/edgion_ai_service.rs  # provider variants + validation
+edgion-resources/src/resources/edgion_backend/       # spec.ai providers + validation
 edgion-resources/.../plugin_configs/ai_proxy.rs      # endpoints allow-list
 edgion-tests test_server                       # mock Gemini endpoints;
                                                # Anthropic-native client scenarios
@@ -86,7 +90,9 @@ The symmetric counterpart of what we already have; highest client value.
 
 ### Phase 2 — `/v1/models` + `/v1/embeddings`
 1. Models synthesis (interacts with WS-05 aliasing; ship basic listing now).
-2. Embeddings as a non-streaming bounded class (usage extraction only).
+2. Embeddings with bounded request handling and bounded side-path usage
+   extraction; the main upstream response remains streaming and is never
+   aggregated merely because the endpoint is normally non-streaming.
 
 ### Phase 3 — Gemini provider
 `AiProvider::Gemini`: API-key credential (reuse `AiApiKeyResolver` slot),

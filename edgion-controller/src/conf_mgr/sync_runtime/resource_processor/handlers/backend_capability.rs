@@ -34,11 +34,7 @@ pub(super) fn classify_raw_backend(
         .validate()
         .map_err(|_| format!("EdgionBackend {key} has an invalid backend specification"))?;
 
-    if let (Some(ai), None, None) = (
-        backend.spec.ai.as_ref(),
-        backend.spec.a2a.as_ref(),
-        backend.spec.mcp.as_ref(),
-    ) {
+    if let (Some(ai), None) = (backend.spec.ai.as_ref(), backend.spec.a2a.as_ref()) {
         let endpoint = ai
             .effective_endpoint()
             .map_err(|_| format!("EdgionBackend {key} has an invalid AI endpoint"))?;
@@ -48,38 +44,19 @@ pub(super) fn classify_raw_backend(
         }));
     }
 
-    match (
-        backend.spec.ai.as_ref(),
-        backend.spec.a2a.as_ref(),
-        backend.spec.mcp.as_ref(),
-    ) {
-        (None, Some(a2a), None) if a2a.target.service_ref.is_some() && a2a.target.endpoint.is_none() => {
+    match (backend.spec.ai.as_ref(), backend.spec.a2a.as_ref()) {
+        (None, Some(a2a)) if a2a.target.service_ref.is_some() && a2a.target.endpoint.is_none() => {
             Ok(Some(RawBackendCapability {
                 target_class: ResolvedPolicyTargetClass::A2aService,
                 supports_tls_policy: true,
             }))
         }
-        (None, Some(a2a), None) if a2a.target.endpoint.is_some() && a2a.target.service_ref.is_none() => {
+        (None, Some(a2a)) if a2a.target.endpoint.is_some() && a2a.target.service_ref.is_none() => {
             let endpoint = a2a
                 .normalized_endpoint()
                 .map_err(|_| format!("EdgionBackend {key} has an invalid A2A endpoint"))?;
             Ok(Some(RawBackendCapability {
                 target_class: ResolvedPolicyTargetClass::A2aExternal,
-                supports_tls_policy: endpoint.starts_with("https://"),
-            }))
-        }
-        (None, None, Some(mcp)) if mcp.target.service_ref.is_some() && mcp.target.endpoint.is_none() => {
-            Ok(Some(RawBackendCapability {
-                target_class: ResolvedPolicyTargetClass::McpService,
-                supports_tls_policy: true,
-            }))
-        }
-        (None, None, Some(mcp)) if mcp.target.endpoint.is_some() && mcp.target.service_ref.is_none() => {
-            let endpoint = mcp
-                .normalized_endpoint()
-                .map_err(|_| format!("EdgionBackend {key} has an invalid MCP endpoint"))?;
-            Ok(Some(RawBackendCapability {
-                target_class: ResolvedPolicyTargetClass::McpExternal,
                 supports_tls_policy: endpoint.starts_with("https://"),
             }))
         }

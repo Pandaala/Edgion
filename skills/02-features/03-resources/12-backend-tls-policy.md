@@ -8,7 +8,7 @@ description: Full BackendTLSPolicy schema: upstream backend TLS validation and m
 > API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
 > Gateway API v1.5.0 resource; older clusters may still serve `v1alpha3`
 
-BackendTLSPolicy defines the TLS connection configuration from the gateway to the backend, including CA validation and client certificates (mTLS). In addition to core Service targets, Edgion accepts direct `edgion.io/EdgionBackend` targets for AI HTTPS, A2A Service/HTTPS external, and MCP Service/HTTPS external transports. A wrapped Service never contributes an inherited policy; cleartext external targets reject TLS policy.
+BackendTLSPolicy defines the TLS connection configuration from the gateway to the backend, including CA validation and client certificates (mTLS). In addition to core Service targets, Edgion accepts direct `edgion.io/EdgionBackend` targets for AI HTTPS and A2A Service/HTTPS external transports. A wrapped Service never contributes an inherited policy; cleartext external targets reject TLS policy.
 
 ## Full Schema
 
@@ -70,9 +70,6 @@ spec:
 | `subjectAltNames` | `Vec<SubjectAltName>?` | No | SAN allowlist |
 | `wellKnownCACertificates` | `String?` | No | `System`: use system CA certificates |
 
-For direct MCP EdgionBackend targets, each CA reference name must be unique across Secret and
-ConfigMap kinds. A Secret and ConfigMap with the same name cannot both appear in the list.
-
 **SubjectAltName**:
 
 | Field | Type | Description |
@@ -81,18 +78,11 @@ ConfigMap kinds. A Secret and ConfigMap with the same name cannot both appear in
 | `hostname` | `String?` | Required when type=Hostname |
 | `uri` | `String?` | Required when type=URI |
 
-MCP runtime validation requires a precise nonempty `hostname`, one to five SAN entries when the
-list is present, exactly one value matching each SAN type, and a maximum length of 253 bytes for
-hostnames and absolute URI values.
-
 ### options — Edgion Extensions
 
 | Key | Value Format | Description |
 |-----|--------------|-------------|
 | `edgion.io/client-certificate-ref` | `name` | Client certificate Secret (same namespace, used for gateway→backend mTLS) |
-
-For MCP targets, the Secret name must be a valid Kubernetes name and unknown option keys are
-rejected rather than ignored.
 
 ## Status Schema
 

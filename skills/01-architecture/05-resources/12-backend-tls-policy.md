@@ -7,7 +7,7 @@ description: BackendTLSPolicy resource — upstream mTLS configuration, CA certi
 
 > **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-BackendTLSPolicy is a Gateway API standard policy resource used to configure upstream TLS connections from the Gateway to direct backend targets, including CA certificate verification and client certificates (mTLS). Edgion accepts core `Service` and `edgion.io/EdgionBackend` targets. EdgionBackend supports AI HTTPS endpoints, A2A Service/HTTPS external targets, and MCP Service/HTTPS external targets. Nested Service policy is never inherited, and cleartext external targets reject TLS policy.
+BackendTLSPolicy is a Gateway API standard policy resource used to configure upstream TLS connections from the Gateway to direct backend targets, including CA certificate verification and client certificates (mTLS). Edgion accepts core `Service` and `edgion.io/EdgionBackend` targets. EdgionBackend supports AI HTTPS endpoints and A2A Service/HTTPS external targets. Nested Service policy is never inherited, and cleartext external targets reject TLS policy.
 
 ## Source code locations
 
@@ -26,7 +26,6 @@ BackendTLSPolicy is a Gateway API standard policy resource used to configure ups
    - Require exactly one targetRef and derive a typed `(kind, namespace, name, section)` identity
    - Register the canonical dependency before existence lookup, so target creation can self-heal a missing policy
    - Resolve Service existence or the validated raw EdgionBackend capability; all EdgionBackend variants reject `sectionName`, and external/AI targets reject plaintext endpoints
-   - For MCP, validate the precise SNI hostname, typed SAN shape/count/length, the single supported client-certificate option, and duplicate-free CA names before publishing the target class
    - Set the schema-hidden `resolvedTargetClass` marker and enter conflict arbitration only after complete eligibility
    - Store `creationTimestamp` for conflict-priority ordering
    - Requeue old siblings (when targets change, old siblings need to re-evaluate their conflict status)
@@ -58,7 +57,6 @@ Use synthetic PolicyAncestorStatus (because BackendTLSPolicy's target is a Servi
   - Conflict detection: iterate target refs and call `is_policy_winner()`; non-winner → `False, Reason=Conflicted`
   - Otherwise → `True, Reason=Accepted`
 - `ResolvedRefs`: validates the kind/group of all caCertificateRefs, whether the CA Secret/ConfigMap is resolved, and whether the client-certificate Secret exists and contains tls.crt and tls.key
-- Direct MCP targets additionally require every `caCertificateRefs` name to be unique across Secret and ConfigMap kinds, so one same-named object can never satisfy two trust inputs.
 - Does not set Programmed/Ready Condition (would require data-plane feedback, not currently supported by the architecture)
 
 **Fixed**: `ancestorRef` now performs a `Service → Route → Gateway` three-step lookup via ServiceRefManager + GatewayRouteIndex and correctly points to the associated Gateway. Route on_change/on_delete automatically requeues the related BackendTLSPolicy to keep ancestor state consistent.

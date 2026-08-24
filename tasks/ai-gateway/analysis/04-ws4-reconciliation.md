@@ -35,7 +35,7 @@ other's changes.
 | ws4 item | ws2 counterpart | Status |
 |---|---|---|
 | AI-0 streaming foundation | shipped code (+ WS-06 decoder v2 planned) | **Implemented** — ws2 even goes beyond (mid-stream terminate). Design authority: `docs/superpowers/specs/2026-08-03-ai-gateway-phase1-design.md` (now copied into ws2, fixing the dangling reference at `streaming_response_processor.rs:4`) |
-| AI-1a single-provider passthrough | shipped code | **Implemented** (`ai_proxy` + `EdgionAIService`) |
+| AI-1a single-provider passthrough | shipped code | **Implemented** (`ai_proxy` + `EdgionBackend`) |
 | AI-1b schema translation | shipped (Anthropic) + WS-02 (Gemini etc.) | **Implemented for Anthropic**; breadth pending |
 | AI-2 metering & cost | shipped code + WS-07 tail | **Implemented** (quota, ledger, mid-stream termination) |
 | AI-3 resilience & routing | shipped code | **Implemented and verified in ws4** (G-phase: crd 10/10, ai:: unit 139/139, integration green — see `archive/completed-tasks/ai-gateway-resilience-and-routing/07-changelog.md`, now carried over). ws2's stale checkboxes replaced by ws4's live tracker |
@@ -75,7 +75,7 @@ sites to update), `ai/anthropic/response.rs` (both added different tests +
 | sha | what | kind |
 |---|---|---|
 | d60cfc09 | restore canonical Pingora fork source (removes local `[patch]`, pins `edgion#0b6ae51e`) — **defer/adapt**: ws2's b0c9db66 may depend on local fork changes; verify the local pingora checkout is pushed to the fork branch first | build |
-| 7b05ba19 | EBTP targetRefs: 16-cap/duplicate rules only for EdgionAIService targets; Service unlimited | fix |
+| 7b05ba19 | EBTP targetRefs: 16-cap/duplicate rules only for EdgionBackend targets; Service unlimited | fix |
 | 6c4d4923 | BackendTLSPolicy → EBTP requeue key mismatch (dependent EBTPs never requeued) | fix |
 | 18d94399 | AI admission honors PluginPolicy (Bypass doesn't count; Block preserves rule) | fix |
 | 66d36b37 | partial credential-pool failures keep `ResolvedRefs=False` + `PartiallyInvalid` detail | fix |
@@ -175,6 +175,12 @@ files carry ws4's updates forward, and restore the new-only documents from the
 backup.
 
 ## 4. Unique ws4 analysis absorbed into roadmap files (this change)
+
+> Superseding architecture note, 2026-08-12: the capability requirements below
+> remain absorbed, but backend identity is now governed by
+> `tasks/plan/edgion-backend-unification.md`. MCP uses a future
+> `EdgionBackend.spec.mcp`; A2A uses `spec.a2a` plus a route-attached frontend
+> plugin. See `07-edgion-backend-reconciliation.md`.
 
 - **WS-01 MCP** ← ws4 AI-6: transport hardening checklist (Origin validation /
   DNS-rebinding, CORS `Access-Control-Expose-Headers: Mcp-Session-Id`,

@@ -1176,15 +1176,6 @@ pub struct EdgionHttpContext {
     /// Unified backend generation pinned by A2A protocol classification.
     pub(crate) edgion_backend_snapshot: Option<EdgionBackendSnapshot>,
 
-    /// Activation-gated MCP request/transport plan. WP10-12 is the only public
-    /// installer; earlier WP10 units use it only through focused internal tests.
-    pub(crate) mcp_request_plan: Option<crate::mcp::request::McpRequestPlan>,
-
-    /// Monotonic MCP route-recognition latch for access-log redaction. WP10-12
-    /// sets this before Origin/head/body validation so rejected MCP requests
-    /// cannot expose protocol parameters through raw URI or AccessLogExtern.
-    pub(crate) mcp_route_recognized: bool,
-
     /// Number of connection attempts to backends
     pub try_cnt: u32,
 
@@ -1724,8 +1715,6 @@ impl EdgionHttpContext {
             current_plugin_entry: None,
             a2a_gateway_activated: false,
             edgion_backend_snapshot: None,
-            mcp_request_plan: None,
-            mcp_route_recognized: false,
             try_cnt: 0,
             retry_on_status: false,
             peer_timeout_source: None,
@@ -2012,36 +2001,6 @@ impl EdgionHttpContext {
                 .grpc_route_unit
                 .as_ref()
                 .is_some_and(|u| u.rule.parsed_retry.is_some())
-    }
-
-    /// MCP requests are categorically non-replayable. This predicate becomes
-    /// true as soon as a validated plan is installed, before backend selection.
-    #[inline]
-    pub(crate) fn mcp_no_replay(&self) -> bool {
-        self.mcp_request_plan.is_some()
-    }
-
-    /// Redaction starts at route recognition, before request validation can
-    /// reject the request and before a transport plan exists.
-    #[inline]
-    pub(crate) fn mcp_log_redaction_required(&self) -> bool {
-        self.mcp_route_recognized || self.mcp_request_plan.is_some()
-    }
-
-    /// Canonical main-proxy retry-buffer/backstop predicate.
-    #[inline]
-    pub(crate) fn main_proxy_replay_allowed(&self) -> bool {
-        !self.mcp_no_replay() && !self.request_body_stream_active
-    }
-
-    /// Override any producer- or Pingora-preselected retry state for MCP.
-    #[inline]
-    pub(crate) fn force_mcp_no_replay(&self, retry: &mut pingora_core::RetryType) -> bool {
-        if !self.mcp_no_replay() {
-            return false;
-        }
-        *retry = pingora_core::RetryType::Decided(false);
-        true
     }
 
     /// Initialize backend context for the resource-selected path (HTTP/gRPC backend ref).

@@ -504,7 +504,7 @@ count.
 | `usage.rs` | `UsageExtractionProcessor` — see §4.6 |
 | `quota/mod.rs` | Atomics-only hot path (`add_output_units` fetch_update + flush-boundary notify, :102-116; sticky lock-free `over_limit` latch :147-156); one bounded worker per quota'd request does all Redis I/O; a mid-stream flush that reports over-limit latches immediately (:279-284) |
 | `quota/runtime.rs` | Redis tumbling windows, Identity/IdentityModel scopes, hashed slot-stable `edgion:aiq:` keys, two-phase admission + cumulative reconciliation, TTL leases; `onExceeded` Reject/Throttle/Downgrade; `onRedisFailure` allow/deny |
-| `service_store.rs` | ArcSwap runtime index from the `EdgionAIService` CR; Arc-preserving recompiles; invalid update deactivates the service |
+| `backend_store.rs` | ArcSwap runtime index from the `EdgionBackend` CR; Arc-preserving recompiles; invalid update deactivates the backend |
 | `anthropic/request.rs` | OpenAI→Anthropic request translation: 13-field whitelist, unsupported params fail closed, mandatory `max_tokens` |
 | `anthropic/response.rs` | Anthropic→OpenAI translation, non-streaming + full SSE state machine (:381-596); `changes_body_length()` always true (:650-652); fails closed (sealed) on degraded/malformed (:367-369); owns quota + termination on Anthropic routes (:686-696) |
 

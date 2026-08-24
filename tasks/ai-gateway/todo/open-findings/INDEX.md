@@ -73,7 +73,7 @@ One issue per `<area>-NN-<slug>.md`. `INDEX.md` is batch metadata only. Where a 
 - Thinner coverage: unclassified proxy `ErrorType`, 429 `Retry-After` e2e consistency, credential-pool reconcile × outlier cross-module.
 - `RedisQuotaSink::admit_all`/`apply_all` result folding is reachable only through a live `RedisLinkClient`; a unit test needs the folding loop extracted into a pure function first.
 - Anything reached only through `prepare_first_attempt` / `commit_ai_attempt_context` needs a live `pingora_proxy::Session` and has no unit coverage: `apply_backend_request_headers`, `provider_uri` wiring, header stripping, `effective_max_output_tokens`.
-- Verified clean and deliberately not filed: provider-upstream SSRF (egress classification is applied at dial time), credential material in `Debug`/`Serialize`/error bodies, Redis key construction and Lua argument validation, all documented byte caps, the `EdgionAIService` CRD↔struct field correspondence, RBAC in both manifests, workqueue discipline, and delete→create coalescing in the new handlers.
+- Verified clean and deliberately not filed: provider-upstream SSRF (egress classification is applied at dial time), credential material in `Debug`/`Serialize`/error bodies, Redis key construction and Lua argument validation, all documented byte caps, the `EdgionBackend` CRD↔struct field correspondence, RBAC in both manifests, workqueue discipline, and delete→create coalescing in the new handlers.
 
 ## How this batch was produced
 
