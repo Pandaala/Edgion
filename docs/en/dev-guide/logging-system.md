@@ -480,7 +480,7 @@ All logs are output in JSON format, one record per line. Below are format exampl
       "response_time_ms": 45
     }]
   },
-  "errors": [],
+  "diagnostics": [],
   "plugin_logs": [],
   "conn_est": true
 }

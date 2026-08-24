@@ -283,7 +283,7 @@ impl AiProxy {
         // cannot provide it.
         if let Some(expected) = session.ctx().ai_state().and_then(|state| state.guard_body_generation) {
             if session.ctx().request_body.generation() != Some(expected) {
-                session.add_error(edgion_resources::EdgionStatus::BodyMutationConflict);
+                session.record_error(edgion_resources::EdgionErrorCode::BodyMutationConflict);
                 return Self::reject(session, log, "guard body changed", AiProxyError::BackendUnavailable);
             }
         }

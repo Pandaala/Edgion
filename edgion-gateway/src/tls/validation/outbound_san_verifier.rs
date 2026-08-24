@@ -7,7 +7,7 @@
 //!
 //! On no-match the verifier returns a `rustls::Error` so the handshake aborts.
 //! The caller (Task 3 / Task 4) maps the rustls error to
-//! `EdgionStatus::OutboundTlsSanMismatch` in its handshake-error path.
+//! `EdgionErrorCode::OutboundTlsSanMismatch` in its handshake-error path.
 //!
 //! # Performance note
 //! `verify_server_cert` is called once per TLS handshake.  `x509-parser` is

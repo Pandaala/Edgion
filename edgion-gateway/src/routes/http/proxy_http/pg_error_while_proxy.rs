@@ -1,7 +1,7 @@
 use super::pg_upstream_response_filter::has_final_response_written;
 use super::EdgionHttpProxy;
 use crate::{EdgionHttpContext, PeerTimeoutSource};
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error, ErrorSource, ErrorType};
 use pingora_proxy::Session;
@@ -112,7 +112,7 @@ pub fn error_while_proxy(
         let common_retry_gates = buffer_ok
             && !ctx.request_timeout_exceeded()
             && !ctx.grpc_deadline_exceeded()
-            && !ctx.request_info.response_committed
+            && !ctx.response_write_started()
             && !has_final_response_written(session);
         let Some(failure_class) = failure_class else {
             return e;
@@ -150,13 +150,13 @@ pub fn error_while_proxy(
                     }
                 }
                 if failure_class == AiProxyFailureClass::BackendRequestTimeout {
-                    ctx.add_error(EdgionStatus::BackendRequestTimeoutRetry);
+                    ctx.record_error(EdgionErrorCode::BackendRequestTimeoutRetry);
                 }
                 e.set_retry(true);
             }
             Ok(crate::ai::dispatch::AiRetryDecision::BudgetDenied) => {
                 crate::observe::metrics::record_retry_budget_denied();
-                ctx.add_error(EdgionStatus::RetryBudgetExhausted);
+                ctx.record_error(EdgionErrorCode::RetryBudgetExhausted);
                 return Error::explain(ErrorType::HTTPStatus(503), "AI retry budget exhausted");
             }
             Ok(crate::ai::dispatch::AiRetryDecision::Final) | Err(_) => {}
@@ -195,7 +195,7 @@ pub fn error_while_proxy(
             // Stamp the canceled attempt's per-upstream log entry so it is
             // self-describing (mirrors pg_fail_to_connect): without this the
             // entry shows neither status nor error and operators must infer
-            // the cancellation from the request-level error chain.
+            // the cancellation from the request-level diagnostics.
             if let Some(upstream) = ctx.get_current_upstream_mut() {
                 upstream.status = Some(504);
                 upstream.err.push(e.etype().as_str().to_string());
@@ -216,11 +216,11 @@ pub fn error_while_proxy(
             if let Some(budget) = super::pg_upstream_peer::retry_budget_for(ctx) {
                 if !budget.try_retry() {
                     crate::observe::metrics::record_retry_budget_denied();
-                    ctx.add_error(EdgionStatus::RetryBudgetExhausted);
+                    ctx.record_error(EdgionErrorCode::RetryBudgetExhausted);
                     return Error::explain(ErrorType::HTTPStatus(503), "retry budget exhausted");
                 }
             }
-            ctx.add_error(EdgionStatus::BackendRequestTimeoutRetry);
+            ctx.record_error(EdgionErrorCode::BackendRequestTimeoutRetry);
             e.set_retry(true);
             return e;
         }

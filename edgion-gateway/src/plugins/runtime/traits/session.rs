@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::common::{KeyGet, KeySet};
 pub use edgion_resources::resources::edgion_plugins::DyeOutcome;
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 use pingora_http::ResponseHeader;
 use std::sync::Arc;
 
@@ -325,10 +325,10 @@ pub trait PluginSession: Send + Sync {
     /// Get reference to EdgionHttpContext (for access log generation)
     fn ctx(&self) -> &EdgionHttpContext;
 
-    /// Append an EdgionStatus error to the gateway context so it surfaces in the
-    /// access log `errors` array. Narrow interface — plugins cannot mutate other
+    /// Append an EdgionErrorCode error to the gateway context so it surfaces in the
+    /// access-log diagnostics array. Narrow interface — plugins cannot mutate other
     /// ctx fields; only the error list.
-    fn add_error(&mut self, status: EdgionStatus);
+    fn record_error(&mut self, status: EdgionErrorCode);
 
     /// Claim the request-wide AI context. The first writer wins; alternate
     /// adapters without a mutable Edgion context fail closed by default.

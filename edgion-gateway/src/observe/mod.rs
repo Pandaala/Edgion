@@ -4,6 +4,7 @@ pub mod access_log;
 pub mod access_log_store;
 pub mod logs;
 pub mod metrics;
+pub mod request_diagnostics;
 
 pub use access_log::{AccessLogEntry, AccessLogger};
 pub use logs::{
@@ -11,3 +12,4 @@ pub use logs::{
     init_udp_logger, log_ssl, log_tcp, log_tls, log_udp, SysLogConfig, TcpLogEntry, UdpLogEntry,
 };
 pub use metrics::{global_metrics, GatewayMetrics, TestData, TestType};
+pub use request_diagnostics::{RequestDiagnostic, RequestDiagnostics};

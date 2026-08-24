@@ -493,7 +493,7 @@ udp_log:
       "response_time_ms": 45
     }]
   },
-  "errors": [],
+  "diagnostics": [],
   "plugin_logs": [],
   "conn_est": true
 }

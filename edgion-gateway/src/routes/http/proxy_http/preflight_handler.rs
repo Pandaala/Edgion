@@ -46,6 +46,7 @@ impl PreflightHandler {
     pub async fn handle_preflight(
         &self,
         session: &mut Session,
+        ctx: &mut crate::EdgionHttpContext,
         cors_config: Option<&Arc<CorsConfig>>,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         // A route-level CORS plugin owns both local preflight responses and
@@ -58,6 +59,9 @@ impl PreflightHandler {
 
         // No CORS config: return simple empty response
         let status = self.policy.as_ref().map(|p| p.status_code).unwrap_or(204);
+        if !ctx.claim_final_response(status) {
+            return Ok(true);
+        }
 
         let resp = ResponseHeader::build(status, None)?;
         session.write_response_header(Box::new(resp), true).await?;
@@ -141,7 +145,7 @@ mod tests {
 
         assert!(handler.is_preflight(&session));
         let response_sent = handler
-            .handle_preflight(&mut session, Some(&cors_config))
+            .handle_preflight(&mut session, &mut ctx, Some(&cors_config))
             .await
             .expect("preflight handling should succeed");
 
@@ -176,11 +180,12 @@ mod tests {
             status_code: 204,
         }));
         let mut session = session_from_request(b"OPTIONS / HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
         let cors_config = cors_config(false);
 
         assert!(handler.is_preflight(&session));
         let response_sent = handler
-            .handle_preflight(&mut session, Some(&cors_config))
+            .handle_preflight(&mut session, &mut ctx, Some(&cors_config))
             .await
             .expect("preflight handling should succeed");
 

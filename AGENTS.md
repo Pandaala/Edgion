@@ -313,7 +313,7 @@ Do not add another cache implementation or broaden TinyUFO usage without documen
 6. Key extraction uses `KeyGet`; IP allow/deny matching uses `ip_radix_tree`; client real IP comes from `real_ip_extractor` — never ad-hoc re-implementations.
 7. Templated config fields use the shared `${type:name}` engine; security-sensitive fields (deadlines, fail-open switches, destinations) use the restricted variable allow-list that rejects client-controlled variables.
 8. Plugins reject requests via `PluginRunningResult::ErrResponse`; `ErrTerminateRequest` only for inherently dynamic responses, written before returning.
-9. Fail-close error bodies never leak internal detail (dependency errors, addresses, traces) — detail goes to the access log / `EdgionStatus`.
+9. Fail-close error bodies never leak internal detail (dependency errors, addresses, traces) — detail goes to `PluginLog` and access-log diagnostics (`EdgionErrorCode`).
 10. Failure policy is frozen, not converging: the four existing fail-open/
     fail-close shapes are grandfathered; do not add a fifth. New runtime-
     dependency plugins follow the auth/non-auth rule (auth = fixed fail-close,

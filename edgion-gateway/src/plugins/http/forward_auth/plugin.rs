@@ -196,7 +196,7 @@ impl RequestFilter for ForwardAuth {
             match session.read_request_body(None).await {
                 Ok(body) => Some(body),
                 Err(_) => {
-                    session.add_error(edgion_resources::EdgionStatus::BodyReadAborted);
+                    session.record_error(edgion_resources::EdgionErrorCode::BodyReadAborted);
                     plugin_log.push_err("forward auth body unavailable");
                     return PluginRunningResult::ErrResponse {
                         status: 500,
@@ -221,9 +221,9 @@ impl RequestFilter for ForwardAuth {
             Ok(r) => r,
             Err(e) => {
                 // Transport-level failure: connection refused, DNS, timeout, rate/health gate.
-                // Surface in the access log `errors` for gateway-level visibility; PluginLog
+                // Surface in access-log diagnostics for gateway-level visibility; PluginLog
                 // captures the per-request plugin-side detail.
-                session.add_error(edgion_resources::EdgionStatus::ForwardAuthServiceUnreachable);
+                session.record_error(edgion_resources::EdgionErrorCode::ForwardAuthServiceUnreachable);
                 plugin_log.push_fmt("upstream unreachable {}", la![e.to_string().as_str()]);
                 // Record BEFORE `send_error_response`'s self-write
                 // (`write_response_header`) so the queued dye header op is
@@ -562,8 +562,8 @@ mod tests {
 
         let mut session = make_session();
         session
-            .expect_add_error()
-            .withf(|status| matches!(status, edgion_resources::EdgionStatus::ForwardAuthServiceUnreachable))
+            .expect_record_error()
+            .withf(|status| matches!(status, edgion_resources::EdgionErrorCode::ForwardAuthServiceUnreachable))
             .times(1)
             .returning(|_| ());
 

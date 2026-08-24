@@ -27,7 +27,7 @@ Verify that LDAP TLS outbound connections succeed when the server certificate's 
 2. **LDAP Authentication**: SUCCESS
    - Login request succeeds; no SAN mismatch rejection
    - Access log shows clean LDAP exchange
-   - Note: the access log `errors` array must NOT contain `"OutboundTlsSanMismatch"` on this path
+   - Note: access-log `diagnostics` must NOT contain the `OutboundTlsSanMismatch` error on this path
 
 ## Dependencies
 

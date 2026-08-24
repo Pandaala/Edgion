@@ -62,7 +62,7 @@ Verify that OpenID Connect outbound connections fail with `OutboundTlsSanMismatc
    check runs before the bearer-only short-circuit), but it returns at the very first guard — this
    fixture declares no `sessionSecretRef`, so `resolve_session_secret()` fails and it replies
    `401 Unauthorized - Missing session secret` long before the discovery fetch. To assert on the
-   access-log `errors` array, use the LDAP fixture or an OIDC fixture with the interactive
+   access-log `diagnostics` array, use the LDAP fixture or an OIDC fixture with the interactive
    (non-bearer-only) flow.
 
 ## Current Limitation
@@ -80,5 +80,5 @@ Verify that OpenID Connect outbound connections fail with `OutboundTlsSanMismatc
 ## Reference
 
 - Phase 2 Task 6: `docs/superpowers/plans/2026-06-29-outbound-tls-align-phase2.md`
-- SAN mismatch status code: `edgion-resources/src/edgion_status.rs` (OutboundTlsSanMismatch = 999_09)
+- SAN mismatch diagnostic: `edgion-resources/src/diagnostic.rs` (`EdgionErrorCode::OutboundTlsSanMismatch`)
 - SAN validation logic: `edgion-gateway/src/tls/validation/outbound_san_verifier.rs` (OutboundSanVerifier)

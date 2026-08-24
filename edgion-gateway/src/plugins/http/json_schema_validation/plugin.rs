@@ -6,7 +6,7 @@ use edgion_resources::resources::edgion_plugins::{
     parse_json_instance, CompiledJsonSchema, InstanceValidationError, JsonSchemaValidationConfig, StrictJsonError,
     ABSOLUTE_INSTANCE_MAX_BYTES,
 };
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 
 use crate::plugins::http::common::json_request_headers_are_supported;
 use crate::plugins::runtime::traits::session::BodyReadError;
@@ -38,18 +38,18 @@ impl JsonSchemaValidation {
     fn record_body_error(session: &mut dyn PluginSession, error: &BodyReadError) {
         let status = match error {
             BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
-                Some(EdgionStatus::BodyReadTooLarge)
+                Some(EdgionErrorCode::BodyReadTooLarge)
             }
-            BodyReadError::Timeout => Some(EdgionStatus::BodyReadTimeout),
-            BodyReadError::Incomplete => Some(EdgionStatus::BodyReadAborted),
-            BodyReadError::Unimplemented => Some(EdgionStatus::BodyReadUnimplemented),
+            BodyReadError::Timeout => Some(EdgionErrorCode::BodyReadTimeout),
+            BodyReadError::Incomplete => Some(EdgionErrorCode::BodyReadAborted),
+            BodyReadError::Unimplemented => Some(EdgionErrorCode::BodyReadUnimplemented),
             // The adapter records the more precise refusal status.
             BodyReadError::NotBuffered => None,
-            BodyReadError::StorageFailure => Some(EdgionStatus::BodyCaptureStorageFailed),
-            BodyReadError::GenerationConflict => Some(EdgionStatus::BodyMutationConflict),
+            BodyReadError::StorageFailure => Some(EdgionErrorCode::BodyCaptureStorageFailed),
+            BodyReadError::GenerationConflict => Some(EdgionErrorCode::BodyMutationConflict),
         };
         if let Some(status) = status {
-            session.add_error(status);
+            session.record_error(status);
         }
     }
 }
@@ -85,7 +85,7 @@ impl RequestFilter for JsonSchemaValidation {
             return Self::reject(400, Some(INVALID_REQUEST_BODY));
         }
         if body_len > ABSOLUTE_INSTANCE_MAX_BYTES {
-            session.add_error(EdgionStatus::BodyReadTooLarge);
+            session.record_error(EdgionErrorCode::BodyReadTooLarge);
             log.push("deny body too large");
             return Self::reject(413, None);
         }
@@ -105,7 +105,7 @@ impl RequestFilter for JsonSchemaValidation {
             }
         };
         if body.len() as u64 > ABSOLUTE_INSTANCE_MAX_BYTES {
-            session.add_error(EdgionStatus::BodyReadTooLarge);
+            session.record_error(EdgionErrorCode::BodyReadTooLarge);
             log.push("deny body too large");
             return Self::reject(413, None);
         }
@@ -113,7 +113,7 @@ impl RequestFilter for JsonSchemaValidation {
         let parsed = match parse_json_instance(&body) {
             Ok(parsed) => parsed,
             Err(StrictJsonError::TooLarge) => {
-                session.add_error(EdgionStatus::BodyReadTooLarge);
+                session.record_error(EdgionErrorCode::BodyReadTooLarge);
                 log.push("deny body too large");
                 return Self::reject(413, None);
             }
@@ -257,8 +257,8 @@ mod tests {
             .with(mockall::predicate::eq(false))
             .return_const(Ok(ABSOLUTE_INSTANCE_MAX_BYTES + 1));
         session
-            .expect_add_error()
-            .with(mockall::predicate::eq(EdgionStatus::BodyReadTooLarge))
+            .expect_record_error()
+            .with(mockall::predicate::eq(EdgionErrorCode::BodyReadTooLarge))
             .return_once(|_| ());
         let mut log = PluginLog::new(filter.name());
 
@@ -315,8 +315,8 @@ mod tests {
             .with(mockall::predicate::eq(None))
             .return_once(|_| Err(BodyReadError::StorageFailure));
         session
-            .expect_add_error()
-            .with(mockall::predicate::eq(EdgionStatus::BodyCaptureStorageFailed))
+            .expect_record_error()
+            .with(mockall::predicate::eq(EdgionErrorCode::BodyCaptureStorageFailed))
             .return_once(|_| ());
         let mut log = PluginLog::new(filter.name());
 

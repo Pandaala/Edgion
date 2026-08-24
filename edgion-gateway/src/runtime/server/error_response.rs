@@ -14,7 +14,7 @@
 use crate::runtime::server::server_header::ServerHeaderOpts;
 use crate::EdgionHttpContext;
 use bytes::Bytes;
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 use http::HeaderMap;
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use pingora_core::modules::http::grpc_web::GrpcWebBridge;
@@ -142,13 +142,11 @@ pub(crate) async fn send_grpc_status_trailers_only(
     grpc_status: u16,
     grpc_message: Option<&str>,
 ) -> pingora_core::Result<()> {
-    if ctx.request_info.response_committed {
+    if !ctx.claim_final_response(200) {
         return Ok(());
     }
 
-    ctx.request_info.status = Some(200);
     ctx.request_info.grpc_status = Some(grpc_status);
-    ctx.request_info.response_committed = true;
 
     let mut resp = ResponseHeader::build(200, None)?;
     server_header_opts.apply_to_response(&mut resp);
@@ -202,7 +200,7 @@ pub fn http_to_grpc_status(http_status: u16) -> (u16, &'static str) {
 
 /// Shared nginx-style HTML error response writer used by every `end_response_<code>` helper.
 ///
-/// Handles the `response_committed` guard, sets `ctx.request_info.status`, builds the
+/// Claims final-response ownership, records the selected status, builds the
 /// response header with the standard `Content-Type: text/html`, writes the nginx-style
 /// body (only `title` varies between status codes), and tears down the session.
 ///
@@ -217,12 +215,9 @@ async fn send_html_error(
     status: u16,
     title: &str,
 ) -> pingora_core::Result<()> {
-    if ctx.request_info.response_committed {
+    if !ctx.claim_final_response(status) {
         return Ok(());
     }
-
-    ctx.request_info.status = Some(status);
-    ctx.request_info.response_committed = true;
 
     let mut resp = ResponseHeader::build(status, None)?;
     server_header_opts.apply_to_response(&mut resp);
@@ -336,9 +331,9 @@ pub async fn end_response_502(
 /// [`ErrTerminateRequest`](edgion_resources::filters::PluginRunningResult::ErrTerminateRequest)
 /// without writing a response.
 ///
-/// - If `response_committed` is already true (spec-compliant plugin wrote its own
+/// - If final-response ownership is already claimed (spec-compliant plugin wrote its own
 ///   response), this is a no-op — the plugin's response stands.
-/// - Otherwise: adds [`EdgionStatus::PluginTerminateWithoutResponse`] to the access
+/// - Otherwise: adds [`EdgionErrorCode::PluginTerminateWithoutResponse`] to the access
 ///   log and writes a 502 (HTTP) / gRPC INTERNAL=13 fallback response.
 ///
 /// The `let _ =` at call sites is intentional: a write error on a broken downstream
@@ -348,10 +343,10 @@ pub async fn terminate_with_fallback(
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
-    if ctx.request_info.response_committed {
+    if ctx.response_write_started() {
         return Ok(());
     }
-    ctx.add_error(EdgionStatus::PluginTerminateWithoutResponse);
+    ctx.record_error(EdgionErrorCode::PluginTerminateWithoutResponse);
     end_response_502(session, ctx, server_header_opts).await
 }
 
@@ -379,47 +374,33 @@ pub async fn end_response_503(
 mod tests {
     use super::*;
     use crate::EdgionHttpContext;
-    use edgion_resources::EdgionStatus;
+    use edgion_resources::EdgionErrorCode;
 
-    /// When `response_committed` is true, `terminate_with_fallback` must be a no-op:
-    /// it must NOT push `PluginTerminateWithoutResponse` into `ctx.edgion_status`.
+    /// When response ownership is claimed, `terminate_with_fallback` must be a no-op:
+    /// it must NOT record `PluginTerminateWithoutResponse` in diagnostics.
     /// This test validates the guard branch directly without needing a live Session.
     #[test]
-    fn terminate_with_fallback_noop_when_committed() {
+    fn terminate_with_fallback_noop_when_response_write_started() {
         let mut ctx = EdgionHttpContext::new();
-        ctx.request_info.response_committed = true;
+        assert!(ctx.claim_final_response(204));
 
         // Pre-condition: no errors recorded yet
-        assert!(ctx.edgion_status.is_empty());
+        assert!(ctx.diagnostics.is_empty());
 
         // Simulate the guard that terminate_with_fallback checks first
-        if !ctx.request_info.response_committed {
-            ctx.add_error(EdgionStatus::PluginTerminateWithoutResponse);
+        if !ctx.response_write_started() {
+            ctx.record_error(EdgionErrorCode::PluginTerminateWithoutResponse);
         }
 
-        // Because response_committed was true, no error should have been added
+        // Because response ownership was claimed, no error should have been added.
         assert!(
-            ctx.edgion_status.is_empty(),
-            "terminate_with_fallback must not add errors when response_committed = true"
+            ctx.diagnostics.is_empty(),
+            "terminate_with_fallback must not add errors after response ownership is claimed"
         );
         assert!(
-            !ctx.edgion_status
-                .contains(&EdgionStatus::PluginTerminateWithoutResponse),
-            "PluginTerminateWithoutResponse must not appear when response was already committed"
-        );
-    }
-
-    /// Pin the discriminant of `EdgionStatus::PluginTerminateWithoutResponse`
-    /// to 50202. Access logs serialize the variant name, not this integer, so
-    /// the value is internal — but the `<http>_<sub>` encoding is a documented
-    /// convention (see `EdgionStatus::http_status`) and the assertion guards
-    /// against accidental renumbering.
-    #[test]
-    fn plugin_terminate_without_response_discriminant() {
-        assert_eq!(
-            EdgionStatus::PluginTerminateWithoutResponse as u32,
-            50202u32,
-            "PluginTerminateWithoutResponse discriminant must remain 50202 (502_02 convention)"
+            !ctx.diagnostics
+                .contains_error(EdgionErrorCode::PluginTerminateWithoutResponse),
+            "PluginTerminateWithoutResponse must not appear after response write ownership is claimed"
         );
     }
 

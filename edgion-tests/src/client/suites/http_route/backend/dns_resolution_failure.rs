@@ -95,7 +95,7 @@ impl DnsResolutionFailureTestSuite {
     ///
     /// When the TCP connect to 192.0.2.1:80 times out, Pingora fires `fail_to_connect`
     /// with ErrorType::ConnectTimedout.  pg_fail_to_connect sets upstream.status = 504
-    /// on the ConnectTimedout path (does NOT push to ctx.edgion_status, so `errors` is empty).
+    /// on the ConnectTimedout path (does not record a request diagnostic).
     ///
     /// With BTP connectTimeout=1s each connect attempt times out in ~1s; gateway responds in ~2-3s total.
     ///

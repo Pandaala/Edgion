@@ -191,10 +191,8 @@ mod body_framing_tests {
         request_body.install(view);
         request_body.overwrite(Bytes::from_static(b"new-body")).unwrap();
 
-        let mut ctx = EdgionHttpContext {
-            request_body,
-            ..Default::default()
-        };
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_body = request_body;
         let mut request = pingora_http::RequestHeader::build("POST", b"/", None).unwrap();
         request.insert_header("transfer-encoding", "chunked").unwrap();
         request.insert_header("content-length", "3").unwrap();

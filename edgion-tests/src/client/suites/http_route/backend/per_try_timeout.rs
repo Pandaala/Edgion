@@ -104,19 +104,17 @@ impl PerTryTimeoutTestSuite {
                             }
 
                             // Verify the retry was Case 1.5 (per-try timeout), not some
-                            // other retry path: the access-log error chain must carry
+                            // other retry path: access-log diagnostics must carry
                             // BackendRequestTimeoutRetry for the canceled attempt.
                             let al_client = ctx.access_log_client();
                             if let Ok(entry) = al_client.get_access_log_with_retry(&test_id, 10, 200).await {
-                                let has_marker = entry.data["errors"].as_array().is_some_and(|errs| {
-                                    errs.iter().any(|e| e.as_str() == Some("BackendRequestTimeoutRetry"))
-                                });
+                                let has_marker = entry.has_diagnostic("error", "BackendRequestTimeoutRetry");
                                 if !has_marker {
                                     return TestResult::failed(
                                         start.elapsed(),
                                         format!(
-                                            "Access log errors chain missing BackendRequestTimeoutRetry: {}",
-                                            entry.data["errors"]
+                                            "Access log diagnostics missing BackendRequestTimeoutRetry: {}",
+                                            entry.data["diagnostics"]
                                         ),
                                     );
                                 }
@@ -125,7 +123,7 @@ impl PerTryTimeoutTestSuite {
                             TestResult::passed_with_message(
                                 start.elapsed(),
                                 format!(
-                                    "Got 200 on attempt 2 in {:?} — slow attempt canceled and retried (504_03 logged)",
+                                    "Got 200 on attempt 2 in {:?} — slow attempt canceled and retried (diagnostic recorded)",
                                     elapsed
                                 ),
                             )
@@ -378,9 +376,7 @@ impl PerTryTimeoutTestSuite {
                         );
                     }
 
-                    let has_retry_marker = entry.data["errors"]
-                        .as_array()
-                        .is_some_and(|errs| errs.iter().any(|e| e.as_str() == Some("BackendRequestTimeoutRetry")));
+                    let has_retry_marker = entry.has_diagnostic("error", "BackendRequestTimeoutRetry");
                     if has_retry_marker {
                         return TestResult::failed(
                             start.elapsed(),
@@ -591,15 +587,14 @@ impl PerTryTimeoutTestSuite {
                     }
 
                     // Attempt 1's cancellation must be the per-try (backendRequest) retry.
-                    let has_retry_marker = entry.data["errors"].as_array().is_some_and(|errs| {
-                        errs.iter().any(|e| e.as_str() == Some("BackendRequestTimeoutRetry"))
-                    });
+                    let has_retry_marker =
+                        entry.has_diagnostic("error", "BackendRequestTimeoutRetry");
                     if !has_retry_marker {
                         return TestResult::failed(
                             start.elapsed(),
                             format!(
                                 "Expected BackendRequestTimeoutRetry (attempt 1 per-try cancel): {}",
-                                entry.data["errors"]
+                                entry.data["diagnostics"]
                             ),
                         );
                     }
@@ -672,9 +667,7 @@ impl PerTryTimeoutTestSuite {
                         }
                     };
 
-                    let has_client_closed = entry.data["errors"]
-                        .as_array()
-                        .is_some_and(|errs| errs.iter().any(|v| v.as_str() == Some("ClientClosed")));
+                    let has_client_closed = entry.has_diagnostic("error", "ClientClosed");
                     if !has_client_closed {
                         return TestResult::failed(
                             start.elapsed(),
@@ -890,15 +883,13 @@ impl PerTryTimeoutTestSuite {
                     }
 
                     // Confirm the retry was the per-try timeout path (Case 1.5).
-                    let has_marker = entry.data["errors"]
-                        .as_array()
-                        .is_some_and(|errs| errs.iter().any(|e| e.as_str() == Some("BackendRequestTimeoutRetry")));
+                    let has_marker = entry.has_diagnostic("error", "BackendRequestTimeoutRetry");
                     if !has_marker {
                         return TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "errors chain missing BackendRequestTimeoutRetry: {}",
-                                entry.data["errors"]
+                                "diagnostics missing BackendRequestTimeoutRetry: {}",
+                                entry.data["diagnostics"]
                             ),
                         );
                     }
@@ -1051,15 +1042,13 @@ impl PerTryTimeoutTestSuite {
                             format!("last upstream status expected 200, got {}", last["status"]),
                         );
                     }
-                    let has_marker = entry.data["errors"]
-                        .as_array()
-                        .is_some_and(|errs| errs.iter().any(|e| e.as_str() == Some("BackendRequestTimeoutRetry")));
+                    let has_marker = entry.has_diagnostic("error", "BackendRequestTimeoutRetry");
                     if !has_marker {
                         return TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "errors chain missing BackendRequestTimeoutRetry: {}",
-                                entry.data["errors"]
+                                "diagnostics missing BackendRequestTimeoutRetry: {}",
+                                entry.data["diagnostics"]
                             ),
                         );
                     }

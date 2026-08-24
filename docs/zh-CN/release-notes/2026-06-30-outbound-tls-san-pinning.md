@@ -6,7 +6,7 @@
 
 ## 概述
 
-Phase 2 在 Phase 1 schema 对齐的基础上，通过**启用 OIDC 和 LDAP 插件的运行时 SAN 固定验证**来进一步推进。之前，在这些插件上配置 `validation.hostname` 或 `validation.subjectAltNames` 会导致 `Accepted=False`。现在，控制器接受该配置，网关在 TLS 握手时使用 rustls 的 `OutboundSanVerifier` 强制 SAN 匹配。证书不匹配会导致握手失败，记录错误代码 `999_09`（`OutboundTlsSanMismatch`）。
+Phase 2 在 Phase 1 schema 对齐的基础上，通过**启用 OIDC 和 LDAP 插件的运行时 SAN 固定验证**来进一步推进。之前，在这些插件上配置 `validation.hostname` 或 `validation.subjectAltNames` 会导致 `Accepted=False`。现在，控制器接受该配置，网关在 TLS 握手时使用 rustls 的 `OutboundSanVerifier` 强制 SAN 匹配。证书不匹配会导致握手失败，并记录 `OutboundTlsSanMismatch` 错误诊断。
 
 其他后端——LinkSys 提供商（Redis、etcd、Elasticsearch、Kafka）、ext_proc 和 EdgionGatewayConfig 全局默认——仍延期到后续版本。在这些不支持的后端上配置 SAN 会继续导致 `Accepted=False`。
 
@@ -21,7 +21,7 @@ Phase 2 在 Phase 1 schema 对齐的基础上，通过**启用 OIDC 和 LDAP 插
 **现在（Phase 2）：**
 - `validation.hostname` 和 `validation.subjectAltNames` 被**接受并在运行时强制执行**。
 - 在 TLS 握手到 OIDC 提供商（如 Keycloak、Okta、Azure AD）或 LDAP 服务器时，网关的 rustls 验证器检查对端证书的 Subject Alternative Names (SANs) 是否与配置的值匹配。
-- 如果验证失败（证书 SAN 不包含预期的主机名或值），握手立即中止。连接会在网关访问日志中记录 `EdgionStatus::OutboundTlsSanMismatch`。
+- 如果验证失败（证书 SAN 不包含预期的主机名或值），握手立即中止。连接会在网关访问日志中记录 `EdgionErrorCode::OutboundTlsSanMismatch`。
 - 握手失败会传播到请求：客户端收到错误响应，网关记录该拒绝（详见下方"诊断"章节）。
 
 ### LinkSys、ext_proc 和全局默认（仍处于延期阶段）
@@ -32,9 +32,9 @@ Phase 2 在 Phase 1 schema 对齐的基础上，通过**启用 OIDC 和 LDAP 插
 
 ## 新错误代码
 
-| 代码 | 名称 | HTTP 含义 | 条件 |
-|------|------|----------|------|
-| 999_09 | `OutboundTlsSanMismatch` | 502 Bad Gateway（默认） | 出站对端证书的 Subject Alternative Names 与配置的 `validation.subjectAltNames` 或 `validation.hostname` 不匹配 |
+| Kind | Code | 常见 HTTP 结果 | 条件 |
+|------|------|---------------|------|
+| `error` | `OutboundTlsSanMismatch` | 502 Bad Gateway | 出站对端证书的 Subject Alternative Names 与配置的 `validation.subjectAltNames` 或 `validation.hostname` 不匹配 |
 
 > **范围说明。** `OutboundTlsSanMismatch` 会出现在 LDAP bind 的访问日志中；OIDC 一侧只有交互式登录
 > 跳转和 callback 处理这两个入口触发的 discovery 请求会写入该状态。其余所有 OIDC 出站调用
@@ -79,7 +79,7 @@ echo | openssl s_client -connect ldap.example.com:636 2>/dev/null | \
 ### 步骤 3：监控握手失败
 
 部署 Phase 2 后，对 `edgion_gateway_outbound_tls_san_mismatch_total` 计数器设置告警——这是预期的监控信号，
-因为 `EdgionStatus` 序列化为其变体名称，而不是数字代码：
+诊断码是稳定字符串，没有数字表示：
 
 ```bash
 # 对出站 TLS SAN 固定拒绝设置告警
@@ -134,19 +134,18 @@ spec:
 
 ### 访问日志条目
 
-当握手因 SAN 不匹配而失败时，访问日志的 `errors` 数组会包含 `EdgionStatus` 的变体名称
-（unit variant 序列化为其名称，而不是数字代码）：
+当握手因 SAN 不匹配而失败时，访问日志的 `diagnostics` 数组会包含对应的错误诊断：
 
 ```json
 {
-  "errors": ["OutboundTlsSanMismatch"]
+  "diagnostics": [{ "kind": "error", "code": "OutboundTlsSanMismatch" }]
 }
 ```
 
 ### SSL 日志（网关数据平面）
 
 `ssl.log` 只记录*入站* TLS 握手诊断信息（client → gateway），不涉及出站 SAN 固定。对于出站 TLS SAN
-不匹配，请使用上文描述的计数器以及访问日志 `errors` 数组。
+不匹配，请使用上文描述的计数器以及访问日志诊断项。
 
 ### 调试命令
 

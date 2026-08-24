@@ -464,7 +464,7 @@ mod tests {
     use base64::Engine;
     use edgion_resources::resources::edgion_plugins::conditions::{Condition, ConditionSet};
     use edgion_resources::resources::edgion_plugins::plugin_configs::SecretMatchCondition;
-    use edgion_resources::EdgionStatus;
+    use edgion_resources::EdgionErrorCode;
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
 
@@ -959,7 +959,7 @@ profiles:
         session
             .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::BufferLimitExceeded { limit: 4 }));
-        session.expect_add_error().returning(|_| ());
+        session.expect_record_error().returning(|_| ());
         let mut log = PluginLog::new("RequestAccessPolicy");
         assert_eq!(
             plugin.run_request(&mut session, &mut log).await,
@@ -1019,8 +1019,8 @@ profiles:
             .expect_request_body_sha256()
             .returning(|| Err(BodyReadError::Timeout));
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::BodyReadTimeout)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::BodyReadTimeout)
             .times(1)
             .returning(|_| ());
         let mut log = PluginLog::new("RequestAccessPolicy");

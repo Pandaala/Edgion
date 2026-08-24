@@ -2,10 +2,10 @@
 
 use crate::geoip::GeoLookup;
 use crate::observe::access_log::log_ext::LogExt;
+use crate::observe::RequestDiagnostic;
 use crate::plugins::StageLogs;
 use crate::routes::grpc::GrpcMatchInfo;
 use crate::{ai::GenAiSummary, BackendContext, EdgionHttpContext, MatchInfo, RequestInfo};
-use edgion_resources::EdgionStatus;
 use serde::Serialize;
 
 /// Explicit per-slot outcome marker. "Not queried" (no database loaded) and
@@ -126,6 +126,10 @@ fn is_empty<T>(slice: &&[T]) -> bool {
     slice.is_empty()
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Unified match info that covers both HTTP and gRPC routes in access logs.
 #[derive(Serialize)]
 #[serde(untagged)]
@@ -154,10 +158,10 @@ pub struct AccessLogEntry<'a> {
     pub match_info: Option<RouteMatchInfo<'a>>,
 
     #[serde(skip_serializing_if = "is_empty")]
-    pub info: &'a [EdgionStatus],
+    pub diagnostics: &'a [RequestDiagnostic],
 
-    #[serde(skip_serializing_if = "is_empty")]
-    pub errors: &'a [EdgionStatus],
+    #[serde(skip_serializing_if = "is_false")]
+    pub diagnostics_full: bool,
 
     pub backend_context: Option<&'a BackendContext>,
 
@@ -188,11 +192,9 @@ pub struct AccessLogEntry<'a> {
 
     /// Operator-declared fields (`AccessLogExtern`), nested one level deep.
     ///
-    /// Nested rather than flattened: the top-level namespace holds `errors` and
-    /// `info`, both plausible field names, and a flattened field named `errors`
-    /// would emit duplicate JSON keys and silently shadow the error array under
-    /// a last-wins parser. (Note `path` / `status` / `host` are NOT top-level —
-    /// they live under `request_info` — so they were never at risk.)
+    /// Nested rather than flattened: the top-level namespace holds reserved
+    /// access-log fields such as `diagnostics`; nesting prevents an operator
+    /// field from creating duplicate JSON keys under a last-wins parser.
     #[serde(skip_serializing_if = "LogExt::is_empty")]
     pub ext: LogExt,
 }
@@ -226,8 +228,8 @@ impl<'a> AccessLogEntry<'a> {
             request_info: &ctx.request_info,
             request_uri,
             match_info,
-            info: &ctx.info,
-            errors: &ctx.edgion_status,
+            diagnostics: ctx.diagnostics.entries(),
+            diagnostics_full: ctx.diagnostics.is_full(),
             backend_context: ctx.backend_context.as_ref(),
             stage_logs: &ctx.stage_logs,
             conn_est: None,
@@ -245,19 +247,60 @@ impl<'a> AccessLogEntry<'a> {
     }
 
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| {
-            format!(
-                r#"{{"ts":{},"errors":["AccessLogSerializeFailed"]}}"#,
-                chrono::Utc::now().timestamp_millis()
-            )
-        })
+        serde_json::to_string(self).unwrap_or_else(|_| access_log_fallback(chrono::Utc::now().timestamp_millis()))
     }
+}
+
+fn access_log_fallback(timestamp: i64) -> String {
+    format!(r#"{{"ts":{timestamp},"diagnostics":[{{"kind":"error","code":"AccessLogSerializeFailed"}}]}}"#)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::geoip::GeoInfo;
+    use edgion_resources::{EdgionErrorCode, EdgionInfoCode};
+
+    #[test]
+    fn empty_diagnostics_and_full_marker_are_omitted() {
+        let json = AccessLogEntry::from_context(&EdgionHttpContext::new()).to_json();
+        assert!(!json.contains(r#""diagnostics""#), "got: {json}");
+        assert!(!json.contains(r#""diagnostics_full""#), "got: {json}");
+    }
+
+    #[test]
+    fn diagnostic_overflow_emits_the_full_marker_and_only_kind_and_code() {
+        let mut ctx = EdgionHttpContext::new();
+        for _ in 0..=crate::observe::request_diagnostics::MAX_REQUEST_DIAGNOSTICS {
+            ctx.record_error(EdgionErrorCode::Unknown);
+        }
+
+        let value: serde_json::Value = serde_json::from_str(&AccessLogEntry::from_context(&ctx).to_json()).unwrap();
+        let diagnostics = value["diagnostics"].as_array().unwrap();
+        assert_eq!(
+            diagnostics.len(),
+            crate::observe::request_diagnostics::MAX_REQUEST_DIAGNOSTICS
+        );
+        assert_eq!(value["diagnostics_full"], true);
+        assert!(diagnostics.iter().all(|diagnostic| {
+            diagnostic.as_object().is_some_and(|object| {
+                object.len() == 2
+                    && object.get("kind") == Some(&serde_json::json!("error"))
+                    && object.get("code") == Some(&serde_json::json!("Unknown"))
+            })
+        }));
+    }
+
+    #[test]
+    fn serialization_fallback_uses_the_diagnostic_schema() {
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&access_log_fallback(123)).unwrap(),
+            serde_json::json!({
+                "ts": 123,
+                "diagnostics": [{"kind": "error", "code": "AccessLogSerializeFailed"}]
+            })
+        );
+    }
 
     #[test]
     fn geo_block_is_omitted_when_no_geo_lookup_ran() {
@@ -333,19 +376,18 @@ mod tests {
     }
 
     #[test]
-    fn access_log_includes_acme_local_response_status() {
+    fn access_log_includes_acme_information_diagnostic() {
         let mut ctx = EdgionHttpContext::new();
-        ctx.request_info.status = Some(200);
-        ctx.add_info(EdgionStatus::AcmeChallengeServed);
+        ctx.record_info(EdgionInfoCode::AcmeChallengeServed);
 
         let json = AccessLogEntry::from_context(&ctx).to_json();
 
         assert!(
-            json.contains(r#""info":["AcmeChallengeServed"]"#),
+            json.contains(r#""diagnostics":[{"kind":"info","code":"AcmeChallengeServed"}]"#),
             "access log must include ACME local response status, got: {json}"
         );
         assert!(
-            !json.contains(r#""errors""#),
+            !json.contains(r#""kind":"error""#),
             "ACME local response should not be reported as an error, got: {json}"
         );
     }

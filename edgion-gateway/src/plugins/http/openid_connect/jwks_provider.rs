@@ -8,7 +8,7 @@
 //! Both entry points are reachable from the request path, so this file is
 //! `tracing`-free (Iron rule 3). Failures surface through
 //! `edgion_gateway_outbound_tls_san_mismatch_total`, the caller's `PluginLog` /
-//! `EdgionStatus`, and the `served_stale` dye outcome recorded by
+//! `EdgionErrorCode`, and the `served_stale` dye outcome recorded by
 //! `discovery_jwks.rs`. The one genuinely cold signal — "discovery document
 //! loaded" — is emitted by the background prewarm task in `plugin.rs`.
 //! `JwksProviderConfig` parameterizes TTL / min refresh interval / response byte

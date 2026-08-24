@@ -3,9 +3,9 @@ use crate::backends::health;
 use crate::backends::health::get_health_status_store;
 use crate::backends::outlier_detection::get_outlier_detection_store;
 use crate::lb::{compiled_selector, EdgionBackend, PolicyKind};
-use edgion_resources::edgion_status::EdgionStatus;
 use edgion_resources::resources::lb_policy::{ConsistentHashOn, ParsedLBPolicy};
 use edgion_resources::uri_utils;
+use edgion_resources::EdgionErrorCode;
 use pingora_proxy::Session;
 use std::sync::Arc;
 
@@ -195,22 +195,22 @@ pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPol
 }
 
 /// Errors raised when the cell yields no backend, broken out per LB policy
-/// so the caller maps to the historically-correct `EdgionStatus`.
+/// so the caller maps to the historically-correct `EdgionErrorCode`.
 struct NotFoundMap {
     /// Empty backend list (no policy applies).
-    empty: EdgionStatus,
+    empty: EdgionErrorCode,
     /// Round-robin selection found nothing healthy.
-    rr: EdgionStatus,
+    rr: EdgionErrorCode,
     /// Consistent hash selected nothing (non-empty key path).
-    ch: EdgionStatus,
+    ch: EdgionErrorCode,
     /// LeastConn found nothing.
-    lc: EdgionStatus,
+    lc: EdgionErrorCode,
     /// EWMA found nothing.
-    ewma: EdgionStatus,
+    ewma: EdgionErrorCode,
 }
 
 impl NotFoundMap {
-    fn for_kind(&self, kind: PolicyKind, ch_used_hash_key: bool) -> EdgionStatus {
+    fn for_kind(&self, kind: PolicyKind, ch_used_hash_key: bool) -> EdgionErrorCode {
         match kind {
             PolicyKind::RoundRobin => self.rr,
             PolicyKind::ConsistentHash if ch_used_hash_key => self.ch,
@@ -229,7 +229,7 @@ fn pick(
     session: &Session,
     remote_ip: &str,
     not_found: NotFoundMap,
-) -> Result<Arc<EdgionBackend>, EdgionStatus> {
+) -> Result<Arc<EdgionBackend>, EdgionErrorCode> {
     let cell = compiled_selector::get_or_create_cell(service_key);
     if !hydrate_cell_if_empty(&cell, service_key) {
         return Err(not_found.empty);
@@ -264,18 +264,18 @@ pub(crate) fn select_from_endpoint_slice(
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
     remote_ip: &str,
-) -> Result<Arc<EdgionBackend>, EdgionStatus> {
+) -> Result<Arc<EdgionBackend>, EdgionErrorCode> {
     pick(
         service_key,
         lb_policy,
         session,
         remote_ip,
         NotFoundMap {
-            empty: EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault,
-            rr: EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin,
-            ch: EdgionStatus::BackendEndpointSliceNotFoundByConsistent,
-            lc: EdgionStatus::BackendEndpointSliceNotFoundByLeastConn,
-            ewma: EdgionStatus::BackendEndpointSliceNotFoundByEwma,
+            empty: EdgionErrorCode::BackendEndpointSliceNotFoundByRoundRobinDefault,
+            rr: EdgionErrorCode::BackendEndpointSliceNotFoundByRoundRobin,
+            ch: EdgionErrorCode::BackendEndpointSliceNotFoundByConsistent,
+            lc: EdgionErrorCode::BackendEndpointSliceNotFoundByLeastConn,
+            ewma: EdgionErrorCode::BackendEndpointSliceNotFoundByEwma,
         },
     )
 }

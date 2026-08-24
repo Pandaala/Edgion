@@ -118,13 +118,37 @@ impl AccessLogEntry {
             .unwrap_or(0)
     }
 
-    /// Get errors list
-    pub fn errors(&self) -> Vec<String> {
+    /// Get diagnostic codes of one kind while preserving their recorded order.
+    pub fn diagnostic_codes(&self, kind: &str) -> Vec<String> {
         self.data
-            .get("errors")
-            .and_then(|e| e.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .get("diagnostics")
+            .and_then(|diagnostics| diagnostics.as_array())
+            .map(|diagnostics| {
+                diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.get("kind").and_then(|value| value.as_str()) == Some(kind))
+                    .filter_map(|diagnostic| {
+                        diagnostic
+                            .get("code")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_owned)
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
+    }
+
+    /// Check whether an access log contains a diagnostic with the given kind and code.
+    pub fn has_diagnostic(&self, kind: &str, code: &str) -> bool {
+        self.data
+            .get("diagnostics")
+            .and_then(|diagnostics| diagnostics.as_array())
+            .is_some_and(|diagnostics| {
+                diagnostics.iter().any(|diagnostic| {
+                    diagnostic.get("kind").and_then(|value| value.as_str()) == Some(kind)
+                        && diagnostic.get("code").and_then(|value| value.as_str()) == Some(code)
+                })
+            })
     }
 
     /// Check if a specific plugin was executed in any stage

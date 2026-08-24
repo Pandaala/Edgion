@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 use http::StatusCode;
 use pingora_http::ResponseHeader;
 use pingora_proxy::ResponseBodySink;
@@ -668,7 +668,7 @@ impl AnthropicResponseProcessor {
 
     fn record_translation_failure(&mut self, session: &mut dyn PluginSession) {
         if !self.error_recorded {
-            session.add_error(EdgionStatus::AiResponseTranslationFailed);
+            session.record_error(EdgionErrorCode::AiResponseTranslationFailed);
             self.error_recorded = true;
         }
     }
@@ -1260,8 +1260,8 @@ mod tests {
             assert_eq!(response.status.as_u16(), 503);
             let mut session = mock_session();
             session
-                .expect_add_error()
-                .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
+                .expect_record_error()
+                .withf(|status| *status == EdgionErrorCode::AiResponseTranslationFailed)
                 .times(1)
                 .return_const(());
             let body = run_chunk(&mut p, &mut session, None, true).await.expect("fixed body");
@@ -1343,8 +1343,8 @@ mod tests {
         processor.on_response_header(&mut header(200, "application/json"));
         let mut session = mock_session();
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiResponseTranslationFailed)
             .times(1)
             .return_const(());
         let body = run_chunk(
@@ -1536,7 +1536,7 @@ mod tests {
         let (mut invalid_processor, _) = self::processor(true, false);
         invalid_processor.on_response_header(&mut header(200, "text/event-stream"));
         let mut session = mock_session();
-        session.expect_add_error().times(1).return_const(());
+        session.expect_record_error().times(1).return_const(());
         assert_eq!(
             run_chunk(&mut invalid_processor, &mut session, Some(invalid.as_bytes()), false)
                 .await
@@ -1642,8 +1642,8 @@ mod tests {
         processor.on_response_header(&mut header(200, "text/event-stream"));
         let mut session = mock_session();
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiResponseTranslationFailed)
             .times(1)
             .return_const(());
         let output = run_chunk(&mut processor, &mut session, Some(fixture.as_bytes()), false)
@@ -1673,8 +1673,8 @@ mod tests {
         .is_none());
 
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiResponseTranslationFailed)
             .times(1)
             .return_const(());
         let mismatch = event("ping", json!({"type":"message_start"}));
@@ -1686,7 +1686,7 @@ mod tests {
         let (mut second_processor, _) = self::processor(true, false);
         second_processor.on_response_header(&mut header(200, "text/event-stream"));
         let mut session = mock_session();
-        session.expect_add_error().times(1).return_const(());
+        session.expect_record_error().times(1).return_const(());
         let mismatch = event("error", json!({"type":"future_event"}));
         let output = run_chunk(&mut second_processor, &mut session, Some(mismatch.as_bytes()), false)
             .await
@@ -1711,8 +1711,8 @@ mod tests {
         processor.on_response_header(&mut header(200, "text/event-stream"));
         let mut session = mock_session();
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiResponseTranslationFailed)
             .times(1)
             .return_const(());
         let output = run_chunk(&mut processor, &mut session, Some(fixture.as_bytes()), false)
@@ -1736,7 +1736,7 @@ mod tests {
         let (mut processor, usage) = processor(false, false);
         processor.on_response_header(&mut header(200, "application/json"));
         let mut session = mock_session();
-        session.expect_add_error().times(1).return_const(());
+        session.expect_record_error().times(1).return_const(());
         let output = run_chunk(&mut processor, &mut session, Some(&provider), true)
             .await
             .expect("fixed error");
@@ -1763,7 +1763,7 @@ mod tests {
         let (mut processor, usage) = self::processor(true, false);
         processor.on_response_header(&mut header(200, "text/event-stream"));
         let mut session = mock_session();
-        session.expect_add_error().times(1).return_const(());
+        session.expect_record_error().times(1).return_const(());
         let output = run_chunk(&mut processor, &mut session, Some(stream.as_bytes()), true)
             .await
             .expect("fixed stream error");
@@ -1807,8 +1807,8 @@ mod tests {
             processor.on_response_header(&mut header(200, "text/event-stream"));
             let mut session = mock_session();
             session
-                .expect_add_error()
-                .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
+                .expect_record_error()
+                .withf(|status| *status == EdgionErrorCode::AiResponseTranslationFailed)
                 .times(1)
                 .return_const(());
             let output = run_chunk(&mut processor, &mut session, Some(&input), false)
@@ -1831,8 +1831,8 @@ mod tests {
             processor.on_response_header(&mut header(200, "text/event-stream"));
             let mut session = mock_session();
             session
-                .expect_add_error()
-                .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
+                .expect_record_error()
+                .withf(|status| *status == EdgionErrorCode::AiResponseTranslationFailed)
                 .times(1)
                 .return_const(());
             let output = run_chunk(&mut processor, &mut session, Some(input.as_bytes()), true)
@@ -1863,8 +1863,8 @@ mod tests {
 
         let mut session = mock_session();
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiQuotaOverLimitTerminated)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiQuotaOverLimitTerminated)
             .times(1)
             .return_const(());
         let mut sink = ResponseBodySink::new();
@@ -1902,8 +1902,8 @@ mod tests {
         processor.on_response_header(&mut header(200, "text/event-stream"));
         let mut session = mock_session();
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiResponseTranslationFailed)
             .times(1)
             .return_const(());
         let mut sink = ResponseBodySink::new();
@@ -2015,8 +2015,8 @@ mod tests {
         processor.on_response_header(&mut header(200, "application/json"));
         let mut session = mock_session();
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiResponseTranslationFailed)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiResponseTranslationFailed)
             .times(1)
             .return_const(());
         let output = run_chunk(&mut processor, &mut session, Some(&oversized), false)

@@ -51,9 +51,9 @@ use edgion_common::dns::resolver_select::{
 use edgion_common::dns::{resolve, ResolverSpec};
 use edgion_resources::constants::annotations::edgion as edgion_annotations;
 use edgion_resources::duration::parse_duration;
-use edgion_resources::edgion_status::EdgionStatus;
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::resources::link_sys::HttpDnsResolverConfig;
+use edgion_resources::EdgionErrorCode;
 use peer_builder::first_safe_inet_addr;
 use peer_builder::{
     apply_backend_app_protocol, create_tls_peer, detect_backend_app_protocol_key, extract_tls_config,
@@ -84,13 +84,13 @@ struct ServicePeerInput {
 fn selected_http_service_input(
     selected: &SelectedServiceBackend,
     backend_context: Option<&crate::BackendContext>,
-) -> Result<ServicePeerInput, EdgionStatus> {
+) -> Result<ServicePeerInput, EdgionErrorCode> {
     let compiled = selected.logical().compiled();
     let (namespace, name) = match selected.logical().target() {
         crate::routes::http::match_unit::CompiledBackendTarget::Service { namespace, name } => (namespace, name),
         crate::routes::http::match_unit::CompiledBackendTarget::EdgionBackend { .. }
         | crate::routes::http::match_unit::CompiledBackendTarget::Invalid { .. } => {
-            return Err(EdgionStatus::UpstreamNotBackendRefs);
+            return Err(EdgionErrorCode::UpstreamNotBackendRefs);
         }
     };
     let service_key = format!("{namespace}/{name}");
@@ -100,7 +100,7 @@ fn selected_http_service_input(
             && context.service_kind.as_ref() == Some(&service_kind)
     });
     if !context_matches {
-        return Err(EdgionStatus::UpstreamNotBackendRefs);
+        return Err(EdgionErrorCode::UpstreamNotBackendRefs);
     }
     Ok(ServicePeerInput {
         port: compiled.port,
@@ -111,13 +111,13 @@ fn selected_http_service_input(
     })
 }
 
-/// Internal: try to get peer, returns Result with EdgionStatus on error
+/// Internal: try to get peer, returns Result with EdgionErrorCode on error
 pub(crate) async fn try_get_peer(
     ctx: &mut EdgionHttpContext,
     session: &Session,
     is_grpc: bool,
     selected_http: Option<&SelectedLogicalBackend>,
-) -> Result<Box<HttpPeer>, EdgionStatus> {
+) -> Result<Box<HttpPeer>, EdgionErrorCode> {
     let gateway_key = ctx.gateway_info.gateway_key();
     let gateway_key_ref = Some(gateway_key.as_str());
 
@@ -128,7 +128,7 @@ pub(crate) async fn try_get_peer(
         let grpc_br = ctx
             .selected_grpc_backend
             .as_ref()
-            .ok_or(EdgionStatus::GrpcUpstreamNotBackendRefs)?;
+            .ok_or(EdgionErrorCode::GrpcUpstreamNotBackendRefs)?;
         let (service_key, service_type) = ctx
             .backend_context
             .as_ref()
@@ -136,7 +136,7 @@ pub(crate) async fn try_get_peer(
                 (Some(key), Some(kind)) => Some((key, kind)),
                 _ => None,
             })
-            .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
+            .ok_or(EdgionErrorCode::UpstreamNotBackendRefs)?;
         let lb_policy = crate::backends::policy::backend_traffic::resolve_lb_policy(&service_key);
         ServicePeerInput {
             port: grpc_br.port,
@@ -150,13 +150,13 @@ pub(crate) async fn try_get_peer(
             SelectedLogicalBackend::Service(selected) => {
                 selected_http_service_input(selected, ctx.backend_context.as_ref())?
             }
-            SelectedLogicalBackend::Ai(_) => return Err(EdgionStatus::UpstreamNotBackendRefs),
+            SelectedLogicalBackend::Ai(_) => return Err(EdgionErrorCode::UpstreamNotBackendRefs),
         }
     } else {
         let http_br = match ctx.selected_backend.as_ref() {
             Some(SelectedHttpBackend::Invalid(compiled)) => compiled,
             Some(SelectedHttpBackend::Routed(_)) | Some(SelectedHttpBackend::Direct(_)) | None => {
-                return Err(EdgionStatus::UpstreamNotBackendRefs)
+                return Err(EdgionErrorCode::UpstreamNotBackendRefs)
             }
         };
         let (service_key, service_type) = ctx
@@ -166,7 +166,7 @@ pub(crate) async fn try_get_peer(
                 (Some(key), Some(kind)) => Some((key, kind)),
                 _ => None,
             })
-            .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
+            .ok_or(EdgionErrorCode::UpstreamNotBackendRefs)?;
         let lb_policy = crate::backends::policy::backend_traffic::resolve_lb_policy(&service_key);
         ServicePeerInput {
             port: http_br.port,
@@ -190,7 +190,7 @@ pub(crate) async fn try_get_peer(
     match service_type {
         ServiceBackendKind::Service => {
             if !get_global_service_store().contains(&service_key) {
-                return Err(EdgionStatus::BackendServiceNotFound);
+                return Err(EdgionErrorCode::BackendServiceNotFound);
             }
 
             // Only ConsistentHash consumes RemoteIp; skip the clone (and its
@@ -221,13 +221,13 @@ pub(crate) async fn try_get_peer(
             let svc_store = get_global_service_store();
             let service = svc_store
                 .get(&service_key)
-                .ok_or(EdgionStatus::BackendServiceNotFound)?;
+                .ok_or(EdgionErrorCode::BackendServiceNotFound)?;
 
             let cluster_ip = service
                 .spec
                 .as_ref()
                 .and_then(|spec| spec.cluster_ip.as_ref())
-                .ok_or(EdgionStatus::BackendClusterIpNotFound)?;
+                .ok_or(EdgionErrorCode::BackendClusterIpNotFound)?;
 
             let port = match br_port {
                 Some(p) => p as u16,
@@ -237,7 +237,7 @@ pub(crate) async fn try_get_peer(
                     .and_then(|spec| spec.ports.as_ref())
                     .and_then(|ports| ports.first())
                     .map(|p| p.port as u16)
-                    .ok_or(EdgionStatus::BackendPortResolutionFailed)?,
+                    .ok_or(EdgionErrorCode::BackendPortResolutionFailed)?,
             };
 
             // cluster_ip is a bare IP literal (no brackets). Parse it as IpAddr and
@@ -245,7 +245,7 @@ pub(crate) async fn try_get_peer(
             // manual bracketing (mirrors the EndpointSlice discovery_impl path).
             let ip: std::net::IpAddr = cluster_ip
                 .parse()
-                .map_err(|_| EdgionStatus::BackendAddressParsingFailed)?;
+                .map_err(|_| EdgionErrorCode::BackendAddressParsingFailed)?;
             let addr = SocketAddr::Inet(std::net::SocketAddr::new(ip, port));
 
             // Security check: reject loopback / link-local / metadata (SSRF defense)
@@ -267,13 +267,13 @@ pub(crate) async fn try_get_peer(
             let svc_store = get_global_service_store();
             let service = svc_store
                 .get(&service_key)
-                .ok_or(EdgionStatus::BackendServiceNotFound)?;
+                .ok_or(EdgionErrorCode::BackendServiceNotFound)?;
 
             let external_name = service
                 .spec
                 .as_ref()
                 .and_then(|spec| spec.external_name.as_ref())
-                .ok_or(EdgionStatus::BackendExternalNameNotFound)?
+                .ok_or(EdgionErrorCode::BackendExternalNameNotFound)?
                 .clone();
 
             let port = match br_port {
@@ -284,7 +284,7 @@ pub(crate) async fn try_get_peer(
                     .and_then(|spec| spec.ports.as_ref())
                     .and_then(|ports| ports.first())
                     .map(|p| p.port as u16)
-                    .ok_or(EdgionStatus::BackendPortResolutionFailed)?,
+                    .ok_or(EdgionErrorCode::BackendPortResolutionFailed)?,
             };
 
             // Mode-first dispatch (edgion.io/dns-resolution-mode on the Service,
@@ -351,7 +351,7 @@ pub(crate) async fn try_get_peer(
                                 upstream.port = Some(port);
                                 upstream.err.push(format!("dns resolution failed: {e}"));
                             }
-                            EdgionStatus::BackendDnsResolutionFailed
+                            EdgionErrorCode::BackendDnsResolutionFailed
                         })?;
 
                     // SSRF: route only to the first resolved IP that passes the
@@ -383,9 +383,9 @@ pub(crate) async fn try_get_peer(
             }
         }
 
-        ServiceBackendKind::ServiceImport => Err(EdgionStatus::BackendServiceImportNotImplemented),
+        ServiceBackendKind::ServiceImport => Err(EdgionErrorCode::BackendServiceImportNotImplemented),
 
-        ServiceBackendKind::Unsupported(_) => Err(EdgionStatus::BackendUnsupportedKind),
+        ServiceBackendKind::Unsupported(_) => Err(EdgionErrorCode::BackendUnsupportedKind),
 
         ServiceBackendKind::ServiceEndpointSlice => {
             // Only ConsistentHash consumes RemoteIp; skip the clone (and its
@@ -501,9 +501,9 @@ fn take_sp_target_or_select<F>(
     ctx: &mut EdgionHttpContext,
     service_key: &str,
     select_fn: F,
-) -> Result<Arc<crate::lb::EdgionBackend>, EdgionStatus>
+) -> Result<Arc<crate::lb::EdgionBackend>, EdgionErrorCode>
 where
-    F: FnOnce() -> Result<Arc<crate::lb::EdgionBackend>, EdgionStatus>,
+    F: FnOnce() -> Result<Arc<crate::lb::EdgionBackend>, EdgionErrorCode>,
 {
     if let Some(target_addr) = ctx
         .session_persistence_mut()
@@ -529,12 +529,12 @@ where
                 if is_backend_healthy(service_key, arc.inner(), &health_store) {
                     return Ok(arc);
                 }
-                return Err(EdgionStatus::StickyBackendUnhealthy);
+                return Err(EdgionErrorCode::StickyBackendUnhealthy);
             }
             // SP target no longer in the cell (pod removed after sticky token was
             // issued). Treat as unhealthy so the caller's strict-mode logic and
             // InjectUpdate state machine apply identically to the gone-backend case.
-            None => return Err(EdgionStatus::StickyBackendUnhealthy),
+            None => return Err(EdgionErrorCode::StickyBackendUnhealthy),
         }
     }
     select_fn()
@@ -558,7 +558,7 @@ fn build_peer_from_lb_selection(
     backend: Arc<crate::lb::EdgionBackend>,
     backend_app_protocol: Option<BackendAppProtocol>,
     gateway_key_ref: Option<&str>,
-) -> Result<Box<HttpPeer>, EdgionStatus> {
+) -> Result<Box<HttpPeer>, EdgionErrorCode> {
     let lb_addr = backend.addr.clone();
     let mut peer_addr = lb_addr.clone();
     port_resolver::resolve_target_port_key(&mut peer_addr, br_port, service_key);
@@ -592,14 +592,14 @@ fn build_peer_from_lb_selection(
     Ok(peer)
 }
 
-fn record_unsafe_upstream_attempt(ctx: &mut EdgionHttpContext, addr: &SocketAddr, status: EdgionStatus) {
+fn record_unsafe_upstream_attempt(ctx: &mut EdgionHttpContext, addr: &SocketAddr, status: EdgionErrorCode) {
     let (ip, port) = addr
         .as_inet()
         .map(|addr| (Some(addr.ip().to_string()), Some(addr.port())))
         .unwrap_or((None, None));
     let reason = match status {
-        EdgionStatus::BackendLocalhostNotAllowed => "unsafe loopback upstream",
-        EdgionStatus::BackendAddrLinkLocalNotAllowed => "unsafe link-local upstream",
+        EdgionErrorCode::BackendLocalhostNotAllowed => "unsafe loopback upstream",
+        EdgionErrorCode::BackendAddrLinkLocalNotAllowed => "unsafe link-local upstream",
         _ => UNSAFE_UPSTREAM_ADDRESS_LOG,
     };
     // Backfill the placeholder pushed by `begin_upstream_attempt`. Fall back to
@@ -639,12 +639,12 @@ pub async fn get_peer(
     match try_get_peer(ctx, session, is_grpc, selected_http).await {
         Ok(peer) => Ok(peer),
         Err(status) => {
-            ctx.add_error(status);
+            ctx.record_error(status);
             match status {
-                EdgionStatus::BackendUnsupportedKind
-                | EdgionStatus::BackendServiceNotFound
-                | EdgionStatus::RefDenied
-                | EdgionStatus::BackendServiceImportNotImplemented => {
+                EdgionErrorCode::BackendUnsupportedKind
+                | EdgionErrorCode::BackendServiceNotFound
+                | EdgionErrorCode::RefDenied
+                | EdgionErrorCode::BackendServiceImportNotImplemented => {
                     let _ = end_response_500(session, ctx, server_header_opts).await;
                 }
                 _ => {
@@ -714,7 +714,7 @@ mod selected_service_input_tests {
 
         assert_eq!(
             selected_http_service_input(&selected, Some(&context)).unwrap_err(),
-            EdgionStatus::UpstreamNotBackendRefs
+            EdgionErrorCode::UpstreamNotBackendRefs
         );
     }
 }

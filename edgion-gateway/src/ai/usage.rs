@@ -7,7 +7,7 @@ use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::resources::edgion_backend::ParsedAiModelPricing;
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 use pingora_proxy::ResponseBodySink;
 #[cfg(test)]
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
@@ -211,7 +211,7 @@ pub const MAX_NON_STREAMING_USAGE_BYTES: usize = 1024 * 1024;
 /// outcome rather than inventing a mid-stream vocabulary, so a client that
 /// learned to key off `error.code` from a 429 recognizes the streaming form
 /// the same way. It is kept minimal and free of internal detail: the diagnosis
-/// belongs in the access log and `EdgionStatus`, not in a body the client
+/// belongs in the access log and `EdgionErrorCode`, not in a body the client
 /// reads.
 fn injected_sse_error_event(error: AiProxyError) -> Bytes {
     let (_, body) = render_openai_error(error);
@@ -229,7 +229,7 @@ pub(crate) static QUOTA_EXCEEDED_SSE_EVENT: LazyLock<Bytes> =
 /// admission path renders when enforcement cannot be performed (no quota
 /// identity, quota backend unreachable). Deliberately does not say "SSE
 /// decoding degraded": that is an internal detail belonging to the access log
-/// and `EdgionStatus`, not to a body the client reads.
+/// and `EdgionErrorCode`, not to a body the client reads.
 pub(crate) static QUOTA_UNENFORCEABLE_SSE_EVENT: LazyLock<Bytes> =
     LazyLock::new(|| injected_sse_error_event(AiProxyError::QuotaUnavailable));
 
@@ -242,7 +242,7 @@ const MAX_TOLERATED_MALFORMED_SSE_EVENTS: u64 = 1;
 /// first: only when the caller knows the wire format the client receives is
 /// SSE, since the event bytes are SSE-framed and would corrupt anything else.
 ///
-/// Records `EdgionStatus::AiQuotaOverLimitTerminated` unconditionally so an
+/// Records `EdgionErrorCode::AiQuotaOverLimitTerminated` unconditionally so an
 /// operator can tell a gateway-initiated cutoff apart from an upstream
 /// hang-up, and additionally `AiQuotaErrorEventDropped` when the injection
 /// itself could not fit the sink's per-batch emit budget (an earlier
@@ -272,7 +272,7 @@ pub(crate) fn terminate_over_quota(
         session,
         inject,
         &QUOTA_EXCEEDED_SSE_EVENT,
-        EdgionStatus::AiQuotaOverLimitTerminated,
+        EdgionErrorCode::AiQuotaOverLimitTerminated,
     );
 }
 
@@ -297,7 +297,7 @@ pub(crate) fn terminate_quota_unenforceable(
         session,
         inject,
         &QUOTA_UNENFORCEABLE_SSE_EVENT,
-        EdgionStatus::AiSseDegradedQuotaTerminated,
+        EdgionErrorCode::AiSseDegradedQuotaTerminated,
     );
 }
 
@@ -313,7 +313,7 @@ fn terminate_malformed_quota_unenforceable(
         session,
         inject,
         &QUOTA_UNENFORCEABLE_SSE_EVENT,
-        EdgionStatus::AiSseMalformedQuotaTerminated,
+        EdgionErrorCode::AiSseMalformedQuotaTerminated,
     );
 }
 
@@ -331,10 +331,10 @@ fn terminate_ai_stream(
     session: &mut dyn PluginSession,
     inject: bool,
     event: &LazyLock<Bytes>,
-    terminal_status: EdgionStatus,
+    terminal_status: EdgionErrorCode,
 ) {
     let cause = match terminal_status {
-        EdgionStatus::AiQuotaOverLimitTerminated => ResponseTerminalCause::QuotaExceeded,
+        EdgionErrorCode::AiQuotaOverLimitTerminated => ResponseTerminalCause::QuotaExceeded,
         _ => ResponseTerminalCause::QuotaUnavailable,
     };
     if !session.try_claim_response_terminal(cause) {
@@ -342,7 +342,7 @@ fn terminate_ai_stream(
     }
     let emission = if inject {
         if sink.push((*event).clone()).is_err() {
-            session.add_error(EdgionStatus::AiQuotaErrorEventDropped);
+            session.record_error(EdgionErrorCode::AiQuotaErrorEventDropped);
             TerminalEmission::NoEvent
         } else {
             TerminalEmission::Rendered
@@ -353,7 +353,7 @@ fn terminate_ai_stream(
     session.mark_response_terminal_emission(emission);
     sink.terminate();
     shared.mark_gateway_terminated();
-    session.add_error(terminal_status);
+    session.record_error(terminal_status);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1500,11 +1500,11 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
         // once per remaining chunk.
         if !self.sse_degraded_reported && self.sse.degraded() {
             self.sse_degraded_reported = true;
-            session.add_error(EdgionStatus::AiSseDecodeDegraded);
+            session.record_error(EdgionErrorCode::AiSseDecodeDegraded);
         }
         if !self.sse_malformed_reported && self.sse.malformed_events() != 0 {
             self.sse_malformed_reported = true;
-            session.add_error(EdgionStatus::AiSseDecodeMalformed);
+            session.record_error(EdgionErrorCode::AiSseDecodeMalformed);
         }
         if end_of_stream {
             if semantic_guard_active {
@@ -1658,7 +1658,7 @@ mod tests {
         let mut session = mock_session();
         // Tests that assert on recorded statuses build their own session; this
         // shared driver only has to tolerate them.
-        session.expect_add_error().return_const(());
+        session.expect_record_error().return_const(());
         let mut sink = ResponseBodySink::new();
         for (chunk, eos) in chunks {
             let original = Bytes::copy_from_slice(chunk);
@@ -1891,8 +1891,8 @@ mod tests {
 
         let mut session = mock_session();
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiQuotaOverLimitTerminated)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiQuotaOverLimitTerminated)
             .times(1)
             .return_const(());
         let mut sink = ResponseBodySink::new();
@@ -2009,8 +2009,8 @@ mod tests {
         let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, true);
         let mut session = mock_session();
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiSseDecodeMalformed)
             .times(1)
             .return_const(());
         let mut sink = ResponseBodySink::new();
@@ -2038,13 +2038,13 @@ mod tests {
         let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota), true, true);
         let mut session = mock_session();
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiSseDecodeMalformed)
             .times(1)
             .return_const(());
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiSseMalformedQuotaTerminated)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiSseMalformedQuotaTerminated)
             .times(1)
             .return_const(());
         let mut sink = ResponseBodySink::new();
@@ -2073,8 +2073,8 @@ mod tests {
         let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
         let mut session = mock_session();
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiSseDecodeMalformed)
             .times(1)
             .return_const(());
         let mut sink = ResponseBodySink::new();
@@ -2104,8 +2104,8 @@ mod tests {
             );
             let mut session = mock_session();
             session
-                .expect_add_error()
-                .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
+                .expect_record_error()
+                .withf(|status| *status == EdgionErrorCode::AiSseDecodeMalformed)
                 .times(1)
                 .return_const(());
             let mut sink = ResponseBodySink::new();
@@ -2129,13 +2129,13 @@ mod tests {
         let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
         let mut session = mock_session();
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiSseDecodeMalformed)
             .times(1)
             .return_const(());
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiQuotaOverLimitTerminated)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiQuotaOverLimitTerminated)
             .times(1)
             .return_const(());
         let mut sink = ResponseBodySink::new();
@@ -2156,18 +2156,18 @@ mod tests {
         let mut processor = UsageExtractionProcessor::new_with_quota(shared, Some(quota), true, true);
         let mut session = mock_session();
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiSseDecodeMalformed)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiSseDecodeMalformed)
             .times(1)
             .return_const(());
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiSseDecodeDegraded)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiSseDecodeDegraded)
             .times(1)
             .return_const(());
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiSseDegradedQuotaTerminated)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiSseDegradedQuotaTerminated)
             .times(1)
             .return_const(());
         let mut bytes = malformed_sse_with_valid_middle().to_vec();
@@ -2200,13 +2200,13 @@ mod tests {
 
         let mut session = mock_session();
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiSseDecodeDegraded)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiSseDecodeDegraded)
             .times(1)
             .return_const(());
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiSseDegradedQuotaTerminated)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiSseDegradedQuotaTerminated)
             .times(1)
             .return_const(());
         let mut sink = ResponseBodySink::new();
@@ -2297,8 +2297,8 @@ mod tests {
 
         let mut session = mock_session();
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiSseDecodeDegraded)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiSseDecodeDegraded)
             .times(1)
             .return_const(());
         let mut sink = ResponseBodySink::new();
@@ -2330,13 +2330,13 @@ mod tests {
 
         let mut session = mock_session();
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiSseDecodeDegraded)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiSseDecodeDegraded)
             .times(1)
             .return_const(());
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiQuotaOverLimitTerminated)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiQuotaOverLimitTerminated)
             .times(1)
             .return_const(());
         let mut sink = ResponseBodySink::new();
@@ -2359,13 +2359,13 @@ mod tests {
 
         let mut session = mock_session();
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiQuotaErrorEventDropped)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiQuotaErrorEventDropped)
             .times(1)
             .return_const(());
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::AiQuotaOverLimitTerminated)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::AiQuotaOverLimitTerminated)
             .times(1)
             .return_const(());
         let mut sink = ResponseBodySink::new();

@@ -483,7 +483,7 @@ anywhere**. The only signal is the counter `edgion_geoip_denied_total{layer,reas
 accept loop, so a log entry genuinely isn't possible there, and a per-connection denial log is
 also an amplification vector under a connection flood — uniform, counter-only signaling is worth
 more than per-connection detail. HTTP-layer geo denials are unaffected by this — they keep their
-normal `EdgionStatus` entry and access-log record, since a per-request log already exists there
+normal `EdgionErrorCode` diagnostic and access-log record, since a per-request log already exists there
 regardless.
 
 ## Access log

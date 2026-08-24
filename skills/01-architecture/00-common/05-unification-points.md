@@ -293,7 +293,7 @@ not in-process checks.
 - **Canon**: `PluginRunningResult::ErrResponse`
   (`edgion-resources/src/filters.rs`). The runtime renders it at a single
   point, draining the pending response-header queue (dye rules, CORS, ...)
-  and recording `EdgionStatus` in the access log.
+  and recording an `EdgionErrorCode` diagnostic in the access log.
 - **Exception**: `ErrTerminateRequest` — only when the response shape is
   inherently dynamic (e.g. forward_auth forwarding the auth service's full
   response, rate_limit_redis's own reject write), and the plugin MUST have
@@ -313,7 +313,7 @@ not in-process checks.
 
 - Any fail-close reject body sent to the client MUST NOT include internal
   error detail (upstream addresses, dependency error strings, stack traces).
-  Detail goes to the access log / `EdgionStatus`, not the response body.
+  Detail goes to `PluginLog` / access-log diagnostics, not the response body.
   Rationale and worked cases:
   [fail-closed-error-body-no-internal-detail.md](../../04-review/security/fail-closed-error-body-no-internal-detail.md).
 
@@ -349,7 +349,7 @@ not in-process checks.
   `edgion-resources/src/redact.rs` discipline: see the
   "CRD schema ↔ struct invariants" section of `AGENTS.md` and
   [00-schema-transport-contract.md](../05-resources/00-schema-transport-contract.md).
-- **Observability split** — data plane: access log + `EdgionStatus` +
+- **Observability split** — data plane: access log diagnostics +
   restrained metrics; control plane: `tracing` + status conditions. See
   [skills/03-coding/observability/](../../03-coding/observability/01-metrics.md).
 - **Security review iron rules** —

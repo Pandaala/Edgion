@@ -6,7 +6,7 @@
 
 ## Summary
 
-Phase 2 builds on Phase 1's schema alignment by **enabling runtime SAN pinning verification for OIDC and LDAP plugins**. Previously, configuring `validation.hostname` or `validation.subjectAltNames` on these plugins resulted in `Accepted=False`. Now, the controller accepts the configuration, and the gateway enforces SAN matching at TLS handshake time using rustls's `OutboundSanVerifier`. Certificate mismatch results in handshake failure with error code `999_09` (`OutboundTlsSanMismatch`).
+Phase 2 builds on Phase 1's schema alignment by **enabling runtime SAN pinning verification for OIDC and LDAP plugins**. Previously, configuring `validation.hostname` or `validation.subjectAltNames` on these plugins resulted in `Accepted=False`. Now, the controller accepts the configuration, and the gateway enforces SAN matching at TLS handshake time using rustls's `OutboundSanVerifier`. Certificate mismatch results in handshake failure with the `OutboundTlsSanMismatch` error diagnostic.
 
 Other backends—LinkSys providers (Redis, etcd, Elasticsearch, Kafka), ext_proc, and EdgionGatewayConfig global defaults—remain deferred to a future phase. Configuring SAN on these unsupported backends continues to result in `Accepted=False`.
 
@@ -21,7 +21,7 @@ Other backends—LinkSys providers (Redis, etcd, Elasticsearch, Kafka), ext_proc
 **Now (Phase 2):**
 - `validation.hostname` and `validation.subjectAltNames` are **accepted and enforced at runtime**.
 - During TLS handshake to the OIDC provider (e.g., Keycloak, Okta, Azure AD) or LDAP server, the gateway's rustls verifier checks that the peer certificate's Subject Alternative Names (SANs) match the configured values.
-- If verification fails (certificate SAN does not contain the expected hostname or value), the handshake is aborted immediately. The connection records `EdgionStatus::OutboundTlsSanMismatch` in the gateway access log.
+- If verification fails (certificate SAN does not contain the expected hostname or value), the handshake is aborted immediately. The connection records `EdgionErrorCode::OutboundTlsSanMismatch` in gateway access-log diagnostics.
 - Handshake failures propagate to the request: the client receives an error response, and the gateway records the rejection (see Diagnostics below).
 
 ### LinkSys, ext_proc, and Global Defaults (Still Deferred)
@@ -32,9 +32,9 @@ Other backends—LinkSys providers (Redis, etcd, Elasticsearch, Kafka), ext_proc
 
 ## New Error Code
 
-| Code | Name | HTTP Meaning | Condition |
-|------|------|--------------|-----------|
-| 999_09 | `OutboundTlsSanMismatch` | 502 Bad Gateway (default) | Outbound peer certificate Subject Alternative Names did not match the configured `validation.subjectAltNames` or `validation.hostname` |
+| Kind | Code | Typical HTTP outcome | Condition |
+|------|------|----------------------|-----------|
+| `error` | `OutboundTlsSanMismatch` | 502 Bad Gateway | Outbound peer certificate Subject Alternative Names did not match the configured `validation.subjectAltNames` or `validation.hostname` |
 
 > **Scope note.** `OutboundTlsSanMismatch` appears in the access log for the LDAP bind, and — on the
 > OIDC side — only for the discovery fetch reached from the interactive login redirect and the
@@ -81,7 +81,7 @@ Ensure that the SANs in the certificate match the values you have configured in 
 ### Step 3: Monitor for Handshake Failures
 
 After deploying Phase 2, alert on the `edgion_gateway_outbound_tls_san_mismatch_total` counter — this
-is the intended signal, since `EdgionStatus` serializes to its variant name, not the numeric code:
+is the intended signal; the diagnostic code is a stable string with no numeric representation:
 
 ```bash
 # Alert on outbound TLS SAN pinning rejections
@@ -136,20 +136,20 @@ For detailed rationale and the full three-phase enforcement timeline (OIDC/LDAP 
 
 ### Access Log Entry
 
-When a handshake fails due to SAN mismatch, the access log's `errors` array contains the
-`EdgionStatus` variant name (unit variants serialize to their name, not the numeric code):
+When a handshake fails due to SAN mismatch, the access log's `diagnostics` array contains the
+typed error diagnostic:
 
 ```json
 {
-  "errors": ["OutboundTlsSanMismatch"]
+  "diagnostics": [{ "kind": "error", "code": "OutboundTlsSanMismatch" }]
 }
 ```
 
 ### SSL Log (Gateway Data Plane)
 
 `ssl.log` records *inbound* TLS handshake diagnostics only (client → gateway) and is not touched by
-outbound SAN pinning. For outbound TLS SAN mismatches, use the counter and the access log `errors`
-array described above.
+outbound SAN pinning. For outbound TLS SAN mismatches, use the counter and the access-log
+diagnostic described above.
 
 ### Debugging Commands
 

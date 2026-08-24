@@ -184,4 +184,4 @@ Re-open only if:
 - Source: `edgion-gateway/src/plugins/runtime/session_adapter.rs`
   (`request_admission`, `response_admission`, `read_response_body`),
   `edgion-gateway/src/ctx.rs` (`RequestInfo::method_is_head`),
-  `edgion-resources/src/edgion_status.rs` (`BodyRefusedNoSnapshot`).
+  `edgion-resources/src/diagnostic.rs` (`BodyRefusedNoSnapshot`).

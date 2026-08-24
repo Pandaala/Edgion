@@ -1133,10 +1133,8 @@ mod tests {
             false,
         )
         .unwrap();
-        let mut ctx = crate::EdgionHttpContext {
-            response_stream_kind: ResponseStreamKind::Sse,
-            ..Default::default()
-        };
+        let mut ctx = crate::EdgionHttpContext::default();
+        ctx.response_stream_kind = ResponseStreamKind::Sse;
         let state = ctx.ensure_ai_state();
         state.semantic_guard_claimed = true;
         state.stream_processor = Some(Box::new(crate::ai::UsageExtractionProcessor::new(Arc::new(

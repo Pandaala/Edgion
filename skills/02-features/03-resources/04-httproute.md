@@ -263,9 +263,8 @@ pages live under `docs/zh-CN/`.
 
 > **Per-try timeout**: with a retry policy present, `timeouts.backendRequest`
 > bounds each attempt and a timed-out attempt is retried while nothing has
-> been sent downstream yet (recorded as
-> `EdgionStatus::BackendRequestTimeoutRetry`, 504_03, in the access-log error
-> chain). Deadline-sourced timeouts (`request` / client `grpc-timeout`) are
+> been sent downstream yet (recorded as the access-log error diagnostic
+> `BackendRequestTimeoutRetry`). Deadline-sourced timeouts (`request` / client `grpc-timeout`) are
 > never retried. Implemented in `configure_peer_timeouts`
 > (`pg_upstream_peer.rs`, `fold_peer_timeouts`) + `error_while_proxy` Case
 > 1.5. Integration scenario: `HTTPRoute/Backend/PerTryTimeout`.

@@ -2248,18 +2248,21 @@ fn repeated_malformed_sse_events_fail_quota_enforcement_closed(
                 return TestResult::failed(start.elapsed(), format!("malformed quota access log missing: {error}"));
             }
         };
-        let errors = entry.data["errors"].as_array().cloned().unwrap_or_default();
-        let has = |status: &str| errors.iter().any(|value| value == status);
-        if !has("AiSseDecodeMalformed") || !has("AiSseMalformedQuotaTerminated") {
+        let error_codes = entry.diagnostic_codes("error");
+        if !entry.has_diagnostic("error", "AiSseDecodeMalformed")
+            || !entry.has_diagnostic("error", "AiSseMalformedQuotaTerminated")
+        {
             return TestResult::failed(
                 start.elapsed(),
-                format!("malformed quota statuses were incomplete: {errors:?}"),
+                format!("malformed quota diagnostics were incomplete: {error_codes:?}"),
             );
         }
-        if has("AiQuotaOverLimitTerminated") || has("AiSseDegradedQuotaTerminated") {
+        if entry.has_diagnostic("error", "AiQuotaOverLimitTerminated")
+            || entry.has_diagnostic("error", "AiSseDegradedQuotaTerminated")
+        {
             return TestResult::failed(
                 start.elapsed(),
-                format!("malformed termination was assigned the wrong cause: {errors:?}"),
+                format!("malformed termination was assigned the wrong cause: {error_codes:?}"),
             );
         }
         let attempts = entry.data["genai"]["attempts"].as_array().cloned().unwrap_or_default();
@@ -2728,18 +2731,17 @@ fn quota_terminated_stream_records_its_status_and_settles_its_bucket(
                 )
             }
         };
-        let errors = entry.data["errors"].as_array().cloned().unwrap_or_default();
-        let has = |status: &str| errors.iter().any(|value| value == status);
-        if !has("AiQuotaOverLimitTerminated") {
+        let error_codes = entry.diagnostic_codes("error");
+        if !entry.has_diagnostic("error", "AiQuotaOverLimitTerminated") {
             return TestResult::failed(
                 start.elapsed(),
-                format!("the deliberate cut must be recorded as AiQuotaOverLimitTerminated; got errors {errors:?}"),
+                format!("the deliberate cut must be recorded as AiQuotaOverLimitTerminated; got diagnostics {error_codes:?}"),
             );
         }
-        if has("AiQuotaErrorEventDropped") {
+        if entry.has_diagnostic("error", "AiQuotaErrorEventDropped") {
             return TestResult::failed(
                 start.elapsed(),
-                format!("the injected diagnostic event must have fit the emit budget; got errors {errors:?}"),
+                format!("the injected diagnostic event must have fit the emit budget; got diagnostics {error_codes:?}"),
             );
         }
         let attempts = entry.data["genai"]["attempts"].as_array().cloned().unwrap_or_default();

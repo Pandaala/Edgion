@@ -164,8 +164,10 @@ Authorization: Bearer <admin-token>
   "backend_context": { },
   "genai": { },
   "stage_logs": [ ],
-  "info": [ ],
-  "errors": [ ]
+  "diagnostics": [
+    { "kind": "info", "code": "AcmeChallengeServed" },
+    { "kind": "error", "code": "BackendRequestTimeoutRetry" }
+  ]
 }
 ```
 
@@ -183,13 +185,13 @@ Authorization: Bearer <admin-token>
 | `backend_context` | Object | 后端标识和上游时序（无后端时省略/`null`） |
 | `genai` | Object | 最终 GenAI 用量与有界 per-attempt 核算（非 AI 请求省略） |
 | `stage_logs` | Array\<Object\> | 按阶段分组的每插件执行日志（为空时省略） |
-| `info` | Array\<String\> | 网关内部信息事件（为空时省略） |
-| `errors` | Array\<String\> | 处理过程中捕获的错误原因（为空时省略） |
+| `diagnostics` | Array\<Object\> | 按发生顺序记录的请求诊断项 `{kind, code}`；`kind` 为 `info` 或 `error`（为空时省略） |
+| `diagnostics_full` | Boolean | 有诊断项因有界缓冲区已满而被丢弃时为 `true`（否则省略） |
 | `ext` | Object | 来自 [`AccessLogExtern`](#扩展日志accesslogextern) 的操作员声明字段（未采集到任何字段时省略） |
 
 ### 请求字段
 
-嵌套在顶层 `request_info` 对象内、下沉一层（见上方[顶层字段](#顶层字段)），而非平铺在条目顶层。每个字段不存在时省略。
+嵌套在顶层 `request_info` 对象内、下沉一层（见上方[顶层字段](#顶层字段)），而非平铺在条目顶层。可选字段不存在时省略；`status` 始终存在，未知的最终结果记为 `0`。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -199,7 +201,7 @@ Authorization: Bearer <admin-token>
 | `x-trace-id` | String | 每请求追踪 ID；客户端传递相同值可关联日志 |
 | `host` | String | 请求 `Host` 头 |
 | `path` | String | 规范化后的请求路径 |
-| `status` | Integer | 响应状态码 |
+| `status` | Integer | 最终下游 HTTP 状态，与 Nginx/OpenResty `$status` 语义一致；`0` 表示未观察到最终状态 |
 | `x-forwarded-for` | String | `X-Forwarded-For` 头值（存在时） |
 | `discover_protocol` | String | 自动检测的协议。示例：`grpc`、`websocket` |
 | `grpc_service` | String | gRPC 服务名（仅 gRPC 请求） |
@@ -257,7 +259,7 @@ per-attempt 字段。`attempts` 最多包含八次已派发尝试，其序列化
 | `provider` | String | 固定提供商枚举 |
 | `credential` | String | 非敏感配置凭据别名；绝不是提供商凭据或 Secret 数据 |
 | `status` | Integer | 收到时的提供商 HTTP 状态 |
-| `failure` | String | 固定类别：`retryable_status`、`ambiguous_transport`、`backend_request_timeout` 或 `incomplete_response`。`incomplete_response` 表示**提供商**提前中断；由网关自身结束的流（超配额，或配额已无法执行）不是提供商故障，不带 `failure`，请改看其 `EdgionStatus` 码 |
+| `failure` | String | 固定类别：`retryable_status`、`ambiguous_transport`、`backend_request_timeout` 或 `incomplete_response`。`incomplete_response` 表示**提供商**提前中断；由网关自身结束的流（超配额，或配额已无法执行）不是提供商故障，不带 `failure`，请改看其错误诊断 |
 | `retry_after_seconds` | Integer | 接受的有界 Retry-After 冷却，单位秒 |
 | `ttft_ms` | Integer | 最终成功尝试到达首个非空响应体分片的时间 |
 | `usage_source` | String | `reported` 或 `estimated` |
@@ -306,14 +308,18 @@ per-attempt 字段。`attempts` 最多包含八次已派发尝试，其序列化
 
 `log_full: true` 表示插件输出的日志数据超过了每插件缓冲区的容量，后续行被丢弃。将其视为需要精简插件日志输出的提示，而非错误。
 
-### `errors` 取值
+### `diagnostics` 取值
 
-| 值 | 说明 |
-|----|------|
-| `RouteNotFound` | 请求无匹配路由 |
-| `XffHeaderTooLong` | `X-Forwarded-For` 头超过允许长度 |
-| `BackendNotFound` | 后端服务无法解析 |
-| `UpstreamConnectError` | 上游连接失败 |
+诊断项保留发生顺序及重复项。`error` 表示请求过程中遇到过失败、拒绝或降级，但不等于必须告警，
+因为后续重试可能成功。告警应按具体 `code` 制定，并可结合最终状态和聚合频率。诊断码没有数字形式，
+也不隐含 HTTP 状态。
+
+| Kind | Code | 说明 |
+|------|------|------|
+| `error` | `RouteNotFound` | 请求无匹配路由 |
+| `error` | `XffHeaderTooLong` | `X-Forwarded-For` 头超过允许长度 |
+| `error` | `BackendRequestTimeoutRetry` | 某次上游尝试达到单次超时后发生重试 |
+| `info` | `AcmeChallengeServed` | 网关在本地返回 ACME HTTP-01 挑战响应 |
 
 ## 扩展日志：AccessLogExtern
 
@@ -559,7 +565,7 @@ access_log_options:
     "path": "/test",
     "status": 404
   },
-  "errors": ["RouteNotFound"],
+  "diagnostics": [{ "kind": "error", "code": "RouteNotFound" }],
   "backend_context": null
 }
 ```

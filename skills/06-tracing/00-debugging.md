@@ -199,9 +199,9 @@ curl -s http://127.0.0.1:12001/api/v1/testing/access-log/<trace-id> | jq .
 - `matched_route`
 - `backend`
 - `stage_logs`
-- `errors`
+- `diagnostics`
 
-For plugin issues, `stage_logs` is the most useful; for upstream issues, look first at `backend.upstreams` and `errors`.
+For plugin issues, `stage_logs` is the most useful; for upstream issues, look first at `backend.upstreams` and `diagnostics`.
 
 A ready-made client on the code side:
 - `edgion-tests/src/client/access_log_client.rs`

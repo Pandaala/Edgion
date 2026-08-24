@@ -14,7 +14,7 @@ When `01_LinkSys_default_redis-san-unsupported.yaml` is applied:
 - The resource is **admitted** to the API server (schema is valid).
 - The controller sets the `Accepted` condition to **False**.
 - The `reason` field contains `"SAN pinning not supported"` (mapped from
-  `EdgionStatus::OutboundTlsVerifyUnsupported`).
+  `EdgionErrorCode::OutboundTlsVerifyUnsupported`).
 - No Redis client is registered in the gateway (`/api/v1/testing/link-sys/redis/clients`
   does NOT contain `redis-san-unsupported`).
 

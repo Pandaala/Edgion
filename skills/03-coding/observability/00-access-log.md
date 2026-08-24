@@ -50,7 +50,7 @@ Each access log entry must contain enough information for an operator to locate 
 | upstreams | Upstream connection details (ip, port, ct/ht/bt/et); per-attempt retry reason in `err`: etype strings / `RetryOnStatus` / `ConnectionReuseRetry`. Client-disconnect waste is marked by the request diagnostic `{kind: "error", code: "ClientClosed"}` |
 | `ext` | Operator-declared fields from `AccessLogExtern` (see below); omitted when nothing was collected |
 
-### Final client status
+### Final downstream/access-log status
 
 `request_info.status` has one meaning: the Nginx/OpenResty `$status` analogue for the
 finalized downstream HTTP response or terminal request error. It MUST never expose a
@@ -94,8 +94,9 @@ from the other.
 Raw proxy failure codes are response-control inputs, not automatically HTTP access-log
 status. Apply protocol mapping first: a generic gRPC upstream timeout uses raw 504 to
 select `grpc_status: 4`, but the rendered downstream HTTP/access-log status is 200.
-Likewise, diagnostic codes and their numeric IDs never map to or derive HTTP status; the
-response path records the explicit HTTP status it selected and diagnostics record reasons.
+Likewise, diagnostic codes never map to or derive HTTP status. They serialize as stable
+strings and have no numeric representation or implied HTTP prefix. The response path
+records the explicit HTTP status it selected and diagnostics record reasons.
 
 ### Ordered request diagnostics
 
@@ -108,11 +109,11 @@ from error analysis and alerting:
   served locally or an intentional plugin response replacement.
 - `kind: "error"` records failures, rejects, degraded processing, failed upstream
   attempts, and other abnormal signals that an operator may query. An error entry means
-  the condition occurred during the request; it does not by itself mean the final client
+  the condition occurred during the request; it does not by itself mean the final downstream
   status was a 4xx/5xx (a later retry may have succeeded).
 
 Never alert merely because an error diagnostic exists. Alertability belongs to each
-diagnostic code's contract and may also depend on the finalized client status and an
+diagnostic code's contract and may also depend on the finalized access-log status and an
 aggregate rate.
 For example, `BackendRequestTimeoutRetry` followed by a successful final response is a
 recovered attempt failure (normally aggregate for trend/SLO analysis, not a per-request
@@ -479,7 +480,7 @@ The upstream error message flows into the access log via the `UpstreamInfo.err` 
 |---------|------|
 | Final request decision | `PluginLog` → access log |
 | Intermediate request steps | Omit; reconstruct from bounded final access-log fields |
-| Request exception | `errors`, `PluginLog`, or an existing bounded metric |
+| Request exception | `diagnostics`, `PluginLog`, or an existing bounded metric |
 | Cold/config/background exception | Structured `tracing::warn!()` / `tracing::error!()` |
 | Performance data | `Gauge` / `Counter` in `metrics.rs` → Prometheus |
 

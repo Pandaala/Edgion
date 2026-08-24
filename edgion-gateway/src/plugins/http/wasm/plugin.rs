@@ -19,7 +19,7 @@ use crate::plugins::runtime::{
 };
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::plugin_configs::WasmConfig;
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 
 const PLUGIN_NAME: &str = "Wasm";
 
@@ -265,7 +265,7 @@ impl WasmPlugin {
             // A refusal is unconditionally fail-close (design R5): the guest's
             // body hook would inspect nothing, and `failOpen` governs wasm
             // runtime failures, not admission. The precise reason is already on
-            // ctx as an `EdgionStatus`, recorded by the read adapter.
+            // ctx as an `EdgionErrorCode`, recorded by the read adapter.
             Err(BodyReadError::NotBuffered) => {
                 log.push_err("wasm body-refused");
                 return PluginRunningResult::ErrResponse {
@@ -274,7 +274,7 @@ impl WasmPlugin {
                 };
             }
             Err(BodyReadError::BufferLimitExceeded { .. }) => {
-                session.add_error(EdgionStatus::BodyReadTooLarge);
+                session.record_error(EdgionErrorCode::BodyReadTooLarge);
                 log.push_err("wasm body-buffer-limit");
                 return PluginRunningResult::ErrResponse {
                     status: 413,
@@ -286,7 +286,7 @@ impl WasmPlugin {
             // never stored, so no forwarding copy of the body exists and
             // `failOpen` cannot help this request.
             Err(BodyReadError::StorageFailure) => {
-                session.add_error(EdgionStatus::BodyCaptureStorageFailed);
+                session.record_error(EdgionErrorCode::BodyCaptureStorageFailed);
                 log.push_err("wasm body-storage-failed");
                 return PluginRunningResult::ErrResponse {
                     status: 500,
@@ -295,21 +295,21 @@ impl WasmPlugin {
             }
             // Genuine read failures keep the configured policy, but must still
             // be alertable: `fail_mode` only writes a `PluginLog` line (nested
-            // per-plugin array), while the access log's structured `errors`
-            // array is populated solely by `ctx.add_error`. Mirror the
+            // per-plugin array), while the access log's structured diagnostics
+            // array is populated solely by `ctx.record_error`. Mirror the
             // `body_gate.rs::body_read_failure_result` mapping so both paths
             // agree.
             Err(err) => {
-                session.add_error(match err {
-                    BodyReadError::TooLarge { .. } => EdgionStatus::BodyReadTooLarge,
-                    BodyReadError::BufferLimitExceeded { .. } => EdgionStatus::BodyReadTooLarge,
-                    BodyReadError::Timeout => EdgionStatus::BodyReadTimeout,
-                    BodyReadError::Incomplete => EdgionStatus::BodyReadAborted,
-                    BodyReadError::Unimplemented => EdgionStatus::BodyReadUnimplemented,
+                session.record_error(match err {
+                    BodyReadError::TooLarge { .. } => EdgionErrorCode::BodyReadTooLarge,
+                    BodyReadError::BufferLimitExceeded { .. } => EdgionErrorCode::BodyReadTooLarge,
+                    BodyReadError::Timeout => EdgionErrorCode::BodyReadTimeout,
+                    BodyReadError::Incomplete => EdgionErrorCode::BodyReadAborted,
+                    BodyReadError::Unimplemented => EdgionErrorCode::BodyReadUnimplemented,
                     // Handled above; unreachable here.
-                    BodyReadError::NotBuffered => EdgionStatus::BodyRefusedStage,
-                    BodyReadError::StorageFailure => EdgionStatus::BodyCaptureStorageFailed,
-                    BodyReadError::GenerationConflict => EdgionStatus::BodyMutationConflict,
+                    BodyReadError::NotBuffered => EdgionErrorCode::BodyRefusedStage,
+                    BodyReadError::StorageFailure => EdgionErrorCode::BodyCaptureStorageFailed,
+                    BodyReadError::GenerationConflict => EdgionErrorCode::BodyMutationConflict,
                 });
                 return self.fail_mode(session, log, "body read");
             }
@@ -346,16 +346,16 @@ impl WasmPlugin {
         };
         if let Some(body) = request_body {
             if let Err(error) = session.overwrite_request_body(body).await {
-                session.add_error(match error {
+                session.record_error(match error {
                     BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
-                        EdgionStatus::BodyReadTooLarge
+                        EdgionErrorCode::BodyReadTooLarge
                     }
-                    BodyReadError::StorageFailure => EdgionStatus::BodyCaptureStorageFailed,
-                    BodyReadError::GenerationConflict => EdgionStatus::BodyMutationConflict,
-                    BodyReadError::Timeout => EdgionStatus::BodyReadTimeout,
-                    BodyReadError::Incomplete => EdgionStatus::BodyReadAborted,
-                    BodyReadError::Unimplemented => EdgionStatus::BodyReadUnimplemented,
-                    BodyReadError::NotBuffered => EdgionStatus::BodyRefusedStage,
+                    BodyReadError::StorageFailure => EdgionErrorCode::BodyCaptureStorageFailed,
+                    BodyReadError::GenerationConflict => EdgionErrorCode::BodyMutationConflict,
+                    BodyReadError::Timeout => EdgionErrorCode::BodyReadTimeout,
+                    BodyReadError::Incomplete => EdgionErrorCode::BodyReadAborted,
+                    BodyReadError::Unimplemented => EdgionErrorCode::BodyReadUnimplemented,
+                    BodyReadError::NotBuffered => EdgionErrorCode::BodyRefusedStage,
                 });
                 return self.fail_mode(session, log, "body mutation");
             }
@@ -466,7 +466,7 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
     ///   read failure — including `Unimplemented` from a binary built without
     ///   the request-buffering capability — goes through `fail_mode`, so it honors
     ///   `failOpen`, whose default is fail-close (`fail_open` defaults to
-    ///   `false`). Either way the failure is recorded via `ctx.add_error` so it
+    ///   `false`). Either way the failure is recorded via `ctx.record_error` so it
     ///   is alertable in the access log, not just logged to `PluginLog`. An
     ///   ungated read must still fail rather than auto-buffer — see the facade contract in
     ///   `docs/superpowers/specs/2026-07-22-wasm-body-wiring-design.md`.
@@ -1396,8 +1396,8 @@ mod tests {
         session.expect_record_outcome().return_const(());
         // The SDK guest's request-body hook runs `read_request_body` ->
         // `Unimplemented` -> `fail_mode` (Task 7), which now also records the
-        // matching `EdgionStatus` (R17) before `fail_open` softens the result.
-        session.expect_add_error().return_const(());
+        // matching `EdgionErrorCode` (R17) before `fail_open` softens the result.
+        session.expect_record_error().return_const(());
         let mut log = PluginLog::new("Wasm");
         let res = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(res, PluginRunningResult::GoodNext);
@@ -1541,7 +1541,7 @@ mod tests {
             .returning(|_, _| Ok(()));
         session.expect_record_outcome().return_const(());
         // See `reference_guest_module_loads_and_runs` for why this fires (R17).
-        session.expect_add_error().return_const(());
+        session.expect_record_error().return_const(());
         let mut log = PluginLog::new("Wasm");
         let res = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(res, PluginRunningResult::GoodNext, "authorized callout must resume");
@@ -1618,7 +1618,7 @@ mod tests {
             .returning(|_, _| Ok(()));
         session.expect_record_outcome().return_const(());
         // See `reference_guest_module_loads_and_runs` for why this fires (R17).
-        session.expect_add_error().return_const(());
+        session.expect_record_error().return_const(());
         let mut log = PluginLog::new("Wasm");
         let res = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(res, PluginRunningResult::GoodNext);
@@ -1683,7 +1683,7 @@ mod tests {
                 .returning(|_, _| Ok(()));
             session.expect_record_outcome().return_const(());
             // See `reference_guest_module_loads_and_runs` for why this fires (R17).
-            session.expect_add_error().return_const(());
+            session.expect_record_error().return_const(());
             let mut log = PluginLog::new("Wasm");
             res = Some(plugin.run_request(&mut session, &mut log).await);
             if seen.load(std::sync::atomic::Ordering::Relaxed) >= 1 {
@@ -1748,7 +1748,7 @@ mod tests {
             .returning(|_, _| Ok(()));
         session.expect_record_outcome().return_const(());
         // See `reference_guest_module_loads_and_runs` for why this fires (R17).
-        session.expect_add_error().return_const(());
+        session.expect_record_error().return_const(());
         let mut log = PluginLog::new("Wasm");
         let res = req_plugin.run_request(&mut session, &mut log).await;
         assert_eq!(res, PluginRunningResult::GoodNext);
@@ -1933,8 +1933,8 @@ mod tests {
             .returning(|_| Err(BodyReadError::StorageFailure));
         session.expect_set_request_header().times(0);
         session
-            .expect_add_error()
-            .withf(|status| *status == edgion_resources::EdgionStatus::BodyCaptureStorageFailed)
+            .expect_record_error()
+            .withf(|status| *status == edgion_resources::EdgionErrorCode::BodyCaptureStorageFailed)
             .times(1)
             .return_const(());
         session
@@ -1961,8 +1961,8 @@ mod tests {
             .returning(|_| Err(BodyReadError::StorageFailure));
         session.expect_set_request_header().times(0);
         session
-            .expect_add_error()
-            .withf(|status| *status == edgion_resources::EdgionStatus::BodyCaptureStorageFailed)
+            .expect_record_error()
+            .withf(|status| *status == edgion_resources::EdgionErrorCode::BodyCaptureStorageFailed)
             .times(1)
             .return_const(());
         session
@@ -1992,8 +1992,8 @@ mod tests {
         let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
         let mut session = body_mock(Err(BodyReadError::Unimplemented));
         session
-            .expect_add_error()
-            .withf(|status| *status == edgion_resources::EdgionStatus::BodyReadUnimplemented)
+            .expect_record_error()
+            .withf(|status| *status == edgion_resources::EdgionErrorCode::BodyReadUnimplemented)
             .times(1)
             .return_const(());
         session.expect_record_outcome().return_const(());
@@ -2003,20 +2003,20 @@ mod tests {
     }
 
     /// R17: an ungated wasm module (no operator `body:` block) whose body read
-    /// fails with `Unimplemented` must still record an `EdgionStatus` via
-    /// `ctx.add_error`, not just a `PluginLog` line — otherwise the newly-common
+    /// fails with `Unimplemented` must still record an `EdgionErrorCode` via
+    /// `ctx.record_error`, not just a `PluginLog` line — otherwise the newly-common
     /// default-500 for a body-hook wasm guest is invisible in the access log's
-    /// structured `errors` array. Pins the mapping used at the
+    /// structured diagnostics array. Pins the mapping used at the
     /// `run_request_body_phase` call site (mirrors `body_gate.rs`'s
     /// `body_read_failure_result`).
     #[tokio::test]
-    async fn ungated_body_read_unimplemented_records_edgion_status() {
+    async fn ungated_body_read_unimplemented_records_error_diagnostic() {
         let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
         let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
         let mut session = body_mock(Err(BodyReadError::Unimplemented));
         session
-            .expect_add_error()
-            .withf(|status| *status == edgion_resources::EdgionStatus::BodyReadUnimplemented)
+            .expect_record_error()
+            .withf(|status| *status == edgion_resources::EdgionErrorCode::BodyReadUnimplemented)
             .times(1)
             .return_const(());
         session.expect_record_outcome().return_const(());
@@ -2057,8 +2057,8 @@ mod tests {
         let plugin = WasmPlugin::create_request(&config_for(f.path(), true)).expect("plugin");
         let mut session = body_mock(Err(BodyReadError::Unimplemented));
         session
-            .expect_add_error()
-            .withf(|status| *status == edgion_resources::EdgionStatus::BodyReadUnimplemented)
+            .expect_record_error()
+            .withf(|status| *status == edgion_resources::EdgionErrorCode::BodyReadUnimplemented)
             .times(1)
             .return_const(());
         session.expect_record_outcome().return_const(());

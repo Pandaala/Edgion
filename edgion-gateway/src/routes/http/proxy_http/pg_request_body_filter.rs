@@ -176,10 +176,8 @@ mod tests {
     #[tokio::test]
     async fn abandoned_body_cancels_mirror_request() {
         let (state, cancel_rx, _reason) = streaming_state();
-        let mut ctx = EdgionHttpContext {
-            mirror_state: Some(state),
-            ..Default::default()
-        };
+        let mut ctx = EdgionHttpContext::default();
+        ctx.mirror_state = Some(state);
         let mut body = None;
 
         mirror_body_tee(&mut body, RequestBodyEvent::Abandoned, &mut ctx).await;
@@ -191,10 +189,8 @@ mod tests {
     #[tokio::test]
     async fn complete_body_closes_mirror_without_cancelling() {
         let (state, cancel_rx, _reason) = streaming_state();
-        let mut ctx = EdgionHttpContext {
-            mirror_state: Some(state),
-            ..Default::default()
-        };
+        let mut ctx = EdgionHttpContext::default();
+        ctx.mirror_state = Some(state);
         let mut body = None;
 
         mirror_body_tee(&mut body, RequestBodyEvent::Complete, &mut ctx).await;
@@ -226,10 +222,8 @@ mod tests {
         // The helper's body receiver is already dropped, so `try_send` below
         // takes the `TrySendError::Closed` arm.
         let (state, cancel_rx, reason) = streaming_state();
-        let mut ctx = EdgionHttpContext {
-            mirror_state: Some(state),
-            ..Default::default()
-        };
+        let mut ctx = EdgionHttpContext::default();
+        ctx.mirror_state = Some(state);
         let mut body = Some(Bytes::from_static(b"partial chunk"));
 
         mirror_body_tee(&mut body, RequestBodyEvent::Data, &mut ctx).await;

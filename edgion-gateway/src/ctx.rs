@@ -5,6 +5,7 @@ use crate::ai::{AiAttemptPlan, AiRequestContext, GenAiSummary};
 use crate::backends::{SelectedHttpBackend, ServiceBackendKind};
 use crate::lb::edgion_backend::EdgionBackend;
 use crate::observe::logs::LogBuffer;
+use crate::observe::RequestDiagnostics;
 use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
 use crate::plugins::runtime::PluginRuntime;
 use crate::plugins::{EdgionPluginsLog, StageLogs};
@@ -17,7 +18,7 @@ use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::http_route::SessionPersistence;
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::uri_utils;
-use edgion_resources::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
+use edgion_resources::{EdgionErrorCode, EdgionInfoCode, HTTPBackendRef, HTTPRouteMatch};
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
@@ -485,9 +486,8 @@ pub struct RequestInfo {
     /// Serializes as JSON field "path" for backward-compatible access_log output.
     #[serde(rename = "path", serialize_with = "edgion_resources::sensitive::masked::serialize")]
     pub normalized_current_path: String,
-    /// Response status code (e.g., 200, 400, 404, 500)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<u16>,
+    /// Final downstream/access-log HTTP status. Zero represents Nginx `000`.
+    status: u16,
     /// Original X-Forwarded-For header value (before appending client IP)
     #[serde(
         rename = "x-forwarded-for",
@@ -603,11 +603,6 @@ pub struct RequestInfo {
     /// None for non-gRPC requests or when no gRPC error was generated locally.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grpc_status: Option<u16>,
-    /// Whether an HTTP/gRPC response has already been written to downstream.
-    /// Used as a guard to prevent double-write across error response paths.
-    #[serde(skip)]
-    pub response_committed: bool,
-
     /// Parsed `grpc-timeout` deadline (`start_time + value`). Populated by
     /// `pg_request_filter::build_request_metadata` when the request carries
     /// a syntactically valid header. `None` when no header, malformed
@@ -633,6 +628,21 @@ pub(crate) struct RequestGeoInfo {
 }
 
 impl RequestInfo {
+    #[inline]
+    pub fn status(&self) -> u16 {
+        self.status
+    }
+
+    #[inline]
+    pub fn status_option(&self) -> Option<u16> {
+        (self.status != 0).then_some(self.status)
+    }
+
+    #[inline]
+    fn finalize_status(&mut self, status: u16) {
+        self.status = status;
+    }
+
     #[inline]
     fn geo(&self) -> &RequestGeoInfo {
         self.geo.get_or_init(|| Box::new(RequestGeoInfo::default())).as_ref()
@@ -1243,11 +1253,8 @@ pub struct EdgionHttpContext {
     /// Request information (hostname, path, x-trace-id)
     pub request_info: RequestInfo,
 
-    /// Informational statuses collected during request processing
-    pub info: Vec<EdgionStatus>,
-
-    /// Error codes collected during request processing
-    pub edgion_status: Vec<EdgionStatus>,
+    /// Ordered, bounded information and error diagnostics for the request.
+    pub diagnostics: RequestDiagnostics,
 
     // --- Route and backend selection ---
     /// Matched HTTP route unit containing full route information
@@ -1520,6 +1527,18 @@ pub struct EdgionHttpContext {
     /// First-wins request-local terminal and close ownership.
     pub(crate) response_terminal_state: ResponseTerminalState,
 
+    /// Normalized, accepted response status captured immediately before the
+    /// response plugin chain. Never serialized.
+    pub(crate) pre_plugin_response_status: Option<u16>,
+
+    /// Final downstream status selected by the response/terminal path. Private:
+    /// writers must use the guarded lifecycle methods below.
+    final_downstream_status: Option<u16>,
+
+    /// Whether a final response writer has claimed ownership. This is not
+    /// successful-write evidence; Pingora `response_written()` owns that fact.
+    response_write_started: bool,
+
     /// Streaming-response processors installed for this request by request-stage
     /// plugins (e.g. AiProxy's usage extractor). Run in installation order from
     /// `pg_upstream_response_body_filter`, before the read-only body-filter
@@ -1756,8 +1775,7 @@ impl EdgionHttpContext {
             start_time: Instant::now(),
             gateway_info: GatewayInfo::default(),
             request_info: RequestInfo::default(),
-            info: Vec::with_capacity(3),
-            edgion_status: Vec::with_capacity(5),
+            diagnostics: RequestDiagnostics::default(),
             route_unit: None,
             selected_backend: None,
             grpc_route_unit: None,
@@ -1798,6 +1816,9 @@ impl EdgionHttpContext {
             ai_state: None,
             active_response_processor_slot: None,
             response_terminal_state: ResponseTerminalState::Open,
+            pre_plugin_response_status: None,
+            final_downstream_status: None,
+            response_write_started: false,
             stream_processors: Vec::new(),
             attached_ext_proc: std::collections::HashMap::new(),
             attached_response_framing_reservations: 0,
@@ -1811,14 +1832,63 @@ impl EdgionHttpContext {
         }
     }
 
-    /// Add an error code to the context
-    pub fn add_error(&mut self, err_code: EdgionStatus) {
-        self.edgion_status.push(err_code);
+    /// Record an intrinsically classified error diagnostic.
+    pub fn record_error(&mut self, code: EdgionErrorCode) -> bool {
+        self.diagnostics.record_error(code)
     }
 
-    /// Add an informational status to the context
-    pub fn add_info(&mut self, info_code: EdgionStatus) {
-        self.info.push(info_code);
+    /// Record an intrinsically classified informational diagnostic.
+    pub fn record_info(&mut self, code: EdgionInfoCode) -> bool {
+        self.diagnostics.record_info(code)
+    }
+
+    /// Select a candidate final response while response processing may still
+    /// replace it. Rejected after a writer claims ownership.
+    pub(crate) fn select_final_downstream_status(&mut self, status: u16) -> bool {
+        if self.response_write_started {
+            return false;
+        }
+        self.final_downstream_status = Some(status);
+        true
+    }
+
+    /// Select the response and claim the sole final-header write in one state
+    /// transition. The selected status survives a later write failure.
+    pub(crate) fn claim_final_response(&mut self, status: u16) -> bool {
+        if self.response_write_started {
+            return false;
+        }
+        self.final_downstream_status = Some(status);
+        self.response_write_started = true;
+        true
+    }
+
+    /// Record a request-ending status only when no response already owns the
+    /// outcome. Used for narrow terminal outcomes such as downstream 499.
+    pub(crate) fn select_terminal_downstream_status(&mut self, status: u16) -> bool {
+        if self.response_write_started || self.final_downstream_status.is_some() {
+            return false;
+        }
+        self.final_downstream_status = Some(status);
+        true
+    }
+
+    #[inline]
+    pub(crate) fn response_write_started(&self) -> bool {
+        self.response_write_started
+    }
+
+    #[inline]
+    pub(crate) fn final_downstream_status(&self) -> Option<u16> {
+        self.final_downstream_status
+    }
+
+    /// Finalize the serialized access-log status exactly once at terminal
+    /// logging. Interim 1xx values are ignored except terminal 101.
+    pub(crate) fn finalize_downstream_status(&mut self, session_status: Option<u16>) {
+        let session_status = session_status.filter(|status| *status == 101 || !(100..200).contains(status));
+        self.request_info
+            .finalize_status(session_status.or(self.final_downstream_status).unwrap_or(0));
     }
 
     /// Get (and lazily build) the per-request decoded query parameter map.
@@ -2779,6 +2849,66 @@ mod local_reply_tests {
         assert!(ctx.local_reply_header.is_none());
         assert!(ctx.local_reply_body.is_none());
         assert!(!ctx.local_reply_written);
+    }
+}
+
+#[cfg(test)]
+mod final_downstream_status_tests {
+    use super::*;
+
+    #[test]
+    fn finalization_prefers_written_final_header_then_selected_status_then_zero() {
+        let mut written = EdgionHttpContext::default();
+        assert!(written.select_final_downstream_status(502));
+        written.finalize_downstream_status(Some(200));
+        assert_eq!(written.request_info.status(), 200);
+
+        let mut selected = EdgionHttpContext::default();
+        assert!(selected.claim_final_response(503));
+        selected.finalize_downstream_status(None);
+        assert_eq!(selected.request_info.status(), 503);
+
+        let mut unknown = EdgionHttpContext::default();
+        unknown.finalize_downstream_status(None);
+        assert_eq!(unknown.request_info.status(), 0);
+        assert_eq!(unknown.request_info.status_option(), None);
+    }
+
+    #[test]
+    fn interim_headers_do_not_replace_selected_status_but_101_is_terminal() {
+        let mut interim = EdgionHttpContext::default();
+        assert!(interim.select_final_downstream_status(502));
+        interim.finalize_downstream_status(Some(103));
+        assert_eq!(interim.request_info.status(), 502);
+
+        let mut switching = EdgionHttpContext::default();
+        assert!(switching.select_final_downstream_status(502));
+        switching.finalize_downstream_status(Some(101));
+        assert_eq!(switching.request_info.status(), 101);
+    }
+
+    #[test]
+    fn write_claim_rejects_late_replacement_and_terminal_499() {
+        let mut ctx = EdgionHttpContext::default();
+        assert!(ctx.claim_final_response(200));
+        assert!(!ctx.select_final_downstream_status(502));
+        assert!(!ctx.select_terminal_downstream_status(499));
+        assert!(!ctx.claim_final_response(503));
+        ctx.finalize_downstream_status(None);
+        assert_eq!(ctx.request_info.status(), 200);
+    }
+
+    #[test]
+    fn grpc_error_keeps_http_and_grpc_status_independent() {
+        let mut ctx = EdgionHttpContext::default();
+        assert!(ctx.select_final_downstream_status(504));
+        assert!(ctx.claim_final_response(200));
+        ctx.request_info.grpc_status = Some(4);
+
+        ctx.finalize_downstream_status(None);
+
+        assert_eq!(ctx.request_info.status(), 200);
+        assert_eq!(ctx.request_info.grpc_status, Some(4));
     }
 }
 

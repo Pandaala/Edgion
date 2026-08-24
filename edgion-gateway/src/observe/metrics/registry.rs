@@ -135,7 +135,7 @@ pub mod names {
     // Retry budget enforcement (`EdgionBackendTrafficPolicy.retryConstraint`,
     // spec 2026-07-21). No labels (D5): a per-service label would churn
     // unboundedly on Service creation/deletion. Backend attribution comes
-    // from the per-request access log / `EdgionStatus`, already service-scoped.
+    // from the per-request access log / `EdgionErrorCode`, already service-scoped.
     pub const RETRY_BUDGET_DENIED_TOTAL: &str = "edgion_gateway_retry_budget_denied_total";
     // Circuit-breaker admit-time CONCURRENCY-CAP shed (backends/circuit_breaker/mod.rs
     // `CbPermit::try_acquire` returning None). This is NOT the outlier-detection
@@ -873,7 +873,7 @@ pub fn record_plugin_policy_bypassed(plugin: &str) {
 // exhausted. Label-less by design (D5): a per-service label would mint an
 // unbounded number of series as Services churn (create/delete), retained
 // server-side for the whole retention window. Which backend was throttled
-// is read from the per-request access log / `EdgionStatus`, both already
+// is read from the per-request access log / `EdgionErrorCode`, both already
 // service-scoped.
 
 /// A retry attempt was refused by a `retryConstraint` budget.

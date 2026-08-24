@@ -187,4 +187,4 @@ If you encounter issues during migration, check:
 
 1. **Configuration status**: `kubectl describe` the affected resource to see any `Accepted=False` conditions
 2. **Admission logs**: Look for pruned fields in structural paths
-3. **Gateway logs**: Error messages on TLS connection failures will appear in the gateway audit/access logs with the `EdgionStatus` code and reason
+3. **Gateway logs**: TLS connection failures appear in gateway audit/access logs with a stable `EdgionErrorCode` diagnostic and reason

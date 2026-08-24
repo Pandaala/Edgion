@@ -18,7 +18,7 @@ use edgion_resources::path_normalization::{
     contains_escaped_slash, has_invalid_percent_encoding, normalize_path, PathNormalizationConfig,
 };
 use edgion_resources::resources::{CorsConfig, HTTPRouteFilter, HTTPRouteFilterType};
-use edgion_resources::EdgionStatus;
+use edgion_resources::{EdgionErrorCode, EdgionInfoCode};
 use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::Session;
 use std::sync::Arc;
@@ -72,7 +72,7 @@ pub async fn request_filter(
                         };
 
                         if !host_matches_sni_listener || gw_listeners.has_more_specific(host, sni_hostname) {
-                            ctx.add_error(EdgionStatus::SniHostMismatch);
+                            ctx.record_error(EdgionErrorCode::SniHostMismatch);
                             end_response_421(session, ctx, &edgion_http.server_header_opts).await?;
                             return Ok(true);
                         }
@@ -84,7 +84,7 @@ pub async fn request_filter(
 
     if ctx.request_info.is_grpc_request {
         if ctx.request_info.discover_protocol.as_deref() == Some("grpc") && !edgion_http.enable_http2 {
-            ctx.add_error(EdgionStatus::Http2Required);
+            ctx.record_error(EdgionErrorCode::Http2Required);
             end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
             return Ok(true);
         }
@@ -100,7 +100,7 @@ pub async fn request_filter(
             && grpc_routes.has_routes()
             && ctx.request_info.discover_protocol.as_deref() == Some("grpc")
         {
-            ctx.add_error(EdgionStatus::RouteNotFound);
+            ctx.record_error(EdgionErrorCode::RouteNotFound);
             end_response_grpc_unimplemented(session, ctx, &edgion_http.server_header_opts).await?;
             // gRPC trailers-only response (HTTP 200 + grpc-status: 12, END_STREAM=true) already
             // written above. Return Ok(true) to signal response is fully handled.
@@ -117,7 +117,7 @@ pub async fn request_filter(
                 ctx.route_unit = Some(result.route_unit);
             }
             Err(_) => {
-                ctx.add_error(EdgionStatus::RouteNotFound);
+                ctx.record_error(EdgionErrorCode::RouteNotFound);
                 end_response_404(session, ctx, &edgion_http.server_header_opts).await?;
                 return Ok(true); // Already sent error response, signal completion
             }
@@ -169,7 +169,7 @@ pub async fn request_filter(
             // Handle preflight request
             match edgion_http
                 .preflight_handler
-                .handle_preflight(session, cors_config.as_ref())
+                .handle_preflight(session, ctx, cors_config.as_ref())
                 .await
             {
                 Ok(true) => {
@@ -361,7 +361,7 @@ async fn build_request_metadata(
         .map(|s| s.reject_duplicate_host)
         .unwrap_or(true);
     if reject_duplicate_host && req_header.headers.get_all("host").iter().count() > 1 {
-        ctx.add_error(EdgionStatus::DuplicateHostHeader);
+        ctx.record_error(EdgionErrorCode::DuplicateHostHeader);
         end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
         return Ok(true);
     }
@@ -417,7 +417,7 @@ async fn build_request_metadata(
     }
 
     if let Some(status) = apply_path_normalization_entry(ctx, &raw_path, raw_query, path_norm_cfg) {
-        ctx.add_error(status);
+        ctx.record_error(status);
         end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
         return Ok(true);
     }
@@ -438,7 +438,7 @@ async fn build_request_metadata(
     // tenant isolation. `end_response_400` already routes gRPC requests to
     // `grpc-status 3` (INVALID_ARGUMENT) trailers via `send_grpc_trailers_only`.
     if ctx.request_info.hostname.is_empty() {
-        ctx.add_error(EdgionStatus::HostMissing);
+        ctx.record_error(EdgionErrorCode::HostMissing);
         end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
         return Ok(true); // Response sent
     }
@@ -448,7 +448,7 @@ async fn build_request_metadata(
         if let Some(ref existing_xff) = ctx.request_info.x_forwarded_for {
             let xff_len = existing_xff.len();
             if xff_len > security_config.x_forwarded_for_limit {
-                ctx.add_error(EdgionStatus::XffHeaderTooLong);
+                ctx.record_error(EdgionErrorCode::XffHeaderTooLong);
                 end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
                 return Ok(true); // Response sent
             }
@@ -554,9 +554,9 @@ async fn try_serve_acme_challenge(
         None => return Ok(false),
     };
 
-    ctx.add_info(EdgionStatus::AcmeChallengeServed);
-    ctx.request_info.status = Some(200);
-    ctx.request_info.response_committed = true;
+    if !ctx.claim_final_response(200) {
+        return Ok(true);
+    }
 
     let mut resp = ResponseHeader::build(200, None)?;
     edgion_http.server_header_opts.apply_to_response(&mut resp);
@@ -565,6 +565,7 @@ async fn try_serve_acme_challenge(
 
     session.write_response_header(Box::new(resp), false).await?;
     session.write_response_body(Some(key_auth), true).await?;
+    ctx.record_info(EdgionInfoCode::AcmeChallengeServed);
 
     Ok(true)
 }
@@ -591,16 +592,16 @@ fn apply_path_normalization_entry(
     raw_path: &str,
     raw_query: Option<String>,
     cfg: &PathNormalizationConfig,
-) -> Option<EdgionStatus> {
+) -> Option<EdgionErrorCode> {
     ctx.request_info.entry_raw_path = raw_path.to_string();
     ctx.request_info.entry_raw_query = raw_query;
 
     if cfg.reject_escaped_slashes && contains_escaped_slash(raw_path) {
-        return Some(EdgionStatus::PathEscapedSlashRejected);
+        return Some(EdgionErrorCode::PathEscapedSlashRejected);
     }
 
     if cfg.reject_invalid_percent_encoding && has_invalid_percent_encoding(raw_path) {
-        return Some(EdgionStatus::PathInvalidPercentEncoding);
+        return Some(EdgionErrorCode::PathInvalidPercentEncoding);
     }
 
     ctx.request_info.normalized_current_path = normalize_path(raw_path, cfg).unwrap_or_else(|| raw_path.to_string());
@@ -657,7 +658,7 @@ mod tests {
 
         let status = apply_path_normalization_entry(&mut ctx, "/admin%2Fsecret", Some("trace=1".to_string()), &cfg);
 
-        assert_eq!(status, Some(EdgionStatus::PathEscapedSlashRejected));
+        assert_eq!(status, Some(EdgionErrorCode::PathEscapedSlashRejected));
         assert_eq!(ctx.request_path(), "/admin%2Fsecret");
         assert_eq!(ctx.request_uri(), "/admin%2Fsecret?trace=1");
     }

@@ -164,8 +164,10 @@ The log is always JSON, one entry per line. Optional fields are omitted entirely
   "backend_context": { },
   "genai": { },
   "stage_logs": [ ],
-  "info": [ ],
-  "errors": [ ]
+  "diagnostics": [
+    { "kind": "info", "code": "AcmeChallengeServed" },
+    { "kind": "error", "code": "BackendRequestTimeoutRetry" }
+  ]
 }
 ```
 
@@ -183,13 +185,13 @@ Request-scoped fields (`direct_peer_ip`, `host`, `path`, `status`, etc.) nest on
 | `backend_context` | Object | Backend identity and upstream timing (omitted/`null` when no backend was used) |
 | `genai` | Object | Final GenAI usage and bounded per-attempt accounting (omitted for non-AI requests) |
 | `stage_logs` | Array\<Object\> | Per-plugin execution logs grouped by stage (omitted when empty) |
-| `info` | Array\<String\> | Gateway-internal informational events (omitted when empty) |
-| `errors` | Array\<String\> | Error reasons captured during processing (omitted when empty) |
+| `diagnostics` | Array\<Object\> | Ordered request diagnostics as `{kind, code}` entries; `kind` is `info` or `error` (omitted when empty) |
+| `diagnostics_full` | Boolean | `true` when the bounded diagnostics buffer dropped one or more tail entries (omitted otherwise) |
 | `ext` | Object | Operator-declared fields from [`AccessLogExtern`](#extending-the-log-accesslogextern) (omitted when nothing was collected) |
 
 ### Request fields
 
-Nested one level deep under the top-level `request_info` object (see [Top-level fields](#top-level-fields) above) — not flattened into the entry's top level. Every field is omitted when not present.
+Nested one level deep under the top-level `request_info` object (see [Top-level fields](#top-level-fields) above) — not flattened into the entry's top level. Optional fields are omitted when absent; `status` is always present and uses `0` for an unknown final outcome.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -199,7 +201,7 @@ Nested one level deep under the top-level `request_info` object (see [Top-level 
 | `x-trace-id` | String | Per-request trace ID; propagate the same value from clients to correlate |
 | `host` | String | Request `Host` header |
 | `path` | String | Normalized request path |
-| `status` | Integer | Response status code |
+| `status` | Integer | Final downstream HTTP status, equivalent to Nginx/OpenResty `$status`; `0` means no final status was observable |
 | `x-forwarded-for` | String | `X-Forwarded-For` header value (when present) |
 | `discover_protocol` | String | Auto-detected protocol. Example values: `grpc`, `websocket` |
 | `grpc_service` | String | gRPC service name (gRPC requests only) |
@@ -258,7 +260,7 @@ when later summaries were omitted to preserve either bound.
 | `provider` | String | Fixed provider enum |
 | `credential` | String | Non-secret configured credential alias; never provider credential or Secret data |
 | `status` | Integer | Provider HTTP status, when received |
-| `failure` | String | Fixed class: `retryable_status`, `ambiguous_transport`, `backend_request_timeout`, or `incomplete_response`. `incomplete_response` means the *provider* stopped early; a stream the gateway itself ended (over quota, or quota no longer enforceable) is not a provider failure and carries no `failure` — read its `EdgionStatus` code instead |
+| `failure` | String | Fixed class: `retryable_status`, `ambiguous_transport`, `backend_request_timeout`, or `incomplete_response`. `incomplete_response` means the *provider* stopped early; a stream the gateway itself ended (over quota, or quota no longer enforceable) is not a provider failure and carries no `failure` — read its error diagnostic instead |
 | `retry_after_seconds` | Integer | Accepted bounded Retry-After cooldown, in seconds |
 | `ttft_ms` | Integer | Time to the first non-empty response body chunk for the successful final attempt |
 | `usage_source` | String | `reported` or `estimated` |
@@ -309,14 +311,19 @@ Common plugin log lines:
 
 `log_full: true` means the plugin emitted more log data than the per-plugin buffer holds, so later lines were dropped. Treat it as a hint to trim the plugin's log output rather than as an error.
 
-### `errors` values
+### `diagnostics` values
 
-| Value | Description |
-|-------|-------------|
-| `RouteNotFound` | No matching route for the request |
-| `XffHeaderTooLong` | `X-Forwarded-For` header exceeded the allowed length |
-| `BackendNotFound` | Backend service could not be resolved |
-| `UpstreamConnectError` | Connection to the upstream failed |
+Diagnostics preserve encounter order and repeated entries. An `error` diagnostic records an
+encountered failure, rejection, or degradation; it is not automatically an alert because a later
+retry may recover. Alerting should be code-specific and may also consider the final status and
+aggregate rate. Diagnostic codes have no numeric representation and do not imply an HTTP status.
+
+| Kind | Code | Description |
+|------|------|-------------|
+| `error` | `RouteNotFound` | No matching route for the request |
+| `error` | `XffHeaderTooLong` | `X-Forwarded-For` header exceeded the allowed length |
+| `error` | `BackendRequestTimeoutRetry` | An upstream attempt hit its per-try timeout and was retried |
+| `info` | `AcmeChallengeServed` | The gateway served an ACME HTTP-01 challenge locally |
 
 ## Extending the log: AccessLogExtern
 
@@ -618,11 +625,11 @@ access_log_options:
 ### Client disconnected before delivery
 
 When the response cannot be delivered because the client already disconnected,
-the request-level `errors` array carries `ClientClosed` (499_01). The status
+the request-level `diagnostics` array carries the error code `ClientClosed`. The status
 is 499 when the disconnect itself ended the proxying; when the disconnect is
 only discovered while writing the final error response, the record keeps the
 original error status (e.g. 504, or 200 for gRPC trailers-only responses).
-Filter on `errors` containing `ClientClosed`, not on `status == 499`. On
+Filter on the `ClientClosed` diagnostic, not on `status == 499`. On
 HTTP/1.1 the gateway notices the disconnect while an
 upstream attempt is in flight and aborts within milliseconds, so the typical
 record shows a single canceled attempt; a disconnect that lands in the retry
@@ -633,7 +640,7 @@ that had already given up:
 ```json
 {
   "request_info": { "status": 499 },
-  "errors": ["ClientClosed"],
+  "diagnostics": [{ "kind": "error", "code": "ClientClosed" }],
   "backend_context": {
     "upstreams": [
       { "ip": "10.0.0.5", "port": 8080, "status": 499, "ct": 0, "et": 512 }
@@ -652,7 +659,7 @@ that had already given up:
     "path": "/test",
     "status": 404
   },
-  "errors": ["RouteNotFound"],
+  "diagnostics": [{ "kind": "error", "code": "RouteNotFound" }],
   "backend_context": null
 }
 ```

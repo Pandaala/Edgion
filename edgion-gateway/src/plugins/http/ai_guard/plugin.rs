@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{AiGuardConfig, AiGuardRejectionMode};
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 
 use super::evaluator::CompiledEvaluator;
 use super::rules::{CompiledRules, GuardDecision, RuleSpan};
@@ -93,10 +93,10 @@ impl AiGuard {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
         kind: &'static str,
-        status: EdgionStatus,
+        status: EdgionErrorCode,
     ) -> PluginRunningResult {
         log.push_err(kind);
-        session.add_error(status);
+        session.record_error(status);
         PluginRunningResult::ErrResponse {
             status: 500,
             body: None,
@@ -179,7 +179,12 @@ impl RequestFilter for AiGuard {
         // Ordering fault: AiProxy already captured the canonical body, so a
         // mask published now could never reach the provider.
         if session.ctx().has_ai_attempt_plan() {
-            return Self::configuration_fault(session, log, "guard after ai proxy", EdgionStatus::BodyMutationConflict);
+            return Self::configuration_fault(
+                session,
+                log,
+                "guard after ai proxy",
+                EdgionErrorCode::BodyMutationConflict,
+            );
         }
 
         let body = match session.read_request_body(None).await {
@@ -196,7 +201,7 @@ impl RequestFilter for AiGuard {
         let facts = request_facts(&body);
 
         let Some(generation) = session.ctx().request_body.generation() else {
-            return Self::configuration_fault(session, log, "body not buffered", EdgionStatus::BodyRefusedStage);
+            return Self::configuration_fault(session, log, "body not buffered", EdgionErrorCode::BodyRefusedStage);
         };
 
         // Both span caps default to the resolved request-body cap, so the guard
@@ -284,7 +289,12 @@ impl RequestFilter for AiGuard {
                 }
                 edits.sort_by_key(|(range, _)| range.start);
                 if edits.windows(2).any(|pair| pair[0].0.end > pair[1].0.start) {
-                    return Self::configuration_fault(session, log, "span overlap", EdgionStatus::BodyMutationConflict);
+                    return Self::configuration_fault(
+                        session,
+                        log,
+                        "span overlap",
+                        EdgionErrorCode::BodyMutationConflict,
+                    );
                 }
                 match session.replace_request_body_spans(generation, &edits).await {
                     Ok(_) => Outcome::Masked(edits.len()),
@@ -293,7 +303,7 @@ impl RequestFilter for AiGuard {
                             session,
                             log,
                             "body changed under guard",
-                            EdgionStatus::BodyMutationConflict,
+                            EdgionErrorCode::BodyMutationConflict,
                         )
                     }
                     Err(BodyReadError::BufferLimitExceeded { .. }) => {
@@ -469,7 +479,7 @@ mod tests {
             session
                 .expect_get_path()
                 .return_const("/v1/chat/completions".to_string());
-            session.expect_add_error().returning(|_| ());
+            session.expect_record_error().returning(|_| ());
             // An ordering fault must never be softened, and never rendered as
             // a content-policy decision.
             session.expect_read_request_body().never();
@@ -625,7 +635,7 @@ mod tests {
         session
             .expect_replace_request_body_spans()
             .returning(|_, _| Err(BodyReadError::GenerationConflict));
-        session.expect_add_error().returning(|_| ());
+        session.expect_record_error().returning(|_| ());
 
         let mut log = PluginLog::new("AiGuard");
         assert_eq!(

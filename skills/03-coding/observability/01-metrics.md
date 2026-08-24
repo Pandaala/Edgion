@@ -125,7 +125,7 @@ Labels are only for bounded enums (cardinality ≤ tens):
 // Reasonable label: bounded enum
 counter!(
     names::BACKEND_REQUESTS_TOTAL,
-    "status" => status_group(ctx.request_info.status),   // "2xx"/"3xx"/"4xx"/"5xx"/"failed"
+    "status" => status_group(ctx.request_info.status_option()), // "2xx"/"3xx"/"4xx"/"5xx"/"failed"
     "protocol" => "grpc",
     "gateway_name" => gateway_name,                       // bounded number of instances
 )

@@ -92,7 +92,7 @@ and others later) may reference it via a generic `dataRef`.
 | EdgionConfigData present, valid | `base ⊕ overlay` (field-level replace) |
 | `enable=false` effective (envelope `spec.enable` or variant `enable`) | **Base** + `overlay_disabled` signal (envelope kill switch) |
 
-Signals: gateway uses access-log `EdgionStatus` + Prometheus counter. No `tracing::error!` on the data plane.
+Signals: gateway uses an access-log `EdgionErrorCode` diagnostic + Prometheus counter. No `tracing::error!` on the data plane.
 
 > Three CI gates guard this contract — see [`skills/09-misc/cicd/02-github-workflow.md`](../../../09-misc/cicd/02-github-workflow.md) "EdgionConfigData overlay gates". In short: forbidden-legacy-refs grep, CRD `type` ↔ Rust `ConfigEntry` parity, and overlay-consumer signal completeness (all four signals above).
 

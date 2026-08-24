@@ -34,9 +34,8 @@ pub async fn logging(
     // `connected_to_upstream` (see `lb_runtime_cleanup` for the full contract).
     lb_runtime_cleanup(ctx);
 
-    if let Some(resp_header) = session.response_written() {
-        ctx.request_info.status = Some(resp_header.status.as_u16());
-    }
+    let session_status = session.response_written().map(|header| header.status.as_u16());
+    ctx.finalize_downstream_status(session_status);
 
     let ai_ttft_ms = ctx.get_current_upstream().and_then(|upstream| upstream.bt);
     if let Some(state) = ctx.ai_state_mut() {
@@ -73,8 +72,8 @@ pub async fn logging(
     // entry.timestamp is i64 milliseconds; guard negative values before casting.
     let meta = LogMeta {
         timestamp_ns: entry.timestamp.max(0) as u64 * 1_000_000,
-        severity_number: LogMeta::severity_from_status(entry.request_info.status),
-        status_code: entry.request_info.status,
+        severity_number: LogMeta::severity_from_status(entry.request_info.status_option()),
+        status_code: entry.request_info.status_option(),
         method: Some(session.req_header().method.as_str().to_string()),
         path: Some(entry.request_info.normalized_current_path.clone()),
     };
@@ -273,7 +272,7 @@ async fn finalize_ai_quota(ctx: &mut EdgionHttpContext) {
         if let Some(summary) = state.summary.as_mut() {
             summary.quota_status = Some("accounting_overflow");
         }
-        ctx.add_error(edgion_resources::EdgionStatus::AiQuotaReconciliationFailed);
+        ctx.record_error(edgion_resources::EdgionErrorCode::AiQuotaReconciliationFailed);
         return;
     };
     let Some(quota) = state.request.as_mut().and_then(|ai| ai.quota.as_mut()) else {
@@ -287,7 +286,7 @@ async fn finalize_ai_quota(ctx: &mut EdgionHttpContext) {
         status,
         crate::ai::quota::QuotaFinalStatus::Failed | crate::ai::quota::QuotaFinalStatus::TimedOut
     ) {
-        ctx.add_error(edgion_resources::EdgionStatus::AiQuotaReconciliationFailed);
+        ctx.record_error(edgion_resources::EdgionErrorCode::AiQuotaReconciliationFailed);
     }
 }
 
@@ -342,7 +341,7 @@ fn try_record_via_handles(ctx: &EdgionHttpContext, duration_ms: f64) -> bool {
         Some(p) => p,
         None => return false,
     };
-    let s_idx = status_to_idx(ctx.request_info.status);
+    let s_idx = status_to_idx(ctx.request_info.status_option());
     let idx = ps_index(p_idx, s_idx);
 
     // Graceful degradation on a stale-handle / backend-index mismatch: `record`
@@ -396,7 +395,7 @@ fn record_request_metrics_fallback(ctx: &EdgionHttpContext, error: Option<&Pingo
         ("", String::new())
     };
 
-    let status = status_group(ctx.request_info.status);
+    let status = status_group(ctx.request_info.status_option());
     record_backend_request(
         &get_backend_requests_config().labels,
         gateway_ns,

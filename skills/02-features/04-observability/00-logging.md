@@ -29,9 +29,9 @@ Each entry is serialized from `AccessLogEntry` (`edgion-gateway/src/observe/acce
 |-------|-------------|
 | `ts` | Entry timestamp (epoch milliseconds) |
 | `request_info.host` / `request_info.path` | Request host and normalized current path |
-| `request_info.status` | Response status code |
+| `request_info.status` | Final downstream HTTP status (`0` when unknown), matching Nginx/OpenResty `$status` semantics |
 | `match_info.sv` | Controller → Gateway sync version (omitted when 0) |
-| `info` / `errors` | Gateway-internal normal events / exception reasons |
+| `diagnostics` | Ordered `{kind, code}` request events; errors may be recovered by a later retry |
 | `stage_logs` | Per-plugin execution log (compact, ≤ 40 bytes per entry) |
 | `backend_context.upstreams` | Upstream connection details (ip, port, timing phases, retry) |
 | `request_uri` | **Optional** raw client-entry URI; emitted only when `access_log_options.includeRawUri: true` |

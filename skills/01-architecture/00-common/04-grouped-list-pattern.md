@@ -72,7 +72,7 @@ Closed cases (do not reopen without new requirement): see the "Closed: not group
 
 - **Hit branch** (`Allow` / `OK`): `PluginLog` must include `group=<name>`. Follow the `<verb>:group=<name>` shape that IpRestriction uses (`allow:group=<name>`, `deny:group=<name>`, `deny:default`, `deny:not-in-allow`) so existing log parsers keep working.
 - **Failure / anonymous branch** (`Deny *`, `Allow anon`): **must not** include `group=`. Leaking the group on a failed credential lets an attacker enumerate multi-tenant topology by brute-forcing keys. This is an iron rule; every grouping plugin records it as `skills/04-review/<plugin>/group-in-ok-log.md`.
-- **Tracing forbidden on the data plane**: all attribution signal on the gateway path goes through `PluginLog`, the access log's `EdgionStatus`, or Prometheus metrics. `tracing::warn!/error!/info!` is reserved for the controller (resolution path, duplicate warnings). See [`../../03-coding/01-log-safety.md`](../../03-coding/01-log-safety.md) iron rule 3.
+- **Tracing forbidden on the data plane**: all attribution signal on the gateway path goes through `PluginLog`, access-log diagnostics, or Prometheus metrics. `tracing::warn!/error!/info!` is reserved for the controller (resolution path, duplicate warnings). See [`../../03-coding/01-log-safety.md`](../../03-coding/01-log-safety.md) iron rule 3.
 
 ## 5. Access-log skill must be updated in the same PR
 

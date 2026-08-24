@@ -25,7 +25,7 @@ pub use storage::{BodyStorage, BodyStorageView};
 
 /// Whether a captured request body was being replayed to the upstream on this
 /// session. Error handling uses this to attribute a gateway-local replay
-/// failure in the access log (`EdgionStatus::BodyReplayFailed`) — the final
+/// failure in the access log (`EdgionErrorCode::BodyReplayFailed`) — the final
 /// error alone only shows an unactionable `InternalError`.
 pub fn request_body_replay_active(session: &pingora_proxy::Session) -> bool {
     session.as_ref().request_body_buffer_replaying()

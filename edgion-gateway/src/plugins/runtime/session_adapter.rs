@@ -21,7 +21,7 @@ use crate::{EdgionHttpContext, MirrorState, PendingHeaderOp, ResponseStageDenial
 use edgion_resources::common::{KeyGet, KeySet};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::sanitize_field_value;
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 
 /// Resolve a `${matchedHttpRoute:<selector>}` / `${matchedGrpcRoute:<selector>}`
 /// selector against route metadata.
@@ -149,7 +149,6 @@ pub(crate) fn build_response_local_reply(
     }
     ctx.local_reply_header = Some(Box::new(fresh));
     ctx.local_reply_body = Some(if bodyless { bytes::Bytes::new() } else { body_bytes });
-    ctx.add_info(EdgionStatus::PluginResponseReplaced);
     true
 }
 
@@ -196,7 +195,7 @@ impl<'a> PingoraSessionAdapter<'a> {
             return Err(BodyReadError::Unimplemented);
         }
         if !self.ctx.request_info.in_request_body_stage {
-            self.ctx.add_error(EdgionStatus::BodyRefusedStage);
+            self.ctx.record_error(EdgionErrorCode::BodyRefusedStage);
             return Err(BodyReadError::NotBuffered);
         }
         if self.ctx.request_body.has_cached_body() {
@@ -205,11 +204,11 @@ impl<'a> PingoraSessionAdapter<'a> {
         if self.ctx.request_info.discover_protocol.as_deref() == Some("websocket")
             || self.inner.req_header().method == http::Method::CONNECT
         {
-            self.ctx.add_error(EdgionStatus::BodyRefusedWebsocket);
+            self.ctx.record_error(EdgionErrorCode::BodyRefusedWebsocket);
             return Err(BodyReadError::NotBuffered);
         }
         if self.ctx.request_info.is_grpc_request || self.ctx.is_grpc_route_matched {
-            self.ctx.add_error(EdgionStatus::BodyRefusedGrpc);
+            self.ctx.record_error(EdgionErrorCode::BodyRefusedGrpc);
             return Err(BodyReadError::NotBuffered);
         }
         if self.ctx.request_info.body_declared != Some(false) {
@@ -324,7 +323,7 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// `Upgrade: <anything>` on an ordinary request; unless the upstream answers
     /// `101` no protocol switch happened, the response header is still in hand
     /// (nothing has been written downstream at either response-stage entry
-    /// point — `response_committed` is only set by the local-reply/error paths),
+    /// point — response-write ownership is only claimed by final writer paths),
     /// and a plugin's denial must be able to replace it. Keying the refusal on
     /// the request header instead let any request carrying an unrecognized
     /// `Upgrade` token drop a plugin's `ErrResponse` on the floor and forward the
@@ -354,7 +353,8 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// log to what the gRPC translation cost: the plugin's body is dropped and
     /// its status only survives as far as `http_to_grpc_status` maps it.
     pub fn note_response_local_reply_unsupported(&mut self) {
-        self.ctx.add_error(EdgionStatus::PluginResponseReplaceUnsupportedGrpc);
+        self.ctx
+            .record_error(EdgionErrorCode::PluginResponseReplaceUnsupportedGrpc);
     }
 
     /// Arm the response-stage abort for an `ErrResponse` that
@@ -370,9 +370,9 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// `fail_to_proxy`'s `status.is_none()` fill-in would never fire and the log
     /// would attribute the request to the response the client never received.
     pub fn set_response_denied(&mut self, status: u16) {
-        self.ctx.request_info.status = Some(status);
+        self.ctx.select_final_downstream_status(status);
         self.ctx.response_denial = Some(ResponseStageDenial::Http(status));
-        self.ctx.add_error(EdgionStatus::PluginResponseDenyAborted);
+        self.ctx.record_error(EdgionErrorCode::PluginResponseDenyAborted);
     }
 
     /// Arm the response-stage abort for a naked `ErrTerminateRequest`.
@@ -380,11 +380,11 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// Mirrors the request stage's contract for the same result
     /// (`error_response::terminate_with_fallback`): a plugin that terminates
     /// without writing a response is a plugin bug, answered with a 502 fallback
-    /// and [`EdgionStatus::PluginTerminateWithoutResponse`]. The response stage
+    /// and [`EdgionErrorCode::PluginTerminateWithoutResponse`]. The response stage
     /// had no equivalent — it returned "terminate" and the upstream response was
     /// forwarded anyway, unconditionally, with no marker at all.
     pub fn set_response_terminate_without_reply(&mut self) {
-        self.ctx.add_error(EdgionStatus::PluginTerminateWithoutResponse);
+        self.ctx.record_error(EdgionErrorCode::PluginTerminateWithoutResponse);
         self.set_response_denied(502);
     }
 
@@ -399,10 +399,10 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// The wire status of a gRPC error is 200 (the error lives in the trailers),
     /// so that — not the gRPC code — is what the access log records.
     pub fn set_response_denied_grpc(&mut self, status: u16, message: Option<String>) {
-        self.ctx.request_info.status = Some(200);
+        self.ctx.select_final_downstream_status(200);
         self.ctx.request_info.grpc_status = Some(status);
         self.ctx.response_denial = Some(ResponseStageDenial::Grpc { status, message });
-        self.ctx.add_error(EdgionStatus::PluginResponseDenyAborted);
+        self.ctx.record_error(EdgionErrorCode::PluginResponseDenyAborted);
     }
 
     /// Whether the in-flight request is gRPC/gRPC-Web. Used by the response
@@ -441,9 +441,10 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// grpc-status (and grpc-message if provided) as ordinary header fields alongside the
     /// HTTP/2 pseudo-headers and content-type. No DATA frame is emitted.
     pub async fn send_grpc_error_direct(&mut self, grpc_status: u16, message: Option<&str>) -> PluginSessionResult<()> {
-        self.ctx.request_info.status = Some(200);
+        if !self.ctx.claim_final_response(200) {
+            return Ok(());
+        }
         self.ctx.request_info.grpc_status = Some(grpc_status);
-        self.ctx.request_info.response_committed = true;
         self.grpc_response_terminated = true;
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
@@ -502,9 +503,10 @@ impl<'a> PingoraSessionAdapter<'a> {
         http_status: u16,
     ) -> PluginSessionResult<()> {
         let (grpc_status, grpc_message) = http_to_grpc_status(http_status);
-        ctx.request_info.status = Some(200);
+        if !ctx.claim_final_response(200) {
+            return Ok(());
+        }
         ctx.request_info.grpc_status = Some(grpc_status);
-        ctx.request_info.response_committed = true;
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
         // Drain queued response-header ops, strip framing headers, then re-assert content-type
@@ -562,7 +564,7 @@ pub(crate) enum RequestAdmission {
     /// The request truthfully declared no body.
     PassThrough,
     /// We decline to buffer. Always fail-close; never softened by policy.
-    Refuse(EdgionStatus),
+    Refuse(EdgionErrorCode),
     /// Buffer the body.
     Buffer,
 }
@@ -586,7 +588,7 @@ pub(crate) fn request_admission(ctx: &EdgionHttpContext, past_request_stage: boo
         // is expected traffic. This arm is a BUG — a call site reached body
         // admission without `snapshot_body_declared`. Sharing one status would
         // bury the bug signal under the expected case's volume.
-        None => return RequestAdmission::Refuse(EdgionStatus::BodyRefusedNoSnapshot),
+        None => return RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedNoSnapshot),
         Some(true) => {}
     }
 
@@ -594,13 +596,13 @@ pub(crate) fn request_admission(ctx: &EdgionHttpContext, past_request_stage: boo
     //    processing has completed (any of: the response header is bound, the
     //    upstream response body stage, or any later stage).
     if past_request_stage {
-        return RequestAdmission::Refuse(EdgionStatus::BodyRefusedStage);
+        return RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedStage);
     }
 
     // 3. Declared a body AND claims WebSocket — an anomalous shape no
     //    legitimate client produces.
     if ctx.request_info.discover_protocol.as_deref() == Some("websocket") {
-        return RequestAdmission::Refuse(EdgionStatus::BodyRefusedWebsocket);
+        return RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedWebsocket);
     }
 
     // 4. gRPC, by EITHER fact. `is_grpc_request` is client-controlled and
@@ -609,7 +611,7 @@ pub(crate) fn request_admission(ctx: &EdgionHttpContext, past_request_stage: boo
     //    Widening a refusal with a client-controlled fact is safe precisely
     //    because a refusal cannot be softened into a skip.
     if ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched {
-        return RequestAdmission::Refuse(EdgionStatus::BodyRefusedGrpc);
+        return RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedGrpc);
     }
 
     RequestAdmission::Buffer
@@ -649,17 +651,17 @@ pub(crate) fn response_admission(
 ) -> RequestAdmission {
     // 1. No response header bound: this is a request-stage call.
     let Some(status) = status else {
-        return RequestAdmission::Refuse(EdgionStatus::BodyRefusedStage);
+        return RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedStage);
     };
 
     // 2. Only a real 101 is a tunnel.
     if status == 101 {
-        return RequestAdmission::Refuse(EdgionStatus::BodyRefusedWebsocket);
+        return RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedWebsocket);
     }
 
     // 3. A gRPC response body does not end until the RPC does.
     if ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched {
-        return RequestAdmission::Refuse(EdgionStatus::BodyRefusedGrpc);
+        return RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedGrpc);
     }
 
     // 4. Statuses that carry no body, plus HEAD (RFC 9110 9.3.2).
@@ -784,6 +786,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             self.grpc_response_terminated = true;
             return Self::send_grpc_trailers_only(self.inner, self.ctx, http_status).await;
         }
+        if !self.ctx.claim_final_response(http_status) {
+            return Ok(());
+        }
         let mut resp = resp;
         if !self.ctx.pending_response_header_ops.is_empty() {
             // Unify: queued response-header ops (dye/record_outcome from
@@ -818,9 +823,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .write_response_header(resp, end_of_stream)
             .await
             .map_err(|e| Box::new(e) as PluginSessionError);
-        if result.is_ok() {
-            self.ctx.request_info.response_committed = true;
-        }
         result
     }
 
@@ -1051,8 +1053,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx
     }
 
-    fn add_error(&mut self, status: edgion_resources::EdgionStatus) {
-        self.ctx.add_error(status);
+    fn record_error(&mut self, status: edgion_resources::EdgionErrorCode) {
+        self.ctx.record_error(status);
     }
 
     fn set_ai_request_context(&mut self, context: AiRequestContext) -> bool {
@@ -1250,7 +1252,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 Ok(0)
             }
             RequestAdmission::Refuse(status) => {
-                self.ctx.add_error(status);
+                self.ctx.record_error(status);
                 Err(BodyReadError::NotBuffered)
             }
             RequestAdmission::Buffer => self.capture_request_body(max_bytes).await,
@@ -1274,12 +1276,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         // from DSL's `resp.set_status` and from `response_rewrite` — so a
         // `resp.set_status(204)` ahead of a body consumer in the same array
         // would otherwise fabricate `Ok(Bytes::new())` for a response whose
-        // body is real and is on its way to the client. `ctx.request_info.status`
-        // is the upstream's own status, stamped in `upstream_response_filter`
+        // body is real and is on its way downstream. `pre_plugin_response_status`
+        // is the normalized upstream status, captured in `upstream_response_filter`
         // before any response-stage plugin runs. `None` (never stamped) yields
         // `false` -> `Buffer`, the loud direction.
-        let bodyless_agreed =
-            status.is_some_and(is_bodyless_status) && self.ctx.request_info.status.is_some_and(is_bodyless_status);
+        let bodyless_agreed = status.is_some_and(is_bodyless_status)
+            && self.ctx.pre_plugin_response_status.is_some_and(is_bodyless_status);
         // `PassThrough` is the SILENT disposition — it resolves to
         // `Ok(Bytes::new())`, whose contract is "the response truthfully
         // declared no body". It therefore requires BOTH the pre-plugin
@@ -1306,7 +1308,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         match response_admission(self.ctx, status, is_head, bodyless_agreed) {
             RequestAdmission::PassThrough => Ok(bytes::Bytes::new()),
             RequestAdmission::Refuse(status) => {
-                self.ctx.add_error(status);
+                self.ctx.record_error(status);
                 Err(BodyReadError::NotBuffered)
             }
             RequestAdmission::Buffer => {
@@ -2107,7 +2109,7 @@ mod tests {
         let ctx = admission_ctx(None, None, false);
         assert_eq!(
             request_admission(&ctx, false),
-            RequestAdmission::Refuse(EdgionStatus::BodyRefusedNoSnapshot)
+            RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedNoSnapshot)
         );
     }
 
@@ -2119,8 +2121,8 @@ mod tests {
         // the bug undetectable in the access log.
         let bug = request_admission(&admission_ctx(None, None, false), false);
         let expected = request_admission(&admission_ctx(Some(true), None, false), true);
-        assert_eq!(bug, RequestAdmission::Refuse(EdgionStatus::BodyRefusedNoSnapshot));
-        assert_eq!(expected, RequestAdmission::Refuse(EdgionStatus::BodyRefusedStage));
+        assert_eq!(bug, RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedNoSnapshot));
+        assert_eq!(expected, RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedStage));
         assert_ne!(bug, expected);
     }
 
@@ -2132,7 +2134,7 @@ mod tests {
         let ctx = admission_ctx(Some(true), None, false);
         assert_eq!(
             request_admission(&ctx, true),
-            RequestAdmission::Refuse(EdgionStatus::BodyRefusedStage)
+            RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedStage)
         );
     }
 
@@ -2141,7 +2143,7 @@ mod tests {
         let ctx = admission_ctx(Some(true), Some("websocket"), false);
         assert_eq!(
             request_admission(&ctx, false),
-            RequestAdmission::Refuse(EdgionStatus::BodyRefusedWebsocket)
+            RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedWebsocket)
         );
     }
 
@@ -2159,7 +2161,7 @@ mod tests {
         let ctx = admission_ctx(Some(true), None, true);
         assert_eq!(
             request_admission(&ctx, false),
-            RequestAdmission::Refuse(EdgionStatus::BodyRefusedGrpc)
+            RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedGrpc)
         );
 
         // Route-derived, with no gRPC content-type at all.
@@ -2167,7 +2169,7 @@ mod tests {
         ctx.is_grpc_route_matched = true;
         assert_eq!(
             request_admission(&ctx, false),
-            RequestAdmission::Refuse(EdgionStatus::BodyRefusedGrpc)
+            RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedGrpc)
         );
     }
 
@@ -2185,7 +2187,7 @@ mod tests {
         let ctx = EdgionHttpContext::new();
         assert_eq!(
             response_admission(&ctx, None, false, false),
-            RequestAdmission::Refuse(EdgionStatus::BodyRefusedStage)
+            RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedStage)
         );
     }
 
@@ -2194,7 +2196,7 @@ mod tests {
         let ctx = EdgionHttpContext::new();
         assert_eq!(
             response_admission(&ctx, Some(101), false, false),
-            RequestAdmission::Refuse(EdgionStatus::BodyRefusedWebsocket)
+            RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedWebsocket)
         );
     }
 
@@ -2216,7 +2218,7 @@ mod tests {
         ctx.request_info.is_grpc_request = true;
         assert_eq!(
             response_admission(&ctx, Some(200), false, false),
-            RequestAdmission::Refuse(EdgionStatus::BodyRefusedGrpc)
+            RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedGrpc)
         );
     }
 
@@ -2800,7 +2802,7 @@ mod record_outcome_tests {
             .expect("trailers-only header must have been written");
         assert_eq!(written.headers.get("X-O").unwrap().to_str().unwrap(), "v1");
         assert!(written.headers.get("grpc-status").is_some());
-        assert_eq!(ctx.request_info.status, Some(200));
+        assert_eq!(ctx.final_downstream_status(), Some(200));
         assert!(ctx.request_info.grpc_status.is_some());
         assert!(pending_ops(&ctx).is_empty());
     }
@@ -2902,7 +2904,7 @@ mod record_outcome_tests {
             let result = adapter.read_request_body(None).await;
             assert!(matches!(result, Err(BodyReadError::NotBuffered)));
         }
-        assert!(ctx.edgion_status.contains(&EdgionStatus::BodyRefusedStage));
+        assert!(ctx.diagnostics.contains_error(EdgionErrorCode::BodyRefusedStage));
     }
 
     /// A truthfully bodyless request needs no capture and remains readable as
@@ -2921,7 +2923,7 @@ mod record_outcome_tests {
 
         assert!(body.is_empty());
         assert!(!ctx.request_body.has_cached_body());
-        assert!(!ctx.edgion_status.contains(&EdgionStatus::BodyRefusedStage));
+        assert!(!ctx.diagnostics.contains_error(EdgionErrorCode::BodyRefusedStage));
     }
 
     #[tokio::test]
@@ -2972,7 +2974,7 @@ mod record_outcome_tests {
 
         assert_eq!(first, Bytes::from_static(b"buffered-before-upstream"));
         assert_eq!(first.as_ptr(), second.as_ptr());
-        assert!(!ctx.edgion_status.contains(&EdgionStatus::BodyRefusedStage));
+        assert!(!ctx.diagnostics.contains_error(EdgionErrorCode::BodyRefusedStage));
     }
 
     /// Late stages may read an existing cache, but must never acquire mutable
@@ -3001,7 +3003,7 @@ mod record_outcome_tests {
             ctx.request_body.read_all().await.unwrap().unwrap(),
             Bytes::from_static(b"immutable-after-upstream")
         );
-        assert!(ctx.edgion_status.contains(&EdgionStatus::BodyRefusedStage));
+        assert!(ctx.diagnostics.contains_error(EdgionErrorCode::BodyRefusedStage));
     }
 
     /// Regression pin for the backendRef-scoped plugin stage: `request_filter`
@@ -3013,7 +3015,7 @@ mod record_outcome_tests {
     /// `PingoraSessionAdapter::read_request_body` with the exact ctx shape
     /// that holds at those call sites and asserts it resolves to the
     /// real buffering path, not the stage/protocol refusal (`NotBuffered` /
-    /// `EdgionStatus::BodyRefusedStage`) that
+    /// `EdgionErrorCode::BodyRefusedStage`) that
     /// `read_request_body_refuses_once_past_request_stage` above pins for the
     /// opposite (post-`upstream_request_filter`) direction.
     #[tokio::test]
@@ -3269,7 +3271,7 @@ mod record_outcome_tests {
     /// `response_admission` unit test (see the `response_admission_*` tests
     /// earlier in this module) cannot catch a bug in how the override reads
     /// `self.response_header` / `self.inner.req_header().method` or whether
-    /// it forwards the refusal to `ctx.add_error`. This drives the real
+    /// it forwards the refusal to `ctx.record_error`. This drives the real
     /// trait method through a `with_response_header`-bound adapter over a
     /// real `pingora_proxy::Session`, status 101, the upgrade-refusal case.
     #[tokio::test]
@@ -3283,7 +3285,7 @@ mod record_outcome_tests {
             let result = adapter.read_response_body(None).await;
             assert!(matches!(result, Err(BodyReadError::NotBuffered)));
         }
-        assert!(ctx.edgion_status.contains(&EdgionStatus::BodyRefusedWebsocket));
+        assert!(ctx.diagnostics.contains_error(EdgionErrorCode::BodyRefusedWebsocket));
     }
 
     /// Stage-guard counterpart: `PingoraSessionAdapter::new` binds no
@@ -3300,18 +3302,18 @@ mod record_outcome_tests {
             let result = adapter.read_response_body(None).await;
             assert!(matches!(result, Err(BodyReadError::NotBuffered)));
         }
-        assert!(ctx.edgion_status.contains(&EdgionStatus::BodyRefusedStage));
+        assert!(ctx.diagnostics.contains_error(EdgionErrorCode::BodyRefusedStage));
     }
 
     /// PassThrough path: a bodyless status (204) that the UPSTREAM itself sent —
-    /// both the bound header and `ctx.request_info.status` agree — must return
+    /// both the bound header and `pre_plugin_response_status` agree — must return
     /// an empty, non-error body rather than falling into the
     /// `Buffer`/`Unimplemented` arm.
     #[tokio::test]
     async fn read_response_body_bodyless_status_passes_through_empty() {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
-        ctx.request_info.status = Some(204);
+        ctx.pre_plugin_response_status = Some(204);
         let mut response_header = ResponseHeader::build(204, None).unwrap();
 
         let result = {
@@ -3334,7 +3336,7 @@ mod record_outcome_tests {
         let mut ctx = EdgionHttpContext::default();
         // The upstream's own status, stamped in `upstream_response_filter`
         // before any response-stage plugin ran.
-        ctx.request_info.status = Some(200);
+        ctx.pre_plugin_response_status = Some(200);
         let mut response_header = ResponseHeader::build(200, None).unwrap();
 
         let result = {
@@ -3357,7 +3359,7 @@ mod record_outcome_tests {
     async fn read_response_body_ignores_bodyless_snapshot_when_status_rewritten_away() {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
-        ctx.request_info.status = Some(204);
+        ctx.pre_plugin_response_status = Some(204);
         let mut response_header = ResponseHeader::build(204, None).unwrap();
 
         let result = {
@@ -3563,8 +3565,9 @@ mod record_outcome_tests {
 
         let mut session = test_session_raw(request).await;
         let mut ctx = EdgionHttpContext::default();
-        // As stamped by `upstream_response_filter` before the plugin chains run.
-        ctx.request_info.status = Some(upstream_status);
+        // As captured by `upstream_response_filter` before plugin chains run.
+        ctx.pre_plugin_response_status = Some(upstream_status);
+        ctx.select_final_downstream_status(upstream_status);
         let mut response_header = ResponseHeader::build(upstream_status, None).unwrap();
         let result = PluginRunningResult::ErrResponse {
             status: 403,
@@ -3599,9 +3602,11 @@ mod record_outcome_tests {
             Some(ResponseStageDenial::Http(403)),
             "the denial must survive as an abort the entry point can act on"
         );
-        assert!(ctx.edgion_status.contains(&EdgionStatus::PluginResponseDenyAborted));
+        assert!(ctx
+            .diagnostics
+            .contains_error(EdgionErrorCode::PluginResponseDenyAborted));
         assert_eq!(
-            ctx.request_info.status,
+            ctx.final_downstream_status(),
             Some(403),
             "the access log must show the denial, not the upstream response the client never got"
         );
@@ -3616,7 +3621,9 @@ mod record_outcome_tests {
         assert!(terminate);
         assert!(ctx.local_reply_header.is_some());
         assert_eq!(ctx.response_denial, None);
-        assert!(!ctx.edgion_status.contains(&EdgionStatus::PluginResponseDenyAborted));
+        assert!(!ctx
+            .diagnostics
+            .contains_error(EdgionErrorCode::PluginResponseDenyAborted));
     }
 
     /// `ErrGrpcError` has no response-stage writer at all — the sync runner
@@ -3631,7 +3638,8 @@ mod record_outcome_tests {
         let mut session = test_session_raw("POST /svc/M HTTP/1.1\r\nHost: test\r\n\r\n").await;
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.is_grpc_request = true;
-        ctx.request_info.status = Some(200);
+        ctx.pre_plugin_response_status = Some(200);
+        ctx.select_final_downstream_status(200);
         let mut response_header = ResponseHeader::build(200, None).unwrap();
         let result = PluginRunningResult::ErrGrpcError {
             grpc_status: 8,
@@ -3654,11 +3662,13 @@ mod record_outcome_tests {
         );
         assert_eq!(ctx.request_info.grpc_status, Some(8));
         assert_eq!(
-            ctx.request_info.status,
+            ctx.final_downstream_status(),
             Some(200),
             "a gRPC error is HTTP 200 on the wire"
         );
-        assert!(ctx.edgion_status.contains(&EdgionStatus::PluginResponseDenyAborted));
+        assert!(ctx
+            .diagnostics
+            .contains_error(EdgionErrorCode::PluginResponseDenyAborted));
     }
 
     /// The broadest leak of the three: a naked `ErrTerminateRequest` needs NO
@@ -3672,7 +3682,8 @@ mod record_outcome_tests {
 
         let mut session = test_session_raw("GET /x HTTP/1.1\r\nHost: test\r\n\r\n").await;
         let mut ctx = EdgionHttpContext::default();
-        ctx.request_info.status = Some(200);
+        ctx.pre_plugin_response_status = Some(200);
+        ctx.select_final_downstream_status(200);
         let mut response_header = ResponseHeader::build(200, None).unwrap();
         let result = PluginRunningResult::ErrTerminateRequest;
 
@@ -3685,9 +3696,11 @@ mod record_outcome_tests {
         assert!(terminate);
         assert_eq!(ctx.response_denial, Some(ResponseStageDenial::Http(502)));
         assert!(ctx
-            .edgion_status
-            .contains(&EdgionStatus::PluginTerminateWithoutResponse));
-        assert!(ctx.edgion_status.contains(&EdgionStatus::PluginResponseDenyAborted));
-        assert_eq!(ctx.request_info.status, Some(502));
+            .diagnostics
+            .contains_error(EdgionErrorCode::PluginTerminateWithoutResponse));
+        assert!(ctx
+            .diagnostics
+            .contains_error(EdgionErrorCode::PluginResponseDenyAborted));
+        assert_eq!(ctx.final_downstream_status(), Some(502));
     }
 }

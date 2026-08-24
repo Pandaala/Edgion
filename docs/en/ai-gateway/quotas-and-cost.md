@@ -109,14 +109,14 @@ error description.
 
 Alert on:
 
-| EdgionStatus | Code | Meaning |
-|--------------|------|---------|
-| `AiQuotaOverLimitTerminated` | `999_12` | A streaming AI response was cut short by quota enforcement — a deliberate action, not an upstream failure. |
-| `AiQuotaErrorEventDropped` | `999_13` | The injected error event did not fit the per-batch emit budget before the cut; the client saw a bare truncation instead of the diagnostic event. |
-| `AiSseDecodeDegraded` | `999_14` | SSE decoding gave up on an AI response because one unterminated event exceeded the cap. On its own this costs accounting precision, not correctness: reported usage falls back to the character estimate. |
-| `AiSseDegradedQuotaTerminated` | `999_15` | A streaming AI response was cut short because quota could no longer be evaluated. Distinct from `AiQuotaOverLimitTerminated`: that one means the limit was reached, this one means the limit could no longer be measured. |
-| `AiSseDecodeMalformed` | `999_16` | At least one completed SSE event contained invalid UTF-8 and was excluded from usage parsing. Recorded once per request, whether or not quota enforcement is active. |
-| `AiSseMalformedQuotaTerminated` | `999_17` | The second cumulative malformed SSE event caused streaming Reject enforcement to fail closed. This is neither an actual over-limit result nor permanent decoder degradation. |
+| Error diagnostic | Meaning |
+|------------------|---------|
+| `AiQuotaOverLimitTerminated` | A streaming AI response was cut short by quota enforcement — a deliberate action, not an upstream failure. |
+| `AiQuotaErrorEventDropped` | The injected error event did not fit the per-batch emit budget before the cut; the client saw a bare truncation instead of the diagnostic event. |
+| `AiSseDecodeDegraded` | SSE decoding gave up on an AI response because one unterminated event exceeded the cap. On its own this costs accounting precision, not correctness: reported usage falls back to the character estimate. |
+| `AiSseDegradedQuotaTerminated` | A streaming AI response was cut short because quota could no longer be evaluated. Distinct from `AiQuotaOverLimitTerminated`: that one means the limit was reached, this one means the limit could no longer be measured. |
+| `AiSseDecodeMalformed` | At least one completed SSE event contained invalid UTF-8 and was excluded from usage parsing. Recorded once per request, whether or not quota enforcement is active. |
+| `AiSseMalformedQuotaTerminated` | The second cumulative malformed SSE event caused streaming Reject enforcement to fail closed. This is neither an actual over-limit result nor permanent decoder degradation. |
 
 ## Estimated cost
 

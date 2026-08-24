@@ -2,8 +2,8 @@ pub mod auth_dto;
 pub mod common;
 pub mod constants;
 pub mod credentials;
+pub mod diagnostic;
 pub mod duration;
-pub mod edgion_status;
 pub mod err;
 pub mod filters;
 pub mod geoip_codes;
@@ -47,7 +47,7 @@ pub use self::resource::{all_resource_type_names, default_capacity_for_kind, DEF
 
 // Re-export from other modules
 pub use self::constants::app::*;
-pub use self::edgion_status::EdgionStatus;
+pub use self::diagnostic::{EdgionErrorCode, EdgionInfoCode};
 pub use self::err::{
     EdError, WATCH_ERR_EVENTS_LOST, WATCH_ERR_NOT_READY, WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD,
     WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED,

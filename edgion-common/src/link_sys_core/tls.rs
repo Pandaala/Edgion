@@ -33,7 +33,7 @@ use crate::link_sys_core::outbound_tls::{self, EffectiveCa};
 /// (`provider_can_disable=false`). rustls has no skip-verify path — a
 /// `verify=false` config would silently fall through to a verifying connector,
 /// so this function rejects it upfront with
-/// [`EdgionStatus::OutboundTlsVerifyUnsupported`] instead.
+/// [`EdgionErrorCode::OutboundTlsVerifyUnsupported`] instead.
 ///
 /// Root certificate selection:
 /// - [`EffectiveCa::Custom`] → the CA PEM is the **only** trust root (private

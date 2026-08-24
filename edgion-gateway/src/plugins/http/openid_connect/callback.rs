@@ -240,7 +240,7 @@ impl OpenidConnect {
             Ok(d) => d,
             Err(e) => {
                 if let JwksProviderError::TlsSanMismatch { ref reason } = e {
-                    session.add_error(edgion_resources::EdgionStatus::OutboundTlsSanMismatch);
+                    session.record_error(edgion_resources::EdgionErrorCode::OutboundTlsSanMismatch);
                     plugin_log.push_err("outbound tls san mismatch");
                     plugin_log.push_fmt("san {}", la![reason.as_str()]);
                 }

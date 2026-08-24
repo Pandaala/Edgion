@@ -16,7 +16,7 @@ The only allowed observability channels on the data plane are:
 1. AccessLog (per-request JSON log for HTTP/gRPC, zero-copy).
 2. Protocol logs (`ssl_log` / `tcp_log` / `tls_log` / `udp_log`).
 3. Prometheus metrics (`metrics::counter!` / `histogram!` / `gauge!`).
-4. Error code accumulation (`EdgionStatus`, written into `EdgionHttpContext.errors` and ultimately landing in the AccessLog `errors` field).
+4. Ordered request diagnostics (`EdgionInfoCode` / `EdgionErrorCode`, stored in `EdgionHttpContext.diagnostics` and emitted in the access-log `diagnostics` field).
 
 Control-plane and startup logs use `tracing` and are not subject to this rule. See [`../../03-coding/01-log-safety.md`](../../03-coding/01-log-safety.md) iron rule 3 for details.
 
@@ -31,7 +31,8 @@ pub struct AccessLogEntry<'a> {
     pub timestamp: i64,
     pub request_info: &'a RequestInfo,
     pub match_info: Option<RouteMatchInfo<'a>>,  // HTTP or gRPC route match info
-    pub errors: &'a [EdgionStatus],
+    pub diagnostics: &'a [RequestDiagnostic],
+    pub diagnostics_full: bool,
     pub backend_context: Option<&'a BackendContext>,
     pub stage_logs: &'a [StageLogs],             // plugin execution logs
     pub conn_est: Option<bool>,                   // whether the upstream connection is established

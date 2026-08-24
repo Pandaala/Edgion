@@ -112,7 +112,7 @@ Callback after the upstream connection is established:
 
 Called when the upstream response headers are received:
 
-1. **Status code recording**: `ctx.request_info.status = status_code`.
+1. **Per-attempt status recording**: write the received code to the current `UpstreamInfo`. After retry decisions and response-stage normalization, snapshot the pre-plugin status and select the candidate final downstream status. Do not mutate `request_info.status` here.
 2. **Server header**: inject the custom Server header via `ServerHeaderOpts::apply_to_response()`.
 3. **Header time recording**: compute `ht` (header time, in milliseconds, from upstream attempt start to receiving response headers).
 4. **Sync plugin execution**:
@@ -234,7 +234,9 @@ Typical uses: IP allow/deny lists, geolocation filtering, connection rate limiti
 | `start_time` | `Instant` | Request start time |
 | `gateway_info` | `GatewayInfo` | Matched Gateway metadata |
 | `request_info` | `RequestInfo` | Request metadata: direct_peer_ip, remote_ip, hostname, path, status, x_trace_id, sni, tls_id, listener_port, discover_protocol |
-| `edgion_status` | `Vec<EdgionStatus>` | Error code collection |
+| `diagnostics` | `RequestDiagnostics` | Bounded, ordered information/error diagnostic history |
+| `pre_plugin_response_status` | `Option<u16>` | Upstream status snapshot used by response-body admission |
+| `final_downstream_status` | `Option<u16>` | Selected downstream status before terminal logging; private ownership state |
 | `route_unit` | `Option<Arc<HttpRouteRuleUnit>>` | Matched HTTP route rule |
 | `grpc_route_unit` | `Option<Arc<GrpcRouteRuleUnit>>` | Matched gRPC route rule |
 | `selected_backend` | `Option<HTTPBackendRef>` | LB-selected HTTP backend |
@@ -262,14 +264,15 @@ Each upstream attempt creates an `UpstreamInfo` recording fine-grained timings:
 
 **Definition**: `observe/access_log/entry.rs`
 
-`AccessLogEntry` is built by borrowing fields from `EdgionHttpContext` (`&'a RequestInfo`, `&'a BackendContext`, `&'a [EdgionStatus]`, `&'a [StageLogs]`), avoiding data copying.
+`AccessLogEntry` is built by borrowing fields from `EdgionHttpContext` (`&'a RequestInfo`, `&'a BackendContext`, `&'a [RequestDiagnostic]`, `&'a [StageLogs]`), avoiding data copying.
 
 ```rust
 pub struct AccessLogEntry<'a> {
     pub timestamp: i64,                      // millisecond timestamp
     pub request_info: &'a RequestInfo,        // borrowed
     pub match_info: Option<RouteMatchInfo<'a>>, // HTTP or gRPC match info
-    pub errors: &'a [EdgionStatus],           // borrowed
+    pub diagnostics: &'a [RequestDiagnostic], // borrowed
+    pub diagnostics_full: bool,
     pub backend_context: Option<&'a BackendContext>, // borrowed (includes upstreams list)
     pub stage_logs: &'a [StageLogs],          // borrowed
     pub conn_est: Option<bool>,               // WebSocket/gRPC-Web connection-established marker

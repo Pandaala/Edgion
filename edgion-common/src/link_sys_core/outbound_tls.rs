@@ -9,9 +9,9 @@
 use std::sync::LazyLock;
 
 use edgion_resources::constants::secret_keys::tls as tls_keys;
-use edgion_resources::edgion_status::EdgionStatus;
 use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
 use edgion_resources::resources::common::{OutboundTlsConfig, OutboundTlsLocal};
+use edgion_resources::EdgionErrorCode;
 use k8s_openapi::api::core::v1::Secret;
 use parking_lot::RwLock;
 use zeroize::Zeroizing;
@@ -124,7 +124,7 @@ pub fn aggregate_verify(blocks: &[OutboundTlsConfig]) -> OutboundTlsConfig {
 /// CA bytes are sourced from whichever block wins:
 /// - local block wins → CA bytes come **only** from the per-call `resolved_ca`.
 ///   If the local block declares `caCertificateRefs` but `resolved_ca` is
-///   `None`/empty, this fails with [`EdgionStatus::OutboundTlsCaMissing`] rather
+///   `None`/empty, this fails with [`EdgionErrorCode::OutboundTlsCaMissing`] rather
 ///   than silently falling back to the global bundles (which belong to the
 ///   global refs, not the local ones).
 /// - global block wins (no local `validation`) → CA bytes come from the
@@ -155,11 +155,11 @@ pub fn aggregate_verify(blocks: &[OutboundTlsConfig]) -> OutboundTlsConfig {
 ///
 /// # Errors
 ///
-/// - [`EdgionStatus::OutboundTlsVerifyUnsupported`] — `verify=false` requested
+/// - [`EdgionErrorCode::OutboundTlsVerifyUnsupported`] — `verify=false` requested
 ///   but `provider_can_disable == false`.
-/// - [`EdgionStatus::OutboundTlsCaMissing`] — `caCertificateRefs` declared but
+/// - [`EdgionErrorCode::OutboundTlsCaMissing`] — `caCertificateRefs` declared but
 ///   no resolved Secret carries a valid CA PEM bundle.
-/// - [`EdgionStatus::OutboundTlsClientCertInvalid`] — `resolved_client` is
+/// - [`EdgionErrorCode::OutboundTlsClientCertInvalid`] — `resolved_client` is
 ///   `Some` but the Secret is missing `tls.crt` or `tls.key`.
 pub fn resolve_outbound_tls(
     local: &OutboundTlsLocal,
@@ -167,7 +167,7 @@ pub fn resolve_outbound_tls(
     resolved_client: Option<&Secret>,
     provider_can_disable: bool,
     context: &str,
-) -> Result<ResolvedOutboundTls, EdgionStatus> {
+) -> Result<ResolvedOutboundTls, EdgionErrorCode> {
     let global = outbound_global_default();
 
     // Whole-block precedence: a present local `validation` shadows the global
@@ -198,7 +198,7 @@ pub fn resolve_outbound_tls(
                 provider = context,
                 "outbound TLS verify=false requested but provider does not support skip-verify"
             );
-            return Err(EdgionStatus::OutboundTlsVerifyUnsupported);
+            return Err(EdgionErrorCode::OutboundTlsVerifyUnsupported);
         }
         // Operator explicitly disabled verification; honored as their responsibility.
         tracing::warn!(
@@ -227,13 +227,13 @@ pub fn resolve_outbound_tls(
             // cross-block fallback (see the tuple selection comment).
             let secrets: &[Secret] = resolved_ca_effective
                 .filter(|s| !s.is_empty())
-                .ok_or(EdgionStatus::OutboundTlsCaMissing)?;
+                .ok_or(EdgionErrorCode::OutboundTlsCaMissing)?;
             let bundles: Vec<Vec<u8>> = secrets
                 .iter()
                 .filter_map(|s| s.data.as_ref()?.get(tls_keys::CA_CERT).map(|v| v.0.clone()))
                 .collect();
             if bundles.is_empty() {
-                return Err(EdgionStatus::OutboundTlsCaMissing);
+                return Err(EdgionErrorCode::OutboundTlsCaMissing);
             }
             EffectiveCa::Custom(bundles)
         }
@@ -249,13 +249,13 @@ pub fn resolve_outbound_tls(
                 .as_ref()
                 .and_then(|d| d.get(tls_keys::CERT))
                 .map(|v| v.0.clone())
-                .ok_or(EdgionStatus::OutboundTlsClientCertInvalid)?;
+                .ok_or(EdgionErrorCode::OutboundTlsClientCertInvalid)?;
             let key = secret
                 .data
                 .as_ref()
                 .and_then(|d| d.get(tls_keys::KEY))
                 .map(|v| Zeroizing::new(v.0.clone()))
-                .ok_or(EdgionStatus::OutboundTlsClientCertInvalid)?;
+                .ok_or(EdgionErrorCode::OutboundTlsClientCertInvalid)?;
             Some((cert, key))
         }
         None => None,
@@ -468,7 +468,7 @@ mod tests {
         };
         let r = resolve_outbound_tls(&local, None, None, true, "Test");
         assert!(
-            matches!(r, Err(EdgionStatus::OutboundTlsCaMissing)),
+            matches!(r, Err(EdgionErrorCode::OutboundTlsCaMissing)),
             "local CA refs with no resolved bytes must error, got: {:?}",
             r.map(|_| "Ok(resolved)")
         );

@@ -96,7 +96,7 @@ Defined in `edgion-gateway/src/ctx.rs`, the "backpack" carried through the entir
 | `start_time` | Request timing |
 | `gateway_info` | Gateway metadata |
 | `request_info` | Client address, hostname, path, trace ID, SNI, gRPC metadata |
-| `edgion_status` | Error codes accumulated during processing |
+| `diagnostics` | Bounded, ordered information/error diagnostics accumulated during request processing |
 | `route_unit` / `grpc_route_unit` | The matched routing rule (containing `PluginRuntime`) |
 | `selected_backend` / `selected_grpc_backend` | The selected backend reference |
 | `backend_context` | Service name, upstream attempt count, connection time |

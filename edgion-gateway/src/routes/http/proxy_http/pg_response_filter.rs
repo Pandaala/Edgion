@@ -5,6 +5,7 @@ use super::pg_upstream_response_filter::{is_interim_informational, response_deni
 use super::EdgionHttpProxy;
 use crate::ctx::ResponseStreamKind;
 use crate::EdgionHttpContext;
+use edgion_resources::EdgionInfoCode;
 use pingora_core::modules::http::compression::ResponseCompression;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
@@ -163,15 +164,16 @@ pub async fn response_filter(
     // directly to the downstream and abort the pump so the upstream response is
     // not forwarded. This is the single write+abort point; it handles both
     // body-less and body-present upstreams (Phase 8 is never reached).
-    if ctx.local_reply_header.is_some() && !ctx.request_info.response_committed {
+    if ctx.local_reply_header.is_some() && !ctx.response_write_started() {
         let mut header = ctx.local_reply_header.take().expect("checked is_some");
         // Stamp the gateway Server identity onto the freshly-built reply header.
         edgion_http.server_header_opts.apply_to_response(&mut header);
         let body = ctx.local_reply_body.take().unwrap_or_default();
         let body_empty = body.is_empty();
-        ctx.request_info.status = Some(header.status.as_u16());
-        ctx.request_info.response_committed = true;
-        ctx.local_reply_written = true;
+        let status = header.status.as_u16();
+        if !ctx.claim_final_response(status) {
+            return Ok(());
+        }
         // Writing this reply and returning the abort `Err` below tears down the
         // downstream connection. Disable keepalive first so Pingora's H1 codec
         // emits `Connection: close` on the wire (no-op semantics for H2): without
@@ -180,9 +182,11 @@ pub async fn response_filter(
         // surfacing as an intermittent transport-level send error.
         session.set_keepalive(None);
         session.write_response_header(header, body_empty).await?;
+        ctx.local_reply_written = true;
         if !body_empty {
             session.write_response_body(Some(body), true).await?;
         }
+        ctx.record_info(EdgionInfoCode::PluginResponseReplaced);
         return Err(pingora_core::Error::explain(
             pingora_core::ErrorType::InternalError,
             "edgion response local reply",
@@ -210,6 +214,7 @@ pub async fn response_filter(
         );
         compression_ctx.adjust_level(level);
     }
+    ctx.claim_final_response(upstream_response.status.as_u16());
     Ok(())
 }
 

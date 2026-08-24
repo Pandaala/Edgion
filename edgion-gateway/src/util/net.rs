@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 /// Category of backend address blocked for security reasons.
 ///
-/// Stable, low-cardinality labels suitable for `edgion_status` / access log.
+/// Stable, low-cardinality labels suitable for request diagnostics / access log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockedBackendReason {
     /// 127.0.0.0/8 or ::1 — loopback

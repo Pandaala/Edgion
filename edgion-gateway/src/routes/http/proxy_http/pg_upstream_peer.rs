@@ -28,7 +28,7 @@ use edgion_common::dns::resolve;
 use edgion_resources::err::EdError;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::path_normalization::get_path_normalization_config;
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 use pingora_core::upstreams::peer::Peer;
@@ -47,14 +47,14 @@ fn ai_predispatch_error(error: AiDispatchError) -> Option<AiProxyError> {
     }
 }
 
-fn ai_predispatch_deadline_mapping(error: &AiDispatchError) -> Option<(EdgionStatus, &'static str)> {
+fn ai_predispatch_deadline_mapping(error: &AiDispatchError) -> Option<(EdgionErrorCode, &'static str)> {
     match error {
         AiDispatchError::RequestDeadlineExceeded => Some((
-            EdgionStatus::RequestTimeoutExceeded,
+            EdgionErrorCode::RequestTimeoutExceeded,
             "Request timeout exceeded during AI predispatch selection",
         )),
         AiDispatchError::GrpcDeadlineExceeded => Some((
-            EdgionStatus::GrpcClientDeadlineExceeded,
+            EdgionErrorCode::GrpcClientDeadlineExceeded,
             "gRPC client deadline exceeded during AI predispatch selection",
         )),
         _ => None,
@@ -63,7 +63,7 @@ fn ai_predispatch_deadline_mapping(error: &AiDispatchError) -> Option<(EdgionSta
 
 fn ai_predispatch_deadline_response(error: &AiDispatchError, ctx: &mut EdgionHttpContext) -> Option<BError> {
     let (status, detail) = ai_predispatch_deadline_mapping(error)?;
-    ctx.add_error(status);
+    ctx.record_error(status);
     if let Some(upstream) = ctx.get_current_upstream_mut() {
         upstream.status = Some(504);
     }
@@ -94,8 +94,9 @@ async fn end_ai_predispatch_error(
     edgion_http.server_header_opts.apply_to_response(&mut response);
     response.insert_header("content-type", "application/json")?;
     response.insert_header("content-length", body.len().to_string())?;
-    ctx.request_info.status = Some(status);
-    ctx.request_info.response_committed = true;
+    if !ctx.claim_final_response(status) {
+        return Ok(());
+    }
     session.write_response_header(Box::new(response), false).await?;
     session.write_response_body(Some(Bytes::from(body)), true).await
 }
@@ -150,7 +151,7 @@ pub async fn upstream_peer(
     if let Some(timeout) = request_timeout {
         let elapsed = std::time::Instant::now().saturating_duration_since(ctx.start_time);
         if elapsed >= timeout {
-            ctx.add_error(EdgionStatus::RequestTimeoutExceeded);
+            ctx.record_error(EdgionErrorCode::RequestTimeoutExceeded);
             if let Some(upstream) = ctx.get_current_upstream_mut() {
                 upstream.status = Some(504);
             }
@@ -165,7 +166,7 @@ pub async fn upstream_peer(
     // before peer selection so the client sees DEADLINE_EXCEEDED via the
     // 504 → grpc-status 4 mapping rather than waiting for a transport reset.
     if ctx.grpc_deadline_exceeded() {
-        ctx.add_error(EdgionStatus::GrpcClientDeadlineExceeded);
+        ctx.record_error(EdgionErrorCode::GrpcClientDeadlineExceeded);
         if let Some(upstream) = ctx.get_current_upstream_mut() {
             upstream.status = Some(504);
         }
@@ -209,7 +210,7 @@ pub async fn upstream_peer(
                 // a sub-minimum immediate retry.
                 BackoffAction::FailBudgetTooSmall { prefer_request } => {
                     if prefer_request {
-                        ctx.add_error(EdgionStatus::RequestTimeoutExceeded);
+                        ctx.record_error(EdgionErrorCode::RequestTimeoutExceeded);
                         if let Some(upstream) = ctx.get_current_upstream_mut() {
                             upstream.status = Some(504);
                         }
@@ -218,7 +219,7 @@ pub async fn upstream_peer(
                             "Request timeout budget too small to honour retry backoff",
                         ));
                     }
-                    ctx.add_error(EdgionStatus::GrpcClientDeadlineExceeded);
+                    ctx.record_error(EdgionErrorCode::GrpcClientDeadlineExceeded);
                     if let Some(upstream) = ctx.get_current_upstream_mut() {
                         upstream.status = Some(504);
                     }
@@ -239,7 +240,7 @@ pub async fn upstream_peer(
             if let Some(timeout) = request_timeout {
                 let elapsed = std::time::Instant::now().saturating_duration_since(ctx.start_time);
                 if elapsed >= timeout {
-                    ctx.add_error(EdgionStatus::RequestTimeoutExceeded);
+                    ctx.record_error(EdgionErrorCode::RequestTimeoutExceeded);
                     if let Some(upstream) = ctx.get_current_upstream_mut() {
                         upstream.status = Some(504);
                     }
@@ -250,7 +251,7 @@ pub async fn upstream_peer(
                 }
             }
             if ctx.grpc_deadline_exceeded() {
-                ctx.add_error(EdgionStatus::GrpcClientDeadlineExceeded);
+                ctx.record_error(EdgionErrorCode::GrpcClientDeadlineExceeded);
                 if let Some(upstream) = ctx.get_current_upstream_mut() {
                     upstream.status = Some(504);
                 }
@@ -353,7 +354,7 @@ fn decide_upstream_authority(rendered: Option<Result<String, AuthorityError>>) -
 
 /// Apply the effects of an [`AuthorityDecision`] to `ctx` / `peer`. Split out
 /// from `apply_upstream_authority` so the fail-closed `Reject` path (peer left
-/// untouched, `ctx.upstream_authority` cleared, 502 `EdgionStatus` + metric
+/// untouched, `ctx.upstream_authority` cleared, 502 `EdgionErrorCode` + metric
 /// recorded) is unit-testable without a live `Session`.
 #[inline]
 fn apply_upstream_authority_decision(
@@ -393,7 +394,7 @@ fn apply_upstream_authority_decision(
         }
         AuthorityDecision::Reject(e) => {
             record_authority_rejected(e.reason());
-            ctx.add_error(EdgionStatus::UpstreamAuthorityRejected);
+            ctx.record_error(EdgionErrorCode::UpstreamAuthorityRejected);
             if let Some(upstream) = ctx.get_current_upstream_mut() {
                 upstream.status = Some(502);
             }
@@ -467,15 +468,15 @@ pub async fn upstream_peer_grpc(
     match handle_grpc_upstream(session, ctx).await {
         Ok(Some(())) => {}
         Ok(None) => {
-            ctx.add_error(EdgionStatus::GrpcUpstreamNotRouteMatched);
-            if !ctx.request_info.response_committed {
+            ctx.record_error(EdgionErrorCode::GrpcUpstreamNotRouteMatched);
+            if !ctx.response_write_started() {
                 end_response_grpc_unavailable(session, ctx, &edgion_http.server_header_opts).await?;
             }
             return Err(PingoraError::new(ErrorType::HTTPStatus(200)));
         }
         Err(_) => {
-            ctx.add_error(EdgionStatus::GrpcUpstreamNotBackendRefs);
-            if !ctx.request_info.response_committed {
+            ctx.record_error(EdgionErrorCode::GrpcUpstreamNotBackendRefs);
+            if !ctx.response_write_started() {
                 end_response_grpc_unavailable(session, ctx, &edgion_http.server_header_opts).await?;
             }
             return Err(PingoraError::new(ErrorType::HTTPStatus(200)));
@@ -722,7 +723,7 @@ pub async fn select_http_backend(
         // below takes `&mut ctx` while iterating the unit's backends.
         Some(unit) => unit.clone(),
         None => {
-            ctx.add_error(EdgionStatus::UpstreamNotRouteMatched);
+            ctx.record_error(EdgionErrorCode::UpstreamNotRouteMatched);
             end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
             return Err(PingoraError::new(ErrorType::InternalError));
         }
@@ -782,7 +783,7 @@ pub async fn select_http_backend(
         None => match pick_backend_ref(&route_unit, &route_unit.matched_info.rsc.ns, ctx.jump.as_ref()) {
             Ok(b) => b,
             Err(e) => {
-                ctx.add_error(backend_select_status(&e));
+                ctx.record_error(backend_select_status(&e));
                 end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
                 return Err(PingoraError::new(ErrorType::InternalError));
             }
@@ -810,7 +811,7 @@ pub async fn select_http_backend(
         }
         CompiledBackendTarget::Invalid { .. } => SelectedHttpBackend::Invalid(backend_ref),
         CompiledBackendTarget::EdgionBackend { .. } => {
-            ctx.add_error(EdgionStatus::UpstreamNotBackendRefs);
+            ctx.record_error(EdgionErrorCode::UpstreamNotBackendRefs);
             end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
             return Err(PingoraError::new(ErrorType::InternalError));
         }
@@ -872,11 +873,11 @@ async fn get_peer_with_sp_fallback(
     match try_get_peer(ctx, session, is_grpc, selected_http).await {
         Ok(peer) => Ok(peer),
         Err(
-            status @ (EdgionStatus::BackendLocalhostNotAllowed
-            | EdgionStatus::BackendAddrLinkLocalNotAllowed
-            | EdgionStatus::BackendDnsResolutionFailed),
+            status @ (EdgionErrorCode::BackendLocalhostNotAllowed
+            | EdgionErrorCode::BackendAddrLinkLocalNotAllowed
+            | EdgionErrorCode::BackendDnsResolutionFailed),
         ) => {
-            ctx.add_error(status);
+            ctx.record_error(status);
             end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
             Err(fail_closed_err())
         }
@@ -893,7 +894,7 @@ async fn get_peer_with_sp_fallback(
             // end_response_503 commits the downstream response (for gRPC it is
             // already trailers-only grpc-status 14); the returned Err terminates
             // without a pingora retry (same mechanism as the SSRF arm).
-            ctx.add_error(status); // status: typically StickyBackendUnhealthy; any non-SSRF/DNS peer error fails closed here
+            ctx.record_error(status); // status: typically StickyBackendUnhealthy; any non-SSRF/DNS peer error fails closed here
             end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
             Err(fail_closed_err())
         }
@@ -972,14 +973,14 @@ fn pick_backend_ref(
     RouteRules::select_backend(unit)
 }
 
-/// Map a backend-selection `EdError` to its public `EdgionStatus` for access logs.
+/// Map a backend-selection `EdError` to its public `EdgionErrorCode` for access logs.
 #[inline]
-fn backend_select_status(e: &EdError) -> EdgionStatus {
+fn backend_select_status(e: &EdError) -> EdgionErrorCode {
     match e {
-        EdError::BackendNotFound() => EdgionStatus::UpstreamNotBackendRefs,
-        EdError::InconsistentWeight() => EdgionStatus::UpstreamInconsistentWeight,
-        EdError::RefDenied { .. } => EdgionStatus::RefDenied,
-        _ => EdgionStatus::Unknown,
+        EdError::BackendNotFound() => EdgionErrorCode::UpstreamNotBackendRefs,
+        EdError::InconsistentWeight() => EdgionErrorCode::UpstreamInconsistentWeight,
+        EdError::RefDenied { .. } => EdgionErrorCode::RefDenied,
+        _ => EdgionErrorCode::Unknown,
     }
 }
 
@@ -1343,7 +1344,7 @@ async fn try_ai_backend_peer(
             None,
         )
         .map_err(|status| {
-            ctx.add_error(status);
+            ctx.record_error(status);
             AiPeerPredispatchFailure::Endpoint
         })?,
         None => Box::new(HttpPeer::new(addr, endpoint.use_tls, endpoint.sni.clone())),
@@ -1468,7 +1469,7 @@ async fn try_external_jump_peer(
 
     if let Err(status) = validate_resolved_domain_addr(&addr, ctx.allow_loopback_upstream) {
         record_unsafe_resolved_upstream_attempt(ctx, addr, status);
-        ctx.add_error(status);
+        ctx.record_error(status);
         return Err(PingoraError::explain(
             ErrorType::ConnectError,
             "external upstream resolved to unsafe address",
@@ -1562,12 +1563,12 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
 fn validate_resolved_domain_addr(
     addr: &std::net::SocketAddr,
     allow_loopback_upstream: bool,
-) -> Result<(), EdgionStatus> {
+) -> Result<(), EdgionErrorCode> {
     match classify_backend_addr(&PingoraSocketAddr::Inet(*addr)) {
         None => {}
         Some(BlockedBackendReason::Localhost) if allow_loopback_upstream => {}
-        Some(BlockedBackendReason::Localhost) => return Err(EdgionStatus::BackendLocalhostNotAllowed),
-        Some(BlockedBackendReason::LinkLocal) => return Err(EdgionStatus::BackendAddrLinkLocalNotAllowed),
+        Some(BlockedBackendReason::Localhost) => return Err(EdgionErrorCode::BackendLocalhostNotAllowed),
+        Some(BlockedBackendReason::LinkLocal) => return Err(EdgionErrorCode::BackendAddrLinkLocalNotAllowed),
     }
 
     Ok(())
@@ -1576,13 +1577,13 @@ fn validate_resolved_domain_addr(
 fn record_unsafe_resolved_upstream_attempt(
     ctx: &mut EdgionHttpContext,
     addr: std::net::SocketAddr,
-    status: EdgionStatus,
+    status: EdgionErrorCode,
 ) {
     ctx.push_upstream(Some(addr.ip().to_string()), Some(addr.port()));
     if let Some(upstream) = ctx.get_current_upstream_mut() {
         let reason = match status {
-            EdgionStatus::BackendLocalhostNotAllowed => "unsafe loopback upstream",
-            EdgionStatus::BackendAddrLinkLocalNotAllowed => "unsafe link-local upstream",
+            EdgionErrorCode::BackendLocalhostNotAllowed => "unsafe loopback upstream",
+            EdgionErrorCode::BackendAddrLinkLocalNotAllowed => "unsafe link-local upstream",
             _ => UNSAFE_UPSTREAM_ADDRESS_LOG,
         };
         upstream.err.push(reason.to_string());
@@ -1717,7 +1718,7 @@ mod tests {
     use crate::routes::http::match_unit::{CompiledBackend, CompiledBackendTarget};
     use crate::{BackendContext, BackendTlsInfo, EdgionHttpContext, UpstreamInfo};
     use crate::{PeerTimeoutSource, SessionPersistenceState};
-    use edgion_resources::{EdgionStatus, HTTPBackendRef};
+    use edgion_resources::{EdgionErrorCode, HTTPBackendRef};
     use pingora_core::prelude::HttpPeer;
     use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
     use pingora_core::ErrorType;
@@ -1763,14 +1764,14 @@ mod tests {
         assert_eq!(
             ai_predispatch_deadline_mapping(&AiDispatchError::RequestDeadlineExceeded),
             Some((
-                EdgionStatus::RequestTimeoutExceeded,
+                EdgionErrorCode::RequestTimeoutExceeded,
                 "Request timeout exceeded during AI predispatch selection",
             ))
         );
         assert_eq!(
             ai_predispatch_deadline_mapping(&AiDispatchError::GrpcDeadlineExceeded),
             Some((
-                EdgionStatus::GrpcClientDeadlineExceeded,
+                EdgionErrorCode::GrpcClientDeadlineExceeded,
                 "gRPC client deadline exceeded during AI predispatch selection",
             ))
         );
@@ -1787,7 +1788,9 @@ mod tests {
             .expect("expired gRPC deadline must stop predispatch");
 
         assert_eq!(response.etype(), &ErrorType::HTTPStatus(504));
-        assert_eq!(ctx.edgion_status, vec![EdgionStatus::GrpcClientDeadlineExceeded]);
+        assert!(ctx
+            .diagnostics
+            .contains_error(EdgionErrorCode::GrpcClientDeadlineExceeded));
     }
 
     #[test]
@@ -2618,7 +2621,9 @@ mod tests {
             peer.sni, original_sni,
             "peer must be left with the static SNI, not a usable altered one"
         );
-        assert!(ctx.edgion_status.contains(&EdgionStatus::UpstreamAuthorityRejected));
+        assert!(ctx
+            .diagnostics
+            .contains_error(EdgionErrorCode::UpstreamAuthorityRejected));
         assert_eq!(ctx.get_current_upstream_mut().and_then(|u| u.status), Some(502));
         assert_eq!(ctx.upstream_authority, None);
     }

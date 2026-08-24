@@ -211,8 +211,8 @@ Includes `certificate_callback` / `handshake_complete_callback`.
 // TLS proxy: use ctx-based logging
 ctx.err_log = Some(format!("No matching TLSRoute for SNI={sni}"));
 
-// HTTP proxy: errors flow into the access log
-ctx.add_error(EdgionStatus::NoRoute);
+// HTTP proxy: typed errors flow into access-log diagnostics
+ctx.record_error(EdgionErrorCode::RouteNotFound);
 
 // Plugin: via PluginLog
 log.push("Deny rate-limited");

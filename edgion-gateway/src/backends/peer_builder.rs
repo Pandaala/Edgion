@@ -3,8 +3,8 @@ use crate::backends::gateway_backend_tls_store::get_global_gateway_backend_tls_s
 use crate::util::net::{classify_backend_addr, BlockedBackendReason};
 use crate::EdgionHttpContext;
 use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
-use edgion_resources::edgion_status::EdgionStatus;
 use edgion_resources::resources::BackendTLSPolicy;
+use edgion_resources::EdgionErrorCode;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr;
 #[cfg(feature = "boringssl")]
@@ -74,7 +74,7 @@ pub(crate) fn extract_tls_config(policy: &Option<Arc<BackendTLSPolicy>>) -> (boo
 }
 
 #[cfg(feature = "boringssl")]
-fn build_client_cert_key(policy: &BackendTLSPolicy) -> Result<Option<Arc<CertKey>>, EdgionStatus> {
+fn build_client_cert_key(policy: &BackendTLSPolicy) -> Result<Option<Arc<CertKey>>, EdgionErrorCode> {
     let Some(secret) = &policy.spec.resolved_client_certificate else {
         return Ok(None);
     };
@@ -85,19 +85,19 @@ fn build_client_cert_key(policy: &BackendTLSPolicy) -> Result<Option<Arc<CertKey
 #[cfg(feature = "boringssl")]
 fn build_client_cert_key_from_secret(
     secret: &k8s_openapi::api::core::v1::Secret,
-) -> Result<Option<Arc<CertKey>>, EdgionStatus> {
-    let data = secret.data.as_ref().ok_or(EdgionStatus::Unknown)?;
-    let cert_pem = data.get(CERT).ok_or(EdgionStatus::Unknown)?;
-    let key_pem = data.get(KEY).ok_or(EdgionStatus::Unknown)?;
+) -> Result<Option<Arc<CertKey>>, EdgionErrorCode> {
+    let data = secret.data.as_ref().ok_or(EdgionErrorCode::Unknown)?;
+    let cert_pem = data.get(CERT).ok_or(EdgionErrorCode::Unknown)?;
+    let key_pem = data.get(KEY).ok_or(EdgionErrorCode::Unknown)?;
 
-    let cert = X509::from_pem(cert_pem.0.as_slice()).map_err(|_| EdgionStatus::Unknown)?;
-    let key = PKey::private_key_from_pem(key_pem.0.as_slice()).map_err(|_| EdgionStatus::Unknown)?;
+    let cert = X509::from_pem(cert_pem.0.as_slice()).map_err(|_| EdgionErrorCode::Unknown)?;
+    let key = PKey::private_key_from_pem(key_pem.0.as_slice()).map_err(|_| EdgionErrorCode::Unknown)?;
 
     Ok(Some(Arc::new(CertKey::new(vec![cert], key))))
 }
 
 #[cfg(feature = "boringssl")]
-fn build_ca_chain(policy: &BackendTLSPolicy) -> Result<Option<Arc<CaType>>, EdgionStatus> {
+fn build_ca_chain(policy: &BackendTLSPolicy) -> Result<Option<Arc<CaType>>, EdgionErrorCode> {
     let Some(secrets) = policy.spec.resolved_ca_certificates.as_ref() else {
         return Ok(None);
     };
@@ -113,9 +113,9 @@ fn build_ca_chain(policy: &BackendTLSPolicy) -> Result<Option<Arc<CaType>>, Edgi
         // (RFC 5280 §6.1 needs the full chain); `from_pem` would keep only the
         // first. A present-but-unparseable/empty `ca.crt` is fail-closed instead
         // of silently swallowed.
-        let certs = X509::stack_from_pem(ca_pem.0.as_slice()).map_err(|_| EdgionStatus::BackendTlsCaInvalid)?;
+        let certs = X509::stack_from_pem(ca_pem.0.as_slice()).map_err(|_| EdgionErrorCode::BackendTlsCaInvalid)?;
         if certs.is_empty() {
-            return Err(EdgionStatus::BackendTlsCaInvalid);
+            return Err(EdgionErrorCode::BackendTlsCaInvalid);
         }
         ca_chain.extend(certs);
     }
@@ -128,7 +128,7 @@ fn build_ca_chain(policy: &BackendTLSPolicy) -> Result<Option<Arc<CaType>>, Edgi
 }
 
 #[cfg(not(feature = "boringssl"))]
-fn build_ca_chain(_policy: &BackendTLSPolicy) -> Result<Option<Arc<()>>, EdgionStatus> {
+fn build_ca_chain(_policy: &BackendTLSPolicy) -> Result<Option<Arc<()>>, EdgionErrorCode> {
     Ok(None)
 }
 
@@ -136,7 +136,7 @@ pub(crate) fn create_tls_peer(
     addr: SocketAddr,
     policy: &Option<Arc<BackendTLSPolicy>>,
     gateway_key: Option<&str>,
-) -> Result<Box<HttpPeer>, EdgionStatus> {
+) -> Result<Box<HttpPeer>, EdgionErrorCode> {
     let Some(policy) = policy.as_ref() else {
         if let Some(gw_key) = gateway_key {
             if let Some(gw_secret) = get_global_gateway_backend_tls_store().get(gw_key) {
@@ -181,7 +181,7 @@ pub(crate) fn create_tls_peer(
         // bundle must fail-closed rather than silently fall back to it.
         match build_ca_chain(policy)? {
             Some(ca_chain) => peer.options.ca = Some(ca_chain),
-            None => return Err(EdgionStatus::BackendTlsCaInvalid),
+            None => return Err(EdgionErrorCode::BackendTlsCaInvalid),
         }
     }
 
@@ -247,12 +247,12 @@ pub(crate) fn record_tls_to_upstream(ctx: &mut EdgionHttpContext, use_tls: bool,
 ///
 /// RFC1918 private ranges are **not** blocked; cluster-internal pod/service IPs live there.
 #[inline]
-pub(crate) fn validate_backend_addr(addr: &SocketAddr, allow_loopback_upstream: bool) -> Result<(), EdgionStatus> {
+pub(crate) fn validate_backend_addr(addr: &SocketAddr, allow_loopback_upstream: bool) -> Result<(), EdgionErrorCode> {
     match classify_backend_addr(addr) {
         None => Ok(()),
         Some(BlockedBackendReason::Localhost) if allow_loopback_upstream => Ok(()),
-        Some(BlockedBackendReason::Localhost) => Err(EdgionStatus::BackendLocalhostNotAllowed),
-        Some(BlockedBackendReason::LinkLocal) => Err(EdgionStatus::BackendAddrLinkLocalNotAllowed),
+        Some(BlockedBackendReason::Localhost) => Err(EdgionErrorCode::BackendLocalhostNotAllowed),
+        Some(BlockedBackendReason::LinkLocal) => Err(EdgionErrorCode::BackendAddrLinkLocalNotAllowed),
     }
 }
 
@@ -264,13 +264,13 @@ pub(crate) fn validate_backend_addr(addr: &SocketAddr, allow_loopback_upstream: 
 /// skips the unsafe ones and returns the first safe address. If none are safe,
 /// it returns the rejection status of the last candidate (a stable
 /// loopback/link-local status) so the caller can record it; an empty input
-/// yields [`EdgionStatus::BackendDnsResolutionFailed`].
+/// yields [`EdgionErrorCode::BackendDnsResolutionFailed`].
 pub(crate) fn first_safe_inet_addr(
     ips: &[std::net::IpAddr],
     port: u16,
     allow_loopback_upstream: bool,
-) -> Result<SocketAddr, EdgionStatus> {
-    let mut last_err = EdgionStatus::BackendDnsResolutionFailed;
+) -> Result<SocketAddr, EdgionErrorCode> {
+    let mut last_err = EdgionErrorCode::BackendDnsResolutionFailed;
     for ip in ips {
         let addr = SocketAddr::Inet(std::net::SocketAddr::new(*ip, port));
         match validate_backend_addr(&addr, allow_loopback_upstream) {
@@ -290,15 +290,15 @@ pub(crate) fn first_safe_inet_addr(
 pub(crate) fn validate_endpoint_backend_addr(
     addr: &SocketAddr,
     allow_loopback_upstream: bool,
-) -> Result<(), EdgionStatus> {
+) -> Result<(), EdgionErrorCode> {
     match classify_backend_addr(addr) {
         Some(BlockedBackendReason::Localhost)
             if allow_loopback_upstream || edgion_common::test_mode::is_integration_testing_mode() =>
         {
             Ok(())
         }
-        Some(BlockedBackendReason::Localhost) => Err(EdgionStatus::BackendLocalhostNotAllowed),
-        Some(BlockedBackendReason::LinkLocal) => Err(EdgionStatus::BackendAddrLinkLocalNotAllowed),
+        Some(BlockedBackendReason::Localhost) => Err(EdgionErrorCode::BackendLocalhostNotAllowed),
+        Some(BlockedBackendReason::LinkLocal) => Err(EdgionErrorCode::BackendAddrLinkLocalNotAllowed),
         None => Ok(()),
     }
 }
@@ -331,7 +331,7 @@ mod tests {
         let ips = [ip("127.0.0.1"), ip("169.254.169.254")];
         let err = first_safe_inet_addr(&ips, 80, false).unwrap_err();
         // The last candidate's rejection status surfaces (link-local here).
-        assert_eq!(err, EdgionStatus::BackendAddrLinkLocalNotAllowed);
+        assert_eq!(err, EdgionErrorCode::BackendAddrLinkLocalNotAllowed);
     }
 
     #[test]
@@ -344,6 +344,6 @@ mod tests {
     #[test]
     fn first_safe_inet_addr_empty_is_dns_failure() {
         let err = first_safe_inet_addr(&[], 80, false).unwrap_err();
-        assert_eq!(err, EdgionStatus::BackendDnsResolutionFailed);
+        assert_eq!(err, EdgionErrorCode::BackendDnsResolutionFailed);
     }
 }

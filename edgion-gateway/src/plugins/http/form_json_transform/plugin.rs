@@ -9,7 +9,7 @@ use edgion_resources::resources::edgion_plugins::{
     parse_json_instance, BodyRequirement, FormJsonDirection, FormJsonTransformConfig, StrictJsonError,
     ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES,
 };
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 use serde_json::{Map, Value};
 
 use crate::plugins::http::common::{
@@ -69,17 +69,17 @@ impl FormJsonTransform {
     fn record_body_error(session: &mut dyn PluginSession, error: &BodyReadError) {
         let status = match error {
             BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
-                Some(EdgionStatus::BodyReadTooLarge)
+                Some(EdgionErrorCode::BodyReadTooLarge)
             }
-            BodyReadError::Timeout => Some(EdgionStatus::BodyReadTimeout),
-            BodyReadError::Incomplete => Some(EdgionStatus::BodyReadAborted),
-            BodyReadError::Unimplemented => Some(EdgionStatus::BodyReadUnimplemented),
+            BodyReadError::Timeout => Some(EdgionErrorCode::BodyReadTimeout),
+            BodyReadError::Incomplete => Some(EdgionErrorCode::BodyReadAborted),
+            BodyReadError::Unimplemented => Some(EdgionErrorCode::BodyReadUnimplemented),
             BodyReadError::NotBuffered => None,
-            BodyReadError::StorageFailure => Some(EdgionStatus::BodyCaptureStorageFailed),
-            BodyReadError::GenerationConflict => Some(EdgionStatus::BodyMutationConflict),
+            BodyReadError::StorageFailure => Some(EdgionErrorCode::BodyCaptureStorageFailed),
+            BodyReadError::GenerationConflict => Some(EdgionErrorCode::BodyMutationConflict),
         };
         if let Some(status) = status {
-            session.add_error(status);
+            session.record_error(status);
         }
     }
 
@@ -137,7 +137,7 @@ impl RequestFilter for FormJsonTransform {
             }
         };
         if body_len > self.body_limit {
-            session.add_error(EdgionStatus::BodyReadTooLarge);
+            session.record_error(EdgionErrorCode::BodyReadTooLarge);
             log.push("deny body too large");
             return Self::reject(413, None);
         }
@@ -159,7 +159,7 @@ impl RequestFilter for FormJsonTransform {
             }
         };
         if original.len() as u64 > self.body_limit {
-            session.add_error(EdgionStatus::BodyReadTooLarge);
+            session.record_error(EdgionErrorCode::BodyReadTooLarge);
             log.push("deny body too large");
             return Self::reject(413, None);
         }
@@ -171,7 +171,7 @@ impl RequestFilter for FormJsonTransform {
                 return Self::reject(400, Some(INVALID_REQUEST_BODY));
             }
             Err(TransformFailure::TooLarge) => {
-                session.add_error(EdgionStatus::BodyReadTooLarge);
+                session.record_error(EdgionErrorCode::BodyReadTooLarge);
                 log.push("deny transform limit");
                 return Self::reject(413, None);
             }
@@ -546,8 +546,8 @@ mod tests {
             .return_const(Err(BodyReadError::StorageFailure));
         session.expect_set_request_header().times(0);
         session
-            .expect_add_error()
-            .with(mockall::predicate::eq(EdgionStatus::BodyCaptureStorageFailed))
+            .expect_record_error()
+            .with(mockall::predicate::eq(EdgionErrorCode::BodyCaptureStorageFailed))
             .return_const(());
         let mut log = PluginLog::new(filter.name());
 
@@ -587,8 +587,8 @@ mod tests {
         too_large.expect_declares_body().return_const(Some(true));
         too_large.expect_request_body_available_len().return_const(Ok(4));
         too_large
-            .expect_add_error()
-            .with(mockall::predicate::eq(EdgionStatus::BodyReadTooLarge))
+            .expect_record_error()
+            .with(mockall::predicate::eq(EdgionErrorCode::BodyReadTooLarge))
             .return_const(());
         too_large.expect_read_request_body().times(0);
         too_large.expect_overwrite_request_body().times(0);

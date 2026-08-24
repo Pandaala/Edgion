@@ -9,7 +9,7 @@ use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::EdgionHttpContext;
 use edgion_resources::err::EdError;
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 use pingora_proxy::Session;
 use std::sync::Arc;
 
@@ -144,8 +144,8 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
 
     if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
-        if !ctx.request_info.response_committed {
-            ctx.add_error(EdgionStatus::PluginTerminateWithoutResponse);
+        if !ctx.response_write_started() {
+            ctx.record_error(EdgionErrorCode::PluginTerminateWithoutResponse);
         }
         return Err(EdError::PluginTerminated());
     }

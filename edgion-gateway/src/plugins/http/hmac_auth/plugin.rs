@@ -30,7 +30,7 @@ use edgion_resources::resources::edgion_plugins::{
     BodyRequirement, HmacAlgorithm, HmacAuthConfig, HmacCredential, HmacMatchConfig,
 };
 #[cfg(test)]
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 
 type HmacSha256 = Hmac<Sha256>;
 type HmacSha384 = Hmac<Sha384>;
@@ -469,11 +469,11 @@ impl HmacAuth {
     /// Requires the request body to have been captured before hashing. Only
     /// SHA-256 is accepted.
     ///
-    /// A failed read records the matching `EdgionStatus` before denying, using
-    /// the same `BodyReadError` -> `EdgionStatus` mapping as
+    /// A failed read records the matching `EdgionErrorCode` before denying, using
+    /// the same `BodyReadError` -> `EdgionErrorCode` mapping as
     /// `body_gate.rs::body_read_failure_result` and `wasm/plugin.rs` — the
     /// returned `&'static str` is the client-visible denial reason and must
-    /// stay opaque, so `ctx.add_error` is the only place the specific cause
+    /// stay opaque, so `ctx.record_error` is the only place the specific cause
     /// becomes observable. `NotBuffered` is excluded: the read adapter already
     /// recorded which refusal, and double-counting it here would inflate that
     /// status.
@@ -767,17 +767,17 @@ mod tests {
     }
 
     /// Every distinct `BodyReadError` must reach the access log as its own
-    /// `EdgionStatus`, matching `body_gate.rs` / `wasm/plugin.rs`. The denial
-    /// reason returned to the caller stays opaque, so `add_error` is the only
+    /// `EdgionErrorCode`, matching `body_gate.rs` / `wasm/plugin.rs`. The denial
+    /// reason returned to the caller stays opaque, so `record_error` is the only
     /// place the cause is observable — collapsing the variants here would make
     /// a timeout indistinguishable from an oversize body in production.
     #[tokio::test]
     async fn verify_body_digest_records_status_per_read_error() {
         for (err, expected) in [
-            (BodyReadError::TooLarge { limit: 8 }, EdgionStatus::BodyReadTooLarge),
-            (BodyReadError::Timeout, EdgionStatus::BodyReadTimeout),
-            (BodyReadError::Incomplete, EdgionStatus::BodyReadAborted),
-            (BodyReadError::Unimplemented, EdgionStatus::BodyReadUnimplemented),
+            (BodyReadError::TooLarge { limit: 8 }, EdgionErrorCode::BodyReadTooLarge),
+            (BodyReadError::Timeout, EdgionErrorCode::BodyReadTimeout),
+            (BodyReadError::Incomplete, EdgionErrorCode::BodyReadAborted),
+            (BodyReadError::Unimplemented, EdgionErrorCode::BodyReadUnimplemented),
         ] {
             let mut session = MockPluginSession::new();
             session
@@ -786,7 +786,7 @@ mod tests {
                 .return_const(Some("SHA-256=unused".to_string()));
             session.expect_request_body_sha256().returning(move || Err(err.clone()));
             session
-                .expect_add_error()
+                .expect_record_error()
                 .withf(move |status| *status == expected)
                 .times(1)
                 .returning(|_| ());
@@ -810,7 +810,7 @@ mod tests {
         session
             .expect_request_body_sha256()
             .returning(|| Err(BodyReadError::NotBuffered));
-        session.expect_add_error().times(0);
+        session.expect_record_error().times(0);
 
         assert_eq!(
             HmacAuth::verify_body_digest(&mut session).await,
@@ -1080,8 +1080,8 @@ mod tests {
             .expect_ensure_request_body()
             .returning(move |_| Ok(body.len() as u64));
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::BodyReadTooLarge)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::BodyReadTooLarge)
             .times(1)
             .returning(|_| ());
 
@@ -1104,8 +1104,8 @@ mod tests {
             .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::BufferLimitExceeded { limit: 4 }));
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::BodyReadTooLarge)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::BodyReadTooLarge)
             .times(1)
             .returning(|_| ());
 
@@ -1128,8 +1128,8 @@ mod tests {
             .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::Unimplemented));
         session
-            .expect_add_error()
-            .withf(|status| *status == EdgionStatus::BodyReadUnimplemented)
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::BodyReadUnimplemented)
             .times(1)
             .returning(|_| ());
 

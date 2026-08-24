@@ -187,4 +187,4 @@ LinkSys 提供商（Redis、etcd、Elasticsearch）目前仅支持 Secret 引用
 
 1. **配置状态**：`kubectl describe` 受影响的资源，查看任何 `Accepted=False` 条件
 2. **准入日志**：在结构化路径中查找被删除字段的日志
-3. **网关日志**：TLS 连接失败的错误消息将显示在网关审计/访问日志中，包含 `EdgionStatus` 代码和原因
+3. **网关日志**：TLS 连接失败会显示在网关审计/访问日志中，包含稳定的 `EdgionErrorCode` 诊断和原因

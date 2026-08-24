@@ -600,10 +600,7 @@ fn bodyless_responses(ctx: TestContext) -> std::pin::Pin<Box<dyn std::future::Fu
                         )
                     }
                 };
-                let recorded_translation_failure = entry
-                    .errors()
-                    .iter()
-                    .any(|error| error == "AiResponseTranslationFailed");
+                let recorded_translation_failure = entry.has_diagnostic("error", "AiResponseTranslationFailed");
                 if recorded_translation_failure != expect_translation_failure {
                     return TestResult::failed(
                         start.elapsed(),
@@ -662,10 +659,7 @@ fn bodyless_responses(ctx: TestContext) -> std::pin::Pin<Box<dyn std::future::Fu
                 Ok(entry) => entry,
                 Err(error) => return TestResult::failed(start.elapsed(), error.to_string()),
             };
-            if !entry
-                .errors()
-                .iter()
-                .any(|error| error == "AiResponseTranslationFailed")
+            if !entry.has_diagnostic("error", "AiResponseTranslationFailed")
                 || entry.data.pointer("/genai/streaming").and_then(Value::as_bool) != Some(true)
             {
                 return TestResult::failed(

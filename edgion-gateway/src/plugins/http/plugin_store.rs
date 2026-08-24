@@ -118,7 +118,7 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     // `validation_error()` per request in `apply_declarations`) would allocate
     // format strings on the data-plane hot path. Dropping the field (not the
     // request) fails safe: a bad log declaration must not turn into a fail-closed
-    // 500 for live traffic, which is why this pushes into `errors` (surfaced only
+    // 500 for live traffic, which is why this records an error diagnostic (surfaced only
     // as a status condition) rather than anything `seal_fail_closed` reads.
     if let Some(fields) = spec.spec.access_log_extern.as_mut() {
         let mut idx = 0usize;
@@ -215,7 +215,7 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
 
 /// Compile regex patterns and validate static config in conditions for all
 /// plugin entries. Both compile failures (regex) and validate failures (e.g.
-/// malformed `timeRange` bounds) push into `errors`, which `compile_plugins`
+/// malformed `timeRange` bounds) record error diagnostics, which `compile_plugins`
 /// then forwards to `seal_fail_closed`.
 fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>, runtime: &mut PluginRuntime) {
     macro_rules! compile_entries {

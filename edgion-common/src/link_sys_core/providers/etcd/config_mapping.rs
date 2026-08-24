@@ -125,7 +125,7 @@ pub fn election_connect_options(
 /// Uses the shared [`outbound_tls::resolve_outbound_tls`] resolver with
 /// `provider_can_disable: false` — etcd-client's TLS stack always verifies
 /// certificates and has no skip-verify knob, so the resolver will return
-/// [`EdgionStatus::OutboundTlsVerifyUnsupported`] (mapped to an error here)
+/// [`EdgionErrorCode::OutboundTlsVerifyUnsupported`] (mapped to an error here)
 /// if `verify=false` is configured, preventing a silent ignore of the
 /// operator's intent.
 fn build_tls_options(tls: &TlsConfig) -> Result<TlsOptions> {

@@ -37,7 +37,7 @@ use super::traits::{PluginSession, RequestFilter, UpstreamResponse};
 use crate::plugins::runtime::conditions::{CompiledPluginConditions, EvaluationResult};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{BodyReadFailureMode, BodyRequirement};
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 
 /// How much to physically buffer: the resolved gateway-wide body limit. This is a
 /// SHARED per-request size — it does not depend on any per-plugin `maxBodySize`
@@ -70,15 +70,15 @@ pub(crate) fn over_plugin_limit_len(requirement: &BodyRequirement, body_len: u64
 /// the more precise refusal status when it rejects the request class.
 pub(crate) fn record_body_read_error_status(session: &mut dyn PluginSession, err: &BodyReadError) {
     let status = match err {
-        BodyReadError::TooLarge { .. } | BodyReadError::BufferLimitExceeded { .. } => EdgionStatus::BodyReadTooLarge,
-        BodyReadError::Timeout => EdgionStatus::BodyReadTimeout,
-        BodyReadError::Incomplete => EdgionStatus::BodyReadAborted,
-        BodyReadError::StorageFailure => EdgionStatus::BodyCaptureStorageFailed,
-        BodyReadError::GenerationConflict => EdgionStatus::BodyMutationConflict,
-        BodyReadError::Unimplemented => EdgionStatus::BodyReadUnimplemented,
+        BodyReadError::TooLarge { .. } | BodyReadError::BufferLimitExceeded { .. } => EdgionErrorCode::BodyReadTooLarge,
+        BodyReadError::Timeout => EdgionErrorCode::BodyReadTimeout,
+        BodyReadError::Incomplete => EdgionErrorCode::BodyReadAborted,
+        BodyReadError::StorageFailure => EdgionErrorCode::BodyCaptureStorageFailed,
+        BodyReadError::GenerationConflict => EdgionErrorCode::BodyMutationConflict,
+        BodyReadError::Unimplemented => EdgionErrorCode::BodyReadUnimplemented,
         BodyReadError::NotBuffered => return,
     };
-    session.add_error(status);
+    session.record_error(status);
 }
 
 /// Wrapper that force-buffers the request body before running the inner filter.
@@ -208,7 +208,7 @@ impl UpstreamResponse for BodyGatedUpstreamResponse {
 ///   routed through `on_read_failure` — tolerating it would mean running an
 ///   inspection plugin that inspected nothing, which no configuration should
 ///   be able to express. The precise reason is already on `ctx` as an
-///   `EdgionStatus`, recorded by the read adapter.
+///   `EdgionErrorCode`, recorded by the read adapter.
 /// - A gateway-wide **physical cap** (`BufferLimitExceeded`) is also always
 ///   fail-close: capture has been discarded and the original body cannot be
 ///   forwarded.
@@ -258,7 +258,7 @@ pub(crate) fn body_read_failure_result(
         };
     }
 
-    // R17: a read failure is alertable too, and only `ctx.add_error` reaches the
+    // R17: a read failure is alertable too, and only `ctx.record_error` reaches the
     // access log — a `PluginLog` line alone stays inside a nested per-plugin array.
     record_body_read_error_status(session, err);
 
@@ -297,7 +297,7 @@ mod tests {
     fn base_session() -> MockPluginSession {
         let mut session = MockPluginSession::new();
         session.expect_ctx().return_const(EdgionHttpContext::new());
-        session.expect_add_error().returning(|_| ());
+        session.expect_record_error().returning(|_| ());
         session
     }
 
@@ -812,22 +812,22 @@ mod tests {
         );
     }
 
-    // ===== Pin the BodyReadError -> EdgionStatus mapping =====
+    // ===== Pin the BodyReadError -> EdgionErrorCode mapping =====
     //
-    // `base_session()`'s `expect_add_error().returning(|_| ())` accepts any
+    // `base_session()`'s `expect_record_error().returning(|_| ())` accepts any
     // status, so it cannot catch a swapped arm in `body_read_failure_result`.
     // These tests build a session mock local to each case with a `.withf(...)`
-    // predicate on the exact expected `EdgionStatus`, so a swapped mapping fails
+    // predicate on the exact expected `EdgionErrorCode`, so a swapped mapping fails
     // the test instead of silently passing.
 
-    /// A session mock like `base_session()`, but with a strict `add_error`
+    /// A session mock like `base_session()`, but with a strict `record_error`
     /// expectation pinned to `expected` (called exactly once) instead of the
     /// permissive any-status stub.
-    fn session_expecting_error(expected: EdgionStatus) -> MockPluginSession {
+    fn session_expecting_error(expected: EdgionErrorCode) -> MockPluginSession {
         let mut session = MockPluginSession::new();
         session.expect_ctx().return_const(EdgionHttpContext::new());
         session
-            .expect_add_error()
+            .expect_record_error()
             .withf(move |status| *status == expected)
             .times(1)
             .returning(|_| ());
@@ -837,7 +837,7 @@ mod tests {
     #[tokio::test]
     async fn too_large_records_body_read_too_large_status() {
         let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
-        let mut session = session_expecting_error(EdgionStatus::BodyReadTooLarge);
+        let mut session = session_expecting_error(EdgionErrorCode::BodyReadTooLarge);
         session
             .expect_read_request_body()
             .returning(|_| Err(BodyReadError::TooLarge { limit: 1024 }));
@@ -849,7 +849,7 @@ mod tests {
     #[tokio::test]
     async fn timeout_records_body_read_timeout_status() {
         let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
-        let mut session = session_expecting_error(EdgionStatus::BodyReadTimeout);
+        let mut session = session_expecting_error(EdgionErrorCode::BodyReadTimeout);
         session
             .expect_read_request_body()
             .returning(|_| Err(BodyReadError::Timeout));
@@ -869,7 +869,7 @@ mod tests {
             ..Default::default()
         };
         let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), req);
-        let mut session = session_expecting_error(EdgionStatus::BodyCaptureStorageFailed);
+        let mut session = session_expecting_error(EdgionErrorCode::BodyCaptureStorageFailed);
         session
             .expect_read_request_body()
             .returning(|_| Err(BodyReadError::StorageFailure));
@@ -887,7 +887,7 @@ mod tests {
     #[tokio::test]
     async fn incomplete_records_body_read_aborted_status() {
         let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
-        let mut session = session_expecting_error(EdgionStatus::BodyReadAborted);
+        let mut session = session_expecting_error(EdgionErrorCode::BodyReadAborted);
         session
             .expect_read_request_body()
             .returning(|_| Err(BodyReadError::Incomplete));
@@ -899,7 +899,7 @@ mod tests {
     #[tokio::test]
     async fn unimplemented_records_body_read_unimplemented_status() {
         let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
-        let mut session = session_expecting_error(EdgionStatus::BodyReadUnimplemented);
+        let mut session = session_expecting_error(EdgionErrorCode::BodyReadUnimplemented);
         session
             .expect_read_request_body()
             .returning(|_| Err(BodyReadError::Unimplemented));
@@ -909,14 +909,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn not_buffered_never_reaches_add_error() {
+    async fn not_buffered_never_records_error_diagnostic() {
         // The read adapter already recorded the specific refusal reason on ctx;
-        // the gate deliberately does not double-count it via `add_error`.
+        // the gate deliberately does not double-count it via `record_error`.
         let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
 
         let mut session = MockPluginSession::new();
         session.expect_ctx().return_const(EdgionHttpContext::new());
-        session.expect_add_error().times(0);
+        session.expect_record_error().times(0);
         session
             .expect_read_request_body()
             .returning(|_| Err(BodyReadError::NotBuffered));

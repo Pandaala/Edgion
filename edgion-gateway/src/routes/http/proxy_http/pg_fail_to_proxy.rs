@@ -2,14 +2,9 @@ use super::EdgionHttpProxy;
 use crate::runtime::server::send_grpc_status_trailers_only;
 use crate::send_grpc_trailers_only;
 use crate::{EdgionHttpContext, ResponseStageDenial};
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 use pingora_core::{ConnectionClosed, Error, ErrorSource, ErrorType, HTTPStatus, ReadError, WriteError};
 use pingora_proxy::{FailToProxy, Session};
-
-#[inline]
-fn fill_missing_status(status: &mut Option<u16>, code: u16) {
-    status.get_or_insert(code);
-}
 
 #[inline]
 pub async fn fail_to_proxy(
@@ -28,7 +23,7 @@ pub async fn fail_to_proxy(
     // skills/04-review/architecture/response-local-reply-h1-close-is-feature.md.
     if ctx.local_reply_written {
         return FailToProxy {
-            error_code: ctx.request_info.status.unwrap_or(500),
+            error_code: ctx.final_downstream_status().unwrap_or(500),
             can_reuse_downstream: true,
         };
     }
@@ -50,7 +45,7 @@ pub async fn fail_to_proxy(
         .is_err()
         {
             // Delivery failed: the downstream connection is dead.
-            ctx.add_error(EdgionStatus::ClientClosed);
+            ctx.record_error(EdgionErrorCode::ClientClosed);
         }
     }
 
@@ -73,12 +68,12 @@ pub async fn fail_to_proxy(
     };
 
     // The proxy-ending error was a downstream failure — the client is gone.
-    // Recorded in the request-level error chain so access-log analysis can
+    // Recorded in the request-level diagnostics so access-log analysis can
     // join it with the upstreams array to quantify retry work spent on
     // callers that had already disconnected. HTTPStatus(499) is excluded:
     // that is an upstream's literal 499 response, not a client disconnect.
     if code == 499 && !matches!(e.etype(), HTTPStatus(_)) {
-        ctx.add_error(EdgionStatus::ClientClosed);
+        ctx.record_error(EdgionErrorCode::ClientClosed);
     }
 
     // A gateway-internal error that surfaced while the captured request body
@@ -92,23 +87,27 @@ pub async fn fail_to_proxy(
     if crate::request_body::request_body_replay_active(session)
         && (matches!(e.esource(), ErrorSource::Internal) || matches!(e.etype(), ErrorType::InternalError))
     {
-        ctx.add_error(EdgionStatus::BodyReplayFailed);
+        ctx.record_error(EdgionErrorCode::BodyReplayFailed);
     }
 
     if code > 0 {
-        fill_missing_status(&mut ctx.request_info.status, code);
+        if code == 499 && !matches!(e.etype(), HTTPStatus(_)) {
+            ctx.select_terminal_downstream_status(499);
+        } else {
+            ctx.select_final_downstream_status(code);
+        }
 
         if let Some(upstream) = ctx.get_current_upstream_mut() {
             // Preserve a real response status stamped by upstream_response_filter;
             // this code is only the gateway's final outcome for the request.
-            fill_missing_status(&mut upstream.status, code);
+            upstream.status.get_or_insert(code);
             if code != 504 && code != 499 {
                 upstream.err.push(e.etype().as_str().to_string());
             }
         }
     }
 
-    if code > 0 && code != 499 && !ctx.request_info.response_committed {
+    if code > 0 && code != 499 && !ctx.response_write_started() {
         if ctx.request_info.is_grpc_request {
             // Send proper gRPC error with correct status mapping instead of an HTML error page.
             // send_grpc_trailers_only uses http_to_grpc_status internally
@@ -118,18 +117,22 @@ pub async fn fail_to_proxy(
                 .is_err()
             {
                 // Delivery failed: the downstream connection is dead.
-                ctx.add_error(EdgionStatus::ClientClosed);
+                ctx.record_error(EdgionErrorCode::ClientClosed);
             }
         } else {
             let mut resp = pingora_core::protocols::http::ServerSession::generate_error(code);
             edgion_http.server_header_opts.apply_to_response(&mut resp);
-            if session
-                .write_error_response(resp, bytes::Bytes::default())
-                .await
-                .is_err()
-            {
+            let write_failed = if ctx.claim_final_response(code) {
+                session
+                    .write_error_response(resp, bytes::Bytes::default())
+                    .await
+                    .is_err()
+            } else {
+                false
+            };
+            if write_failed {
                 // Delivery failed: the downstream connection is dead.
-                ctx.add_error(EdgionStatus::ClientClosed);
+                ctx.record_error(EdgionErrorCode::ClientClosed);
             }
         }
     }
@@ -137,28 +140,5 @@ pub async fn fail_to_proxy(
     FailToProxy {
         error_code: code,
         can_reuse_downstream: matches!(code, 400 | 403 | 404 | 429),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::fill_missing_status;
-
-    #[test]
-    fn proxy_failure_preserves_observed_upstream_status() {
-        let mut status = Some(101);
-
-        fill_missing_status(&mut status, 403);
-
-        assert_eq!(status, Some(101));
-    }
-
-    #[test]
-    fn proxy_failure_fills_status_when_upstream_never_responded() {
-        let mut status = None;
-
-        fill_missing_status(&mut status, 502);
-
-        assert_eq!(status, Some(502));
     }
 }

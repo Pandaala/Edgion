@@ -380,18 +380,16 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     fn ctx_with_upstream() -> crate::EdgionHttpContext {
-        let mut ctx = crate::EdgionHttpContext {
-            backend_context: Some(crate::BackendContext {
-                source: None,
-                rsc: None,
-                service_key: None,
-                service_kind: None,
-                upstreams: Vec::new(),
-                current_upstream_id: None,
-                backend_ref_idx: None,
-            }),
-            ..Default::default()
-        };
+        let mut ctx = crate::EdgionHttpContext::default();
+        ctx.backend_context = Some(crate::BackendContext {
+            source: None,
+            rsc: None,
+            service_key: None,
+            service_kind: None,
+            upstreams: Vec::new(),
+            current_upstream_id: None,
+            backend_ref_idx: None,
+        });
         ctx.push_upstream(None, None);
         ctx
     }
@@ -723,10 +721,8 @@ mod tests {
         enforce_stream_processor_framing(&mut response, &mutating);
         assert!(response.headers.get("content-length").is_none());
 
-        let reserved = crate::EdgionHttpContext {
-            attached_response_framing_reservations: 1,
-            ..Default::default()
-        };
+        let mut reserved = crate::EdgionHttpContext::default();
+        reserved.attached_response_framing_reservations = 1;
         let mut response = ResponseHeader::build(200, None).unwrap();
         response.insert_header("content-length", "42").unwrap();
         enforce_stream_processor_framing(&mut response, &reserved);
@@ -948,10 +944,8 @@ mod tests {
         quota.finish(QuotaFinalStatus::OverLimit);
         let semantic = Arc::new(Mutex::new(LifecycleCounts::default()));
         let ordinary = Arc::new(Mutex::new(LifecycleCounts::default()));
-        let mut ctx = crate::EdgionHttpContext {
-            response_stream_kind: ResponseStreamKind::Sse,
-            ..Default::default()
-        };
+        let mut ctx = crate::EdgionHttpContext::default();
+        ctx.response_stream_kind = ResponseStreamKind::Sse;
         ctx.ensure_ai_state().semantic_guard_claimed = true;
         ctx.ensure_ai_state().stream_processor = Some(Box::new(UsageExtractionProcessor::new_with_quota(
             Arc::clone(&shared),
@@ -1024,10 +1018,8 @@ mod tests {
         let quota = Arc::new(QuotaAccumulator::new(16));
         quota.finish(QuotaFinalStatus::OverLimit);
         let semantic = Arc::new(Mutex::new(LifecycleCounts::default()));
-        let mut ctx = crate::EdgionHttpContext {
-            response_stream_kind: ResponseStreamKind::Sse,
-            ..Default::default()
-        };
+        let mut ctx = crate::EdgionHttpContext::default();
+        ctx.response_stream_kind = ResponseStreamKind::Sse;
         let state = ctx.ensure_ai_state();
         state.semantic_guard_claimed = true;
         state.stream_processor = Some(Box::new(anthropic_streaming_processor(Some(quota))));
@@ -1058,10 +1050,8 @@ mod tests {
     async fn anthropic_translation_failure_keeps_only_fixed_error_and_preempts_guardrail() {
         let mut session = test_session().await;
         let semantic = Arc::new(Mutex::new(LifecycleCounts::default()));
-        let mut ctx = crate::EdgionHttpContext {
-            response_stream_kind: ResponseStreamKind::Sse,
-            ..Default::default()
-        };
+        let mut ctx = crate::EdgionHttpContext::default();
+        ctx.response_stream_kind = ResponseStreamKind::Sse;
         let state = ctx.ensure_ai_state();
         state.semantic_guard_claimed = true;
         state.stream_processor = Some(Box::new(anthropic_streaming_processor(None)));

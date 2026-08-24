@@ -20,7 +20,7 @@ use edgion_resources::resources::edgion_plugins::{
     profile_json_value, BodyRequirement, CompiledJsonPatchOperation, CompiledJsonPatchValue, ProxyRewriteConfig,
     StrictJsonError, ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES,
 };
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 
 const INVALID_REQUEST_BODY: &str = "Invalid request body";
 const UNSUPPORTED_MEDIA_TYPE: &str = "Unsupported media type";
@@ -382,7 +382,7 @@ impl ProxyRewrite {
             Self::reject(500, None)
         })?;
         if body_len > self.json_body_limit {
-            session.add_error(EdgionStatus::BodyReadTooLarge);
+            session.record_error(EdgionErrorCode::BodyReadTooLarge);
             plugin_log.push("deny body too large");
             return Err(Self::reject(413, None));
         }
@@ -401,7 +401,7 @@ impl ProxyRewrite {
             }
         })?;
         if body.len() as u64 > self.json_body_limit {
-            session.add_error(EdgionStatus::BodyReadTooLarge);
+            session.record_error(EdgionErrorCode::BodyReadTooLarge);
             plugin_log.push("deny body too large");
             return Err(Self::reject(413, None));
         }
@@ -409,7 +409,7 @@ impl ProxyRewrite {
         let mut value = edgion_resources::resources::edgion_plugins::parse_json_instance(&body)
             .map_err(|error| match error {
                 StrictJsonError::TooLarge => {
-                    session.add_error(EdgionStatus::BodyReadTooLarge);
+                    session.record_error(EdgionErrorCode::BodyReadTooLarge);
                     plugin_log.push("deny body too large");
                     Self::reject(413, None)
                 }
@@ -430,7 +430,7 @@ impl ProxyRewrite {
                             (400, Some(INVALID_REQUEST_BODY))
                         }
                         JsonRewriteFailure::TooLarge => {
-                            session.add_error(EdgionStatus::BodyReadTooLarge);
+                            session.record_error(EdgionErrorCode::BodyReadTooLarge);
                             plugin_log.push("deny mutation size");
                             (413, None)
                         }
@@ -446,7 +446,7 @@ impl ProxyRewrite {
                 Self::reject(400, Some(INVALID_REQUEST_BODY))
             })?;
             if profile.text_bytes > self.json_body_limit {
-                session.add_error(EdgionStatus::BodyReadTooLarge);
+                session.record_error(EdgionErrorCode::BodyReadTooLarge);
                 plugin_log.push("deny mutation size");
                 return Err(Self::reject(413, None));
             }
@@ -458,7 +458,7 @@ impl ProxyRewrite {
 
         let body = serialize_json_capped(&value, self.json_body_limit as usize).map_err(|failure| match failure {
             JsonRewriteFailure::TooLarge => {
-                session.add_error(EdgionStatus::BodyReadTooLarge);
+                session.record_error(EdgionErrorCode::BodyReadTooLarge);
                 plugin_log.push("deny output too large");
                 Self::reject(413, None)
             }
@@ -592,17 +592,17 @@ impl ProxyRewrite {
     fn record_body_error(session: &mut dyn PluginSession, error: &BodyReadError) {
         let status = match error {
             BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
-                Some(EdgionStatus::BodyReadTooLarge)
+                Some(EdgionErrorCode::BodyReadTooLarge)
             }
-            BodyReadError::Timeout => Some(EdgionStatus::BodyReadTimeout),
-            BodyReadError::Incomplete => Some(EdgionStatus::BodyReadAborted),
-            BodyReadError::Unimplemented => Some(EdgionStatus::BodyReadUnimplemented),
-            BodyReadError::StorageFailure => Some(EdgionStatus::BodyCaptureStorageFailed),
-            BodyReadError::GenerationConflict => Some(EdgionStatus::BodyMutationConflict),
+            BodyReadError::Timeout => Some(EdgionErrorCode::BodyReadTimeout),
+            BodyReadError::Incomplete => Some(EdgionErrorCode::BodyReadAborted),
+            BodyReadError::Unimplemented => Some(EdgionErrorCode::BodyReadUnimplemented),
+            BodyReadError::StorageFailure => Some(EdgionErrorCode::BodyCaptureStorageFailed),
+            BodyReadError::GenerationConflict => Some(EdgionErrorCode::BodyMutationConflict),
             BodyReadError::NotBuffered => None,
         };
         if let Some(status) = status {
-            session.add_error(status);
+            session.record_error(status);
         }
     }
 }
@@ -943,7 +943,7 @@ mod tests {
         )
         .unwrap();
         let mut session = json_session(br#"{}"#, "application/json");
-        session.expect_add_error().return_const(());
+        session.expect_record_error().return_const(());
         session.expect_overwrite_request_body().times(0);
         let mut log = PluginLog::new("ProxyRewrite");
         assert!(matches!(

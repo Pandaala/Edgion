@@ -29,7 +29,7 @@ Verify that LDAP TLS outbound connections fail with `OutboundTlsSanMismatch` err
    - Plugin reports a generic outbound connection/auth failure
    - Plugin log `outbound tls san mismatch` followed by `san <reason>` (the verifier's reason)
    - Counter `edgion_gateway_outbound_tls_san_mismatch_total{plugin="ldap_auth"}` increments
-   - Access log `errors` array contains `"OutboundTlsSanMismatch"`
+   - Access log `diagnostics` contains `{ "kind": "error", "code": "OutboundTlsSanMismatch" }`
 
 ## Dependencies
 
@@ -39,5 +39,5 @@ Verify that LDAP TLS outbound connections fail with `OutboundTlsSanMismatch` err
 ## Reference
 
 - Phase 2 Task 6: `docs/superpowers/plans/2026-06-29-outbound-tls-align-phase2.md`
-- SAN mismatch status code: `edgion-resources/src/edgion_status.rs` (OutboundTlsSanMismatch = 999_09)
+- SAN mismatch diagnostic: `edgion-resources/src/diagnostic.rs` (`EdgionErrorCode::OutboundTlsSanMismatch`)
 - SAN validation logic: `edgion-gateway/src/tls/validation/outbound_san_verifier.rs` (OutboundSanVerifier)

@@ -1,6 +1,6 @@
 use super::EdgionHttpProxy;
 use crate::EdgionHttpContext;
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error, ErrorType};
 use pingora_proxy::Session;
@@ -91,7 +91,7 @@ pub fn fail_to_connect(
         if let Some(budget) = super::pg_upstream_peer::retry_budget_for(ctx) {
             if !budget.try_retry() {
                 crate::observe::metrics::record_retry_budget_denied();
-                ctx.add_error(EdgionStatus::RetryBudgetExhausted);
+                ctx.record_error(EdgionErrorCode::RetryBudgetExhausted);
                 return Error::explain(ErrorType::HTTPStatus(503), "retry budget exhausted");
             }
         }

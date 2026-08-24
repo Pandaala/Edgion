@@ -4,7 +4,7 @@ use crate::routes::http::session_persistence;
 use crate::runtime::server::server_header::ServerHeaderOpts;
 use crate::{EdgionHttpContext, ResponseStageDenial, SessionPersistenceState};
 use edgion_resources::resources::http_route::SessionPersistenceType;
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
@@ -114,7 +114,6 @@ pub fn upstream_response_filter(
     ctx.local_reply_written = false;
 
     let status_code = upstream_response.status.as_u16();
-    ctx.request_info.status = Some(status_code);
 
     // Session-persistence cookie/header injection runs AFTER the retry-on-status
     // decision below — see the relocated block — so a response that will be
@@ -189,7 +188,7 @@ pub fn upstream_response_filter(
         let buffer_ok = !session.as_ref().retry_buffer_truncated() && !ctx.request_body_stream_active;
         let gates_allow_retry = !ctx.request_timeout_exceeded()
             && !ctx.grpc_deadline_exceeded()
-            && !ctx.request_info.response_committed
+            && !ctx.response_write_started()
             && !has_final_response_written(session)
             && buffer_ok;
         match crate::ai::dispatch::handle_ai_response(ctx, wants_retry, gates_allow_retry)
@@ -221,7 +220,7 @@ pub fn upstream_response_filter(
                         ));
                 }
                 crate::observe::metrics::record_retry_budget_denied();
-                ctx.add_error(EdgionStatus::RetryBudgetExhausted);
+                ctx.record_error(EdgionErrorCode::RetryBudgetExhausted);
                 return Err(pingora_core::Error::explain(
                     pingora_core::ErrorType::HTTPStatus(503),
                     "AI retry budget exhausted",
@@ -270,7 +269,7 @@ pub fn upstream_response_filter(
                             if let Some(budget) = super::pg_upstream_peer::retry_budget_for(ctx) {
                                 if !budget.try_retry() {
                                     crate::observe::metrics::record_retry_budget_denied();
-                                    ctx.add_error(EdgionStatus::RetryBudgetExhausted);
+                                    ctx.record_error(EdgionErrorCode::RetryBudgetExhausted);
                                     return Err(pingora_core::Error::explain(
                                         pingora_core::ErrorType::HTTPStatus(503),
                                         "retry budget exhausted",
@@ -299,9 +298,11 @@ pub fn upstream_response_filter(
     // Private response processors see only the final, non-retried response.
     // They may normalize a provider status/content type and retain the body
     // mode they will use later. Per-attempt upstream bookkeeping above keeps
-    // the provider's raw status; the request-level status is client-visible.
+    // the provider's raw status; the request-level status is finalized later.
     normalize_final_response_headers(upstream_response, ctx, &edgion_http.server_header_opts);
-    ctx.request_info.status = Some(upstream_response.status.as_u16());
+    let normalized_status = upstream_response.status.as_u16();
+    ctx.pre_plugin_response_status = Some(normalized_status);
+    ctx.select_final_downstream_status(normalized_status);
 
     // Inject session persistence cookie/header if needed. Runs here, AFTER the
     // retry-on-status decision, so a response about to be discarded for retry
@@ -639,10 +640,8 @@ mod tests {
         request_body.install(view);
         request_body.overwrite(Bytes::from_static(b"edited")).unwrap();
 
-        let mut ctx = EdgionHttpContext {
-            request_body,
-            ..Default::default()
-        };
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_body = request_body;
         assert_eq!(ctx.request_body.modified_len_for_framing().unwrap(), Some(6));
         release_late_request_body_view(&mut ctx);
 

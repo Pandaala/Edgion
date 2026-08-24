@@ -90,14 +90,14 @@ usage 时，Edgion 会保留各 token 分量观察到的最高值；后续较低
 
 需要告警的信号：
 
-| EdgionStatus | 代码 | 含义 |
-|--------------|------|------|
-| `AiQuotaOverLimitTerminated` | `999_12` | 一个流式 AI 响应因配额执行被中途截断——这是一个明确的执行动作，不是上游故障。 |
-| `AiQuotaErrorEventDropped` | `999_13` | 截断前注入的错误事件未能放入单批次的发送预算，客户端只看到了裸截断，没有看到诊断事件。 |
-| `AiSseDecodeDegraded` | `999_14` | 某个 AI 响应因单个未终止事件超过上限，SSE 解码放弃解析。单独出现时损失的是计量精度而非正确性：上报用量回落为字符估算。 |
-| `AiSseDegradedQuotaTerminated` | `999_15` | 一个流式 AI 响应因配额已无法被计量而被中途截断。与 `AiQuotaOverLimitTerminated` 的区别：后者意味着确实达到了限制，前者意味着限制已经无法被测量。 |
-| `AiSseDecodeMalformed` | `999_16` | 至少一条完整 SSE 事件包含无效 UTF-8，因而未参与用量解析。无论是否启用配额执行，每个请求只记录一次。 |
-| `AiSseMalformedQuotaTerminated` | `999_17` | 同一响应内累计出现第二条 malformed SSE 事件，触发流式 Reject 执行 fail-close；它既不表示实际超限，也不表示解码器永久降级。 |
+| 错误诊断 | 含义 |
+|----------|------|
+| `AiQuotaOverLimitTerminated` | 一个流式 AI 响应因配额执行被中途截断——这是一个明确的执行动作，不是上游故障。 |
+| `AiQuotaErrorEventDropped` | 截断前注入的错误事件未能放入单批次的发送预算，客户端只看到了裸截断，没有看到诊断事件。 |
+| `AiSseDecodeDegraded` | 某个 AI 响应因单个未终止事件超过上限，SSE 解码放弃解析。单独出现时损失的是计量精度而非正确性：上报用量回落为字符估算。 |
+| `AiSseDegradedQuotaTerminated` | 一个流式 AI 响应因配额已无法被计量而被中途截断。与 `AiQuotaOverLimitTerminated` 的区别：后者意味着确实达到了限制，前者意味着限制已经无法被测量。 |
+| `AiSseDecodeMalformed` | 至少一条完整 SSE 事件包含无效 UTF-8，因而未参与用量解析。无论是否启用配额执行，每个请求只记录一次。 |
+| `AiSseMalformedQuotaTerminated` | 同一响应内累计出现第二条 malformed SSE 事件，触发流式 Reject 执行 fail-close；它既不表示实际超限，也不表示解码器永久降级。 |
 
 ## 估算成本
 

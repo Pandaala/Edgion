@@ -1026,7 +1026,7 @@ mod tests {
         session
             .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::Timeout));
-        session.expect_add_error().returning(|_| ());
+        session.expect_record_error().returning(|_| ());
         let mut log = PluginLog::new("test");
 
         assert!(matches!(

@@ -2314,9 +2314,9 @@ mod tests {
             .with(mockall::predicate::eq(Some(32 * 1024 * 1024)))
             .return_once(|_| Err(BodyReadError::Unimplemented));
         session
-            .expect_add_error()
+            .expect_record_error()
             .with(mockall::predicate::eq(
-                edgion_resources::EdgionStatus::BodyReadUnimplemented,
+                edgion_resources::EdgionErrorCode::BodyReadUnimplemented,
             ))
             .return_const(());
         session.expect_request_header_values().times(0);
@@ -2578,8 +2578,10 @@ mod tests {
             .with(mockall::predicate::eq(Some(32 * 1024 * 1024)))
             .return_const(Ok(64 * 1024 + 1));
         session
-            .expect_add_error()
-            .with(mockall::predicate::eq(edgion_resources::EdgionStatus::BodyReadTooLarge))
+            .expect_record_error()
+            .with(mockall::predicate::eq(
+                edgion_resources::EdgionErrorCode::BodyReadTooLarge,
+            ))
             .return_once(|_| ());
 
         let mut log = PluginLog::new("JsonSchemaValidation");
@@ -2612,8 +2614,8 @@ mod tests {
             .withf(|max_bytes| *max_bytes == Some(32 * 1024 * 1024))
             .returning(|_| Err(BodyReadError::Unimplemented));
         session
-            .expect_add_error()
-            .withf(|status| *status == edgion_resources::EdgionStatus::BodyReadUnimplemented)
+            .expect_record_error()
+            .withf(|status| *status == edgion_resources::EdgionErrorCode::BodyReadUnimplemented)
             .times(1)
             .returning(|_| ());
 
@@ -2663,7 +2665,7 @@ mod tests {
         session.expect_get_method().return_const("POST".to_string());
         session.expect_header_value().returning(|_| None);
         session.expect_ctx().return_const(EdgionHttpContext::new());
-        session.expect_add_error().returning(|_| ());
+        session.expect_record_error().returning(|_| ());
         session
             .expect_read_request_body()
             .returning(|_| Err(BodyReadError::Unimplemented));

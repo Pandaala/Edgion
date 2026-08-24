@@ -35,7 +35,7 @@ Verify that OpenID Connect outbound connections succeed when the server certific
    - Discovery document retrieved
    - Token introspection succeeds
    - Authorization proceeds normally
-   - Note: the access log `errors` array must NOT contain `"OutboundTlsSanMismatch"` on this path
+   - Note: access-log `diagnostics` must NOT contain the `OutboundTlsSanMismatch` error on this path
 
 ## Current Limitation
 
