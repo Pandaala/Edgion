@@ -12,8 +12,8 @@ Edgion AI Gateway 由四份契约拼装而成。把每项职责放在拥有它�
 | 请求转换、选择算法、配额、用量 | Rule 级 `AiProxy` |
 | 建连超时、outlier、熔断、重试预算 | 指向该 AI Service 的 `EdgionBackendTrafficPolicy` |
 
-AiProxy **不**携带 `aiServiceRef`、提供商列表、后端权重或重试次数。HTTPRoute 是唯一候选来源。
-EBTP 不挂到 Route，也不发明后端。
+HTTPRoute 是唯一候选来源，并拥有后端权重和重试许可。AiProxy 只拥有选择算法，不会自行创建后端。
+EBTP 只挂到 EdgionBackend。
 
 ```mermaid
 flowchart LR

@@ -1051,21 +1051,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx
     }
 
-    fn try_activate_a2a_gateway(&mut self) -> bool {
-        if self.ctx.a2a_gateway_activated {
-            false
-        } else {
-            self.ctx.a2a_gateway_activated = true;
-            true
-        }
-    }
-
-    fn pin_edgion_backend_snapshot(&mut self, snapshot: crate::ai::EdgionBackendSnapshot) {
-        if self.ctx.edgion_backend_snapshot.is_none() {
-            self.ctx.edgion_backend_snapshot = Some(snapshot);
-        }
-    }
-
     fn add_error(&mut self, status: edgion_resources::EdgionStatus) {
         self.ctx.add_error(status);
     }
@@ -1190,18 +1175,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .as_ref()
             .filter(|(installed, _)| installed == identity)
             .map(|(_, owner)| std::sync::Arc::clone(owner))
-    }
-
-    fn install_attached_a2a_observation(
-        &mut self,
-        identity: String,
-        owner: crate::plugins::http::a2a_gateway::AttachedA2aObservation,
-    ) -> bool {
-        if self.ctx.response_body_processing_started || self.ctx.attached_a2a_observation.is_some() {
-            return false;
-        }
-        self.ctx.attached_a2a_observation = Some((identity, owner));
-        true
     }
 
     fn install_attached_response_processor(
@@ -2454,37 +2427,6 @@ mod record_outcome_tests {
         assert_single_set(&ctx, "X-O", "app-v1");
     }
 
-    #[tokio::test]
-    async fn attached_a2a_observation_is_first_writer_and_pre_body_only() {
-        use crate::plugins::http::a2a_gateway::AttachedA2aObservation;
-
-        let mut session = test_session().await;
-        let mut ctx = EdgionHttpContext::default();
-        {
-            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
-            assert!(adapter.install_attached_a2a_observation(
-                "route/requestPlugins/#0".to_string(),
-                AttachedA2aObservation::new(),
-            ));
-            assert!(!adapter.install_attached_a2a_observation(
-                "route/requestPlugins/#1".to_string(),
-                AttachedA2aObservation::new(),
-            ));
-        }
-        assert_eq!(
-            ctx.attached_a2a_observation
-                .as_ref()
-                .map(|(identity, _)| identity.as_str()),
-            Some("route/requestPlugins/#0")
-        );
-
-        ctx.attached_a2a_observation = None;
-        ctx.response_body_processing_started = true;
-        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
-        assert!(!adapter
-            .install_attached_a2a_observation("route/requestPlugins/#2".to_string(), AttachedA2aObservation::new(),));
-    }
-
     struct NoopStreamHandler;
 
     #[async_trait::async_trait]
@@ -2572,15 +2514,6 @@ mod record_outcome_tests {
     }
 
     #[tokio::test]
-    async fn a2a_gateway_activation_is_request_scoped_first_writer_wins() {
-        let mut session = test_session().await;
-        let mut ctx = EdgionHttpContext::default();
-        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
-        assert!(adapter.try_activate_a2a_gateway());
-        assert!(!adapter.try_activate_a2a_gateway());
-    }
-
-    #[tokio::test]
     async fn observer_install_requires_request_stage_and_runtime_identity() {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
@@ -2596,7 +2529,7 @@ mod record_outcome_tests {
         assert!(adapter.ctx.request_body_observers.is_none());
 
         let previous = adapter
-            .replace_plugin_entry_identity(crate::ctx::CurrentPluginEntryIdentity::new("A2aGateway", Some("entry")));
+            .replace_plugin_entry_identity(crate::ctx::CurrentPluginEntryIdentity::new("AiGuard", Some("entry")));
         assert!(!adapter.install_request_body_observer(
             Box::new(|| Err(crate::request_body::observer::ObserverInitError)),
             crate::request_body::observer::ObserverLimits::default(),
@@ -2643,10 +2576,8 @@ mod record_outcome_tests {
             let mut ctx = EdgionHttpContext::default();
             ctx.request_info.in_request_body_stage = !matches!(case, Refusal::Stage);
             let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
-            let previous = adapter.replace_plugin_entry_identity(crate::ctx::CurrentPluginEntryIdentity::new(
-                "A2aGateway",
-                Some("entry"),
-            ));
+            let previous = adapter
+                .replace_plugin_entry_identity(crate::ctx::CurrentPluginEntryIdentity::new("AiGuard", Some("entry")));
             let captured = PanickingFactoryCapture;
             let factory = Box::new(move || {
                 let _captured = &captured;
@@ -2676,7 +2607,7 @@ mod record_outcome_tests {
         ));
         assert!(before_outer.is_none());
         let before_inner = adapter
-            .replace_plugin_entry_identity(crate::ctx::CurrentPluginEntryIdentity::new("A2aGateway", Some("inner")));
+            .replace_plugin_entry_identity(crate::ctx::CurrentPluginEntryIdentity::new("AiGuard", Some("inner")));
         assert_eq!(
             before_inner.as_ref().map(|identity| identity.name()),
             Some("ExtensionRef")

@@ -669,7 +669,6 @@ mod tests {
     use edgion_resources::resources::EdgionBackend;
     use k8s_openapi::api::core::v1::ConfigMap;
     use kube::core::ObjectMeta;
-    use serde::Deserialize;
     use std::collections::{HashMap, HashSet};
 
     struct RecordingBackendHandler {
@@ -942,30 +941,7 @@ mod tests {
     }
 
     #[test]
-    fn kind_23_conf_sync_envelopes_reject_cross_generation_shapes() {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct LegacyFlatBackend {
-            api_version: String,
-            kind: String,
-            metadata: kube::core::ObjectMeta,
-            spec: LegacyFlatSpec,
-        }
-
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct LegacyFlatSpec {
-            provider: edgion_resources::resources::edgion_backend::AiProvider,
-            #[serde(default)]
-            endpoint: Option<String>,
-            #[serde(default)]
-            allow_insecure_http: bool,
-            credential_pool: edgion_resources::resources::edgion_backend::AiCredentialPool,
-            models: Vec<edgion_resources::resources::edgion_backend::AiModel>,
-            #[serde(default)]
-            defaults: edgion_resources::resources::edgion_backend::AiBackendDefaults,
-        }
-
+    fn kind_23_conf_sync_envelopes_require_nested_ai_spec() {
         let request = ListRequest {
             key: String::new(),
             kind: EdgionBackend::kind(&()).to_string(),
@@ -986,8 +962,6 @@ mod tests {
                 .len(),
             1
         );
-        assert!(serde_json::from_slice::<Vec<LegacyFlatBackend>>(&nested_response.data).is_err());
-
         let mut flat = nested.clone();
         flat["spec"] = flat["spec"]["ai"].take();
         let flat_response = ListResponse {
@@ -996,21 +970,6 @@ mod tests {
             server_id: "server-a".to_string(),
         };
         assert!(decode_list_payload::<EdgionBackend>(&flat_response.data).is_err());
-        let legacy = serde_json::from_slice::<Vec<LegacyFlatBackend>>(&flat_response.data).unwrap();
-        assert_eq!(legacy.len(), 1);
-        let _ = (
-            &legacy[0].api_version,
-            &legacy[0].kind,
-            &legacy[0].metadata,
-            &legacy[0].spec.provider,
-            &legacy[0].spec.endpoint,
-        );
-        let _ = (
-            legacy[0].spec.allow_insecure_http,
-            &legacy[0].spec.credential_pool,
-            &legacy[0].spec.models,
-            &legacy[0].spec.defaults,
-        );
 
         let nested_watch = WatchResponse {
             data: serde_json::to_string(&vec![serde_json::json!({"type": "update", "data": nested})]).unwrap(),

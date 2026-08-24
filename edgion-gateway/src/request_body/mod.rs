@@ -12,8 +12,8 @@ mod state;
 mod storage;
 
 pub(crate) use body_scanners::{
-    HmacSha256Scanner, JsonDuplicatePolicy, JsonPathScanner, JsonScanValue, JsonSelectPlan, JsonSelectScanner,
-    Md5Scanner, StreamingRegexScanner,
+    HmacSha256Scanner, JsonPathScanner, JsonScanValue, JsonSelectPlan, JsonSelectScanner, Md5Scanner,
+    StreamingRegexScanner,
 };
 pub use config::{ResolvedRequestBodyConfig, DEFAULT_MEMORY_BUFFER_BYTES};
 pub use operation::{

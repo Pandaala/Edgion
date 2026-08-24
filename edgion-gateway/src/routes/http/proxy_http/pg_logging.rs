@@ -61,7 +61,6 @@ pub async fn logging(
     }
     finalize_attached_ext_proc_logs(ctx);
     finalize_attached_guardrail_log(ctx);
-    finalize_attached_a2a_observation_log(ctx, _e.map(PingoraError::esource));
 
     let mut entry = AccessLogEntry::from_context(ctx);
     // Resolve operator-declared `ext` fields here rather than in a request-stage
@@ -118,38 +117,6 @@ pub async fn logging(
                 "Failed to store access log"
             );
             global_metrics().access_log_dropped();
-        }
-    }
-}
-
-fn finalize_attached_a2a_observation_log(ctx: &mut EdgionHttpContext, error_source: Option<&ErrorSource>) {
-    let Some((identity, owner)) = ctx.attached_a2a_observation.as_mut() else {
-        return;
-    };
-    let (outcome, reason) = match error_source {
-        Some(ErrorSource::Upstream) => ("unknown", "upstream-abort"),
-        Some(ErrorSource::Downstream) => ("unknown", "client-cancel"),
-        Some(ErrorSource::Internal | ErrorSource::Unset) => ("unknown", "internal-abort"),
-        None => ("unknown", "missing-eos"),
-    };
-    owner.terminalize_incomplete(outcome, reason);
-    let Some(line) = owner.take_summary_line() else {
-        return;
-    };
-    'stages: for stage in &mut ctx.stage_logs {
-        for log in &mut stage.filters {
-            if log.internal_token.as_deref() == Some(identity.as_str()) {
-                log.push(&line);
-                break 'stages;
-            }
-        }
-        for resource in &mut stage.edgion_plugins {
-            for log in &mut resource.logs {
-                if log.internal_token.as_deref() == Some(identity.as_str()) {
-                    log.push(&line);
-                    break 'stages;
-                }
-            }
         }
     }
 }
@@ -520,71 +487,6 @@ mod tests {
 
     fn attached_owner() -> Arc<crate::plugins::http::ext_proc::AttachedExtProc> {
         Arc::new(crate::plugins::http::ext_proc::AttachedExtProc::test_lazy())
-    }
-
-    #[test]
-    fn a2a_summary_finalizes_into_existing_plugin_log_once() {
-        use crate::plugins::http::a2a_gateway::{A2aResponseMedia, AttachedA2aObservation};
-        use crate::plugins::runtime::log::{PluginLog, StageLogs};
-
-        let identity = "route/requestPlugins/#0".to_string();
-        let mut owner = AttachedA2aObservation::new();
-        owner.observe_final_header(A2aResponseMedia::Json);
-        let mut log = PluginLog::new("A2aGateway");
-        log.set_internal_token(identity.clone());
-        let mut ctx = EdgionHttpContext {
-            attached_a2a_observation: Some((identity, owner)),
-            ..Default::default()
-        };
-        ctx.stage_logs.push(StageLogs {
-            stage: "request_filters",
-            filters: vec![log],
-            edgion_plugins: Vec::new(),
-        });
-
-        finalize_attached_a2a_observation_log(&mut ctx, None);
-        finalize_attached_a2a_observation_log(&mut ctx, None);
-
-        let rendered = serde_json::to_string(&ctx.stage_logs[0].filters[0]).unwrap();
-        assert_eq!(rendered.matches("a2a_resp").count(), 1);
-        assert!(rendered.contains("reason=missing-eos"));
-    }
-
-    #[test]
-    fn a2a_abort_sources_map_to_static_reasons_once() {
-        use crate::plugins::http::a2a_gateway::{A2aResponseMedia, AttachedA2aObservation};
-        use crate::plugins::runtime::log::{PluginLog, StageLogs};
-
-        let cases = [
-            (Some(ErrorSource::Upstream), "upstream-abort"),
-            (Some(ErrorSource::Downstream), "client-cancel"),
-            (Some(ErrorSource::Internal), "internal-abort"),
-            (None, "missing-eos"),
-        ];
-
-        for (source, expected_reason) in cases {
-            let identity = "route/requestPlugins/#0".to_string();
-            let mut owner = AttachedA2aObservation::new();
-            owner.observe_final_header(A2aResponseMedia::Json);
-            let mut log = PluginLog::new("A2aGateway");
-            log.set_internal_token(identity.clone());
-            let mut ctx = EdgionHttpContext {
-                attached_a2a_observation: Some((identity, owner)),
-                ..Default::default()
-            };
-            ctx.stage_logs.push(StageLogs {
-                stage: "request_filters",
-                filters: vec![log],
-                edgion_plugins: Vec::new(),
-            });
-
-            finalize_attached_a2a_observation_log(&mut ctx, source.as_ref());
-            finalize_attached_a2a_observation_log(&mut ctx, source.as_ref());
-
-            let rendered = serde_json::to_string(&ctx.stage_logs[0].filters[0]).unwrap();
-            assert_eq!(rendered.matches("a2a_resp").count(), 1, "{rendered}");
-            assert!(rendered.contains(&format!("reason={expected_reason}")), "{rendered}");
-        }
     }
 
     #[tokio::test]

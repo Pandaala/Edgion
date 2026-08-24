@@ -72,7 +72,7 @@ pub(crate) fn sp_affinity_get_or_build_scoped(
     scope: Option<&str>,
     backends_fn: impl FnOnce() -> Arc<Vec<Arc<EdgionBackend>>>,
 ) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {
-    // A2A scopes include the direct backend UID. Keeping those generations in
+    // Typed scopes may include a direct backend UID. Keeping those generations in
     // this process-global Service cache would let an in-flight request recreate
     // a retired scope after hot-reload cleanup. Build the bounded view from the
     // request-captured endpoint Arc instead; only ordinary Service affinity is

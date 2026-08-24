@@ -435,7 +435,7 @@ struct SimpleCountStats {
 
 /// Unified EdgionBackend runtime index stats.
 ///
-/// The store is process-global and shared by every AI/A2A resource, so a
+/// The store is process-global and shared by every AI backend resource, so a
 /// bare total cannot tell a caller whether one specific backend compiled into
 /// the activatable index. `keys` names the resident entries so a test can
 /// assert its own backend directly instead of doing arithmetic on a total that
@@ -1756,7 +1756,7 @@ mod edgion_backend_admin_tests {
             ..Default::default()
         });
         let spec = EdgionBackendSpec {
-            ai: Some(AiBackendSpec {
+            ai: AiBackendSpec {
                 provider: AiProvider::OpenAICompatible,
                 endpoint: Some(endpoint.to_string()),
                 allow_insecure_http: false,
@@ -1785,9 +1785,7 @@ mod edgion_backend_admin_tests {
                     pricing: None,
                 }],
                 defaults: AiBackendDefaults::default(),
-            }),
-            a2a: None,
-            resolved_a2a: None,
+            },
             reconcile_outcome: None,
         };
         let mut service = EdgionBackend::new(name, spec);
@@ -1802,7 +1800,7 @@ mod edgion_backend_admin_tests {
         let _enter = rt.enter();
         let client = ConfigClient::new("cid-ai".to_string(), "cname-ai".to_string());
         let mut active = ai_backend("active", "https://ai.example.com/v1", Some(b"admin-private-key"));
-        let mut secondary = active.spec.ai.as_ref().unwrap().credential_pool.credentials[0].clone();
+        let mut secondary = active.spec.ai.credential_pool.credentials[0].clone();
         secondary.name = "secondary".to_string();
         secondary.credential.secret = Some(Secret {
             data: Some(BTreeMap::from([(
@@ -1811,14 +1809,7 @@ mod edgion_backend_admin_tests {
             )])),
             ..Default::default()
         });
-        active
-            .spec
-            .ai
-            .as_mut()
-            .unwrap()
-            .credential_pool
-            .credentials
-            .push(secondary);
+        active.spec.ai.credential_pool.credentials.push(secondary);
 
         client.edgion_backends().reset(
             vec![

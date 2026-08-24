@@ -8,7 +8,7 @@ description: Full BackendTLSPolicy schema: upstream backend TLS validation and m
 > API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
 > Gateway API v1.5.0 resource; older clusters may still serve `v1alpha3`
 
-BackendTLSPolicy defines the TLS connection configuration from the gateway to the backend, including CA validation and client certificates (mTLS). In addition to core Service targets, Edgion accepts direct `edgion.io/EdgionBackend` targets for AI HTTPS and A2A Service/HTTPS external transports. A wrapped Service never contributes an inherited policy; cleartext external targets reject TLS policy.
+BackendTLSPolicy defines the TLS connection configuration from the gateway to the backend, including CA validation and client certificates (mTLS). In addition to core Service targets, Edgion accepts direct AI `edgion.io/EdgionBackend` targets.
 
 ## Full Schema
 

@@ -15,8 +15,8 @@ AiProxy must appear exactly once in a rule-level EdgionPlugins ExtensionRef.
 | `modelRoutes` | Array | `[]` | Structured model/header matching, canonical rewrite, and typed candidate filter/weight overrides |
 | `tokenQuota` | Object | none | Optional Redis-backed logical-model token quota; omission performs no quota Redis work |
 
-AiProxy does not have `aiServiceRef`, a separate provider list, or retry attempts. A model-route
-action may identify existing typed route slots and explicitly override their effective weights.
+AiProxy uses only the candidates and retry permission declared by HTTPRoute. A model-route action
+may identify existing typed route slots and explicitly override their effective weights.
 
 ## Model routes
 

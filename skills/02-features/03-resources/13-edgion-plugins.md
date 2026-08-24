@@ -83,7 +83,6 @@ spec:
 | `WebhookKeyGet` | Resolve webhook vars into request context (once per request). Addressable in EdgionGatewayConfig `validation.plugin_policy` allow/deny lists. |
 | `ExtProc` | Envoy-compatible external processing. One `requestPlugins` entry owns one request-scoped Process stream across request headers/body and final response headers/body. Request bodies support `BUFFERED`/`STREAMED`; response bodies support bounded transport-window `STREAMED` only (no full-response aggregation and no semantic SSE-window claim). |
 | `Guardrail` | One bounded HTTP Pass/Replace/Reject decision per canonical semantic AI SSE window. The request-stage owner installs an internal semantic response processor after AI translation/usage and before ordinary writable processors. Pass is byte-identical; policy Reject is never failed open. See `docs/en/user-guide/http-route/filters/edgion-plugins/guardrail.md`. |
-| `A2aGateway` | Publishes an operator-owned A2A v1 Agent Card on a backendless exact discovery route and observes a bounded JSON-RPC method on typed A2A routes. It does not fetch or rewrite backend-returned cards. See `docs/en/user-guide/http-route/filters/edgion-plugins/a2a-gateway.md`. |
 | `Wasm` | Executes a proxy-wasm ABI v0.2 guest module (WebAssembly, run via wasmtime) in-process: header mutation, local responses, HTTP callouts (`calloutAllowlist`-gated; request phase with Pause/resume, and from `on_tick` with root-context callbacks when the module's plugins agree on one allowlist), buffered `proxy_on_request_body` when the request entry declares `body:`, read-only response-body observation, shared data (per-module KV with CAS), and `on_tick` timers. No body rewrite or gRPC callouts. Source forms: `file` / `inline` / `url` / `oci` (gateway-side pull from an OCI registry, with a content-addressed disk cache). See `docs/en/user-guide/http-route/filters/edgion-plugins/wasm.md`. |
 | `TraceContext` | W3C trace-context propagation and normalization |
 
@@ -157,25 +156,6 @@ recursion, mixed operators, empty arrays, and blank group names
 are invalid. `conditions.skip` is evaluated before `conditions.run`, but each
 field's Boolean behavior is selected by its contained set rather than implied
 by the field name.
-
-## `A2aGateway` configuration
-
-`A2aGateway` is valid only in `spec.requestPlugins`.
-
-| Field | Type | Default | Contract |
-|-------|------|---------|----------|
-| `card` | JSON object | required | Operator-owned A2A v1 Agent Card; compact JSON is capped at 1 MiB, the required core shape is validated, and at least one `JSONRPC`/`1.0` interface is required; optional/extension fields are preserved opaquely |
-| `externalUrl` | HTTP(S) origin | routed origin | Trusted publication origin; user information, path, query, fragment, whitespace, and control characters are rejected |
-| `failOpen` | Boolean | `false` | On an A2A version/content-type gate mismatch, forward unchanged instead of returning `400`; never changes body-storage failures |
-
-The backendless local-card rule must be exact `GET /.well-known/agent-card.json`
-and have no backend. An RPC rule must use only
-positive-weight `edgion.io/EdgionBackend` references whose available runtime
-variants are A2A. The route-level ExtensionRef points to the containing
-EdgionPlugins resource in the normal Gateway API form.
-
-Detailed required fields, snapshot pinning, and body failure semantics are
-canonical in [`A2A Gateway Phase 1`](../../01-architecture/02-gateway/15-a2a-gateway.md).
 
 ### `enable: false` means bypass, not reject
 

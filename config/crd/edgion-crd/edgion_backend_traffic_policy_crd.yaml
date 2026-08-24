@@ -42,7 +42,7 @@ spec:
                 loadBalancer:
                   type: object
                   description: >-
-                    Load balancing for core Service and A2A Service EdgionBackend targets.
+                    Load balancing for core Service targets.
                     Panic threshold is supported only for direct core Service targets.
                   required:
                     - type
@@ -171,8 +171,7 @@ spec:
                   description: >-
                     Dynamic upstream authority (Host + SNI) within a wildcard pattern this
                     Service backend declares. The connection stays pinned to the Service's
-                    endpoints; only the authority varies. Supported for core Service and A2A
-                    Service EdgionBackend targets.
+                    endpoints; only the authority varies. Supported for core Service targets.
                   required:
                     - pattern
                     - template

@@ -15,7 +15,6 @@
 | [快速开始](./quick-start.md) | Secret → EdgionBackend → AiProxy → HTTPRoute → OpenAI SDK |
 | [概念](./concepts.md) | HTTPRoute、EdgionBackend、AiProxy、EBTP 的职责划分 |
 | [EdgionBackend](./edgion-backend.md) | 提供商 Endpoint、模型目录与类型化 AI 后端 |
-| [迁移](./edgion-backend-migration.md) | 停机切换与全图回滚 |
 | [路由与选择](./routing.md) | Weighted、Priority、LowestLatency、LowestUsage、CostWeighted |
 | [凭据与限额](./credentials-and-limits.md) | 凭据池、RPM/TPM 预留、轮转与冷却 |
 | [弹性与故障切换](./resilience.md) | 凭据优先重试、SSE 承诺、outlier half-open、EBTP |

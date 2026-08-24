@@ -439,9 +439,8 @@ async fn reference_lifecycle(ctx: &ScenarioCtx) -> Result<()> {
     apply(ctx, plugin_yaml()).await?;
     apply(ctx, route_yaml()).await?;
 
-    // Exercise the renamed Admin/configclient identities before dependency
-    // transitions. Controller get and Gateway list must both expose the new
-    // nested resource, while the removed legacy Gateway path stays absent.
+    // Verify the current Controller and Gateway representations before
+    // exercising dependency transitions.
     wait_for(
         "Controller nested EdgionBackend spec.ai",
         Duration::from_secs(15),
@@ -452,22 +451,6 @@ async fn reference_lifecycle(ctx: &ScenarioCtx) -> Result<()> {
     )
     .await?;
     wait_backend_presence(ctx, BACKEND_A, true).await?;
-    let legacy_url = format!(
-        "{}/configclient/edgionaiservice/list",
-        ctx.gateway_url.trim_end_matches('/')
-    );
-    let legacy = gateway_authed(ctx.test_ctx.http_client.get(&legacy_url)).send().await?;
-    let legacy_status = legacy.status();
-    let legacy_body: Value = legacy.json().await?;
-    anyhow::ensure!(
-        !legacy_status.is_success()
-            || (legacy_body.get("count").and_then(Value::as_u64) == Some(0)
-                && legacy_body
-                    .get("data")
-                    .and_then(Value::as_array)
-                    .is_some_and(Vec::is_empty)),
-        "removed legacy configclient identity exposed data: status={legacy_status} body={legacy_body}"
-    );
 
     wait_condition(
         ctx,
@@ -871,9 +854,8 @@ async fn policy_lifecycle(ctx: &ScenarioCtx) -> Result<()> {
 
 async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
     reference_lifecycle(ctx).await?;
-    // The unified EdgionBackend store holds every variant published by the
-    // whole harness, so publication is proven by this scenario's own pair
-    // rather than by a global total.
+    // The AI backend store is shared by the whole harness, so publication is
+    // proven by this scenario's own pair rather than by a global total.
     wait_backend_presence(ctx, BACKEND_A, true).await?;
     wait_backend_presence(ctx, BACKEND_B, true).await?;
     policy_lifecycle(ctx).await

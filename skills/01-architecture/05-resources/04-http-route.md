@@ -90,6 +90,6 @@ HTTPRoute's ConfHandler implements route compilation and registration:
 | HTTPRoute → HTTPRoute | HTTPRoute | delegation backendRef (`kind: HTTPRoute`) + `RouteDelegationIndex` | Parent flattens child rules into `resolved_rules`; child changes requeue parents (named + wildcard-namespace edges, transitively registered at the root) |
 | HTTPRoute → Service | Service | backendRef | Route's backend target service |
 | HTTPRoute → EdgionPlugins | EdgionPlugins | ExtensionRef filter | Plugin configuration referenced via ExtensionRef |
-| HTTPRoute → EdgionBackend | EdgionBackend | shared `backend_ref_mgr` | Current variant drives AI/A2A rule validation; apply/delete requeues the route |
+| HTTPRoute → EdgionBackend | EdgionBackend | shared `backend_ref_mgr` | AI capability drives rule validation; apply/delete requeues the route |
 | HTTPRoute → Secret | Secret | indirect, via plugins | Plugins such as JWT/BasicAuth reference Secrets |
 | HTTPRoute ← ReferenceGrant | ReferenceGrant | cross-namespace backendRef | Authorizes cross-namespace backend references |

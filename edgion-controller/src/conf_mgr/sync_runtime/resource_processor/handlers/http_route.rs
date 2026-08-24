@@ -719,7 +719,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 // the route at all; flipping it to False would drop the entire route
                 // from the data-plane route table.
                 //
-                // The single exception is `protocol_rejects_route`: an AI/A2A violation that
+                // The single exception is `protocol_rejects_route`: an AI protocol violation that
                 // leaves no rule serving at all. There the whole-route drop is the
                 // intended outcome (AI-3), so Accepted=False carries the reasons and
                 // PartiallyInvalid is never set True below (an earlier True is
@@ -1055,37 +1055,22 @@ struct AiProxyAdmissionState {
     config: Option<AiProxyConfig>,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct A2aGatewayAdmissionState {
-    active_count: usize,
-    policy_blocked: bool,
-    validation_failed: bool,
-}
-
-fn a2a_gateway_admission_state(
-    runtime: &ControllerRuntime,
-    namespace: &str,
-    name: &str,
-) -> Option<A2aGatewayAdmissionState> {
-    let processor = runtime.processor_registry.get("EdgionPlugins")?;
+fn edgion_plugins_policy_blocked(runtime: &ControllerRuntime, namespace: &str, name: &str) -> bool {
+    let Some(processor) = runtime.processor_registry.get("EdgionPlugins") else {
+        return false;
+    };
     let key = format!("{namespace}/{name}");
     // Read the current raw generation: EdgionPlugins requeues dependent
     // routes before saving its processed generation, so ServerCache may still
     // contain the previous object during this reconcile.
-    let raw = processor.get_raw_any(&key)?.downcast::<EdgionPlugins>().ok()?;
+    let Some(raw) = processor
+        .get_raw_any(&key)
+        .and_then(|raw| raw.downcast::<EdgionPlugins>().ok())
+    else {
+        return false;
+    };
     let mut plugins = (*raw).clone();
     let _ = super::super::plugin_policy_stamp::stamp_http_entries(&mut plugins);
-    let mut state = A2aGatewayAdmissionState::default();
-    for entry in plugins.spec.request_plugins.iter().flatten() {
-        if !entry.is_enabled() {
-            continue;
-        }
-        match entry.policy_action.as_ref() {
-            None if matches!(entry.plugin, EdgionPlugin::A2aGateway(_)) => state.active_count += 1,
-            Some(PluginPolicyAction::Block { .. }) => state.policy_blocked = true,
-            None | Some(PluginPolicyAction::Bypass) => {}
-        }
-    }
     macro_rules! stage_has_policy_block {
         ($entries:expr) => {
             $entries.iter().flatten().any(|entry| {
@@ -1097,11 +1082,10 @@ fn a2a_gateway_admission_state(
             })
         };
     }
-    state.policy_blocked |= stage_has_policy_block!(plugins.spec.upstream_response_filter_plugins);
-    state.policy_blocked |= stage_has_policy_block!(plugins.spec.upstream_response_body_filter_plugins);
-    state.policy_blocked |= stage_has_policy_block!(plugins.spec.upstream_response_plugins);
-    state.validation_failed = !plugins.validate_plugins().is_empty();
-    Some(state)
+    stage_has_policy_block!(plugins.spec.request_plugins)
+        || stage_has_policy_block!(plugins.spec.upstream_response_filter_plugins)
+        || stage_has_policy_block!(plugins.spec.upstream_response_body_filter_plugins)
+        || stage_has_policy_block!(plugins.spec.upstream_response_plugins)
 }
 
 fn ai_proxy_admission_state(runtime: &ControllerRuntime, namespace: &str, name: &str) -> Option<AiProxyAdmissionState> {
@@ -1274,7 +1258,6 @@ fn ai_rule_invalid_reason(
 enum ForwardingBackendClass {
     Service,
     Ai,
-    A2a,
     Missing,
     Denied,
     Invalid,
@@ -1356,25 +1339,14 @@ fn runtime_ai_rule_invalid_reason(
                     let key = format!("{namespace}/{}", backend_ref.name);
                     match backend_processor.as_ref() {
                         // The registry is always populated in a running Controller. Isolated
-                        // admission tests may omit it; treat that as missing instead of guessing
-                        // an AI or A2A variant without the current raw resource generation.
+                        // admission tests may omit it; treat that as missing.
                         None => ForwardingBackendClass::Missing,
                         Some(processor) => match processor
                             .get_raw_any(&key)
                             .and_then(|raw| raw.downcast::<EdgionBackend>().ok())
                         {
                             Some(backend) if backend.spec.validate().is_err() => ForwardingBackendClass::Invalid,
-                            Some(backend)
-                                if matches!((backend.spec.ai.is_some(), backend.spec.a2a.is_some()), (true, false)) =>
-                            {
-                                ForwardingBackendClass::Ai
-                            }
-                            Some(backend)
-                                if matches!((backend.spec.ai.is_some(), backend.spec.a2a.is_some()), (false, true)) =>
-                            {
-                                ForwardingBackendClass::A2a
-                            }
-                            Some(_) => ForwardingBackendClass::Invalid,
+                            Some(_) => ForwardingBackendClass::Ai,
                             None => ForwardingBackendClass::Missing,
                         },
                     }
@@ -1407,12 +1379,10 @@ fn runtime_ai_rule_invalid_reason(
     {
         return Some("AI routing retry.attempts must not exceed 7".to_string());
     }
-    if classes.iter().any(|(_, _, class)| {
-        matches!(
-            class,
-            ForwardingBackendClass::Service | ForwardingBackendClass::A2a | ForwardingBackendClass::Invalid
-        )
-    }) {
+    if classes
+        .iter()
+        .any(|(_, _, class)| matches!(class, ForwardingBackendClass::Service | ForwardingBackendClass::Invalid))
+    {
         return Some("AI EdgionBackend slots must not be mixed with other forwarding backend variants".to_string());
     }
     for (_, backend_ref, class) in &classes {
@@ -1440,148 +1410,6 @@ fn runtime_ai_rule_invalid_reason(
         ));
     }
     (ai_proxy_count != 1).then(|| format!("AI routing requires exactly one enabled AiProxy (found {ai_proxy_count})"))
-}
-
-fn runtime_a2a_rule_invalid_reason(
-    rule: &HTTPRouteRule,
-    route_namespace: &str,
-    runtime: &ControllerRuntime,
-) -> Option<String> {
-    let mut a2a_gateway_count = 0usize;
-    let mut policy_blocked = false;
-    let mut plugin_validation_failed = false;
-    let mut missing_plugin = None;
-    for filter in rule.filters.iter().flatten() {
-        if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
-            continue;
-        }
-        let Some(reference) = filter.extension_ref.as_ref() else {
-            continue;
-        };
-        if !(reference.group.is_empty() || reference.group == "edgion.io") || reference.kind != "EdgionPlugins" {
-            continue;
-        }
-        let namespace = reference.resolved_namespace.as_deref().unwrap_or(route_namespace);
-        match a2a_gateway_admission_state(runtime, namespace, &reference.name) {
-            Some(state) => {
-                a2a_gateway_count += state.active_count;
-                policy_blocked |= state.policy_blocked;
-                plugin_validation_failed |= state.validation_failed;
-            }
-            None => missing_plugin = Some(format!("{namespace}/{}", reference.name)),
-        }
-    }
-
-    // A policy Block is a fail-close request gate. Removing this rule would
-    // remove the gate, so it always wins over A2A attachment validation.
-    if policy_blocked {
-        return None;
-    }
-    if a2a_gateway_count > 0 && plugin_validation_failed {
-        return Some("A2aGateway references an invalid EdgionPlugins generation".to_string());
-    }
-
-    let backend_refs = rule.backend_refs.as_deref().unwrap_or_default();
-    let backend_processor = runtime.processor_registry.get("EdgionBackend");
-    let mut classes = Vec::new();
-    for backend_ref in backend_refs
-        .iter()
-        .filter(|backend_ref| backend_ref.weight.unwrap_or(1) > 0)
-    {
-        let class = if backend_ref.ref_denied.is_some() {
-            ForwardingBackendClass::Denied
-        } else {
-            match backend_ref.backend_kind() {
-                // A2A eligibility is typed by the syntactic backend kind. A
-                // missing core Service must not be reclassified as an allowed
-                // missing EdgionBackend share: the Gateway cannot prove that
-                // it was intended to become an A2A variant later.
-                HTTPBackendRefKind::Service => ForwardingBackendClass::Service,
-                HTTPBackendRefKind::EdgionBackend if backend_ref.port.is_some() => ForwardingBackendClass::Invalid,
-                HTTPBackendRefKind::EdgionBackend => {
-                    let namespace = backend_ref.namespace.as_deref().unwrap_or(route_namespace);
-                    let key = format!("{namespace}/{}", backend_ref.name);
-                    match backend_processor.as_ref() {
-                        None => ForwardingBackendClass::Missing,
-                        Some(processor) => match processor
-                            .get_raw_any(&key)
-                            .and_then(|raw| raw.downcast::<EdgionBackend>().ok())
-                        {
-                            Some(backend) if backend.spec.validate().is_err() => ForwardingBackendClass::Invalid,
-                            Some(backend)
-                                if matches!((backend.spec.ai.is_some(), backend.spec.a2a.is_some()), (true, false)) =>
-                            {
-                                ForwardingBackendClass::Ai
-                            }
-                            Some(backend)
-                                if matches!((backend.spec.ai.is_some(), backend.spec.a2a.is_some()), (false, true)) =>
-                            {
-                                ForwardingBackendClass::A2a
-                            }
-                            Some(_) => ForwardingBackendClass::Invalid,
-                            None => ForwardingBackendClass::Missing,
-                        },
-                    }
-                }
-                HTTPBackendRefKind::RouteDelegation | HTTPBackendRefKind::Unsupported => {
-                    ForwardingBackendClass::Invalid
-                }
-            }
-        };
-        classes.push(class);
-    }
-
-    // Ordinary WP4 A2A backend routes remain valid without the gateway
-    // protocol plugin. This classifier owns only rules that actually resolve
-    // an active route-level A2aGateway.
-    if a2a_gateway_count == 0 {
-        return None;
-    }
-    if let Some(key) = missing_plugin {
-        return Some(format!(
-            "A2A routing requires exactly one enabled A2aGateway, but EdgionPlugins '{key}' was not found"
-        ));
-    }
-    if a2a_gateway_count != 1 {
-        return Some(format!(
-            "A2A routing requires exactly one enabled A2aGateway (found {a2a_gateway_count})"
-        ));
-    }
-
-    if backend_refs.is_empty() {
-        let matches = rule.matches.as_deref().unwrap_or_default();
-        let valid_discovery_match = |route_match: &edgion_resources::resources::http_route::HTTPRouteMatch| {
-            route_match.method.as_deref() == Some("GET")
-                && route_match.path.as_ref().is_some_and(|path| {
-                    path.match_type.as_deref() == Some("Exact")
-                        && path.value.as_deref() == Some("/.well-known/agent-card.json")
-                })
-        };
-        if matches.is_empty() || !matches.iter().all(valid_discovery_match) {
-            return Some(
-                "A2aGateway backendless rules require explicit GET Exact '/.well-known/agent-card.json' matches"
-                    .to_string(),
-            );
-        }
-        return None;
-    }
-
-    if classes.is_empty() {
-        return Some("A2aGateway proxy rules require at least one positive-weight backendRef".to_string());
-    }
-
-    if classes.iter().any(|class| {
-        matches!(
-            class,
-            ForwardingBackendClass::Service | ForwardingBackendClass::Ai | ForwardingBackendClass::Invalid
-        )
-    }) {
-        return Some(
-            "A2aGateway proxy rules require positive existing forwarding backends to use EdgionBackend spec.a2a"
-                .to_string(),
-        );
-    }
-    None
 }
 
 fn backend_variant_invalid_reason(
@@ -1703,11 +1531,7 @@ fn model_route_context_invalid_reason_for_config(
             let Ok(backend) = raw.downcast::<EdgionBackend>() else {
                 return Some("modelRoutes candidate has an incompatible cached backend representation".to_string());
             };
-            let Some(ai) = backend.spec.ai.as_ref() else {
-                return Some(format!(
-                    "modelRoutes[{route_index}] selects an EdgionBackend without spec.ai"
-                ));
-            };
+            let ai = &backend.spec.ai;
             if effective_weight <= 0 {
                 continue;
             }
@@ -1739,7 +1563,7 @@ fn plugin_policy_blocks_rule(rule: &HTTPRouteRule, route_namespace: &str, runtim
             return false;
         }
         let namespace = extension_ref.resolved_namespace.as_deref().unwrap_or(route_namespace);
-        a2a_gateway_admission_state(runtime, namespace, &extension_ref.name).is_some_and(|state| state.policy_blocked)
+        edgion_plugins_policy_blocked(runtime, namespace, &extension_ref.name)
     })
 }
 
@@ -1768,7 +1592,6 @@ fn protocol_rule_invalid_reason_after_policy(
         return None;
     }
     runtime_ai_rule_invalid_reason(rule, route_namespace, runtime)
-        .or_else(|| runtime_a2a_rule_invalid_reason(rule, route_namespace, runtime))
         .or_else(|| backend_variant_invalid_reason(rule, route_namespace, runtime))
         .or_else(|| model_route_context_invalid_reason(rule, route_namespace, runtime))
 }
@@ -1909,76 +1732,11 @@ mod tests {
         HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime)
     }
 
-    fn a2a_rule(backends: serde_json::Value, matches: serde_json::Value) -> HTTPRouteRule {
-        serde_json::from_value(serde_json::json!({
-            "matches": matches,
-            "filters": [{
-                "type": "ExtensionRef",
-                "extensionRef": {
-                    "group": "edgion.io",
-                    "kind": "EdgionPlugins",
-                    "name": "a2a"
-                }
-            }],
-            "backendRefs": backends
-        }))
-        .expect("A2A rule fixture must deserialize")
-    }
-
-    fn valid_a2a_card() -> serde_json::Value {
-        serde_json::json!({
-            "name": "Test agent",
-            "description": "Agent used by controller admission tests",
-            "version": "1.0.0",
-            "capabilities": {},
-            "supportedInterfaces": [{
-                "url": "https://agent.example.test/rpc",
-                "protocolBinding": "JSONRPC",
-                "protocolVersion": "1.0"
-            }],
-            "defaultInputModes": ["application/json"],
-            "defaultOutputModes": ["application/json"],
-            "skills": [{
-                "id": "echo",
-                "name": "Echo",
-                "description": "Echo a test message",
-                "tags": ["test"]
-            }]
-        })
-    }
-
-    fn runtime_with_a2a_plugin(raw_backends: &[(&str, serde_json::Value)]) -> Arc<ControllerRuntime> {
-        use crate::conf_mgr::sync_runtime::resource_processor::handlers::{EdgionBackendHandler, EdgionPluginsHandler};
+    fn runtime_with_ai_backends(raw_backends: &[(&str, serde_json::Value)]) -> Arc<ControllerRuntime> {
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendHandler;
         use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
-        use edgion_resources::resources::edgion_plugins::{A2aGatewayConfig, EdgionPluginsSpec, RequestFilterEntry};
 
         let runtime = Arc::new(ControllerRuntime::default());
-        let plugin_processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
-            "EdgionPlugins",
-            16,
-            Arc::new(EdgionPluginsHandler::default()),
-            runtime.clone(),
-        ));
-        let mut plugins = EdgionPlugins::new(
-            "a2a",
-            EdgionPluginsSpec {
-                request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::A2aGateway(
-                    A2aGatewayConfig {
-                        card: valid_a2a_card(),
-                        external_url: None,
-                        fail_open: false,
-                    },
-                ))]),
-                ..Default::default()
-            },
-        );
-        plugins.metadata.namespace = Some("apps".to_string());
-        let plugin_raw_store = Arc::new(LocalRawStore::new());
-        plugin_raw_store.upsert("apps/a2a".to_string(), Arc::new(plugins.clone()));
-        plugin_processor.set_raw_store(plugin_raw_store);
-        plugin_processor.save(plugins, None);
-        runtime.processor_registry.register(plugin_processor);
-
         let backend_processor = Arc::new(ResourceProcessor::<EdgionBackend>::new(
             "EdgionBackend",
             16,
@@ -2001,6 +1759,19 @@ mod tests {
         runtime
     }
 
+    fn invalid_ai_backend_spec() -> edgion_resources::resources::edgion_backend::EdgionBackendSpec {
+        serde_json::from_value(serde_json::json!({
+            "ai": {
+                "provider": "OpenAI",
+                "credentialPool": {"credentials": [{
+                    "name": "primary", "secretRef": {"name": "provider-key"}
+                }]},
+                "models": []
+            }
+        }))
+        .expect("structurally deserializable invalid AI backend")
+    }
+
     #[tokio::test]
     async fn ai_rule_preserves_a_missing_service_as_an_invalid_share() {
         use crate::conf_mgr::sync_runtime::resource_processor::handlers::{EdgionPluginsHandler, ServiceHandler};
@@ -2008,7 +1779,7 @@ mod tests {
         use edgion_resources::resources::edgion_plugins::{AiProxyConfig, EdgionPluginsSpec, RequestFilterEntry};
         use k8s_openapi::api::core::v1::Service;
 
-        let runtime = runtime_with_a2a_plugin(&[(
+        let runtime = runtime_with_ai_backends(&[(
             "models",
             serde_json::json!({
                 "ai": {
@@ -2065,237 +1836,6 @@ mod tests {
         );
 
         assert_eq!(runtime_ai_rule_invalid_reason(&rule, "apps", &runtime), None);
-    }
-
-    #[tokio::test]
-    async fn a2a_local_card_requires_backendless_exact_get_matches() {
-        let runtime = runtime_with_a2a_plugin(&[]);
-        let exact_get = serde_json::json!([{
-            "method": "GET",
-            "path": {"type": "Exact", "value": "/.well-known/agent-card.json"}
-        }]);
-        assert!(
-            runtime_a2a_rule_invalid_reason(&a2a_rule(serde_json::json!([]), exact_get), "apps", &runtime).is_none()
-        );
-
-        for matches in [
-            serde_json::json!([{
-                "method": "POST",
-                "path": {"type": "Exact", "value": "/.well-known/agent-card.json"}
-            }]),
-            serde_json::json!([{
-                "method": "GET",
-                "path": {"type": "PathPrefix", "value": "/.well-known/agent-card.json"}
-            }]),
-            serde_json::json!([]),
-        ] {
-            let reason = runtime_a2a_rule_invalid_reason(&a2a_rule(serde_json::json!([]), matches), "apps", &runtime)
-                .expect("loose local-card match must be rejected");
-            assert!(reason.contains("explicit GET Exact"), "{reason}");
-        }
-    }
-
-    #[tokio::test]
-    async fn a2a_proxy_uses_current_raw_variant_and_preserves_invalid_shares() {
-        let runtime = runtime_with_a2a_plugin(&[
-            (
-                "agent",
-                serde_json::json!({
-                    "a2a": {"target": {"endpoint": "https://agent.example.test"}}
-                }),
-            ),
-            (
-                "model",
-                serde_json::json!({
-                    "ai": {
-                        "provider": "OpenAI",
-                        "credentialPool": {"credentials": [{
-                            "name": "primary", "secretRef": {"name": "provider-key"}
-                        }]},
-                        "models": [{"name": "model-a"}]
-                    }
-                }),
-            ),
-        ]);
-        let rpc_matches = serde_json::json!([{"method": "POST"}]);
-        let backend = |name: &str, extra: serde_json::Value| {
-            let mut value = serde_json::json!({
-                "group": "edgion.io", "kind": "EdgionBackend", "name": name
-            });
-            value
-                .as_object_mut()
-                .unwrap()
-                .extend(extra.as_object().unwrap().clone());
-            value
-        };
-
-        let accepted = a2a_rule(
-            serde_json::json!([
-                backend("agent", serde_json::json!({})),
-                backend("missing", serde_json::json!({})),
-                backend("model", serde_json::json!({"weight": 0})),
-                backend(
-                    "model",
-                    serde_json::json!({
-                        "refDenied": {"targetNamespace": "apps", "targetName": "model"}
-                    })
-                )
-            ]),
-            rpc_matches.clone(),
-        );
-        assert!(runtime_a2a_rule_invalid_reason(&accepted, "apps", &runtime).is_none());
-
-        let denied_service_share = a2a_rule(
-            serde_json::json!([
-                backend("agent", serde_json::json!({})),
-                {
-                    "name": "service",
-                    "port": 80,
-                    "refDenied": {"targetNamespace": "apps", "targetName": "service"}
-                }
-            ]),
-            rpc_matches.clone(),
-        );
-        assert!(
-            runtime_a2a_rule_invalid_reason(&denied_service_share, "apps", &runtime).is_none(),
-            "a denied Service is an invalid share and must not affect A2A kind admission"
-        );
-
-        for (label, backends) in [
-            ("AI", serde_json::json!([backend("model", serde_json::json!({}))])),
-            (
-                "mixed",
-                serde_json::json!([
-                    backend("agent", serde_json::json!({})),
-                    backend("model", serde_json::json!({}))
-                ]),
-            ),
-            ("missing Service", serde_json::json!([{"name": "service", "port": 80}])),
-        ] {
-            assert!(
-                runtime_a2a_rule_invalid_reason(&a2a_rule(backends, rpc_matches.clone()), "apps", &runtime).is_some(),
-                "{label} backend must be rejected"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn a2a_proxy_rejects_nonempty_all_zero_backend_refs() {
-        let runtime = runtime_with_a2a_plugin(&[(
-            "agent",
-            serde_json::json!({
-                "a2a": {"target": {"endpoint": "https://agent.example.test"}}
-            }),
-        )]);
-        let rule = a2a_rule(
-            serde_json::json!([{
-                "group": "edgion.io",
-                "kind": "EdgionBackend",
-                "name": "agent",
-                "weight": 0
-            }]),
-            serde_json::json!([{"method": "POST"}]),
-        );
-
-        let reason = runtime_a2a_rule_invalid_reason(&rule, "apps", &runtime)
-            .expect("an all-zero proxy rule has no forwarding slot");
-        assert!(reason.contains("at least one positive-weight backendRef"), "{reason}");
-    }
-
-    #[tokio::test]
-    async fn a2a_admission_uses_current_raw_plugin_generation() {
-        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
-        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
-        use edgion_resources::resources::edgion_plugins::{
-            A2aGatewayConfig, EdgionPluginsSpec, MockConfig, RequestFilterEntry,
-        };
-
-        let runtime = Arc::new(ControllerRuntime::default());
-        let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
-            "EdgionPlugins",
-            16,
-            Arc::new(EdgionPluginsHandler::default()),
-            runtime.clone(),
-        ));
-        let mut processed = EdgionPlugins::new(
-            "a2a",
-            EdgionPluginsSpec {
-                request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::Mock(MockConfig::default()))]),
-                ..Default::default()
-            },
-        );
-        processed.metadata.namespace = Some("apps".to_string());
-        processor.save(processed, None);
-
-        let mut current = EdgionPlugins::new(
-            "a2a",
-            EdgionPluginsSpec {
-                request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::A2aGateway(
-                    A2aGatewayConfig {
-                        card: valid_a2a_card(),
-                        external_url: None,
-                        fail_open: false,
-                    },
-                ))]),
-                ..Default::default()
-            },
-        );
-        current.metadata.namespace = Some("apps".to_string());
-        let raw_store = Arc::new(LocalRawStore::new());
-        raw_store.upsert("apps/a2a".to_string(), Arc::new(current));
-        processor.set_raw_store(raw_store);
-        runtime.processor_registry.register(processor);
-
-        assert_eq!(
-            a2a_gateway_admission_state(&runtime, "apps", "a2a"),
-            Some(A2aGatewayAdmissionState {
-                active_count: 1,
-                policy_blocked: false,
-                validation_failed: false,
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn invalid_only_a2a_rule_sets_accepted_false() {
-        let runtime = runtime_with_a2a_plugin(&[]);
-        let ctx = HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime);
-        let mut route: HTTPRoute = serde_yaml::from_str(
-            r#"
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: card
-  namespace: apps
-spec:
-  parentRefs:
-    - name: gw
-  rules:
-    - matches:
-        - method: POST
-          path:
-            type: Exact
-            value: /.well-known/agent-card.json
-      filters:
-        - type: ExtensionRef
-          extensionRef:
-            group: edgion.io
-            kind: EdgionPlugins
-            name: a2a
-"#,
-        )
-        .expect("A2A route fixture must deserialize");
-
-        HttpRouteHandler::default().update_status(&mut route, &ctx, &[]);
-        let conditions = &route.status.as_ref().expect("status").parents[0].conditions;
-        let accepted = conditions
-            .iter()
-            .find(|condition| condition.type_ == condition_types::ACCEPTED)
-            .expect("Accepted condition must be set");
-        assert_eq!(accepted.status, "False");
-        assert!(accepted.message.contains("rules[0]"), "{accepted:?}");
-        assert!(accepted.message.contains("GET Exact"), "{accepted:?}");
-        assert_eq!(route.spec.invalid_rule_indices.as_deref(), Some(&[0][..]));
     }
 
     fn route_with_one_cors_rule(origins: &[&str]) -> HTTPRoute {
@@ -2597,7 +2137,6 @@ modelRoutes:
     async fn positive_weight_backend_requires_ai_capability() {
         use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendHandler;
         use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
-        use edgion_resources::resources::edgion_backend::EdgionBackendSpec;
         use kube::api::ObjectMeta;
 
         let runtime = Arc::new(ControllerRuntime::default());
@@ -2616,12 +2155,7 @@ modelRoutes:
                     name: Some("models".to_string()),
                     ..Default::default()
                 },
-                spec: EdgionBackendSpec {
-                    ai: None,
-                    a2a: None,
-                    resolved_a2a: None,
-                    reconcile_outcome: None,
-                },
+                spec: invalid_ai_backend_spec(),
                 status: None,
             }),
         );
@@ -2646,76 +2180,9 @@ modelRoutes:
     }
 
     #[tokio::test]
-    async fn ordinary_rule_uses_raw_a2a_generation_not_processed_ai_generation() {
-        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendHandler;
-        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
-        use edgion_resources::resources::edgion_backend::{A2aBackendSpec, A2aBackendTarget, EdgionBackendSpec};
-        use kube::api::ObjectMeta;
-
-        let runtime = Arc::new(ControllerRuntime::default());
-        let processor = Arc::new(ResourceProcessor::<EdgionBackend>::new(
-            "EdgionBackend",
-            16,
-            Arc::new(EdgionBackendHandler::new()),
-            runtime.clone(),
-        ));
-        // The current raw generation has already changed from AI to A2A, while
-        // the serial worker has not saved that generation to ServerCache yet.
-        // Admission must classify the direct identity from RawStore. A missing
-        // resolvedA2a is intentional: target resolution is not capability.
-        let raw_a2a = EdgionBackend {
-            metadata: ObjectMeta {
-                namespace: Some("apps".to_string()),
-                name: Some("agent".to_string()),
-                ..Default::default()
-            },
-            spec: EdgionBackendSpec {
-                ai: None,
-                a2a: Some(A2aBackendSpec {
-                    target: A2aBackendTarget {
-                        service_ref: None,
-                        endpoint: Some("https://agent.example.test".to_string()),
-                    },
-                    allow_insecure_http: false,
-                }),
-                resolved_a2a: None,
-                reconcile_outcome: None,
-            },
-            status: None,
-        };
-        let processed_ai: EdgionBackend = serde_json::from_value(serde_json::json!({
-            "apiVersion": "edgion.io/v1",
-            "kind": "EdgionBackend",
-            "metadata": {"namespace": "apps", "name": "agent"},
-            "spec": {"ai": {
-                "provider": "OpenAI",
-                "credentialPool": {"credentials": [{
-                    "name": "primary", "secretRef": {"name": "provider-key"}
-                }]},
-                "models": [{"name": "model-a"}]
-            }}
-        }))
-        .unwrap();
-        let raw = Arc::new(LocalRawStore::new());
-        raw.upsert("apps/agent".to_string(), Arc::new(raw_a2a));
-        processor.set_raw_store(raw);
-        processor.save(processed_ai, None);
-        runtime.processor_registry.register(processor);
-
-        let rule = ai_rule(
-            serde_json::json!([{
-                "group": "edgion.io", "kind": "EdgionBackend", "name": "agent", "weight": 1
-            }]),
-            serde_json::json!([]),
-        );
-        assert!(protocol_rule_invalid_reason_with_runtime(&rule, "apps", &runtime).is_none());
-    }
-
-    #[tokio::test]
     async fn model_route_validates_selected_zero_weight_backend_variant() {
         use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendHandler;
         use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
-        use edgion_resources::resources::edgion_backend::EdgionBackendSpec;
         use kube::api::ObjectMeta;
 
         let runtime = Arc::new(ControllerRuntime::default());
@@ -2734,12 +2201,7 @@ modelRoutes:
                     name: Some("models".to_string()),
                     ..Default::default()
                 },
-                spec: EdgionBackendSpec {
-                    ai: None,
-                    a2a: None,
-                    resolved_a2a: None,
-                    reconcile_outcome: None,
-                },
+                spec: invalid_ai_backend_spec(),
                 status: None,
             }),
         );
@@ -2830,7 +2292,6 @@ modelRoutes:
         use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
         use crate::conf_mgr::sync_runtime::resource_processor::raw_store::LocalRawStore;
         use crate::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
-        use edgion_resources::resources::edgion_backend::EdgionBackendSpec;
         use edgion_resources::resources::edgion_plugins::{
             AiProxyConfig, EdgionPluginsSpec, MockConfig, RequestFilterEntry, UpstreamResponseEntry,
         };
@@ -2940,12 +2401,7 @@ modelRoutes:
                     name: Some("models".to_string()),
                     ..Default::default()
                 },
-                spec: EdgionBackendSpec {
-                    ai: None,
-                    a2a: None,
-                    resolved_a2a: None,
-                    reconcile_outcome: None,
-                },
+                spec: invalid_ai_backend_spec(),
                 status: None,
             }),
         );

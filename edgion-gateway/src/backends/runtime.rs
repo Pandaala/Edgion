@@ -4,7 +4,7 @@ use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::ai::{AdaptiveTelemetryState, AiCredentialOutlierHandle, RuntimeA2aBackend, RuntimeAiBackend};
+use crate::ai::{AdaptiveTelemetryState, AiCredentialOutlierHandle, RuntimeAiBackend};
 use crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy;
 use crate::routes::http::match_unit::{CompiledBackend, CompiledBackendTarget};
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
@@ -119,47 +119,6 @@ pub struct SelectedAiBackend {
     pub effective_weight: i32,
 }
 
-/// An A2A backend selected from the same immutable EdgionBackend generation.
-#[derive(Clone)]
-pub struct SelectedA2aBackend {
-    logical: LogicalBackendHandle,
-    pub backend: Arc<RuntimeA2aBackend>,
-    pub effective_policy: Option<Arc<EffectiveBackendTrafficPolicy>>,
-    pub backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
-}
-
-impl SelectedA2aBackend {
-    pub(crate) fn new(
-        logical: LogicalBackendHandle,
-        backend: Arc<RuntimeA2aBackend>,
-        effective_policy: Option<Arc<EffectiveBackendTrafficPolicy>>,
-        backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
-    ) -> Option<Self> {
-        (logical.is_authorized() && matches!(logical.target(), CompiledBackendTarget::EdgionBackend { .. })).then_some(
-            Self {
-                logical,
-                backend,
-                effective_policy,
-                backend_tls_policy,
-            },
-        )
-    }
-
-    pub fn logical(&self) -> &LogicalBackendHandle {
-        &self.logical
-    }
-}
-
-impl fmt::Debug for SelectedA2aBackend {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SelectedA2aBackend")
-            .field("logical", &self.logical)
-            .field("effective_policy", &self.effective_policy.is_some())
-            .field("backend_tls_policy", &self.backend_tls_policy.is_some())
-            .finish()
-    }
-}
-
 impl SelectedAiBackend {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -212,7 +171,6 @@ impl fmt::Debug for SelectedAiBackend {
 pub enum SelectedLogicalBackend {
     Service(SelectedServiceBackend),
     Ai(SelectedAiBackend),
-    A2a(SelectedA2aBackend),
 }
 
 impl SelectedLogicalBackend {
@@ -221,7 +179,6 @@ impl SelectedLogicalBackend {
         match self {
             Self::Service(selected) => selected.logical(),
             Self::Ai(selected) => selected.logical(),
-            Self::A2a(selected) => selected.logical(),
         }
     }
 

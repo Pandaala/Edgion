@@ -216,7 +216,6 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
                         | EdgionPlugin::FaultInjection(_)
                         | EdgionPlugin::DebugAccessLogToHeader(_)
                         | EdgionPlugin::ProxyRewrite(_)
-                        | EdgionPlugin::A2aGateway(_)
                         | EdgionPlugin::RequestRestriction(_)
                         | EdgionPlugin::RequestBodyBuffer(_)
                         | EdgionPlugin::JsonSchemaValidation(_)

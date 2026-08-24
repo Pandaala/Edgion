@@ -16,7 +16,6 @@ Clients never hold provider API keys.
 | [Quick Start](./quick-start.md) | Secret → EdgionBackend → AiProxy → HTTPRoute → OpenAI SDK |
 | [Concepts](./concepts.md) | Ownership split across HTTPRoute, EdgionBackend, AiProxy, and EBTP |
 | [EdgionBackend](./edgion-backend.md) | Provider endpoint, model catalog, and typed AI backends |
-| [Migration](./edgion-backend-migration.md) | Stop-the-world cutover and whole-graph rollback |
 | [Routing and Selection](./routing.md) | Weighted, Priority, LowestLatency, LowestUsage, CostWeighted |
 | [Credentials and Limits](./credentials-and-limits.md) | Credential pools, RPM/TPM reservation, rotation, cooldowns |
 | [Resilience and Failover](./resilience.md) | Credential-first retry, SSE commitment, outlier half-open, EBTP |

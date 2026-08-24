@@ -68,7 +68,6 @@ flowchart TD
 | **Implement a ConfHandler** | [02-gateway/11-conf-handler-guidelines.md](02-gateway/11-conf-handler-guidelines.md) |
 | **Implement update_status** | [01-controller/10-status-management.md](01-controller/10-status-management.md) |
 | **Understand EdgionBackend internals** | [05-resources/22-edgion-backend.md](05-resources/22-edgion-backend.md) |
-| **Understand A2A Gateway Phase 1** | [02-gateway/15-a2a-gateway.md](02-gateway/15-a2a-gateway.md) |
 
 ---
 
@@ -140,7 +139,6 @@ For resource Schema (field definitions, default values) see [02-features/03-reso
 | Plugins / extensions | EdgionPlugins, EdgionStreamPlugins, EdgionConfigData |
 | Backends / services | Service, EndpointSlice, ConfigMap, EdgionBackendTrafficPolicy |
 | AI Gateway | HTTPRoute-owned AI candidates, EdgionBackend credential pools, and AiProxy attempt runtime |
-| A2A Gateway | Typed A2A backends, operator-owned local Agent Cards, and bounded JSON-RPC request observation |
 | Automation | EdgionAcme |
 | Infrastructure | LinkSys |
 

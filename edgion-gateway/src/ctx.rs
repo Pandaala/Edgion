@@ -1,7 +1,7 @@
 use crate::ai::terminal::{
     AiClientStreamDialect, FinalResponseEligibility, ResponseProcessorSlot, ResponseTerminalState,
 };
-use crate::ai::{AiAttemptPlan, AiRequestContext, EdgionBackendSnapshot, GenAiSummary};
+use crate::ai::{AiAttemptPlan, AiRequestContext, GenAiSummary};
 use crate::backends::{SelectedHttpBackend, ServiceBackendKind};
 use crate::lb::edgion_backend::EdgionBackend;
 use crate::observe::logs::LogBuffer;
@@ -85,20 +85,17 @@ mod plugin_entry_identity_tests {
 
     #[test]
     fn preserves_bounded_name_and_alias() {
-        let identity = CurrentPluginEntryIdentity::new("A2aGateway", Some("edge.a2a-1")).unwrap();
-        assert_eq!(identity.name(), "A2aGateway");
-        assert_eq!(identity.alias(), Some("edge.a2a-1"));
-        assert_eq!(
-            CurrentPluginEntryIdentity::new("A2aGateway", None).unwrap().alias(),
-            None
-        );
+        let identity = CurrentPluginEntryIdentity::new("AiProxy", Some("edge.ai-1")).unwrap();
+        assert_eq!(identity.name(), "AiProxy");
+        assert_eq!(identity.alias(), Some("edge.ai-1"));
+        assert_eq!(CurrentPluginEntryIdentity::new("AiProxy", None).unwrap().alias(), None);
     }
 
     #[test]
     fn rejects_empty_or_overlong_identity_parts() {
         assert!(CurrentPluginEntryIdentity::new("", None).is_none());
         assert!(CurrentPluginEntryIdentity::new(&"x".repeat(37), None).is_none());
-        assert!(CurrentPluginEntryIdentity::new("A2aGateway", Some(&"x".repeat(33))).is_none());
+        assert!(CurrentPluginEntryIdentity::new("AiProxy", Some(&"x".repeat(33))).is_none());
     }
 }
 
@@ -1170,12 +1167,6 @@ pub struct EdgionHttpContext {
     /// invoked. Nested ExtensionRef execution replaces and restores this slot.
     pub(crate) current_plugin_entry: Option<CurrentPluginEntryIdentity>,
 
-    /// First-writer latch for an A2A Gateway activated by the matched rule.
-    pub(crate) a2a_gateway_activated: bool,
-
-    /// Unified backend generation pinned by A2A protocol classification.
-    pub(crate) edgion_backend_snapshot: Option<EdgionBackendSnapshot>,
-
     /// Number of connection attempts to backends
     pub try_cnt: u32,
 
@@ -1432,15 +1423,10 @@ pub struct EdgionHttpContext {
     pub ai_attempt_runtime: crate::ai::attempt_runtime::AiAttemptRuntimeState,
 
     /// Attempt-owned aggregate permit for a non-AI logical backend.
-    pub logical_backend_cb_permit: Option<crate::ai::circuit_breaker::LogicalBackendCircuitBreakerPermit>,
 
     /// Request-captured canonical DNS and dial-time egress classifier for a
     /// routed external backend. Retries share its bounded resolver memo.
     pub(crate) routed_external_resolver: Option<Arc<crate::plugins::http::common::outbound::egress::EgressResolver>>,
-
-    /// One-shot guard for an external A2A target's transport base path. The
-    /// same request context re-enters peer selection on retry.
-    pub(crate) a2a_path_prefix_applied: bool,
 
     /// Request-captured typed destination policy for the selected AI backend.
     pub ai_effective_policy: Option<Arc<crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy>>,
@@ -1497,11 +1483,6 @@ pub struct EdgionHttpContext {
         String,
         std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>,
     )>,
-
-    /// The request-scoped A2A response observer and its request-entry log
-    /// identity. It only sees the final downstream-visible body chunks; the
-    /// observer never owns or changes response bytes.
-    pub attached_a2a_observation: Option<(String, crate::plugins::http::a2a_gateway::AttachedA2aObservation)>,
 
     /// Early framing reservations for attached processors that may mutate the
     /// final response body before their concrete processor is installed.
@@ -1713,8 +1694,6 @@ impl EdgionHttpContext {
             pending_edgion_plugins_logs: Vec::new(),
             plugin_running_result: PluginRunningResult::Nothing,
             current_plugin_entry: None,
-            a2a_gateway_activated: false,
-            edgion_backend_snapshot: None,
             try_cnt: 0,
             retry_on_status: false,
             peer_timeout_source: None,
@@ -1751,9 +1730,7 @@ impl EdgionHttpContext {
             ai_guard_body_generation: None,
             ai_guard_decided: Vec::new(),
             ai_attempt_runtime: crate::ai::attempt_runtime::AiAttemptRuntimeState::default(),
-            logical_backend_cb_permit: None,
             routed_external_resolver: None,
-            a2a_path_prefix_applied: false,
             ai_effective_policy: None,
             ai_request_baseline: None,
             ai_stream_processor: None,
@@ -1768,7 +1745,6 @@ impl EdgionHttpContext {
             semantic_response_processor: None,
             attached_ext_proc: std::collections::HashMap::new(),
             attached_guardrail: None,
-            attached_a2a_observation: None,
             attached_response_framing_reservations: 0,
             response_body_processing_started: false,
             local_reply_body: None,

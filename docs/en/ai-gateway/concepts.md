@@ -12,8 +12,8 @@ Edgion AI Gateway is assembled from four contracts. Keep each concern on the res
 | Request translation, selection algorithm, quota, usage | Rule-level `AiProxy` |
 | Connect timeout, outlier, circuit, retry budget | `EdgionBackendTrafficPolicy` targeting that AI backend |
 
-AiProxy does **not** carry `aiServiceRef`, a provider list, backend weights, or retry attempt counts.
-HTTPRoute is the only candidate source. EBTP never attaches to the route and never invents backends.
+HTTPRoute is the only candidate source and owns backend weights and retry permission. AiProxy owns
+the selection algorithm but never invents backends. EBTP attaches only to an EdgionBackend.
 
 ```mermaid
 flowchart LR

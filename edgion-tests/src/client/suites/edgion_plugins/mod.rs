@@ -3,7 +3,6 @@
 // Tests for EdgionPlugins functionality (independent from Gateway tests)
 // Corresponds to conf/EdgionPlugins/ directory structure
 
-mod a2a_gateway;
 mod access_log_extern;
 mod ai_guard;
 mod all_endpoint_status;
@@ -60,7 +59,6 @@ mod trace_context;
 mod wasm;
 mod webhook_key_get;
 
-pub use a2a_gateway::{A2aGatewayDynamicV1TestSuite, A2aGatewayDynamicV2TestSuite, A2aGatewayTestSuite};
 pub use access_log_extern::AccessLogExternTestSuite;
 pub use ai_guard::AiGuardTestSuite;
 pub use all_endpoint_status::AllEndpointStatusTestSuite;

@@ -13,6 +13,20 @@
 Edgion is a Kubernetes gateway built on Rust + Pingora, using a Controller–Gateway split architecture with gRPC-based configuration sync.
 It supports HTTP/1.1, HTTP/2, gRPC, TCP, UDP, TLS, and WebSocket, and includes a plugin system, load balancing, and TLS/mTLS.
 
+### Product scope: proxy-layer gateways
+
+Edgion focuses on two proxy-layer products: a general-purpose API Gateway and an AI Gateway for
+LLM/provider traffic. The AI Gateway may understand provider request/response formats when that is
+necessary for routing, credential isolation, quotas, resilience, guardrails, usage, or cost, but it
+does not become an agent runtime or business orchestration platform.
+
+Edgion does **not** currently implement MCP or A2A protocol gateways. Do not add MCP/A2A discovery,
+session, tool, agent-card, protocol-routing, or protocol-translation behavior to the Controller,
+Gateway, shared resource union, or ordinary HTTP routing path. If either protocol is pursued later,
+treat it as a separately designed server/product with an explicit boundary; reuse Edgion's generic
+proxy mechanisms only where their semantics genuinely match. Ordinary MCP/A2A HTTP traffic may
+still pass through Edgion as opaque HTTP traffic using normal API Gateway features.
+
 **Three product binary roles**: Controller (handles K8s resources), Gateway
 (data-plane proxy), and edgion-cli (CLI debugging tool). The Gateway builds
 exclusively against the Edgion Pingora fork (`Pandaala/pingora`, branch

@@ -59,68 +59,12 @@ credential = ai["credentialPool"]["credentials"][0]
 
 if case == "valid":
     pass
-elif case == "valid_a2a_service":
-    obj["spec"] = {
-        "a2a": {"target": {"serviceRef": {"name": "agent", "port": 8080}}}
-    }
-elif case == "valid_a2a_external":
-    obj["spec"] = {
-        "a2a": {"target": {"endpoint": "https://agent.example.com/base"}}
-    }
 elif case == "missing_spec":
     del obj["spec"]
 elif case == "empty_spec":
     obj["spec"] = {}
 elif case == "unknown_spec":
     obj["spec"]["unknownField"] = True
-elif case == "both_variants":
-    obj["spec"]["a2a"] = {"target": {"endpoint": "https://agent.example.com"}}
-elif case == "empty_a2a_target":
-    obj["spec"] = {"a2a": {"target": {}}}
-elif case == "both_a2a_targets":
-    obj["spec"] = {
-        "a2a": {
-            "target": {
-                "serviceRef": {"name": "agent", "port": 8080},
-                "endpoint": "https://agent.example.com",
-            }
-        }
-    }
-elif case == "unknown_a2a":
-    obj["spec"] = {
-        "a2a": {"target": {"endpoint": "https://agent.example.com"}, "unknownField": True}
-    }
-elif case == "unknown_a2a_target":
-    obj["spec"] = {"a2a": {"target": {"endpoint": "https://agent.example.com", "unknownField": True}}}
-elif case == "unknown_service_ref":
-    obj["spec"] = {
-        "a2a": {"target": {"serviceRef": {"name": "agent", "port": 8080, "unknownField": True}}}
-    }
-elif case == "invalid_service_name":
-    obj["spec"] = {"a2a": {"target": {"serviceRef": {"name": "Invalid_Name", "port": 8080}}}}
-elif case == "invalid_service_name_label_length":
-    obj["spec"] = {"a2a": {"target": {"serviceRef": {"name": "a" * 64, "port": 8080}}}}
-elif case == "invalid_service_name_numeric_start":
-    obj["spec"] = {"a2a": {"target": {"serviceRef": {"name": "1-agent", "port": 8080}}}}
-elif case == "invalid_service_name_dot":
-    obj["spec"] = {"a2a": {"target": {"serviceRef": {"name": "agent.service", "port": 8080}}}}
-elif case == "invalid_service_namespace":
-    obj["spec"] = {
-        "a2a": {"target": {"serviceRef": {"name": "agent", "namespace": "Invalid_Namespace", "port": 8080}}}
-    }
-elif case == "invalid_service_port":
-    obj["spec"] = {"a2a": {"target": {"serviceRef": {"name": "agent", "port": 0}}}}
-elif case == "insecure_service_target":
-    obj["spec"] = {
-        "a2a": {
-            "target": {"serviceRef": {"name": "agent", "port": 8080}},
-            "allowInsecureHttp": True,
-        }
-    }
-elif case == "invalid_a2a_endpoint":
-    obj["spec"] = {"a2a": {"target": {"endpoint": "https://user@agent.example.com/?query=yes"}}}
-elif case == "insecure_a2a_endpoint":
-    obj["spec"] = {"a2a": {"target": {"endpoint": "http://agent.example.com"}}}
 elif case == "unknown_ai":
     ai["unknownField"] = True
 elif case == "unknown_pool":
@@ -216,8 +160,6 @@ apply_dry_run() {
 }
 
 resource_json valid | apply_dry_run >/dev/null
-resource_json valid_a2a_service | apply_dry_run >/dev/null
-resource_json valid_a2a_external | apply_dry_run >/dev/null
 
 expect_rejected() {
     local case_name="$1"
@@ -240,15 +182,11 @@ expect_rejected() {
 }
 
 expect_rejected missing_spec 'spec: Required value'
-expect_rejected empty_spec 'spec must configure exactly one backend variant'
-expect_rejected both_variants 'spec must configure exactly one backend variant'
-expect_rejected empty_a2a_target 'a2a.target must configure exactly one of serviceRef or endpoint'
-expect_rejected both_a2a_targets 'a2a.target must configure exactly one of serviceRef or endpoint'
+expect_rejected empty_spec 'ai: Required value'
 
 for case_name in \
     unknown_spec unknown_ai unknown_pool unknown_credential unknown_secret_ref \
-    unknown_limits unknown_model unknown_pricing unknown_defaults unknown_a2a \
-    unknown_a2a_target unknown_service_ref; do
+    unknown_limits unknown_model unknown_pricing unknown_defaults; do
     expect_rejected "${case_name}" 'unknown field'
 done
 
@@ -259,9 +197,7 @@ for case_name in \
     invalid_secret_kind invalid_secret_namespace empty_limits invalid_limit \
     limit_without_redis redis_without_limit invalid_redis_ref tpm_without_max_output \
     empty_models too_many_models empty_model_name too_many_aliases invalid_pricing \
-    missing_price invalid_max_output invalid_service_name invalid_service_name_label_length invalid_service_name_numeric_start \
-    invalid_service_name_dot invalid_service_namespace \
-    invalid_service_port insecure_service_target invalid_a2a_endpoint insecure_a2a_endpoint; do
+    missing_price invalid_max_output; do
     expect_rejected "${case_name}" 'EdgionBackend'
 done
 

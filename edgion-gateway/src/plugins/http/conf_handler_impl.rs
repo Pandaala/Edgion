@@ -122,48 +122,6 @@ mod tests {
         }
     }
 
-    fn create_a2a_gateway_plugin(namespace: &str, name: &str, version: &str, valid: bool) -> EdgionPlugins {
-        use edgion_resources::resources::edgion_plugins::A2aGatewayConfig;
-
-        let card = serde_json::json!({
-            "name": "Example agent",
-            "description": "Agent used by plugin-store lifecycle tests",
-            "version": version,
-            "capabilities": {},
-            "supportedInterfaces": [{
-                "url": "https://agent.example.test/rpc",
-                "protocolBinding": "JSONRPC",
-                "protocolVersion": if valid { "1.0" } else { "0.3" }
-            }],
-            "defaultInputModes": ["application/json"],
-            "defaultOutputModes": ["application/json"],
-            "skills": [{
-                "id": "echo",
-                "name": "Echo",
-                "description": "Echo a test message",
-                "tags": ["test"]
-            }]
-        });
-        EdgionPlugins {
-            metadata: kube::core::ObjectMeta {
-                namespace: Some(namespace.to_string()),
-                name: Some(name.to_string()),
-                ..Default::default()
-            },
-            spec: EdgionPluginsSpec {
-                request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::A2aGateway(
-                    A2aGatewayConfig {
-                        card,
-                        external_url: None,
-                        fail_open: false,
-                    },
-                ))]),
-                ..Default::default()
-            },
-            status: None,
-        }
-    }
-
     #[test]
     fn test_full_set() {
         let store = PluginStore::new();
@@ -342,48 +300,5 @@ mod tests {
             store.with_plugin("default/plugin1", |compiled| compiled.is_activatable),
             Some(false)
         );
-    }
-
-    #[test]
-    fn a2a_gateway_update_withdraw_delete_and_recreate_are_atomic() {
-        let store = PluginStore::new();
-        let key = "default/a2a".to_string();
-        store.partial_update(
-            HashMap::from([(
-                key.clone(),
-                Arc::new(create_a2a_gateway_plugin("default", "a2a", "1.0.0", true)),
-            )]),
-            HashMap::new(),
-            HashSet::new(),
-        );
-        let v1 = store.get_plugin_runtime(&key).expect("valid v1 runtime");
-        assert_eq!(store.with_plugin(&key, |compiled| compiled.is_activatable), Some(true));
-
-        store.partial_update(
-            HashMap::new(),
-            HashMap::from([(
-                key.clone(),
-                Arc::new(create_a2a_gateway_plugin("default", "a2a", "invalid", false)),
-            )]),
-            HashSet::new(),
-        );
-        let invalid = store.get_plugin_runtime(&key).expect("fail-closed invalid runtime");
-        assert!(!Arc::ptr_eq(&v1, &invalid));
-        assert_eq!(store.with_plugin(&key, |compiled| compiled.is_activatable), Some(false));
-
-        store.partial_update(HashMap::new(), HashMap::new(), HashSet::from([key.clone()]));
-        assert!(!store.contains(&key));
-
-        store.partial_update(
-            HashMap::from([(
-                key.clone(),
-                Arc::new(create_a2a_gateway_plugin("default", "a2a", "2.0.0", true)),
-            )]),
-            HashMap::new(),
-            HashSet::new(),
-        );
-        let v2 = store.get_plugin_runtime(&key).expect("recreated v2 runtime");
-        assert!(!Arc::ptr_eq(&invalid, &v2));
-        assert_eq!(store.with_plugin(&key, |compiled| compiled.is_activatable), Some(true));
     }
 }

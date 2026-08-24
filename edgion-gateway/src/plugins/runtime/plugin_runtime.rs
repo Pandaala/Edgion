@@ -31,7 +31,6 @@ use super::session_adapter::PingoraSessionAdapter;
 use super::traits::{
     PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };
-use crate::plugins::http::a2a_gateway::A2aGateway;
 use crate::plugins::http::ai_proxy::AiProxy;
 use crate::plugins::http::all_endpoint_status::AllEndpointStatus;
 use crate::plugins::http::bandwidth_limit::BandwidthLimit;
@@ -1382,7 +1381,6 @@ impl PluginRuntime {
             )))),
             EdgionPlugin::BasicAuth(config) => CreateResult::Ok(Some(Box::new(BasicAuth::new(config)))),
             EdgionPlugin::AiProxy(config) => CreateResult::Ok(AiProxy::create(config, namespace, entry_scope)),
-            EdgionPlugin::A2aGateway(config) => CreateResult::Ok(A2aGateway::create(config, entry_scope)),
             EdgionPlugin::AiGuard(config) => CreateResult::Ok(AiGuard::create(config, entry_scope)),
             EdgionPlugin::Cors(config) => CreateResult::Ok(Some(Box::new(Cors::new(config)))),
             EdgionPlugin::Csrf(config) => CreateResult::Ok(Some(Box::new(Csrf::new(config)))),
@@ -1474,7 +1472,6 @@ impl PluginRuntime {
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
             | EdgionPlugin::AiProxy(_)
-            | EdgionPlugin::A2aGateway(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
             | EdgionPlugin::IpRestriction(_)
@@ -1535,7 +1532,6 @@ impl PluginRuntime {
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
             | EdgionPlugin::AiProxy(_)
-            | EdgionPlugin::A2aGateway(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
             | EdgionPlugin::IpRestriction(_)
@@ -1593,7 +1589,6 @@ impl PluginRuntime {
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
             | EdgionPlugin::AiProxy(_)
-            | EdgionPlugin::A2aGateway(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
             | EdgionPlugin::IpRestriction(_)
@@ -1643,7 +1638,6 @@ impl PluginRuntime {
             EdgionPlugin::ResponseHeaderModifier(_) => "ResponseHeaderModifier",
             EdgionPlugin::BasicAuth(_) => "BasicAuth",
             EdgionPlugin::AiProxy(_) => "AiProxy",
-            EdgionPlugin::A2aGateway(_) => "A2aGateway",
             EdgionPlugin::Cors(_) => "Cors",
             EdgionPlugin::Csrf(_) => "Csrf",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",

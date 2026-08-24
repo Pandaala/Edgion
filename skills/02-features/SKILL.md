@@ -39,7 +39,6 @@ description: Use when looking up configuration schemas, resource field definitio
 | Look up the configuration of a plugin | [03-resources/13-edgion-plugins.md](03-resources/13-edgion-plugins.md) |
 | Configure health checks/circuit breaking/load balancing | [03-resources/20-edgion-backend-traffic-policy.md](03-resources/20-edgion-backend-traffic-policy.md) |
 | Configure HTTPRoute AI backends, credential pools, and AiProxy selection | [03-resources/22-edgion-backend.md](03-resources/22-edgion-backend.md) |
-| Configure A2A backends, local Agent Cards, and JSON-RPC observation | [03-resources/22-edgion-backend.md](03-resources/22-edgion-backend.md) and [03-resources/13-edgion-plugins.md](03-resources/13-edgion-plugins.md#a2agateway-configuration) |
 | Configure Access Log output | [04-observability/00-logging.md](04-observability/00-logging.md) |
 | Configure GeoIP database + restrict traffic by country/city | [02-config/01-gateway-config.md](02-config/01-gateway-config.md#geoip) (schema) and `docs/en/ops-guide/gateway/geoip.md` (operator guide + pitfalls) |
 | Integrate with Redis/ES and other external systems | [03-resources/18-link-sys.md](03-resources/18-link-sys.md) |

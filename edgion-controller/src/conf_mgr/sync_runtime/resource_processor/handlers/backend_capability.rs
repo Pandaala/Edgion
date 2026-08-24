@@ -34,34 +34,13 @@ pub(super) fn classify_raw_backend(
         .validate()
         .map_err(|_| format!("EdgionBackend {key} has an invalid backend specification"))?;
 
-    if let (Some(ai), None) = (backend.spec.ai.as_ref(), backend.spec.a2a.as_ref()) {
-        let endpoint = ai
-            .effective_endpoint()
-            .map_err(|_| format!("EdgionBackend {key} has an invalid AI endpoint"))?;
-        return Ok(Some(RawBackendCapability {
-            target_class: ResolvedPolicyTargetClass::Ai,
-            supports_tls_policy: endpoint.scheme() == "https",
-        }));
-    }
-
-    match (backend.spec.ai.as_ref(), backend.spec.a2a.as_ref()) {
-        (None, Some(a2a)) if a2a.target.service_ref.is_some() && a2a.target.endpoint.is_none() => {
-            Ok(Some(RawBackendCapability {
-                target_class: ResolvedPolicyTargetClass::A2aService,
-                supports_tls_policy: true,
-            }))
-        }
-        (None, Some(a2a)) if a2a.target.endpoint.is_some() && a2a.target.service_ref.is_none() => {
-            let endpoint = a2a
-                .normalized_endpoint()
-                .map_err(|_| format!("EdgionBackend {key} has an invalid A2A endpoint"))?;
-            Ok(Some(RawBackendCapability {
-                target_class: ResolvedPolicyTargetClass::A2aExternal,
-                supports_tls_policy: endpoint.starts_with("https://"),
-            }))
-        }
-        _ => Err(format!(
-            "EdgionBackend {key} does not configure exactly one supported backend variant"
-        )),
-    }
+    let endpoint = backend
+        .spec
+        .ai
+        .effective_endpoint()
+        .map_err(|_| format!("EdgionBackend {key} has an invalid AI endpoint"))?;
+    Ok(Some(RawBackendCapability {
+        target_class: ResolvedPolicyTargetClass::Ai,
+        supports_tls_policy: endpoint.scheme() == "https",
+    }))
 }

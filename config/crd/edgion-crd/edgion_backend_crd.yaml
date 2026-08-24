@@ -22,9 +22,8 @@ spec:
               type: object
             spec:
               type: object
-              x-kubernetes-validations:
-                - rule: "[has(self.ai), has(self.a2a)].filter(present, present).size() == 1"
-                  message: "spec must configure exactly one backend variant"
+              required:
+                - ai
               properties:
                 ai:
                   type: object
@@ -198,55 +197,6 @@ spec:
                           description: >-
                             Default provider output-token limit when the client request does not
                             specify one. Omitted by default.
-                a2a:
-                  type: object
-                  description: A2A protocol backend identity and transport target.
-                  required:
-                    - target
-                  properties:
-                    target:
-                      type: object
-                      description: Exactly one Service reference or external HTTP(S) endpoint.
-                      x-kubernetes-validations:
-                        - rule: "[has(self.serviceRef), has(self.endpoint)].filter(present, present).size() == 1"
-                          message: "a2a.target must configure exactly one of serviceRef or endpoint"
-                      properties:
-                        serviceRef:
-                          type: object
-                          description: Typed reference to one port of a core Kubernetes Service.
-                          required:
-                            - name
-                            - port
-                          properties:
-                            name:
-                              type: string
-                              minLength: 1
-                              maxLength: 63
-                              pattern: '^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$'
-                            namespace:
-                              type: string
-                              minLength: 1
-                              maxLength: 63
-                              pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
-                            port:
-                              type: integer
-                              format: int32
-                              minimum: 1
-                              maximum: 65535
-                        endpoint:
-                          type: string
-                          description: Absolute HTTP(S) endpoint without user information, query, or fragment.
-                    allowInsecureHttp:
-                      type: boolean
-                      default: false
-                      description: Allow an explicit external http endpoint. Disabled by default.
-                  x-kubernetes-validations:
-                    - rule: "!has(self.target.serviceRef) || !self.allowInsecureHttp"
-                      message: "allowInsecureHttp must be false for a Service target"
-                    - rule: "!has(self.target.endpoint) || self.target.endpoint.matches('^https?://[^/?#@]+(/[^?#]*)?$')"
-                      message: "a2a.target.endpoint must be an absolute HTTP or HTTPS URL without user information, query, or fragment"
-                    - rule: "!has(self.target.endpoint) || !self.target.endpoint.startsWith('http://') || self.allowInsecureHttp"
-                      message: "HTTP a2a.target.endpoint requires allowInsecureHttp: true"
             status:
               type: object
               properties:

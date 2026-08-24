@@ -360,7 +360,7 @@ requiring full-body capture. It is not a general operator plugin API.
 
 Protocol parsing belongs to the registering frontend. It must use fixed-capacity
 state and charge semantic work before scanning; the generic seam does not
-contain JSON, A2A, method, or content-type recognition.
+contain JSON, protocol-method, or content-type recognition.
 
 ## Reading the request path
 

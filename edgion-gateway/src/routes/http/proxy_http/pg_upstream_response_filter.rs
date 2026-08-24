@@ -133,19 +133,12 @@ pub fn upstream_response_filter(
     // Record every completed upstream response before retry-on-status can
     // return early. The corresponding HTTPStatus control-flow error is not a
     // local-origin failure and is filtered out by error_while_proxy.
-    if !matches!(
-        ctx.selected_backend
-            .as_ref()
-            .and_then(crate::backends::SelectedHttpBackend::routed),
-        Some(crate::backends::SelectedLogicalBackend::A2a(_))
-    ) {
-        if let Some(upstream) = ctx.get_current_upstream() {
-            if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
-                let cb_store = crate::backends::get_outlier_detection_store();
-                match crate::backends::FailureClass::from_http_status(status_code) {
-                    Some(class) => cb_store.record_failure_by_addr(service_key, addr, class),
-                    None => cb_store.record_success_by_addr(service_key, addr),
-                }
+    if let Some(upstream) = ctx.get_current_upstream() {
+        if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
+            let cb_store = crate::backends::get_outlier_detection_store();
+            match crate::backends::FailureClass::from_http_status(status_code) {
+                Some(class) => cb_store.record_failure_by_addr(service_key, addr, class),
+                None => cb_store.record_success_by_addr(service_key, addr),
             }
         }
     }

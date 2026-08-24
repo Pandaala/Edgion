@@ -40,7 +40,6 @@ mod pg_upstream_response_body_filter;
 mod pg_upstream_response_filter;
 
 #[cfg(test)]
-pub(crate) use pg_upstream_peer::backend_snapshot_for_request;
 #[cfg(test)]
 pub(crate) use pg_upstream_response_body_filter::run_stream_processors;
 

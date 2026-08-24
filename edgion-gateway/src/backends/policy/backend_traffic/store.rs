@@ -185,8 +185,6 @@ impl BackendTrafficPolicyStore {
                 (resolved_class, key.target_kind),
                 (ResolvedPolicyTargetClass::Service, PolicyTargetKind::Service)
                     | (ResolvedPolicyTargetClass::Ai, PolicyTargetKind::EdgionBackend)
-                    | (ResolvedPolicyTargetClass::A2aService, PolicyTargetKind::EdgionBackend)
-                    | (ResolvedPolicyTargetClass::A2aExternal, PolicyTargetKind::EdgionBackend)
             )
         });
         if !matches_resolved_class {
@@ -450,7 +448,6 @@ impl BackendTrafficPolicyStore {
                 self.applied.insert(target.clone(), policy_key_str.clone());
                 let target_class = policy.spec.resolved_target_class;
                 let is_ai = target_class == Some(ResolvedPolicyTargetClass::Ai);
-                let is_service_wrapped_backend = matches!(target_class, Some(ResolvedPolicyTargetClass::A2aService));
                 let ai_credential_outlier = is_ai
                     .then(|| {
                         get_ai_credential_outlier_store().publish_policy(target.clone(), normalized_outlier.clone())
@@ -458,22 +455,9 @@ impl BackendTrafficPolicyStore {
                     .flatten();
                 let candidate = Arc::new(EffectiveBackendTrafficPolicy {
                     resolved_target_class: target_class.expect("eligible policy has a resolved target class"),
-                    load_balancer: is_service_wrapped_backend
-                        .then(|| policy.spec.load_balancer.as_ref().and_then(|lb| lb.to_parsed()))
-                        .flatten(),
-                    upstream_authority: is_service_wrapped_backend
-                        .then(|| {
-                            policy
-                                .spec
-                                .upstream_authority
-                                .as_ref()
-                                .and_then(|authority| CompiledUpstreamAuthority::compile(authority).ok())
-                                .map(Arc::new)
-                        })
-                        .flatten(),
-                    upstream_authority_config: is_service_wrapped_backend
-                        .then(|| policy.spec.upstream_authority.clone())
-                        .flatten(),
+                    load_balancer: None,
+                    upstream_authority: None,
+                    upstream_authority_config: None,
                     retry_budget: self.retry_budgets.get(target).map(|entry| Arc::clone(&entry.value().1)),
                     circuit_breaker_limit: self.circuit_breakers.get(target).map(|entry| *entry.value()),
                     connect_timeout: self.connect_timeouts.get(target).map(|entry| *entry.value()),
@@ -776,30 +760,6 @@ mod tests {
             },
             status: None,
         })
-    }
-
-    fn a2a_policy(
-        ns: &str,
-        name: &str,
-        target: &str,
-        target_class: ResolvedPolicyTargetClass,
-    ) -> Arc<EdgionBackendTrafficPolicy> {
-        use edgion_resources::resources::upstream_authority::UpstreamAuthorityConfig;
-
-        let mut policy = ai_policy(ns, name, target, 25, "750ms");
-        let spec = &mut Arc::get_mut(&mut policy).expect("new policy fixture").spec;
-        spec.resolved_target_class = Some(target_class);
-        spec.load_balancer = Some(LoadBalancerConfig {
-            r#type: LoadBalancerType::LeastConn,
-            consistent_hash: None,
-            panic_threshold: None,
-        });
-        spec.upstream_authority = Some(UpstreamAuthorityConfig {
-            pattern: "*.agents.internal".to_string(),
-            template: "${ctx:tenant}.agents.internal".to_string(),
-            health_check_host: None,
-        });
-        policy
     }
 
     #[test]
@@ -1419,91 +1379,6 @@ mod tests {
             "typed/service-policy"
         );
         assert_eq!(store.applied.get(&ai_target).unwrap().value(), "typed/ai-policy");
-    }
-
-    #[test]
-    fn a2a_service_marker_publishes_only_its_captured_direct_target_capabilities() {
-        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
-        let store = BackendTrafficPolicyStore::new();
-        let target = PolicyTargetKey {
-            target_kind: PolicyTargetKind::EdgionBackend,
-            namespace: "a2a-service-marker".to_string(),
-            name: "agent".to_string(),
-        };
-        let policy = a2a_policy(
-            "a2a-service-marker",
-            "policy",
-            "agent",
-            ResolvedPolicyTargetClass::A2aService,
-        );
-
-        assert_eq!(
-            store.full_set_policies(HashMap::from([("a2a-service-marker/policy".to_string(), policy,)])),
-            1
-        );
-        let snapshot = store.snapshot();
-        let effective = snapshot.get_effective(&target).expect("captured A2A Service policy");
-
-        assert_eq!(effective.load_balancer, Some(ParsedLBPolicy::LeastConn));
-        let authority = effective.upstream_authority.as_ref().expect("captured authority");
-        assert_eq!(authority.suffix, ".agents.internal");
-        assert_eq!(authority.compose("tenant-a"), "tenant-a.agents.internal");
-        assert!(effective.retry_budget.is_some());
-        assert_eq!(effective.connect_timeout, Some(std::time::Duration::from_millis(750)));
-        assert_eq!(effective.circuit_breaker_limit, Some(7));
-        assert!(effective.logical_circuit_breaker.is_some());
-
-        assert!(effective.ai_credential_outlier.is_none());
-        assert!(effective.outlier_detection.is_none());
-        assert!(get_ai_credential_outlier_store().current_handle(&target).is_none());
-        assert!(
-            !get_outlier_detection_store().keys().contains(&target.to_string()),
-            "A2A Service must not publish a passive-outlier side store"
-        );
-        assert_eq!(
-            store.get_lb_policy("a2a-service-marker/agent"),
-            None,
-            "nested Service discovery must not turn the direct EdgionBackend owner into a Service policy key"
-        );
-        assert!(store.get_authority("a2a-service-marker/agent").is_none());
-    }
-
-    #[test]
-    fn a2a_external_marker_keeps_common_attempt_policy_without_service_projection() {
-        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
-        let store = BackendTrafficPolicyStore::new();
-        let target = PolicyTargetKey {
-            target_kind: PolicyTargetKind::EdgionBackend,
-            namespace: "a2a-external-marker".to_string(),
-            name: "agent".to_string(),
-        };
-        let policy = a2a_policy(
-            "a2a-external-marker",
-            "policy",
-            "agent",
-            ResolvedPolicyTargetClass::A2aExternal,
-        );
-
-        assert_eq!(
-            store.full_set_policies(HashMap::from([("a2a-external-marker/policy".to_string(), policy,)])),
-            1
-        );
-        let effective = store
-            .snapshot()
-            .get_effective(&target)
-            .expect("captured A2A external policy");
-
-        assert!(effective.load_balancer.is_none());
-        assert!(effective.upstream_authority.is_none());
-        assert!(effective.upstream_authority_config.is_none());
-        assert!(effective.outlier_detection.is_none());
-        assert!(effective.ai_credential_outlier.is_none());
-        assert!(effective.retry_budget.is_some());
-        assert_eq!(effective.connect_timeout, Some(std::time::Duration::from_millis(750)));
-        assert_eq!(effective.circuit_breaker_limit, Some(7));
-        assert!(effective.logical_circuit_breaker.is_some());
-        assert!(get_ai_credential_outlier_store().current_handle(&target).is_none());
-        assert!(!get_outlier_detection_store().keys().contains(&target.to_string()));
     }
 
     #[test]

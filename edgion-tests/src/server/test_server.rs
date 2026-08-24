@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use axum::{
     body::{Body, Bytes},
     extract::{ConnectInfo, Extension, Path, Query, Request as AxumRequest},
-    http::{StatusCode, Version},
+    http::Version,
     response::IntoResponse,
     routing::get,
     Router,
@@ -551,12 +551,6 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/delay/{seconds}", get(delay_handler))
         // GET /sse?events=N&interval_ms=T: paced SSE stream for streaming tests.
         .route("/sse", get(sse_handler))
-        // Deterministic A2A v1 response fixtures. These endpoints return only
-        // server-owned constants so response-observation tests never retain or
-        // reflect request data.
-        .route("/a2a/json-success", axum::routing::post(a2a_json_success_handler))
-        .route("/a2a/json-error", axum::routing::post(a2a_json_error_handler))
-        .route("/a2a/sse", axum::routing::post(a2a_sse_handler))
         // OpenAI-compatible deterministic provider used by the AI Gateway
         // integration suite. It reports only booleans and fixed fixture IDs;
         // credentials and arbitrary request values are never echoed.
@@ -1247,64 +1241,6 @@ async fn sse_handler(Query(query): Query<SseQuery>) -> impl IntoResponse {
         .status(StatusCode::OK)
         .header("content-type", "text/event-stream")
         .body(body)
-        .unwrap()
-}
-
-const A2A_JSON_SUCCESS_BODY: &str = r#"{"jsonrpc":"2.0","id":"fixture-response-id","result":{"task":{"id":"private-task-id","contextId":"private-context-id","status":{"state":"TASK_STATE_COMPLETED"},"history":[{"role":"ROLE_AGENT","parts":[{"text":"private-result-payload"}]}]}}}"#;
-const A2A_JSON_ERROR_BODY: &str = r#"{"jsonrpc":"2.0","id":"fixture-error-id","error":{"code":-32001,"message":"private backend error detail","data":{"credential":"private-error-token"}}}"#;
-
-const A2A_SSE_EVENTS: [&str; 4] = [
-    "data: {\"jsonrpc\":\"2.0\",\"id\":\"fixture-stream-id\",\"result\":{\"task\":{\"id\":\"private-stream-task\",\"contextId\":\"private-stream-context\",\"status\":{\"state\":\"TASK_STATE_SUBMITTED\"}}}}\n\n",
-    "data: {\"jsonrpc\":\"2.0\",\"id\":\"fixture-stream-id\",\"result\":{\"message\":{\"role\":\"ROLE_AGENT\",\"parts\":[{\"text\":\"private-stream-message\"}]}}}\n\n",
-    "data: {\"jsonrpc\":\"2.0\",\"id\":\"fixture-stream-id\",\"result\":{\"artifactUpdate\":{\"artifact\":{\"artifactId\":\"private-artifact-id\",\"parts\":[{\"text\":\"private-artifact-payload\"}]}}}}\n\n",
-    "data: {\"jsonrpc\":\"2.0\",\"id\":\"fixture-stream-id\",\"result\":{\"statusUpdate\":{\"status\":{\"state\":\"TASK_STATE_COMPLETED\",\"message\":{\"role\":\"ROLE_AGENT\",\"parts\":[{\"text\":\"private-final-message\"}]}}}}}\n\n",
-];
-
-async fn a2a_json_success_handler(_request_body: Bytes) -> impl IntoResponse {
-    axum::response::Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", "application/json")
-        .body(Body::from(A2A_JSON_SUCCESS_BODY))
-        .unwrap()
-}
-
-async fn a2a_json_error_handler(_request_body: Bytes) -> impl IntoResponse {
-    axum::response::Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", "application/json")
-        .body(Body::from(A2A_JSON_ERROR_BODY))
-        .unwrap()
-}
-
-/// Emits every complete event at a fixed pace while deliberately splitting
-/// each event across several Hyper body items. Clients must assert complete
-/// SSE event timing and the final raw byte stream, never item boundaries.
-async fn a2a_sse_handler(_request_body: Bytes) -> impl IntoResponse {
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
-    tokio::spawn(async move {
-        for (event_index, event) in A2A_SSE_EVENTS.iter().enumerate() {
-            let first = event.len() / 3;
-            let second = first + (event.len() - first) / 2;
-            for fragment in [
-                &event.as_bytes()[..first],
-                &event.as_bytes()[first..second],
-                &event.as_bytes()[second..],
-            ] {
-                if tx.send(Ok(Bytes::copy_from_slice(fragment))).await.is_err() {
-                    return;
-                }
-            }
-            if event_index + 1 < A2A_SSE_EVENTS.len() {
-                tokio::time::sleep(Duration::from_millis(180)).await;
-            }
-        }
-    });
-
-    axum::response::Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", "text/event-stream")
-        .header("cache-control", "no-cache")
-        .body(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)))
         .unwrap()
 }
 

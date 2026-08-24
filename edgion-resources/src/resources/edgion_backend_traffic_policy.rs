@@ -36,7 +36,7 @@ pub struct EdgionBackendTrafficPolicySpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_target_class: Option<ResolvedPolicyTargetClass>,
-    /// Load balancing for core Service and A2A Service EdgionBackend targets.
+    /// Load balancing for core Service targets.
     /// Panic threshold is supported only for direct core Service targets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load_balancer: Option<LoadBalancerConfig>,
@@ -48,8 +48,7 @@ pub struct EdgionBackendTrafficPolicySpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outlier_detection: Option<OutlierDetectionConfig>,
     /// Dynamic upstream authority (Host + SNI) within a wildcard pattern the
-    /// Service backend declares. Supported for core Service and A2A Service
-    /// EdgionBackend targets.
+    /// Service backend declares. Supported for core Service targets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_authority: Option<UpstreamAuthorityConfig>,
     /// Retry budget: cap retry volume as a percentage of request volume to the
@@ -169,8 +168,6 @@ pub enum PolicyTargetKind {
 pub enum ResolvedPolicyTargetClass {
     Service,
     Ai,
-    A2aService,
-    A2aExternal,
 }
 
 impl PolicyTargetKind {
@@ -638,20 +635,19 @@ outlierDetection:
         .unwrap();
         assert!(allowed.get_validation_errors().is_empty());
 
-        for forbidden in ["healthCheck:\n  active: {}"] {
-            let yaml =
-                format!("targetRefs:\n  - group: edgion.io\n    kind: EdgionBackend\n    name: provider\n{forbidden}");
-            let spec: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(&yaml).unwrap();
-            assert!(
-                spec.get_validation_errors()
-                    .iter()
-                    .any(|error| error.contains("not supported for EdgionBackend targets")),
-                "field must be rejected: {forbidden}"
-            );
-        }
+        let forbidden = "healthCheck:\n  active: {}";
+        let yaml =
+            format!("targetRefs:\n  - group: edgion.io\n    kind: EdgionBackend\n    name: provider\n{forbidden}");
+        let spec: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(&yaml).unwrap();
+        assert!(
+            spec.get_validation_errors()
+                .iter()
+                .any(|error| error.contains("not supported for EdgionBackend targets")),
+            "field must be rejected: {forbidden}"
+        );
 
         // Variant-dependent fields are admitted structurally and resolved by
-        // the Controller after it proves AI, A2A Service, or A2A external.
+        // the Controller after it proves the target capability.
         for deferred in [
             "loadBalancer:\n  type: RoundRobin",
             "upstreamAuthority:\n  pattern: '*.example.com'\n  template: '${ctx:tenant}.example.com'",

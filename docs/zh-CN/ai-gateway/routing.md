@@ -14,7 +14,7 @@ AiProxy 必须通过 Rule 级 EdgionPlugins ExtensionRef 恰好出现一次。
 | `onUnknownModel` | Enum | `reject` | `reject` 拒绝未知模型；`passthrough` 仅可用于采用 `Weighted` 或 `Priority` 的 OpenAI-compatible 候选 |
 | `tokenQuota` | Object | 无 | 可选的 Redis 逻辑模型 token 配额；省略时不执行配额 Redis 操作 |
 
-AiProxy 没有 `aiServiceRef`、提供商列表、后端权重或重试次数。
+AiProxy 只使用 HTTPRoute 声明的候选和重试许可，不维护另一份后端列表。
 
 ## 选择算法
 

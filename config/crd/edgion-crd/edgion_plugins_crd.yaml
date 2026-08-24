@@ -322,7 +322,6 @@ spec:
                         enum:
                           - BasicAuth
                           - AiProxy
-                          - A2aGateway
                           - Cors
                           - Csrf
                           - CtxSet

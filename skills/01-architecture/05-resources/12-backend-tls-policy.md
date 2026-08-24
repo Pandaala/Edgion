@@ -7,7 +7,7 @@ description: BackendTLSPolicy resource — upstream mTLS configuration, CA certi
 
 > **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-BackendTLSPolicy is a Gateway API standard policy resource used to configure upstream TLS connections from the Gateway to direct backend targets, including CA certificate verification and client certificates (mTLS). Edgion accepts core `Service` and `edgion.io/EdgionBackend` targets. EdgionBackend supports AI HTTPS endpoints and A2A Service/HTTPS external targets. Nested Service policy is never inherited, and cleartext external targets reject TLS policy.
+BackendTLSPolicy is a Gateway API standard policy resource used to configure upstream TLS connections from the Gateway to direct backend targets, including CA certificate verification and client certificates (mTLS). Edgion accepts core `Service` and AI `edgion.io/EdgionBackend` targets.
 
 ## Source code locations
 

@@ -325,14 +325,6 @@ pub trait PluginSession: Send + Sync {
     /// Get reference to EdgionHttpContext (for access log generation)
     fn ctx(&self) -> &EdgionHttpContext;
 
-    /// Claim request-scoped A2A Gateway ownership. Returns false on duplicate activation.
-    fn try_activate_a2a_gateway(&mut self) -> bool {
-        false
-    }
-
-    /// Pin the unified backend generation used by A2A rule classification.
-    fn pin_edgion_backend_snapshot(&mut self, _snapshot: crate::ai::EdgionBackendSnapshot) {}
-
     /// Append an EdgionStatus error to the gateway context so it surfaces in the
     /// access log `errors` array. Narrow interface — plugins cannot mutate other
     /// ctx fields; only the error list.
@@ -446,16 +438,6 @@ pub trait PluginSession: Send + Sync {
         _identity: &str,
     ) -> Option<std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>> {
         None
-    }
-
-    /// Install the request's A2A response observer. The first qualifying A2A
-    /// Gateway entry wins and alternate adapters remain inert by default.
-    fn install_attached_a2a_observation(
-        &mut self,
-        _identity: String,
-        _owner: crate::plugins::http::a2a_gateway::AttachedA2aObservation,
-    ) -> bool {
-        false
     }
 
     fn install_attached_response_processor(
