@@ -1220,6 +1220,12 @@ pub(crate) struct AiHttpState {
     pub(crate) summary: Option<GenAiSummary>,
     /// Whether a semantic response guard claimed the canonical AI source.
     pub(crate) semantic_guard_claimed: bool,
+    /// The single request-scoped semantic Guardrail owner and its compiled
+    /// request-entry identity. Multiple matched entries are rejected.
+    pub(crate) attached_guardrail: Option<(
+        String,
+        std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>,
+    )>,
     /// Same-callback handoff from the canonical source to the semantic guard.
     pub(crate) canonical_record_batch: Option<crate::ai::canonical_sse::CanonicalRecordBatch>,
     /// Canonical semantic guard, run after the AI source processor.
@@ -1227,6 +1233,7 @@ pub(crate) struct AiHttpState {
 }
 
 pub struct EdgionHttpContext {
+    // --- Request lifecycle and identity ---
     /// Request start time for latency calculation
     pub start_time: Instant,
 
@@ -1242,6 +1249,7 @@ pub struct EdgionHttpContext {
     /// Error codes collected during request processing
     pub edgion_status: Vec<EdgionStatus>,
 
+    // --- Route and backend selection ---
     /// Matched HTTP route unit containing full route information
     pub route_unit: Option<Arc<HttpRouteRuleUnit>>,
 
@@ -1261,6 +1269,7 @@ pub struct EdgionHttpContext {
     /// Backend context containing service info and upstream attempts
     pub backend_context: Option<BackendContext>,
 
+    // --- Plugin execution and access-log staging ---
     /// Stage execution logs (grouped by stage)
     pub stage_logs: Vec<StageLogs>,
 
@@ -1274,6 +1283,7 @@ pub struct EdgionHttpContext {
     /// invoked. Nested ExtensionRef execution replaces and restores this slot.
     pub(crate) current_plugin_entry: Option<CurrentPluginEntryIdentity>,
 
+    // --- Upstream attempts and retry bookkeeping ---
     /// Number of connection attempts to backends
     pub try_cnt: u32,
 
@@ -1287,6 +1297,14 @@ pub struct EdgionHttpContext {
     /// attempt; `None` when no read/write bound was applied.
     pub peer_timeout_source: Option<PeerTimeoutSource>,
 
+    /// Circuit-breaker admission permit for the active upstream attempt,
+    /// acquired at `upstream_peer` (pre-connect) when the target backend carries
+    /// a `circuitBreaker` concurrency cap. It is released before the next attempt
+    /// or when the request context drops, covering every terminal path (success,
+    /// upstream error, client disconnect, cancellation). `None` when no cap
+    /// applies or admission was not attempted (bypass paths, no policy).
+    pub cb_permit: Option<crate::backends::circuit_breaker::CbPermit>,
+
     /// Time when first upstream connection was initiated
     /// Set only once on first connection attempt
     pub upstream_start_time: Option<Instant>,
@@ -1294,6 +1312,7 @@ pub struct EdgionHttpContext {
     /// Hash key used for consistent hashing (for test metrics)
     pub hash_key: Option<String>,
 
+    // --- Request-scoped variables, URI, and deferred headers ---
     /// Context variables map for plugin communication
     /// Plugins can set values (e.g., KeySet plugin) and conditions can read them
     pub ctx_map: HashMap<String, String>,
@@ -1369,6 +1388,7 @@ pub struct EdgionHttpContext {
     /// would silently degrade to `Set` at drain time.
     pub pending_response_header_ops: Vec<PendingHeaderOp>,
 
+    // --- Dye tracing, mirroring, and optional route state ---
     /// Dye plan of the plugin entry currently being invoked (installed by the
     /// stage loops before each invocation, overwritten per invocation).
     /// Arc so the adapter lifts it out before iterating (render mutates ctx).
@@ -1388,6 +1408,7 @@ pub struct EdgionHttpContext {
     /// Link-local / metadata ranges are never allowed by this switch.
     pub allow_loopback_upstream: bool,
 
+    // --- Request-body policy, buffering, and streaming ---
     /// Resolved GatewayClass request-body policy.
     /// Parsed when the listener is built; the request hot path only copies and
     /// reads these numeric values.
@@ -1445,6 +1466,7 @@ pub struct EdgionHttpContext {
     /// a second validator fails closed before materializing or parsing JSON.
     pub(crate) json_schema_validation_claimed: bool,
 
+    // --- Per-request plugin runtime snapshots ---
     /// Snapshot of resolved global plugin runtimes for this request, taken at
     /// `request_filter` entry. Each entry is one EdgionPlugins resource;
     /// per-stage bucketing is handled by `PluginRuntime`'s internal stage Vecs.
@@ -1486,10 +1508,12 @@ pub struct EdgionHttpContext {
     /// via `PluginSession::resolved_route_ext_ref(index)`.
     pub resolved_route_ext_refs: Option<Arc<Vec<Option<Arc<PluginRuntime>>>>>,
 
+    // --- Lazily allocated AI exchange state ---
     /// Lazily allocated AI-only request, attempt, response, and accounting
     /// state. Ordinary HTTP requests retain only this nullable pointer.
     pub(crate) ai_state: Option<Box<AiHttpState>>,
 
+    // --- Response-stream processors and terminal arbitration ---
     /// Stable processor instance currently executing in the response driver.
     pub(crate) active_response_processor_slot: Option<ResponseProcessorSlot>,
 
@@ -1508,13 +1532,6 @@ pub struct EdgionHttpContext {
     pub attached_ext_proc:
         std::collections::HashMap<String, std::sync::Arc<crate::plugins::http::ext_proc::AttachedExtProc>>,
 
-    /// The single request-scoped semantic Guardrail owner and its compiled
-    /// request-entry identity. Multiple matched entries are rejected.
-    pub attached_guardrail: Option<(
-        String,
-        std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>,
-    )>,
-
     /// Early framing reservations for attached processors that may mutate the
     /// final response body before their concrete processor is installed.
     pub attached_response_framing_reservations: usize,
@@ -1523,6 +1540,7 @@ pub struct EdgionHttpContext {
     /// installation is rejected to keep response composition deterministic.
     pub response_body_processing_started: bool,
 
+    // --- Response replacement, denial, and final classification ---
     /// Response-phase local-reply body, set by a response-phase plugin that
     /// returned `ErrResponse { status, body }` (Phase 6 sync or Phase 7 async)
     /// and consumed by `upstream_response_body_filter` (Phase 8). `Some` until
@@ -1548,15 +1566,6 @@ pub struct EdgionHttpContext {
     /// See [`ResponseStreamKind`]. Consumed by the compression exemption and by
     /// streaming processors/plugins that must know how to interpret chunks.
     pub response_stream_kind: ResponseStreamKind,
-
-    /// Circuit-breaker admission permit for the chosen endpoint, acquired at
-    /// `upstream_peer` (pre-connect) when the target Service carries a
-    /// `circuitBreaker` concurrency cap. Holding it on the ctx ties the permit's
-    /// lifetime to the request: it releases exactly once when the ctx drops at
-    /// request end, covering every terminal path (success, upstream error,
-    /// client disconnect, cancellation). `None` when no cap applies or admission
-    /// was not attempted (bypass paths, no policy).
-    pub cb_permit: Option<crate::backends::circuit_breaker::CbPermit>,
 }
 
 /// Parse a `RequestInfo` address field as an `IpAddr`, tolerating either a
@@ -1791,7 +1800,6 @@ impl EdgionHttpContext {
             response_terminal_state: ResponseTerminalState::Open,
             stream_processors: Vec::new(),
             attached_ext_proc: std::collections::HashMap::new(),
-            attached_guardrail: None,
             attached_response_framing_reservations: 0,
             response_body_processing_started: false,
             local_reply_body: None,

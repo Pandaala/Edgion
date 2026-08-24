@@ -39,16 +39,69 @@ Each access log entry must contain enough information for an operator to locate 
 | `host` / `path` | Request host and the **normalized** current path (no query) |
 | `request_uri` | **Optional** — client-entry **raw URI** (raw path + raw query); only emitted when `access_log_options.includeRawUri: true` |
 | `x-trace-id` | trace id (passed from client or auto-generated UUID) |
-| `status` | Final response status code |
+| `status` | Finalized client-side HTTP outcome; see [Final client status](#final-client-status) below |
 | `sni` | TLS SNI (HTTPS connections) |
 | `tls_id` | TLS connection ID (used to correlate tls_access.log) |
 | `discover_protocol` | Auto-detected protocol (grpc / websocket etc.) |
-| `info` | Gateway-internal normal handling events (e.g., ACME local hit); not an error |
-| `errors` | Gateway-internal exception/reject/failure reasons |
+| `info` | Ordered gateway-internal normal handling diagnostics (e.g., ACME local hit); not an error |
+| `errors` | Ordered gateway-internal failure/reject/degradation diagnostics; not an alert level by itself |
 | `match_info.sv` | sync_version — gRPC sync version, used to correlate control-plane logs (omitted when 0). See [../00-logging-and-tracing-ids.md](../00-logging-and-tracing-ids.md) |
 | stage_logs | Per-phase plugin logs (see PluginLog below) |
 | upstreams | Upstream connection details (ip, port, ct/ht/bt/et); per-attempt retry reason in `err`: etype strings / `RetryOnStatus` / `ConnectionReuseRetry`. Client-disconnect waste is marked request-level via `errors: ["ClientClosed"]` |
 | `ext` | Operator-declared fields from `AccessLogExtern` (see below); omitted when nothing was collected |
+
+### Final client status
+
+`request_info.status` has one meaning: the finalized client-side HTTP outcome. It MUST
+never expose a status merely observed from an upstream attempt, a response status that
+will be discarded for retry, or a pre-plugin/candidate response status.
+
+Finalization belongs at the terminal `logging()` phase, before request metrics, OTLP
+metadata, or `AccessLogEntry` reads the field. Resolve it with this precedence:
+
+1. If a final response header was written downstream, record that header's status.
+   Interim `100`/`102`/`103` headers are not final; `101 Switching Protocols` is terminal.
+2. If no final header was delivered, record the terminal proxy outcome selected for the
+   client side (for example `499` when a downstream disconnect ended proxying, or the
+   gateway-generated `502`/`503`/`504` outcome whose delivery failed).
+3. If neither exists, leave the status absent. Never fall back to an upstream attempt's
+   status just to populate the field.
+
+Each upstream attempt keeps its own observed/mapped status under
+`backend_context.upstreams[].status`. Any response-stage safety check that needs the
+pre-plugin upstream status uses a separate non-serialized snapshot; it must not borrow
+`request_info.status` as scratch storage. For gRPC, `request_info.status` is the final
+HTTP/2 status (normally `200`) and `request_info.grpc_status` is the independent final
+gRPC status from trailers. One must not be inferred from the other after the response is
+written.
+
+### Ordered request diagnostics
+
+`info` and `errors` are the two ordered diagnostic channels attached to the request.
+Together they replace request-scoped messages that would otherwise be scattered through
+a traditional proxy error log, while keeping normal noteworthy handling separate from
+error analysis and alerting:
+
+- `info` records normal, noteworthy handling outcomes such as an ACME challenge served
+  locally or an intentional plugin response replacement.
+- `errors` records failures, rejects, degraded processing, failed upstream attempts, and
+  other abnormal signals that an operator may query. An entry in `errors`
+  means the condition occurred during the request; it does not by itself mean the final
+  client status was a 4xx/5xx (a later retry may have succeeded).
+
+Never alert merely because `errors` is non-empty. Alertability belongs to each diagnostic
+code's contract and may also depend on the finalized client status and an aggregate rate.
+For example, `BackendRequestTimeoutRetry` followed by a successful final response is a
+recovered attempt failure (normally aggregate for trend/SLO analysis, not a per-request
+page), while an invariant marker such as `BodyRefusedNoSnapshot` is alertable at any
+non-zero rate. Expected client/configuration outcomes may remain useful for queries without
+being pager signals.
+
+Both channels are append-only for the request lifetime and preserve occurrence order.
+Do not merge them into one unordered set, deduplicate repeated entries, sort them, or move
+an entry between channels during final serialization. Repetition and order may describe
+the sequence of failed attempts or degraded phases; per-attempt detail remains in
+`backend_context.upstreams`.
 
 ### When to add a new field
 

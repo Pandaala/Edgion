@@ -110,7 +110,11 @@ impl RequestFilter for Guardrail {
         if !session.install_attached_guardrail(self.identity.clone(), owner) {
             // Duplicate claims are structural ambiguity, not dependency
             // availability, and are never softened by either fail-open flag.
-            if let Some((_, existing)) = session.ctx().attached_guardrail.as_ref() {
+            if let Some((_, existing)) = session
+                .ctx()
+                .ai_state()
+                .and_then(|state| state.attached_guardrail.as_ref())
+            {
                 existing.publish(GuardrailSummary {
                     outcome: "fail-close",
                     reason: "duplicate-claim",

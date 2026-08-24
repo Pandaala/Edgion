@@ -1167,13 +1167,16 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         identity: String,
         owner: std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>,
     ) -> bool {
-        if self.ctx.attached_guardrail.is_some()
-            || self.ctx.ai_state().is_some_and(|state| state.semantic_guard_claimed)
+        if self
+            .ctx
+            .ai_state()
+            .is_some_and(|state| state.attached_guardrail.is_some() || state.semantic_guard_claimed)
         {
             return false;
         }
-        self.ctx.attached_guardrail = Some((identity, owner));
-        self.ctx.ensure_ai_state().semantic_guard_claimed = true;
+        let state = self.ctx.ensure_ai_state();
+        state.attached_guardrail = Some((identity, owner));
+        state.semantic_guard_claimed = true;
         self.ctx.attached_response_framing_reservations =
             self.ctx.attached_response_framing_reservations.saturating_add(1);
         true
@@ -1184,6 +1187,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         identity: &str,
     ) -> Option<std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>> {
         self.ctx
+            .ai_state()?
             .attached_guardrail
             .as_ref()
             .filter(|(installed, _)| installed == identity)

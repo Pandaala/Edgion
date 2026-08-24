@@ -149,7 +149,7 @@ fn finalize_attached_ext_proc_logs(ctx: &mut EdgionHttpContext) {
 }
 
 fn finalize_attached_guardrail_log(ctx: &mut EdgionHttpContext) {
-    let Some((identity, owner)) = ctx.attached_guardrail.as_ref() else {
+    let Some((identity, owner)) = ctx.ai_state_mut().and_then(|state| state.attached_guardrail.take()) else {
         return;
     };
     let Some(line) = owner.take_summary_line() else {
