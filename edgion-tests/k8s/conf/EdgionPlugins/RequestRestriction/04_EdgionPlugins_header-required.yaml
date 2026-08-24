@@ -10,20 +10,21 @@ spec:
       type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: header
-                  name: "X-Auth-Token"
-                values:
-                  - "invalid"
-                  - "expired"
-          - allOf:
-              - type: keyExist
-                key:
-                  type: header
-                  name: "X-Auth-Token"
-                negate: true
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: header
+                    name: "X-Auth-Token"
+                  values:
+                    - "invalid"
+                    - "expired"
+            - allOf:
+                - type: keyExist
+                  key:
+                    type: header
+                    name: "X-Auth-Token"
+                  negate: true
         status: 401
         message: "Authentication required"

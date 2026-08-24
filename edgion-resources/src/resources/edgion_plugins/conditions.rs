@@ -13,16 +13,16 @@
 //! Request arrives
 //!     │
 //!     ▼
-//! Check skip conditions (OR logic)
+//! Check the explicit skip condition set
 //!     │
-//!     ├─ Any satisfied ──► Skip plugin
+//!     ├─ Set satisfied ──► Skip plugin
 //!     │
 //!     ▼ None satisfied
-//! Check run conditions (AND logic)
+//! Check the explicit run condition set
 //!     │
-//!     ├─ All satisfied ──► Execute plugin
+//!     ├─ Set satisfied ──► Execute plugin
 //!     │
-//!     └─ Not all satisfied ──► Skip plugin
+//!     └─ Set not satisfied ──► Skip plugin
 //! ```
 //!
 //! ## YAML Example
@@ -30,21 +30,23 @@
 //! ```yaml
 //! conditions:
 //!   skip:
-//!     - type: keyExist
-//!       key:
-//!         type: header
-//!         name: "X-Internal-Request"
-//!     - type: keyMatch
-//!       key:
-//!         type: path
-//!       values: ["/health", "/ready"]
-//!       negate: true
+//!     anyOf:
+//!       - type: keyExist
+//!         key:
+//!           type: header
+//!           name: "X-Internal-Request"
+//!       - type: keyMatch
+//!         key:
+//!           type: path
+//!         values: ["/health", "/ready"]
+//!         negate: true
 //!   run:
-//!     - type: timeRange
-//!       after: "2024-01-01T00:00:00Z"
-//!       before: "2025-12-31T23:59:59Z"
-//!     - type: probability
-//!       ratio: 0.1
+//!     allOf:
+//!       - type: timeRange
+//!         after: "2024-01-01T00:00:00Z"
+//!         before: "2025-12-31T23:59:59Z"
+//!       - type: probability
+//!         ratio: 0.1
 //! ```
 
 use crate::common::KeyGet;
@@ -74,21 +76,101 @@ fn default_true() -> bool {
 
 /// Plugin conditions configuration
 ///
-/// Defines when a plugin should be executed or skipped.
-/// - `skip`: If ANY condition is satisfied, skip the plugin (OR logic)
-/// - `run`: ALL conditions must be satisfied to run the plugin (AND logic)
+/// Defines when a plugin should be executed or skipped. Each action contains
+/// an explicit bounded [`ConditionSet`].
 ///
 /// When both are specified, `skip` is evaluated first.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginConditions {
-    /// Conditions that will cause the plugin to be skipped (OR logic)
+    /// A matching set causes the plugin to be skipped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skip: Option<Vec<Condition>>,
+    pub skip: Option<ConditionSet>,
 
-    /// Conditions that must ALL be satisfied for the plugin to run (AND logic)
+    /// The plugin runs only when this set matches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run: Option<Vec<Condition>>,
+    pub run: Option<ConditionSet>,
+}
+
+/// Placement-specific validation for a shared condition set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConditionValidationProfile {
+    /// Plugin entry, secondary body gate, and dye conditions.
+    EntrySync,
+    /// RequestRestriction and RequestAccessPolicy conditions.
+    RequestAsync,
+}
+
+/// A fixed-depth Boolean expression over shared [`Condition`] leaves.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum ConditionSet {
+    AllOf {
+        #[serde(rename = "allOf")]
+        all_of: Vec<Condition>,
+    },
+    AnyOf {
+        #[serde(rename = "anyOf")]
+        any_of: Vec<AnyOfClause>,
+    },
+}
+
+impl Default for ConditionSet {
+    fn default() -> Self {
+        Self::AllOf { all_of: Vec::new() }
+    }
+}
+
+/// One alternative of a top-level [`ConditionSet::AnyOf`].
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum AnyOfClause {
+    Condition(Condition),
+    AllOf(AllOfGroup),
+}
+
+/// A one-level conjunction nested directly below `anyOf`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AllOfGroup {
+    /// Optional attribution name. It has no effect on Boolean matching.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Direct Condition leaves combined with AND.
+    pub all_of: Vec<Condition>,
+}
+
+impl<'de> Deserialize<'de> for AnyOfClause {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| D::Error::custom("anyOf clause must be an object"))?;
+        let has_type = object.contains_key("type");
+        let has_all_of = object.contains_key("allOf");
+        match (has_type, has_all_of) {
+            (true, false) => {
+                if object.contains_key("name") {
+                    return Err(D::Error::custom("name is only valid on an allOf group"));
+                }
+                serde_json::from_value(value)
+                    .map(Self::Condition)
+                    .map_err(D::Error::custom)
+            }
+            (false, true) => serde_json::from_value(value).map(Self::AllOf).map_err(D::Error::custom),
+            (true, true) => Err(D::Error::custom(
+                "anyOf clause must contain exactly one of type or allOf",
+            )),
+            (false, false) => Err(D::Error::custom(
+                "anyOf clause must contain exactly one of type or allOf",
+            )),
+        }
+    }
 }
 
 /// Condition type enumeration
@@ -481,17 +563,8 @@ fn validate_nonempty_name(value: &str, field: &str) -> Result<(), String> {
     }
 }
 
-/// Where a condition is being validated (D-27).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConditionValidatePosition {
-    /// `PluginConditions` run/skip, body conditions, dye conditions.
-    EntryLevel,
-    /// RequestAccessPolicy `allOf` (inline rules and URL candidates).
-    AllOf,
-}
-
 const HMAC_BODY_ENTRY_LEVEL_ERROR: &str =
-    "hmacAuth.validateRequestBody is only valid inside RequestAccessPolicy allOf (or RequestRestriction)";
+    "hmacAuth.validateRequestBody is only valid inside RequestRestriction or RequestAccessPolicy conditions";
 
 impl Condition {
     /// Condition type name used in compiled descriptors.
@@ -532,8 +605,7 @@ impl Condition {
             Condition::KeyExist(c) => Some(c.key.as_log_str()),
             Condition::KeyMatch(c) => Some(c.key.as_log_str()),
             Condition::SecretMatch(c) => Some(c.key.as_log_str()),
-            Condition::JwtClaimMatch(c) => Some(c.claim.clone()),
-            Condition::MtlsMatch(c) => Some(c.field.as_log_str().to_string()),
+            Condition::JwtClaimMatch(_) | Condition::MtlsMatch(_) => None,
             Condition::TimeRange(_)
             | Condition::DirectPeerIpMatch(_)
             | Condition::RemoteIpMatch(_)
@@ -560,9 +632,10 @@ impl Condition {
 
     /// Compile regex / IP matchers and assign the runtime-only descriptor.
     ///
-    /// `ordinal` is the index of this condition inside its `skip` or `run` vec
-    /// (each vec starts at 0). The descriptor never contains match values,
-    /// secret names, IPs, or credential material.
+    /// `ordinal` is the stable atomic traversal index inside the owning set.
+    /// This resource-layer diagnostic descriptor never contains match values,
+    /// claim paths, certificate fields, secret names, IPs, or credential
+    /// material. Gateway access-log descriptors are rebuilt with full set paths.
     pub fn compile(&mut self, ordinal: usize) -> Result<(), regex::Error> {
         self.assign_descriptor(ordinal);
         match self {
@@ -570,7 +643,7 @@ impl Condition {
             Condition::JwtClaimMatch(c) => c.compile(),
             Condition::MtlsMatch(c) => c.compile(),
             Condition::DirectPeerIpMatch(c) | Condition::RemoteIpMatch(c) => {
-                // Matcher init errors are reported by `validate` / `validate_all_of`
+                // Matcher init errors are reported by placement-profile validation
                 // as String; compile still assigns the descriptor so entry-level
                 // DirectPeerIpMatch can run when the fields are valid.
                 let _ = c.validate_and_init();
@@ -582,15 +655,10 @@ impl Condition {
 
     /// Entry-level validation (`PluginConditions`, body, dye). Implements D-27.
     pub fn validate(&self) -> Result<(), String> {
-        self.validate_at(ConditionValidatePosition::EntryLevel)
+        self.validate_for_profile(ConditionValidationProfile::EntrySync)
     }
 
-    /// RAP `allOf` validation: HMAC `validateRequestBody` stays accepted.
-    pub fn validate_all_of(&self) -> Result<(), String> {
-        self.validate_at(ConditionValidatePosition::AllOf)
-    }
-
-    fn validate_at(&self, position: ConditionValidatePosition) -> Result<(), String> {
+    pub fn validate_for_profile(&self, profile: ConditionValidationProfile) -> Result<(), String> {
         match self {
             Condition::KeyExist(c) => validate_key_get(&c.key, "keyExist.key"),
             Condition::KeyMatch(c) => {
@@ -615,7 +683,7 @@ impl Condition {
                 if let Some(error) = c.detect_validation_error() {
                     return Err(error);
                 }
-                if position == ConditionValidatePosition::EntryLevel && c.validate_request_body {
+                if profile == ConditionValidationProfile::EntrySync && c.validate_request_body {
                     return Err(HMAC_BODY_ENTRY_LEVEL_ERROR.to_string());
                 }
                 Ok(())
@@ -667,68 +735,136 @@ fn validate_key_get(key: &KeyGet, field: &str) -> Result<(), String> {
     }
 }
 
-/// Count IP-match conditions in a slice.
-pub fn ip_match_count(conditions: &[Condition]) -> usize {
-    conditions.iter().filter(|condition| condition.is_ip_match()).count()
+impl AnyOfClause {
+    pub fn iter_conditions(&self) -> Box<dyn Iterator<Item = &Condition> + '_> {
+        match self {
+            Self::Condition(condition) => Box::new(std::iter::once(condition)),
+            Self::AllOf(group) => Box::new(group.all_of.iter()),
+        }
+    }
+
+    pub fn iter_conditions_mut(&mut self) -> Box<dyn Iterator<Item = &mut Condition> + '_> {
+        match self {
+            Self::Condition(condition) => Box::new(std::iter::once(condition)),
+            Self::AllOf(group) => Box::new(group.all_of.iter_mut()),
+        }
+    }
 }
 
-/// True if any condition in the slice is HMAC with body validation.
-pub fn conditions_validate_request_body(conditions: &[Condition]) -> bool {
-    conditions.iter().any(Condition::validates_request_body)
-}
+impl ConditionSet {
+    pub fn all_of(conditions: Vec<Condition>) -> Self {
+        Self::AllOf { all_of: conditions }
+    }
 
-/// A group of [`Condition`]s combined with AND.
-///
-/// The group matches only when every condition in `allOf` is true. An empty
-/// `allOf` is a validation error.
-///
-/// A `Vec<RuleGroup>` is evaluated in configuration order. The first group that
-/// holds short-circuits the rest. Combination of groups is OR (first match
-/// wins). This is distinct from `conditions.run`, which is an ordered array and
-/// a **conjunction**. Order fixes evaluation sequence and the short-circuit
-/// point; the combination comes from the field name at the use site
-/// (`anyOf` on RequestRestriction).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct RuleGroup {
-    /// Group name for logging/debugging.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+    pub fn any_of(conditions: Vec<Condition>) -> Self {
+        Self::AnyOf {
+            any_of: conditions.into_iter().map(AnyOfClause::Condition).collect(),
+        }
+    }
 
-    /// Conditions ANDed together (non-empty).
-    pub all_of: Vec<Condition>,
-}
+    pub fn iter_conditions(&self) -> Box<dyn Iterator<Item = &Condition> + '_> {
+        match self {
+            Self::AllOf { all_of } => Box::new(all_of.iter()),
+            Self::AnyOf { any_of } => Box::new(any_of.iter().flat_map(AnyOfClause::iter_conditions)),
+        }
+    }
 
-impl PluginConditions {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn iter_conditions_mut(&mut self) -> Box<dyn Iterator<Item = &mut Condition> + '_> {
+        match self {
+            Self::AllOf { all_of } => Box::new(all_of.iter_mut()),
+            Self::AnyOf { any_of } => Box::new(any_of.iter_mut().flat_map(AnyOfClause::iter_conditions_mut)),
+        }
+    }
+
+    pub fn atomic_count(&self) -> usize {
+        self.iter_conditions().count()
+    }
+
+    pub fn len(&self) -> usize {
+        self.atomic_count()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.skip.as_ref().is_none_or(|v| v.is_empty()) && self.run.as_ref().is_none_or(|v| v.is_empty())
+        self.atomic_count() == 0
     }
 
-    pub fn add_skip(mut self, condition: Condition) -> Self {
-        self.skip.get_or_insert_with(Vec::new).push(condition);
-        self
+    pub fn ip_match_count(&self) -> usize {
+        self.iter_conditions()
+            .filter(|condition| condition.is_ip_match())
+            .count()
     }
 
-    pub fn add_run(mut self, condition: Condition) -> Self {
-        self.run.get_or_insert_with(Vec::new).push(condition);
-        self
+    pub fn validates_request_body(&self) -> bool {
+        self.iter_conditions().any(Condition::validates_request_body)
+    }
+
+    /// Compile every atomic matcher in stable configuration order.
+    pub fn compile(&mut self) -> Result<(), Vec<regex::Error>> {
+        let mut errors = Vec::new();
+        for (ordinal, condition) in self.iter_conditions_mut().enumerate() {
+            if let Err(error) = condition.compile(ordinal) {
+                condition.clear_regex();
+                errors.push(error);
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Validate structure and every atom for the consumer placement.
+    pub fn validate(&self, profile: ConditionValidationProfile) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        match self {
+            Self::AllOf { all_of } => {
+                if all_of.is_empty() {
+                    errors.push("allOf must be non-empty".to_string());
+                }
+            }
+            Self::AnyOf { any_of } => {
+                if any_of.is_empty() {
+                    errors.push("anyOf must be non-empty".to_string());
+                }
+                for (index, clause) in any_of.iter().enumerate() {
+                    if let AnyOfClause::AllOf(group) = clause {
+                        if group.all_of.is_empty() {
+                            errors.push(format!("anyOf[{index}].allOf must be non-empty"));
+                        }
+                        if let Some(name) = &group.name {
+                            if name.trim().is_empty() {
+                                errors.push(format!("anyOf[{index}].name cannot be empty"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for condition in self.iter_conditions() {
+            if let Err(error) = condition.validate_for_profile(profile) {
+                errors.push(error);
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl PluginConditions {
+    pub fn is_empty(&self) -> bool {
+        self.skip.as_ref().is_none_or(ConditionSet::is_empty) && self.run.as_ref().is_none_or(ConditionSet::is_empty)
     }
 
     /// Compile all conditions. Collects every error instead of short-circuiting.
     pub fn compile(&mut self) -> Result<(), Vec<regex::Error>> {
         let mut errors: Vec<regex::Error> = Vec::new();
-        for conds in [&mut self.skip, &mut self.run] {
-            if let Some(conditions) = conds {
-                for (ordinal, c) in conditions.iter_mut().enumerate() {
-                    if let Err(e) = c.compile(ordinal) {
-                        c.clear_regex();
-                        errors.push(e);
-                    }
-                }
+        for set in [&mut self.skip, &mut self.run].into_iter().flatten() {
+            if let Err(mut set_errors) = set.compile() {
+                errors.append(&mut set_errors);
             }
         }
         if errors.is_empty() {
@@ -741,13 +877,9 @@ impl PluginConditions {
     /// Validate non-regex configuration. Collects every error instead of short-circuiting.
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors: Vec<String> = Vec::new();
-        for conds in [&self.skip, &self.run] {
-            if let Some(conditions) = conds {
-                for c in conditions {
-                    if let Err(e) = c.validate() {
-                        errors.push(e);
-                    }
-                }
+        for set in [&self.skip, &self.run].into_iter().flatten() {
+            if let Err(mut set_errors) = set.validate(ConditionValidationProfile::EntrySync) {
+                errors.append(&mut set_errors);
             }
         }
         if errors.is_empty() {
@@ -759,7 +891,13 @@ impl PluginConditions {
 
     /// Count IP-match conditions across skip and run.
     pub fn ip_match_count(&self) -> usize {
-        ip_match_count(self.skip.as_deref().unwrap_or(&[])) + ip_match_count(self.run.as_deref().unwrap_or(&[]))
+        self.skip.as_ref().map_or(0, ConditionSet::ip_match_count)
+            + self.run.as_ref().map_or(0, ConditionSet::ip_match_count)
+    }
+
+    pub fn atomic_count(&self) -> usize {
+        self.skip.as_ref().map_or(0, ConditionSet::atomic_count)
+            + self.run.as_ref().map_or(0, ConditionSet::atomic_count)
     }
 }
 
@@ -861,32 +999,10 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_conditions_builder() {
-        let conditions = PluginConditions::new()
-            .add_skip(Condition::KeyExist(KeyExistCondition {
-                key: KeyGet::Header {
-                    name: "X-Internal".to_string(),
-                },
-                negate: false,
-                descriptor: Box::from(""),
-            }))
-            .add_run(Condition::TimeRange(TimeRangeCondition {
-                after: Some("2024-01-01T00:00:00Z".to_string()),
-                before: None,
-                negate: false,
-                descriptor: Box::from(""),
-            }));
-
-        assert!(!conditions.is_empty());
-        assert_eq!(conditions.skip.as_ref().unwrap().len(), 1);
-        assert_eq!(conditions.run.as_ref().unwrap().len(), 1);
-    }
-
-    #[test]
     fn plugin_conditions_reject_empty_match_payloads_even_when_negated() {
         let conditions = PluginConditions {
             skip: None,
-            run: Some(vec![
+            run: Some(ConditionSet::all_of(vec![
                 Condition::KeyMatch(KeyMatchCondition {
                     key: KeyGet::Header {
                         name: "X-Test".to_string(),
@@ -908,7 +1024,7 @@ mod tests {
                     negate: true,
                     descriptor: Box::from(""),
                 }),
-            ]),
+            ])),
         };
 
         let errors = conditions
@@ -932,7 +1048,7 @@ mod tests {
         };
         let conditions = PluginConditions {
             skip: None,
-            run: Some(vec![
+            run: Some(ConditionSet::all_of(vec![
                 Condition::KeyMatch(KeyMatchCondition {
                     key: KeyGet::Path,
                     core: core(),
@@ -952,7 +1068,7 @@ mod tests {
                     negate: false,
                     descriptor: Box::from(""),
                 }),
-            ]),
+            ])),
         };
 
         let errors = conditions
@@ -965,11 +1081,11 @@ mod tests {
     #[test]
     fn plugin_conditions_reject_empty_named_key_get() {
         let conditions = PluginConditions {
-            skip: Some(vec![Condition::KeyExist(KeyExistCondition {
+            skip: Some(ConditionSet::any_of(vec![Condition::KeyExist(KeyExistCondition {
                 key: KeyGet::Ctx { name: String::new() },
                 negate: false,
                 descriptor: Box::from(""),
-            })]),
+            })])),
             run: None,
         };
 
@@ -981,12 +1097,14 @@ mod tests {
     fn plugin_conditions_reject_blank_jwt_claim_even_when_negated() {
         let conditions = PluginConditions {
             skip: None,
-            run: Some(vec![Condition::JwtClaimMatch(JwtClaimMatchCondition {
-                claim: "  \t".to_string(),
-                core: core_values(vec!["admin".to_string()]),
-                negate: true,
-                descriptor: Box::from(""),
-            })]),
+            run: Some(ConditionSet::all_of(vec![Condition::JwtClaimMatch(
+                JwtClaimMatchCondition {
+                    claim: "  \t".to_string(),
+                    core: core_values(vec!["admin".to_string()]),
+                    negate: true,
+                    descriptor: Box::from(""),
+                },
+            )])),
         };
 
         let errors = conditions
@@ -1033,19 +1151,21 @@ secretRef: { name: access-token }
     #[test]
     fn test_serialize_deserialize() {
         let conditions = PluginConditions {
-            skip: Some(vec![Condition::KeyExist(KeyExistCondition {
+            skip: Some(ConditionSet::any_of(vec![Condition::KeyExist(KeyExistCondition {
                 key: KeyGet::Header {
                     name: "X-Test".to_string(),
                 },
                 negate: false,
                 descriptor: Box::from(""),
-            })]),
-            run: Some(vec![Condition::Probability(ProbabilityCondition {
-                ratio: 0.5,
-                key: None,
-                negate: false,
-                descriptor: Box::from(""),
-            })]),
+            })])),
+            run: Some(ConditionSet::all_of(vec![Condition::Probability(
+                ProbabilityCondition {
+                    ratio: 0.5,
+                    key: None,
+                    negate: false,
+                    descriptor: Box::from(""),
+                },
+            )])),
         };
 
         let yaml = serde_yaml::to_string(&conditions).unwrap();
@@ -1215,14 +1335,14 @@ secretRef: { name: access-token }
             descriptor: Box::from(""),
         });
         let mut conds = PluginConditions {
-            skip: Some(vec![invalid_bracket, valid_skip, invalid_repeat]),
-            run: Some(vec![valid_run, invalid_paren]),
+            skip: Some(ConditionSet::any_of(vec![invalid_bracket, valid_skip, invalid_repeat])),
+            run: Some(ConditionSet::all_of(vec![valid_run, invalid_paren])),
         };
 
         let errs = conds.compile().expect_err("should collect every regex compile error");
         assert_eq!(errs.len(), 3, "must report all 3 invalid patterns, not just the first");
 
-        let skip = conds.skip.as_ref().unwrap();
+        let skip: Vec<_> = conds.skip.as_ref().unwrap().iter_conditions().collect();
         // skip[0] invalid → regex cleared
         if let Condition::KeyMatch(c) = &skip[0] {
             assert!(c.core.regex.is_none(), "skip[0] regex must be cleared");
@@ -1247,7 +1367,7 @@ secretRef: { name: access-token }
             panic!("expected KeyMatch at skip[2]");
         }
 
-        let run = conds.run.as_ref().unwrap();
+        let run: Vec<_> = conds.run.as_ref().unwrap().iter_conditions().collect();
         // run[0] valid → compiled
         if let Condition::KeyMatch(c) = &run[0] {
             assert!(
@@ -1283,8 +1403,8 @@ secretRef: { name: access-token }
             descriptor: Box::from(""),
         });
         let conds = PluginConditions {
-            skip: Some(vec![bad_after]),
-            run: Some(vec![bad_before]),
+            skip: Some(ConditionSet::any_of(vec![bad_after])),
+            run: Some(ConditionSet::all_of(vec![bad_before])),
         };
 
         let errs = conds.validate().expect_err("should collect every validate error");
@@ -1319,12 +1439,14 @@ secretRef: { name: access-token }
                 "type": "IpRestriction",
                 "config": {"defaultAction": "allow"},
                 "conditions": {
-                    "run": [{
-                        "type": "keyMatch",
-                        "key": {"type": "header", "name": "X-Test"},
-                        "values": ["ok"],
-                        "valuez": "typo"
-                    }]
+                    "run": {
+                        "allOf": [{
+                            "type": "keyMatch",
+                            "key": {"type": "header", "name": "X-Test"},
+                            "values": ["ok"],
+                            "valuez": "typo"
+                        }]
+                    }
                 }
             }]
         });
@@ -1346,11 +1468,11 @@ secretRef: { name: access-token }
     }
 
     #[test]
-    fn descriptor_is_value_free_and_ordinal_bearing() {
+    fn diagnostic_descriptor_is_value_free_and_ordinal_bearing() {
         let secret = "super-secret-token";
         let mut conds = PluginConditions {
             skip: None,
-            run: Some(vec![
+            run: Some(ConditionSet::all_of(vec![
                 Condition::KeyMatch(KeyMatchCondition {
                     key: KeyGet::Header {
                         name: "X-A".to_string(),
@@ -1394,10 +1516,10 @@ secretRef: { name: access-token }
                     negate: false,
                     descriptor: Box::from(""),
                 }),
-            ]),
+            ])),
         };
         conds.compile().expect("compile assigns descriptors");
-        let run = conds.run.as_ref().unwrap();
+        let run: Vec<_> = conds.run.as_ref().unwrap().iter_conditions().collect();
         assert_eq!(run[0].descriptor(), "0:keyMatch:hdr:X-A");
         assert_eq!(run[1].descriptor(), "1:keyMatch:hdr:X-A");
         assert_eq!(run[2].descriptor(), "2:keyExist:hdr:X-B");
@@ -1418,8 +1540,8 @@ secretRef: { name: access-token }
         let mut empty = PluginConditions::default();
         empty.compile().expect("empty skip/run compile");
         let mut none_vecs = PluginConditions {
-            skip: Some(vec![]),
-            run: Some(vec![]),
+            skip: Some(ConditionSet::any_of(vec![])),
+            run: Some(ConditionSet::all_of(vec![])),
         };
         none_vecs.compile().expect("empty vecs compile");
     }
@@ -1495,22 +1617,21 @@ validateRequestBody: {validate_body}
             .validate()
             .expect_err("entry-level HMAC body must be rejected");
         assert!(err.contains("validateRequestBody"), "{err}");
-        assert!(err.contains("allOf"), "{err}");
 
         let conds = PluginConditions {
             skip: None,
-            run: Some(vec![condition]),
+            run: Some(ConditionSet::all_of(vec![condition])),
         };
         let errs = conds.validate().expect_err("PluginConditions uses entry-level path");
         assert!(errs.iter().any(|e| e.contains("validateRequestBody")));
     }
 
     #[test]
-    fn all_of_hmac_validate_request_body_is_accepted() {
+    fn request_async_set_accepts_hmac_validate_request_body() {
         let condition: Condition = serde_yaml::from_str(&hmac_body_yaml(true)).unwrap();
-        condition
-            .validate_all_of()
-            .expect("RAP allOf still accepts validateRequestBody");
+        ConditionSet::all_of(vec![condition])
+            .validate(ConditionValidationProfile::RequestAsync)
+            .expect("request-async ConditionSet accepts validateRequestBody");
     }
 
     #[test]
@@ -1571,7 +1692,7 @@ validateRequestBody: {validate_body}
         let secret = "super-secret-token";
         let mut conds = PluginConditions {
             skip: None,
-            run: Some(vec![
+            run: Some(ConditionSet::all_of(vec![
                 Condition::JwtClaimMatch(JwtClaimMatchCondition {
                     claim: "sub".to_string(),
                     core: core_values(vec![secret.to_string()]),
@@ -1585,12 +1706,12 @@ validateRequestBody: {validate_body}
                     negate: false,
                     descriptor: Box::from(""),
                 }),
-            ]),
+            ])),
         };
         conds.compile().expect("compile assigns descriptors");
-        let run = conds.run.as_ref().unwrap();
-        assert_eq!(run[0].descriptor(), "0:jwtClaimMatch:sub");
-        assert_eq!(run[1].descriptor(), "1:mtlsMatch:san");
+        let run: Vec<_> = conds.run.as_ref().unwrap().iter_conditions().collect();
+        assert_eq!(run[0].descriptor(), "0:jwtClaimMatch");
+        assert_eq!(run[1].descriptor(), "1:mtlsMatch");
         for c in run {
             assert!(
                 !c.descriptor().contains(secret),

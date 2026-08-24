@@ -293,8 +293,7 @@ mod tests {
                 "metadata":{"name":"urls","namespace":"default"},
                 "spec":{"data":{"type":"RequestAccessUrlAllowList","config":{"items":[{
                     "name":"health","hosts":["api.example.com"],
-                    "paths":[{"type":"Exact","value":"/health","valuez":"/ignored"}],
-                    "allOf":[]
+                    "paths":[{"type":"Exact","value":"/health","valuez":"/ignored"}]
                 }]}}}
             }"#,
         );
@@ -316,7 +315,7 @@ mod tests {
                 "metadata":{"name":"urls","namespace":"default"},
                 "spec":{"data":{"type":"RequestAccessUrlAllowList","config":{"items":[{
                     "name":"health","hosts":["api.example.com"],
-                    "paths":[{"type":"Exact","value":"/health"}],"allOf":[]
+                    "paths":[{"type":"Exact","value":"/health"}]
                 }]}}}
             }"#,
         );

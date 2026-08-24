@@ -20,7 +20,7 @@
 //!
 //! # Condition with key check
 //! conditions:
-//!   skip:
+//!   allOf:
 //!     - type: keyExist
 //!       key:
 //!         type: header

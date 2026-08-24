@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn secondary_conditions_parse() {
         let req: BodyRequirement = serde_json::from_str(
-            r#"{ "conditions": { "run": [ { "type": "keyMatch", "key": { "type": "method" }, "values": ["POST"] } ] } }"#,
+            r#"{ "conditions": { "run": { "allOf": [ { "type": "keyMatch", "key": { "type": "method" }, "values": ["POST"] } ] } } }"#,
         )
         .unwrap();
         assert!(req.conditions.is_some());
@@ -247,7 +247,9 @@ mod tests {
             max_body_size: Some("2m".to_string()),
             conditions: Some(PluginConditions {
                 skip: None,
-                run: Some(vec![]),
+                run: Some(crate::resources::edgion_plugins::conditions::ConditionSet::all_of(
+                    vec![],
+                )),
             }),
             on_read_failure: BodyReadFailureMode::FailOpen,
         };
@@ -263,7 +265,9 @@ mod tests {
             max_body_size: Some("64KiB".to_string()),
             conditions: Some(PluginConditions {
                 skip: None,
-                run: Some(vec![]),
+                run: Some(crate::resources::edgion_plugins::conditions::ConditionSet::all_of(
+                    vec![],
+                )),
             }),
             ..Default::default()
         };

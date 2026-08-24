@@ -8,7 +8,6 @@ use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 use edgion_resources::matcher::radix_tree::{MatchKind, RadixTree, RadixTreeBuilder};
 use edgion_resources::resources::edgion_config_data::ConfigEntry;
-use edgion_resources::resources::edgion_plugins::conditions::Condition;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{
     AccessPathMatchType, IpAccessMatch, RequestAccessPolicyConfig, RequestAccessProfile, RequestAccessRuleType,
     UrlAccessCandidate,
@@ -17,9 +16,7 @@ use edgion_resources::resources::edgion_plugins::BodyRequirement;
 use regex::Regex;
 
 use crate::ctx::NormalizedHostname;
-use crate::plugins::http::hmac_auth::{HmacVerifier, HmacVerifyOutcome};
-use crate::plugins::runtime::body_gate::body_read_failure_result;
-use crate::plugins::runtime::conditions::{CompiledCondition, ConditionExt};
+use crate::plugins::runtime::conditions::{CompiledConditionSet, MatchState};
 use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 
@@ -35,84 +32,33 @@ impl RuntimeIpSet {
     }
 }
 
-enum RuntimeCondition {
-    Unresolved,
-    Sync(CompiledCondition),
-    HmacBody { verifier: HmacVerifier, negate: bool },
-}
-
 enum PolicyMatch {
     Matched,
     NoMatch,
     Terminal(PluginRunningResult),
 }
 
-impl RuntimeCondition {
-    fn new(config: Condition, body_requirement: Option<BodyRequirement>) -> Self {
-        if config.has_unresolved_refs() {
-            return Self::Unresolved;
-        }
-        match config {
-            Condition::HmacAuth(value) if value.validate_request_body => Self::HmacBody {
-                negate: value.negate,
-                verifier: HmacVerifier::new(&value, body_requirement),
-            },
-            other => Self::Sync(CompiledCondition::new(other)),
-        }
-    }
-
-    async fn matches(
-        &self,
-        session: &mut dyn PluginSession,
-        _direct_peer_ip: Option<&IpAddr>,
-        _remote_ip: Option<&IpAddr>,
-        log: &mut PluginLog,
-    ) -> PolicyMatch {
-        let matched = match self {
-            // An incomplete allow candidate is unavailable. The caller keeps
-            // evaluating sibling rules and candidates before denying normally.
-            Self::Unresolved => false,
-            Self::Sync(condition) => condition.evaluate(session, None),
-            Self::HmacBody { verifier, negate } => match verifier.verify(session).await {
-                HmacVerifyOutcome::Verified { .. } => !*negate,
-                HmacVerifyOutcome::NoMatch(_) | HmacVerifyOutcome::LogicalBodyLimit(_) => *negate,
-                HmacVerifyOutcome::CaptureFailure(error) | HmacVerifyOutcome::DigestReadFailure(error) => {
-                    return PolicyMatch::Terminal(body_read_failure_result(
-                        session,
-                        verifier.body_requirement(),
-                        log,
-                        &error,
-                    ));
-                }
-            },
-        };
-        if matched {
-            PolicyMatch::Matched
-        } else {
-            PolicyMatch::NoMatch
-        }
-    }
-}
-
-async fn all_match(
-    conditions: &[RuntimeCondition],
+async fn supplemental_matches(
+    conditions: Option<&CompiledConditionSet>,
     session: &mut dyn PluginSession,
-    direct_peer_ip: Option<&IpAddr>,
-    remote_ip: Option<&IpAddr>,
     log: &mut PluginLog,
 ) -> PolicyMatch {
-    for condition in conditions {
-        match condition.matches(session, direct_peer_ip, remote_ip, log).await {
-            PolicyMatch::Matched => {}
-            other => return other,
-        }
+    let Some(conditions) = conditions else {
+        return PolicyMatch::Matched;
+    };
+    match conditions
+        .evaluate_async(session, log, conditions.atomic_count() > 1)
+        .await
+    {
+        Ok(result) if result.state == MatchState::True => PolicyMatch::Matched,
+        Ok(_) => PolicyMatch::NoMatch,
+        Err(result) => PolicyMatch::Terminal(result),
     }
-    PolicyMatch::Matched
 }
 
 struct RuntimeUrlCandidate {
     hosts: HashSet<String>,
-    all_of: Vec<RuntimeCondition>,
+    conditions: Option<CompiledConditionSet>,
 }
 
 #[derive(Default)]
@@ -154,11 +100,10 @@ impl RuntimeUrlIndex {
                     .into_iter()
                     .map(|host| NormalizedHostname::new(&host).as_str().to_string())
                     .collect(),
-                all_of: candidate
-                    .all_of
-                    .into_iter()
-                    .map(|condition| RuntimeCondition::new(condition, body_requirement.clone()))
-                    .collect(),
+                conditions: candidate
+                    .conditions
+                    .as_ref()
+                    .map(|conditions| CompiledConditionSet::new(conditions, "conditions", body_requirement.clone())),
             });
             for path in candidate.paths {
                 match path.match_type {
@@ -234,11 +179,11 @@ impl RuntimeUrlIndex {
 enum RuntimeRule {
     DirectPeerIp {
         ips: RuntimeIpSet,
-        all_of: Vec<RuntimeCondition>,
+        conditions: Option<CompiledConditionSet>,
     },
     RemoteIp {
         ips: RuntimeIpSet,
-        all_of: Vec<RuntimeCondition>,
+        conditions: Option<CompiledConditionSet>,
     },
     Url(Vec<usize>),
 }
@@ -255,18 +200,18 @@ impl RuntimeRule {
         log: &mut PluginLog,
     ) -> PolicyMatch {
         match self {
-            Self::DirectPeerIp { ips, all_of } => {
+            Self::DirectPeerIp { ips, conditions } => {
                 if !ips.matches(direct_peer_ip) {
                     PolicyMatch::NoMatch
                 } else {
-                    all_match(all_of, session, direct_peer_ip, remote_ip, log).await
+                    supplemental_matches(conditions.as_ref(), session, log).await
                 }
             }
-            Self::RemoteIp { ips, all_of } => {
+            Self::RemoteIp { ips, conditions } => {
                 if !ips.matches(remote_ip) {
                     PolicyMatch::NoMatch
                 } else {
-                    all_match(all_of, session, direct_peer_ip, remote_ip, log).await
+                    supplemental_matches(conditions.as_ref(), session, log).await
                 }
             }
             Self::Url(indices) => {
@@ -278,7 +223,7 @@ impl RuntimeRule {
                     if !candidate.hosts.is_empty() && !candidate.hosts.contains(host.as_str()) {
                         continue;
                     }
-                    match all_match(&candidate.all_of, session, direct_peer_ip, remote_ip, log).await {
+                    match supplemental_matches(candidate.conditions.as_ref(), session, log).await {
                         PolicyMatch::Matched => return PolicyMatch::Matched,
                         PolicyMatch::NoMatch => {}
                         terminal @ PolicyMatch::Terminal(_) => return terminal,
@@ -307,19 +252,15 @@ impl RuntimeProfile {
                 rules.push(match rule.rule {
                     RequestAccessRuleType::DirectPeerIp(config) => RuntimeRule::DirectPeerIp {
                         ips: RuntimeIpSet::new(config.ip),
-                        all_of: config
-                            .all_of
-                            .into_iter()
-                            .map(|condition| RuntimeCondition::new(condition, body_requirement.clone()))
-                            .collect(),
+                        conditions: config.conditions.as_ref().map(|conditions| {
+                            CompiledConditionSet::new(conditions, "conditions", body_requirement.clone())
+                        }),
                     },
                     RequestAccessRuleType::RemoteIp(config) => RuntimeRule::RemoteIp {
                         ips: RuntimeIpSet::new(config.ip),
-                        all_of: config
-                            .all_of
-                            .into_iter()
-                            .map(|condition| RuntimeCondition::new(condition, body_requirement.clone()))
-                            .collect(),
+                        conditions: config.conditions.as_ref().map(|conditions| {
+                            CompiledConditionSet::new(conditions, "conditions", body_requirement.clone())
+                        }),
                     },
                     RequestAccessRuleType::Url(config) => {
                         let candidates = config.resolved_candidates.unwrap_or_else(|| {
@@ -327,7 +268,7 @@ impl RuntimeProfile {
                                 name: rule.name,
                                 hosts: config.hosts,
                                 paths: config.paths,
-                                all_of: config.all_of,
+                                conditions: config.conditions,
                             }]
                         });
                         let start = url_candidates.len();
@@ -521,6 +462,7 @@ mod tests {
     use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
+    use edgion_resources::resources::edgion_plugins::conditions::{Condition, ConditionSet};
     use edgion_resources::resources::edgion_plugins::plugin_configs::SecretMatchCondition;
     use edgion_resources::EdgionStatus;
     use hmac::{Hmac, Mac};
@@ -545,12 +487,13 @@ profiles:
             type: directPeerIp
             config:
               ips: [192.0.2.0/24]
-              allOf:
-                - type: hmacAuth
-                  secretGroups:
-                    - name: default
-                      secretRefs: [{{ name: hmac-credentials }}]
-                  validateRequestBody: {validate_request_body}
+              conditions:
+                allOf:
+                  - type: hmacAuth
+                    secretGroups:
+                      - name: default
+                        secretRefs: [{{ name: hmac-credentials }}]
+                    validateRequestBody: {validate_request_body}
           - name: internal-fallback
             type: directPeerIp
             config: {{ ips: [192.0.2.0/24] }}
@@ -560,7 +503,10 @@ profiles:
         let RequestAccessRuleType::DirectPeerIp(rule) = &mut rule.rule else {
             panic!("unexpected rule type")
         };
-        let Condition::HmacAuth(hmac) = &mut rule.all_of[0] else {
+        let Some(ConditionSet::AllOf { all_of }) = &mut rule.conditions else {
+            panic!("expected supplemental conditions")
+        };
+        let Condition::HmacAuth(hmac) = &mut all_of[0] else {
             panic!("unexpected condition type")
         };
         hmac.resolved_credentials = Some(HashMap::from([(
@@ -592,7 +538,10 @@ profiles:
         let RequestAccessRuleType::DirectPeerIp(rule) = &mut rule.rule else {
             unreachable!()
         };
-        let Condition::HmacAuth(hmac) = &mut rule.all_of[0] else {
+        let Some(ConditionSet::AllOf { all_of }) = &mut rule.conditions else {
+            unreachable!()
+        };
+        let Condition::HmacAuth(hmac) = &mut all_of[0] else {
             unreachable!()
         };
         hmac.resolved_credentials = None;
@@ -633,9 +582,10 @@ profiles:
             config:
               hosts: [callbacks.example.com]
               paths: [{ type: PathPrefix, value: /callbacks }]
-              allOf:
-                - type: remoteIpMatch
-                  ips: [203.0.113.0/24]
+              conditions:
+                allOf:
+                  - type: remoteIpMatch
+                    ips: [203.0.113.0/24]
 "#,
         );
         let plugin = RequestAccessPolicy::create(&config, "default", None);
@@ -749,21 +699,23 @@ profiles:
                     value: "/callbacks/:vendor".to_string(),
                 },
             ],
-            all_of: vec![Condition::SecretMatch(SecretMatchCondition {
-                key: edgion_resources::common::KeyGet::Header {
-                    name: "X-Vendor-Token".to_string(),
+            conditions: Some(ConditionSet::all_of(vec![Condition::SecretMatch(
+                SecretMatchCondition {
+                    key: edgion_resources::common::KeyGet::Header {
+                        name: "X-Vendor-Token".to_string(),
+                    },
+                    secret_key: "token".to_string(),
+                    secret_ref: edgion_resources::resources::common::SecretObjectReference {
+                        name: "vendor-token".to_string(),
+                        group: None,
+                        kind: None,
+                        namespace: None,
+                    },
+                    negate: false,
+                    resolved_values: Some(vec!["expected-token".to_string()]),
+                    descriptor: Box::from(""),
                 },
-                secret_key: "token".to_string(),
-                secret_ref: edgion_resources::resources::common::SecretObjectReference {
-                    name: "vendor-token".to_string(),
-                    group: None,
-                    kind: None,
-                    namespace: None,
-                },
-                negate: false,
-                resolved_values: Some(vec!["expected-token".to_string()]),
-                descriptor: Box::from(""),
-            })],
+            )])),
         }]);
         config
     }
@@ -825,7 +777,7 @@ profiles:
                     match_type: AccessPathMatchType::Exact,
                     value: "/events/exact".to_string(),
                 }],
-                all_of: vec![],
+                conditions: None,
             },
             UrlAccessCandidate {
                 name: "prefix".to_string(),
@@ -834,7 +786,7 @@ profiles:
                     match_type: AccessPathMatchType::PathPrefix,
                     value: "/events/:tenant".to_string(),
                 }],
-                all_of: vec![],
+                conditions: None,
             },
             UrlAccessCandidate {
                 name: "regex".to_string(),
@@ -843,7 +795,7 @@ profiles:
                     match_type: AccessPathMatchType::RegularExpression,
                     value: r"^/events/v[0-9]+$".to_string(),
                 }],
-                all_of: vec![],
+                conditions: None,
             },
         ];
         let index = RuntimeUrlIndex::compile(candidates, None).unwrap();
@@ -932,7 +884,7 @@ profiles:
                     value: "/callback".to_string(),
                 },
             ],
-            all_of: vec![
+            conditions: Some(ConditionSet::all_of(vec![
                 Condition::DirectPeerIpMatch(IpAccessMatch {
                     ips: vec!["192.0.2.0/24".to_string()],
                     ..Default::default()
@@ -941,7 +893,7 @@ profiles:
                     ips: vec!["203.0.113.0/24".to_string()],
                     ..Default::default()
                 }),
-            ],
+            ])),
         }]);
         let run = |direct: &'static str, remote: &'static str, config: RequestAccessPolicyConfig| async move {
             let plugin = RequestAccessPolicy::create(&config, "default", None);
@@ -1095,9 +1047,10 @@ profiles:
             type: remoteIp
             config:
               ips: [10.0.0.0/8]
-              allOf:
-                - type: timeRange
-                  after: "2000-01-01T00:00:00Z"
+              conditions:
+                allOf:
+                  - type: timeRange
+                    after: "2000-01-01T00:00:00Z"
 "#,
         );
         let plugin = RequestAccessPolicy::create(&config, "default", None);
@@ -1109,5 +1062,77 @@ profiles:
             plugin.run_request(&mut session, &mut log).await,
             PluginRunningResult::GoodNext
         );
+    }
+
+    #[tokio::test]
+    async fn single_supplemental_leaf_suppresses_atomic_descriptor() {
+        let config = parse_config(
+            r#"
+defaultProfile: lockdown
+profiles:
+  lockdown:
+    requiredRuleGroups:
+      - name: peer
+        anyOfRules:
+          - name: internal
+            type: directPeerIp
+            config:
+              ips: [192.0.2.0/24]
+              conditions:
+                allOf:
+                  - type: keyExist
+                    key: { type: header, name: X-One }
+"#,
+        );
+        let plugin = RequestAccessPolicy::create(&config, "default", None);
+        let mut session = MockPluginSession::new();
+        session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
+        session.expect_remote_ip().return_const("198.51.100.10".to_string());
+        session.expect_key_get().return_const(Some("yes".to_string()));
+        let mut log = PluginLog::new("RequestAccessPolicy");
+
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+        assert!(log.contains("allow:matched"));
+        assert!(!log.contains("conditions.allOf[0]:keyExist"));
+    }
+
+    #[tokio::test]
+    async fn multi_leaf_supplemental_set_retains_atomic_descriptors() {
+        let config = parse_config(
+            r#"
+defaultProfile: lockdown
+profiles:
+  lockdown:
+    requiredRuleGroups:
+      - name: peer
+        anyOfRules:
+          - name: internal
+            type: directPeerIp
+            config:
+              ips: [192.0.2.0/24]
+              conditions:
+                allOf:
+                  - type: keyExist
+                    key: { type: header, name: X-One }
+                  - type: keyExist
+                    key: { type: header, name: X-Two }
+"#,
+        );
+        let plugin = RequestAccessPolicy::create(&config, "default", None);
+        let mut session = MockPluginSession::new();
+        session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
+        session.expect_remote_ip().return_const("198.51.100.10".to_string());
+        session.expect_key_get().return_const(Some("yes".to_string()));
+        let mut log = PluginLog::new("RequestAccessPolicy");
+
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+        assert!(log.contains("conditions.allOf[0]:keyExist:hdr:X-One"));
+        assert!(log.contains("conditions.allOf[1]:keyExist:hdr:X-Two"));
     }
 }

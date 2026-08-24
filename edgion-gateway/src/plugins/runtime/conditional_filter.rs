@@ -14,7 +14,7 @@ use super::log::PluginLog;
 use super::traits::{
     PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };
-use crate::plugins::runtime::conditions::{CompiledPluginConditions, ConditionExt, EvaluationResult, PluginConditions};
+use crate::plugins::runtime::conditions::{CompiledPluginConditions, EvaluationResult, PluginConditions};
 use edgion_resources::filters::PluginRunningResult;
 
 /// Wrapper that adds condition evaluation to a RequestFilter
@@ -75,10 +75,13 @@ impl RequestFilter for ConditionalRequestFilter {
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
-                let eval = conditions.evaluate_detail(session, log);
+                let eval = match conditions.evaluate_detail_async(session, log).await {
+                    Ok(eval) => eval,
+                    Err(result) => return result,
+                };
                 if eval.result == EvaluationResult::Skip {
-                    if let Some(cond) = eval.matched {
-                        log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
+                    if let Some(cause) = eval.cause {
+                        log.set_cond_skip(format!("{}:{cause}", eval.action));
                     }
                     return PluginRunningResult::Nothing;
                 }
@@ -146,8 +149,8 @@ impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
             if conditions.should_evaluate() {
                 let eval = conditions.evaluate_detail(session, log);
                 if eval.result == EvaluationResult::Skip {
-                    if let Some(cond) = eval.matched {
-                        log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
+                    if let Some(cause) = eval.cause {
+                        log.set_cond_skip(format!("{}:{cause}", eval.action));
                     }
                     return PluginRunningResult::Nothing;
                 }
@@ -288,10 +291,13 @@ impl UpstreamResponse for ConditionalUpstreamResponse {
     async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
-                let eval = conditions.evaluate_detail(session, log);
+                let eval = match conditions.evaluate_detail_async(session, log).await {
+                    Ok(eval) => eval,
+                    Err(result) => return result,
+                };
                 if eval.result == EvaluationResult::Skip {
-                    if let Some(cond) = eval.matched {
-                        log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
+                    if let Some(cause) = eval.cause {
+                        log.set_cond_skip(format!("{}:{cause}", eval.action));
                     }
                     return PluginRunningResult::Nothing;
                 }
@@ -307,7 +313,7 @@ mod tests {
     use crate::plugins::runtime::conditions::{Condition, KeyExistCondition, KeyMatchCondition};
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use edgion_resources::common::KeyGet;
-    use edgion_resources::resources::edgion_plugins::conditions::MatchCore;
+    use edgion_resources::resources::edgion_plugins::conditions::{ConditionSet, MatchCore};
     use mockall::predicate::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -352,13 +358,13 @@ mod tests {
     #[test]
     fn test_conditional_filter_with_skip_condition() {
         let conditions = PluginConditions {
-            skip: Some(vec![Condition::KeyExist(KeyExistCondition {
+            skip: Some(ConditionSet::all_of(vec![Condition::KeyExist(KeyExistCondition {
                 key: KeyGet::Header {
                     name: "X-Skip".to_string(),
                 },
                 negate: false,
                 descriptor: Box::from(""),
-            })]),
+            })])),
             run: None,
         };
         assert!(!conditions.is_empty());
@@ -385,7 +391,7 @@ mod tests {
         // Run condition: method must be POST
         let conditions = PluginConditions {
             skip: None,
-            run: Some(vec![Condition::KeyMatch(KeyMatchCondition {
+            run: Some(ConditionSet::all_of(vec![Condition::KeyMatch(KeyMatchCondition {
                 key: KeyGet::Method,
                 core: MatchCore {
                     values: Some(vec!["POST".to_string()]),
@@ -393,7 +399,7 @@ mod tests {
                 },
                 negate: false,
                 descriptor: Box::from(""),
-            })]),
+            })])),
         };
 
         let filter = ConditionalRequestFilter::new(Box::new(inner), Some(conditions));
@@ -418,7 +424,7 @@ mod tests {
         // Run condition: method must be POST
         let conditions = PluginConditions {
             skip: None,
-            run: Some(vec![Condition::KeyMatch(KeyMatchCondition {
+            run: Some(ConditionSet::all_of(vec![Condition::KeyMatch(KeyMatchCondition {
                 key: KeyGet::Method,
                 core: MatchCore {
                     values: Some(vec!["POST".to_string()]),
@@ -426,7 +432,7 @@ mod tests {
                 },
                 negate: false,
                 descriptor: Box::from(""),
-            })]),
+            })])),
         };
 
         let filter = ConditionalRequestFilter::new(Box::new(inner), Some(conditions));
@@ -451,13 +457,13 @@ mod tests {
 
         // Skip if header X-Internal exists
         let conditions = PluginConditions {
-            skip: Some(vec![Condition::KeyExist(KeyExistCondition {
+            skip: Some(ConditionSet::all_of(vec![Condition::KeyExist(KeyExistCondition {
                 key: KeyGet::Header {
                     name: "X-Internal".to_string(),
                 },
                 negate: false,
                 descriptor: Box::from(""),
-            })]),
+            })])),
             run: None,
         };
 
@@ -486,13 +492,13 @@ mod tests {
 
         // Skip if header X-Internal exists
         let conditions = PluginConditions {
-            skip: Some(vec![Condition::KeyExist(KeyExistCondition {
+            skip: Some(ConditionSet::all_of(vec![Condition::KeyExist(KeyExistCondition {
                 key: KeyGet::Header {
                     name: "X-Internal".to_string(),
                 },
                 negate: false,
                 descriptor: Box::from(""),
-            })]),
+            })])),
             run: None,
         };
 
@@ -521,13 +527,13 @@ mod tests {
 
         // Skip if header X-Internal exists
         let conditions = PluginConditions {
-            skip: Some(vec![Condition::KeyExist(KeyExistCondition {
+            skip: Some(ConditionSet::all_of(vec![Condition::KeyExist(KeyExistCondition {
                 key: KeyGet::Header {
                     name: "X-Internal".to_string(),
                 },
                 negate: false,
                 descriptor: Box::from(""),
-            })]),
+            })])),
             run: None,
         };
 
@@ -547,7 +553,7 @@ mod tests {
 
         assert!(log.is_cond_skipped());
         // Verify cond_skip contains condition info
-        assert_eq!(log.cond_skip.as_deref(), Some("skip:keyExist,hdr:X-Internal"));
+        assert_eq!(log.cond_skip.as_deref(), Some("skip:skip.allOf"));
     }
 
     #[tokio::test]
@@ -557,7 +563,7 @@ mod tests {
         // Run condition: method must be POST
         let conditions = PluginConditions {
             skip: None,
-            run: Some(vec![Condition::KeyMatch(KeyMatchCondition {
+            run: Some(ConditionSet::all_of(vec![Condition::KeyMatch(KeyMatchCondition {
                 key: KeyGet::Method,
                 core: MatchCore {
                     values: Some(vec!["POST".to_string()]),
@@ -565,7 +571,7 @@ mod tests {
                 },
                 negate: false,
                 descriptor: Box::from(""),
-            })]),
+            })])),
         };
 
         let filter = ConditionalRequestFilter::new(Box::new(inner), Some(conditions));
@@ -582,7 +588,7 @@ mod tests {
 
         assert!(log.is_cond_skipped());
         // Verify cond_skip contains condition info (prefixed with ! for run condition not met)
-        assert_eq!(log.cond_skip.as_deref(), Some("!run:keyMatch,method"));
+        assert_eq!(log.cond_skip.as_deref(), Some("!run:run.allOf[0]:keyMatch:method"));
     }
 
     #[test]
@@ -596,7 +602,6 @@ mod tests {
             descriptor: Box::from(""),
         });
         assert_eq!(c1.cond_type(), "keyExist");
-        assert_eq!(c1.cond_detail(), "hdr:X-Test");
 
         // Test keyMatch
         let c2 = Condition::KeyMatch(KeyMatchCondition {
@@ -609,7 +614,6 @@ mod tests {
             descriptor: Box::from(""),
         });
         assert_eq!(c2.cond_type(), "keyMatch");
-        assert_eq!(c2.cond_detail(), "method");
 
         // Test probability
         let c3 = Condition::Probability(crate::plugins::runtime::conditions::ProbabilityCondition {
@@ -619,7 +623,6 @@ mod tests {
             descriptor: Box::from(""),
         });
         assert_eq!(c3.cond_type(), "probability");
-        assert_eq!(c3.cond_detail(), "10%");
     }
 
     #[test]

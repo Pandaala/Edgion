@@ -63,119 +63,219 @@ spec:
                         type: object
                         description: "Advanced plugin conditions for conditional execution"
                         properties:
-                          skip:
-                            type: array
-                            description: "Conditions that will skip plugin execution (OR logic)"
-                            items: &conditionSchema
-                              type: object
-                              description: "A single condition (tagged union with 'type' field)"
-                              properties:
-                                type:
-                                  type: string
-                                  description: "Condition type"
-                                  enum: [keyExist, keyMatch, timeRange, probability, directPeerIpMatch, remoteIpMatch, secretMatch, hmacAuth, jwtClaimMatch, mtlsMatch]
-                                key: &keyGetSchema
+                          skip: &conditionSetSchema
+                            type: object
+                            description: "A bounded condition set with one explicit Boolean operator"
+                            properties:
+                              allOf:
+                                type: array
+                                description: "Atomic conditions combined with AND"
+                                items: &conditionSchema
                                   type: object
-                                  description: "Key accessor (KeyGet) - source for reading values"
+                                  description: "A single condition (tagged union with 'type' field)"
+                                  required: [type]
                                   properties:
                                     type:
                                       type: string
-                                      description: "Key source type"
-                                      enum: [remoteIp, header, cookie, query, path, method, ctx, remoteIpAndPath, requestPath]
+                                      description: "Condition type"
+                                      enum: [keyExist, keyMatch, timeRange, probability, directPeerIpMatch, remoteIpMatch, secretMatch, hmacAuth, jwtClaimMatch, mtlsMatch]
+                                    key: &keyGetSchema
+                                      type: object
+                                      description: "Key accessor (KeyGet) - source for reading values"
+                                      properties:
+                                        type:
+                                          type: string
+                                          description: "Key source type"
+                                          enum: [remoteIp, header, cookie, query, path, method, ctx, remoteIpAndPath, requestPath]
+                                        name:
+                                          type: string
+                                          description: "Key name (required for header, cookie, query, ctx)"
+                                    values:
+                                      type: array
+                                      description: "Exact values to match (keyMatch)"
+                                      items:
+                                        type: string
+                                    regex:
+                                      type: array
+                                      description: "Regex patterns to match (keyMatch)"
+                                      items:
+                                        type: string
+                                    caseSensitive:
+                                      type: boolean
+                                      description: "Case sensitivity for exact values (default true; regex uses (?i) if needed)"
+                                    negate:
+                                      type: boolean
+                                      description: "Invert the condition result after the missing-value check (default false)"
+                                    after:
+                                      type: string
+                                      description: "Time after which condition is true (RFC3339)"
+                                    before:
+                                      type: string
+                                      description: "Time before which condition is true (RFC3339)"
+                                    ratio:
+                                      type: number
+                                      description: "Probability ratio 0.0-1.0"
+                                      minimum: 0.0
+                                      maximum: 1.0
+                                    ips:
+                                      type: array
+                                      description: "Inline IPs or CIDRs (directPeerIpMatch / remoteIpMatch)"
+                                      items:
+                                        type: string
+                                    ipRefs:
+                                      type: array
+                                      description: "EdgionConfigData IpList references (directPeerIpMatch / remoteIpMatch)"
+                                      items:
+                                        type: object
+                                        x-kubernetes-preserve-unknown-fields: true
+                                    secretRef:
+                                      type: object
+                                      description: "Secret reference (secretMatch)"
+                                      x-kubernetes-preserve-unknown-fields: true
+                                    secretKey:
+                                      type: string
+                                      description: "Exact Secret data key to compare (secretMatch)"
+                                    secretGroups:
+                                      type: array
+                                      description: "HMAC credential Secret groups (hmacAuth)"
+                                      items:
+                                        type: object
+                                        x-kubernetes-preserve-unknown-fields: true
+                                    algorithms:
+                                      type: array
+                                      description: "Allowed HMAC algorithms (hmacAuth)"
+                                      items:
+                                        type: string
+                                    clockSkew:
+                                      type: integer
+                                      description: "Maximum HMAC clock skew in seconds (hmacAuth)"
+                                    enforceHeaders:
+                                      type: array
+                                      description: "Headers that must appear in the signed header list (hmacAuth)"
+                                      items:
+                                        type: string
+                                    validateRequestBody:
+                                      type: boolean
+                                      description: "Verify the request body digest (hmacAuth). Valid only inside RequestAccessPolicy conditions or RequestRestriction."
+                                    minSecretLength:
+                                      type: integer
+                                      description: "Minimum HMAC secret length in bytes (hmacAuth)"
+                                    secretField:
+                                      type: string
+                                      description: "Credential field name for the HMAC secret (hmacAuth)"
+                                    usernameField:
+                                      type: string
+                                      description: "Credential field name for the HMAC username (hmacAuth)"
+                                    claim:
+                                      type: string
+                                      description: "Dot-nested JWT claim path (jwtClaimMatch)"
+                                    field:
+                                      type: string
+                                      description: "mTLS certificate field (mtlsMatch): subject, cn, or san"
+                                      enum: [subject, cn, san]
+                                    sanType:
+                                      type: string
+                                      description: "SAN type filter for mtlsMatch field san (DNS, URI, Email)"
+                                      enum: [DNS, URI, Email]
+                              anyOf:
+                                type: array
+                                description: "Alternatives combined with OR; an alternative is atomic or one allOf group"
+                                items: &anyOfClauseSchema
+                                  type: object
+                                  description: "An atomic condition or a named one-level allOf group"
+                                  properties:
+                                    type:
+                                      type: string
+                                      description: "Condition type"
+                                      enum: [keyExist, keyMatch, timeRange, probability, directPeerIpMatch, remoteIpMatch, secretMatch, hmacAuth, jwtClaimMatch, mtlsMatch]
+                                    key: *keyGetSchema
+                                    values:
+                                      type: array
+                                      description: "Exact values to match (keyMatch)"
+                                      items: { type: string }
+                                    regex:
+                                      type: array
+                                      description: "Regex patterns to match (keyMatch)"
+                                      items: { type: string }
+                                    caseSensitive: { type: boolean }
+                                    negate: { type: boolean }
+                                    after: { type: string }
+                                    before: { type: string }
+                                    ratio:
+                                      type: number
+                                      minimum: 0.0
+                                      maximum: 1.0
+                                    ips:
+                                      type: array
+                                      items: { type: string }
+                                    ipRefs:
+                                      type: array
+                                      items:
+                                        type: object
+                                        x-kubernetes-preserve-unknown-fields: true
+                                    secretRef:
+                                      type: object
+                                      x-kubernetes-preserve-unknown-fields: true
+                                    secretKey: { type: string }
+                                    secretGroups:
+                                      type: array
+                                      items:
+                                        type: object
+                                        x-kubernetes-preserve-unknown-fields: true
+                                    algorithms:
+                                      type: array
+                                      items: { type: string }
+                                    clockSkew: { type: integer }
+                                    enforceHeaders:
+                                      type: array
+                                      items: { type: string }
+                                    validateRequestBody: { type: boolean }
+                                    minSecretLength: { type: integer }
+                                    secretField: { type: string }
+                                    usernameField: { type: string }
+                                    claim: { type: string }
+                                    field:
+                                      type: string
+                                      enum: [subject, cn, san]
+                                    sanType:
+                                      type: string
+                                      enum: [DNS, URI, Email]
                                     name:
                                       type: string
-                                      description: "Key name (required for header, cookie, query, ctx)"
-                                values:
-                                  type: array
-                                  description: "Exact values to match (keyMatch)"
-                                  items:
-                                    type: string
-                                regex:
-                                  type: array
-                                  description: "Regex patterns to match (keyMatch)"
-                                  items:
-                                    type: string
-                                caseSensitive:
-                                  type: boolean
-                                  description: "Case sensitivity for exact values (default true; regex uses (?i) if needed)"
-                                negate:
-                                  type: boolean
-                                  description: "Invert the condition result after the missing-value check (default false)"
-                                after:
-                                  type: string
-                                  description: "Time after which condition is true (RFC3339)"
-                                before:
-                                  type: string
-                                  description: "Time before which condition is true (RFC3339)"
-                                ratio:
-                                  type: number
-                                  description: "Probability ratio 0.0-1.0"
-                                  minimum: 0.0
-                                  maximum: 1.0
-                                ips:
-                                  type: array
-                                  description: "Inline IPs or CIDRs (directPeerIpMatch / remoteIpMatch)"
-                                  items:
-                                    type: string
-                                ipRefs:
-                                  type: array
-                                  description: "EdgionConfigData IpList references (directPeerIpMatch / remoteIpMatch)"
-                                  items:
-                                    type: object
-                                    x-kubernetes-preserve-unknown-fields: true
-                                secretRef:
-                                  type: object
-                                  description: "Secret reference (secretMatch)"
-                                  x-kubernetes-preserve-unknown-fields: true
-                                secretKey:
-                                  type: string
-                                  description: "Exact Secret data key to compare (secretMatch)"
-                                secretGroups:
-                                  type: array
-                                  description: "HMAC credential Secret groups (hmacAuth)"
-                                  items:
-                                    type: object
-                                    x-kubernetes-preserve-unknown-fields: true
-                                algorithms:
-                                  type: array
-                                  description: "Allowed HMAC algorithms (hmacAuth)"
-                                  items:
-                                    type: string
-                                clockSkew:
-                                  type: integer
-                                  description: "Maximum HMAC clock skew in seconds (hmacAuth)"
-                                enforceHeaders:
-                                  type: array
-                                  description: "Headers that must appear in the signed header list (hmacAuth)"
-                                  items:
-                                    type: string
-                                validateRequestBody:
-                                  type: boolean
-                                  description: "Verify the request body digest (hmacAuth). Valid only inside RequestAccessPolicy allOf (or RequestRestriction)."
-                                minSecretLength:
-                                  type: integer
-                                  description: "Minimum HMAC secret length in bytes (hmacAuth)"
-                                secretField:
-                                  type: string
-                                  description: "Credential field name for the HMAC secret (hmacAuth)"
-                                usernameField:
-                                  type: string
-                                  description: "Credential field name for the HMAC username (hmacAuth)"
-                                claim:
-                                  type: string
-                                  description: "Dot-nested JWT claim path (jwtClaimMatch)"
-                                field:
-                                  type: string
-                                  description: "mTLS certificate field (mtlsMatch): subject, cn, or san"
-                                  enum: [subject, cn, san]
-                                sanType:
-                                  type: string
-                                  description: "SAN type filter for mtlsMatch field san (DNS, URI, Email)"
-                                  enum: [DNS, URI, Email]
-                          run:
-                            type: array
-                            description: "Conditions that must be satisfied to run (AND logic)"
-                            items: *conditionSchema
+                                      description: "Optional attribution name for an allOf group"
+                                    allOf:
+                                      type: array
+                                      description: "Atomic conditions combined with AND"
+                                      items: *conditionSchema
+                                  # Structural schema: declare the property union
+                                  # once above; these branches only narrow the
+                                  # discriminator requirements.
+                                  oneOf:
+                                    - required: [type]
+                                      not:
+                                        required: [allOf]
+                                    - &allOfGroupSchema
+                                      required: [allOf]
+                                      not:
+                                        required: [type]
+                                  x-kubernetes-validations:
+                                    - rule: "has(self.type) != has(self.allOf)"
+                                      message: "an anyOf clause must contain exactly one of type or allOf"
+                                    - rule: "!has(self.name) || has(self.allOf)"
+                                      message: "name is only valid on an allOf group"
+                            # Structural schema: properties stay outside oneOf;
+                            # branches only select the required operator.
+                            oneOf:
+                              - required: [allOf]
+                                not:
+                                  required: [anyOf]
+                              - required: [anyOf]
+                                not:
+                                  required: [allOf]
+                            x-kubernetes-validations:
+                              - rule: "has(self.allOf) != has(self.anyOf)"
+                                message: "a condition set must contain exactly one of allOf or anyOf"
+                          run: *conditionSetSchema
                       # --- dye: define anchor here, reuse below ---
                       dye: &dyeSchema
                         type: object

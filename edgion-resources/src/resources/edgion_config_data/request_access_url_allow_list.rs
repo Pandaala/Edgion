@@ -50,7 +50,7 @@ impl RequestAccessUrlAllowListData {
 mod tests {
     use super::*;
     use crate::resources::edgion_plugins::plugin_configs::{
-        AccessPathMatch, AccessPathMatchType, Condition, IpAccessMatch,
+        AccessPathMatch, AccessPathMatchType, Condition, ConditionSet, IpAccessMatch,
     };
 
     fn candidate(name: &str, hosts: Vec<&str>, match_type: AccessPathMatchType, path: &str) -> UrlAccessCandidate {
@@ -61,7 +61,7 @@ mod tests {
                 match_type,
                 value: path.to_string(),
             }],
-            all_of: vec![],
+            conditions: None,
         }
     }
 
@@ -75,7 +75,7 @@ mod tests {
                     match_type: AccessPathMatchType::PathPrefix,
                     value: "/callbacks/".to_string(),
                 }],
-                all_of: vec![],
+                conditions: None,
             }],
         };
         assert!(data.validate().is_ok());
@@ -91,7 +91,7 @@ mod tests {
                     match_type: AccessPathMatchType::Exact,
                     value: "/health".to_string(),
                 }],
-                all_of: vec![],
+                conditions: None,
             }],
         };
         assert!(data.validate().is_ok());
@@ -121,23 +121,25 @@ mod tests {
             AccessPathMatchType::Exact,
             "/exact",
         );
-        exact.all_of.push(Condition::DirectPeerIpMatch(IpAccessMatch {
-            ips: vec!["127.0.0.0/8".to_string()],
-            ..Default::default()
-        }));
+        exact.conditions = Some(ConditionSet::all_of(vec![Condition::DirectPeerIpMatch(
+            IpAccessMatch {
+                ips: vec!["127.0.0.0/8".to_string()],
+                ..Default::default()
+            },
+        )]));
         let mut prefix = candidate(
             "prefix",
             vec!["callbacks.example.com"],
             AccessPathMatchType::PathPrefix,
             "/callbacks/:vendor",
         );
-        prefix.all_of.push(Condition::RemoteIpMatch(IpAccessMatch {
+        prefix.conditions = Some(ConditionSet::all_of(vec![Condition::RemoteIpMatch(IpAccessMatch {
             ip_refs: vec![crate::resources::edgion_config_data::EdgionConfigDataRef {
                 name: "vendor-networks".to_string(),
                 ..Default::default()
             }],
             ..Default::default()
-        }));
+        })]));
         let regex = candidate(
             "regex",
             vec!["callbacks.example.com"],

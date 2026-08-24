@@ -822,15 +822,17 @@ impl RequestRestrictionTestSuite {
                         Ok(response) => {
                             let status = response.status().as_u16();
                             let body = response.text().await.unwrap_or_default();
-                            if status == 500 && body.contains("Internal restriction policy error") {
+                            if status == 500 && body.contains("plugin configuration error") {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "unresolved deny reference reached the restriction fail-closed path".to_string(),
+                                    "unresolved deny reference sealed the plugin runtime".to_string(),
                                 )
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!("Expected restriction error 500, got status {status} body {body:?}"),
+                                    format!(
+                                        "Expected plugin configuration error 500, got status {status} body {body:?}"
+                                    ),
                                 )
                             }
                         }

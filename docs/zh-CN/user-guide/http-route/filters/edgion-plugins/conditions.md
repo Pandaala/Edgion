@@ -2,22 +2,72 @@
 
 > `EdgionPlugins` 条目（以及条目级 `dye` 规则）上共享的 `run` / `skip` 谓词。这不是一个独立插件。
 
-插件条件决定某个插件条目（或一条染色规则）是否对当前请求生效。它们共用同一个 `PluginConditions` 对象：
-
-- **`skip`**：或（OR）。任一条件为真即跳过。
-- **`run`**：与（AND）。全部条件为真才运行；否则跳过。
-- 两者同时配置时，先求值 `skip`。
+插件条件决定某个插件条目、body 门闩或染色规则是否对当前请求生效。
+`skip` 与 `run` 是动作字段，每个字段都包含一个显式的 `ConditionSet`。
+两者同时配置时先求值 `skip`；`skip` 集合匹配时跳过动作，`run` 集合不匹配时也跳过动作。
 
 ```yaml
 conditions:
   skip:
-    - type: keyExist
-      key: { type: header, name: X-Internal-Request }
+    anyOf:
+      - type: keyExist
+        key: { type: header, name: X-Internal-Request }
   run:
-    - type: keyMatch
-      key: { type: header, name: X-Env }
-      values: ["production"]
+    allOf:
+      - type: keyMatch
+        key: { type: header, name: X-Env }
+        values: ["production"]
 ```
+
+## ConditionSet 语法
+
+一个集合必须且只能包含一个顶层运算符：
+
+- `allOf` 只能直接包含 Condition，全部匹配时集合才匹配。
+- `anyOf` 可以包含直接 Condition，或一层 `{ name?, allOf: [...] }` 分组；任一候选匹配时集合即匹配。
+
+这套有界 DNF 语法支持扁平 AND、扁平 OR，以及 `(A AND B) OR C`：
+
+```yaml
+conditions:
+  run:
+    anyOf:
+      - type: directPeerIpMatch
+        ips: [10.0.0.0/8]
+      - name: authenticated-production
+        allOf:
+          - type: keyMatch
+            key: { type: header, name: X-Env }
+            values: [production]
+          - type: keyExist
+            key: { type: header, name: X-Authenticated-User }
+```
+
+该语法刻意不递归。所有数组必须非空，同一集合不能同时配置两个运算符；
+`allOf -> anyOf`、`anyOf -> anyOf`、嵌套 `allOf -> allOf`、更深层嵌套、
+未知容器字段，以及同一候选同时包含 `type` 与 `allOf` 都会被拒绝。
+可选分组 `name` 不能为空白，且只影响归因，不改变布尔语义。
+
+### Body 门闩与染色规则
+
+条目级 `conditions`、支持该能力的 `body.conditions` 和染色规则的 `conditions`
+都使用同一套 `PluginConditions` 动作容器。例如，下面的 body 门闩只对可能携带请求体的方法生效：
+
+```yaml
+body:
+  maxBodySize: 1MiB
+  conditions:
+    run:
+      anyOf:
+        - type: keyMatch
+          key: { type: method }
+          values: [POST, PUT, PATCH]
+```
+
+body 条件只决定通用 body 门闩是否应用，不会跳过内部插件。部分固有 fail-close
+请求体插件会刻意拒绝 `body.conditions`，具体边界见对应插件页面。染色条件只决定
+已经匹配的结果是否渲染请求头。WebhookKeyGet 使用普通条目级条件，但不会因此获得
+body 门闩；它的 outbound webhook body 与被代理的客户端请求体无关。
 
 ## 变体
 
@@ -36,11 +86,11 @@ conditions:
 
 没有独立的 `include` / `exclude` 类型。原先的 `include` 写成 `keyMatch`；原先的 `exclude` 写成带 `negate: true` 的 `keyMatch`。
 
-`hmacAuth.validateRequestBody` 在条目级 `run` / `skip`、body 门闩和染色条件上会被拒绝。它在 `RequestAccessPolicy` 的 `allOf` 和 `RequestRestriction` 的 `anyOf[].allOf` 中合法。普通的请求值缺失或 HMAC 校验失败以 false 为基值，然后再应用 `negate`。ConfigData 或 Secret 引用未解析是另一种状态：它始终不匹配，`negate` 也不会将其反转。
+`hmacAuth.validateRequestBody` 在条目级 `run` / `skip`、body 门闩和染色条件上会被拒绝。它在 RequestAccessPolicy 与 RequestRestriction 的 ConditionSet 中合法。普通的请求值缺失或 HMAC 校验失败以 false 为基值，然后再应用 `negate`。ConfigData 或 Secret 引用未解析是另一种状态：它始终不匹配，`negate` 也不会将其反转。
 
 ## ConfigData 与 Secret 引用
 
-`directPeerIpMatch` / `remoteIpMatch` 可以用 `ipRefs` 指向 IpList 类型的 `EdgionConfigData`。`secretMatch` 使用 `secretRef` 与必填的 `secretKey`，且只解析 `Secret.data[secretKey]`，不会遍历 Secret 的全部值。`hmacAuth` 解析 `secretGroups[].secretRefs`。Controller 遍历整棵 Condition 树（条目 `run`/`skip`、body、dye、RequestAccessPolicy `allOf`、RequestRestriction `anyOf`），并在这些 Condition 对象上**就地**写入 `resolvedIps` / `resolvedValues` / `resolvedCredentials`。
+`directPeerIpMatch` / `remoteIpMatch` 可以用 `ipRefs` 指向 IpList 类型的 `EdgionConfigData`。`secretMatch` 使用 `secretRef` 与必填的 `secretKey`，且只解析 `Secret.data[secretKey]`，不会遍历 Secret 的全部值。`hmacAuth` 解析 `secretGroups[].secretRefs`。Controller 遍历条目、body、dye、RequestRestriction 和 RequestAccessPolicy 集合中的每个直接或分组 Condition，并在这些 Condition 对象上**就地**写入 `resolvedIps` / `resolvedValues` / `resolvedCredentials`。
 
 - 缺失、未启用、类型错误或未授权的 **IpList** `ipRefs` 目标会报告 `ResolvedRefs=False`，Controller 不会对未解析的 `ipRefs` 编译空 matcher。`secretMatch` 或 HMAC `secretRefs` 引用的 **Secret** 缺失时采用相同报告方式。对于 `secretMatch`，指定的 `secretKey` 不存在、不是 UTF-8 或值为空时也视为未解析。这些错误会进入 `edgion_controller_resource_abnormal` 指标。
 
@@ -101,7 +151,7 @@ conditions:
 
 `keyMatch`、`jwtClaimMatch` 与 `mtlsMatch` 必须至少配置一个非空的
 `values` 或 `regex` 列表。无论条件出现在插件 `run`/`skip`、body、dye、
-RequestRestriction 分组还是 RequestAccessPolicy `allOf` 中，都会执行同一校验。
+RequestRestriction 集合还是 RequestAccessPolicy 补充集合中，都会执行同一校验。
 如果写了 `values`，即使同时提供了非空 `regex`，`values` 也不能是空列表。
 
 ## `caseSensitive`
@@ -120,58 +170,44 @@ RequestRestriction 分组还是 RequestAccessPolicy `allOf` 中，都会执行�
 
 ## 编译后的描述符（访问日志）
 
-每个编译后的条件带有仅运行时存在的描述符，格式为
-`<ordinal>:<type>[:<accessor>]`。序号是该条件在对应 `skip` 或 `run` 列表中的
-下标（每个列表从 0 起算）。`type` 为 `keyExist`、`keyMatch`、`timeRange`、
-`probability`、`secretMatch`、`directPeerIpMatch`、`remoteIpMatch`、`hmacAuth`、
-`jwtClaimMatch` 或 `mtlsMatch`。访问器来自 `KeyGet::as_log_str()`（`keyExist` /
-`keyMatch` / `secretMatch`，以及配置了 key 的 `probability`）。`jwtClaimMatch`
-使用 claim 名（`3:jwtClaimMatch:sub`）；`mtlsMatch` 使用字段名（`3:mtlsMatch:san`）。
-IP 与 HMAC 描述符没有访问器。
+每个编译后的条件都有仅运行时存在的描述符，包含它在集合中的稳定位置、
+Condition 类型，以及适用时的访问器。位置能够区分直接叶子与嵌套分组，例如
+`run.allOf[1]:keyMatch:hdr:X-Env` 或等价的紧凑线格式。描述符从不包含匹配值、
+正则、CIDR、claim 或密钥。
 
-描述符从不包含匹配值（`values`、`regex`、密钥或 IP 列表）。两个访问器相同的
-条件仍靠序号区分：`0:keyMatch:hdr:X-A` 与 `1:keyMatch:hdr:X-A`。
+只有当一个逻辑决策范围包含超过一个原子 Condition 时，才输出仅表示匹配成功的
+原子描述符。插件条件会合并计算 `skip` 与 `run` 的叶子数；RequestRestriction
+按完整集合计算；RequestAccessPolicy 则按每个候选的补充集合分别计算。
+零个或一个叶子的结果已能从插件或策略最终动作中看出，重复记录只会增加噪声；
+复合范围仍按配置求值顺序保留命中描述符，以便还原成功分支或前缀。
 
-**仅匹配才记录：** 条件匹配时，描述符被推入插件 `log` 数组；未匹配则不写。
-body 阶段与染色求值保持静默（不使用 `PluginLog`）。
-
-这是独立于 `cond_skip` 的第二条信号。`cond_skip` 的格式与含义不变，仍回答
-“该插件为何被跳过”。
-
-### 从 `log` 数组还原 AND / OR
-
-| 列表 | 逻辑 | 写入内容 | 如何还原 |
-|------|------|----------|----------|
-| `skip` | 或（OR） | 仅第一条匹配的描述符 | 该 skip 条件命中；后续 skip 未求值 |
-| `run` | 与（AND） | 按顺序写入每次成功；第一次失败即停止且**不写入** | 已写入的前缀全部匹配；若插件随后运行，则整个 `run` 列表都匹配。`cond_skip` 为 `!run:…` 时指出第一次失败 |
-
-示例：`run` 列表有三项时，`log: ["0:keyMatch:hdr:X-A", "1:keyMatch:hdr:X-B"]`
-表示前两项匹配、第三项未匹配（或无需再评）。同样两条出现在 `skip` 列表中
-不可能发生——skip 在第一次匹配后短路。
+该阈值不会抑制 `cond_skip`、最终 allow/deny/reject、命名分组归因、
+未解析引用或配置错误，以及 body 读取错误。body 阶段和染色求值无论叶子数多少都保持静默。
 
 ## 示例
 
 ```yaml
 conditions:
   run:
-    - type: keyMatch
-      key: { type: path }
-      values: ["/health", "/ready"]
-      caseSensitive: true
-    - type: keyMatch
-      key: { type: path }
-      regex: ["^/api/.*"]
-    - type: keyMatch
-      key: { type: path }
-      values: ["/health", "/ready"]
-      negate: true   # exclude 写法
-    - type: keyExist
-      key: { type: header, name: X-Canary }
-      negate: true   # 请求头不存在时运行
+    allOf:
+      - type: keyMatch
+        key: { type: path }
+        values: ["/health", "/ready"]
+        caseSensitive: true
+      - type: keyMatch
+        key: { type: path }
+        regex: ["^/api/.*"]
+      - type: keyMatch
+        key: { type: path }
+        values: ["/health", "/ready"]
+        negate: true   # exclude 写法
+      - type: keyExist
+        key: { type: header, name: X-Canary }
+        negate: true   # 请求头不存在时运行
 ```
 
 ## 相关文档
 
-- [请求限制](./request-restriction.md) — 独立的 allow/deny 插件，使用自己的规则分组
-- [请求访问策略](./request-access-policy.md) — 七层策略；`allOf` 使用同一套 `Condition` 枚举
+- [请求限制](./request-restriction.md) — 使用相同 ConditionSet 的独立 allow/deny 插件
+- [请求访问策略](./request-access-policy.md) — 带补充 ConditionSet 的七层策略
 - [染色](./dye.md) — 条目级染色规则复用此 `conditions` 块

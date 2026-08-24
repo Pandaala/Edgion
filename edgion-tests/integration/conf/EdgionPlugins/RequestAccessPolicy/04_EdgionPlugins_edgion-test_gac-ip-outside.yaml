@@ -28,12 +28,13 @@ spec:
                     type: directPeerIp
                     config:
                       ips: ["10.0.0.0/8"]
-                      allOf:
-                        - type: secretMatch
-                          key:
-                            type: header
-                            name: X-CF-Secret
-                          secretKey: token
-                          secretRef:
-                            name: gac-origin-secret
-                            namespace: edgion-test
+                      conditions:
+                        allOf:
+                          - type: secretMatch
+                            key:
+                              type: header
+                              name: X-CF-Secret
+                            secretKey: token
+                            secretRef:
+                              name: gac-origin-secret
+                              namespace: edgion-test

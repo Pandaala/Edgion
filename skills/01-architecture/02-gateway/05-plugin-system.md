@@ -51,8 +51,12 @@ Plugins defined in EdgionPlugins are automatically wrapped with a `Conditional*`
 | `ConditionalUpstreamResponse` | `UpstreamResponse` |
 
 Condition model (`PluginConditions`):
-- **skip** conditions: if any condition matches, skip plugin execution.
-- **run** conditions: all conditions must match to execute the plugin; otherwise skip.
+- `skip`: evaluate its `ConditionSet` first; a match skips plugin execution.
+- `run`: when `skip` did not match, execute only if its `ConditionSet` matches.
+- Each set has exactly one top-level `allOf` or `anyOf`. `allOf` contains
+  direct conditions. `anyOf` contains direct conditions or one-level
+  `{ name?, allOf: [...] }` groups. Deeper or reverse nesting, mixed top-level
+  keys, empty arrays, and blank group names are invalid.
 
 Condition kinds include:
 - `KeyExist` — whether a key exists (e.g., header, query param).
@@ -79,19 +83,36 @@ leaves `resolvedValues` absent and is reported through `ResolvedRefs=False`.
 
 Unresolved-reference policy is consumer-specific. Active entry/body `PluginConditions` seal the EdgionPlugins runtime fail-closed. `RequestRestriction` fails with the generic 500 response in `Deny` mode but treats an incomplete `Allow` group as unavailable and continues with sibling groups. `RequestAccessPolicy` likewise treats an incomplete allow candidate as unavailable. Dye remains non-blocking: an unresolved dye condition does not match. Missing or denied references retain the Controller status signal. `secretMatch` also reports an unusable selected data key; other present-but-unusable Secret consumers may rely on their resolver-specific status or warning plus Gateway enforcement. These paths do not add a per-request metric or tracing call.
 
-The Gateway converts schema-level `Condition` / `PluginConditions` values into
-`CompiledCondition` / `CompiledPluginConditions` when it builds the immutable plugin
+The Gateway converts schema-level `ConditionSet` / `PluginConditions` values
+into one shared immutable compiled representation when it builds the plugin
 runtime. Besides preserving the regexes compiled during preparse, this step builds a
 header-only HMAC verifier once and retains its credential map for the lifetime of the
 runtime snapshot. Entry wrappers, secondary body gates, dye rules, RequestRestriction,
 and RequestAccessPolicy must use this compiled representation; constructing an HMAC
 verifier from schema configuration during request evaluation is a hot-path bug.
 
-Compiled condition evaluation has two synchronous paths:
-- `evaluate` (log-less): used by the body phase and dye; no `PluginLog`, no skip descriptor.
-- `evaluate_detail` (logged): used by request/response filters (`ConditionalUpstreamResponseFilter` and async RequestFilter / UpstreamResponse wrappers); writes `cond_skip` into the outer `PluginLog`.
+Compiled set evaluation exposes log-less and detailed synchronous paths plus a
+body-aware asynchronous path. They share the same ordered short-circuit
+semantics. The body phase and dye use the log-less path; request/response
+filters use the detailed path and may write `cond_skip` into the outer
+`PluginLog`.
 
-Body phase: call `CompiledPluginConditions::evaluate`, never `evaluate_detail` (that allocates a skip descriptor).
+**Condition match-only logging threshold.** Count atomic `Condition` leaves once
+when the logical decision scope is compiled. A scope with zero or one atomic
+leaf MUST NOT emit match-only condition descriptors: the plugin outcome,
+`cond_skip`, or policy decision already carries the useful result, and repeating
+the sole match on every request is observability noise. Emit match-only atomic
+descriptors only when the scope contains more than one leaf and the matched
+path helps explain a genuinely composite decision. For `PluginConditions`, the
+scope is the combined `skip` plus `run` gate; for RequestRestriction it is the
+whole restriction expression; for RequestAccessPolicy it is one typed
+rule/candidate's supplemental condition expression. This threshold never
+suppresses `cond_skip`, final allow/deny/reject records, named-group
+attribution, unresolved/error diagnostics, or body-read failures. Compute the
+flag at runtime construction, never by recounting leaves per request.
+
+Body phase: call the compiled conditions' log-less evaluation path, never the
+detailed path that produces a skip descriptor.
 
 Gateway API standard filters (added through the private `add_from_httproute_filters_inner`; the public entries are the scope-explicit `from_httproute_filters_for_rule` / `from_httproute_filters_for_backend` mentioned above) are not wrapped with conditions and always execute.
 

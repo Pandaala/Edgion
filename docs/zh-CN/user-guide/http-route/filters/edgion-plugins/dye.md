@@ -20,8 +20,9 @@
         value: degraded                # 运维自定义的静态值覆盖
         conditions:                    # 可选；与条目级 conditions 复用同一套 PluginConditions 结构
           run:
-            - type: keyExist
-              key: { type: header, name: X-Debug-Token }
+            allOf:
+              - type: keyExist
+                key: { type: header, name: X-Debug-Token }
       - name: X-Edgion-Debug
         on: [fallback]
         value: "fallback for ${header:X-Account-Id}"   # 基于共享 ${type:name} 引擎的模板
@@ -95,7 +96,7 @@
 
 ## `conditions`
 
-每条规则都可以携带一个可选的 `conditions` 块，复用与条目级 `conditions` 相同的 `PluginConditions` run/skip 结构。变体、`negate` 与 `values` 见 [插件条件](./conditions.md)。与剥离（无条件执行）不同，`conditions` 决定的是一个*已经匹配*的结果是否真正渲染其请求头——这也是面向公网路由的主要安全缓解手段（见下文）。
+每条规则都可以携带一个可选的 `conditions` 块，复用与条目级 `conditions` 相同、显式包含 ConditionSet 的 `PluginConditions` `run`/`skip` 结构。变体、`negate` 与 `values` 见 [插件条件](./conditions.md)。与剥离（无条件执行）不同，`conditions` 决定的是一个*已经匹配*的结果是否真正渲染其请求头——这也是面向公网路由的主要安全缓解手段（见下文）。
 
 ## 安全指引
 

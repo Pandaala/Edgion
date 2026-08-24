@@ -6,6 +6,7 @@ metadata:
 spec:
   requestPlugins:
     - enable: true
+      alias: single-leaf
       type: Cors
       config:
         allowOrigins: "*"
@@ -13,8 +14,28 @@ spec:
         allowHeaders: "Content-Type"
       conditions:
         skip:
-          - type: keyExist
-            key:
-              type: header
-              name: "X-Skip-Cors"
-
+          allOf:
+            - type: keyExist
+              key:
+                type: header
+                name: "X-Skip-Cors"
+    - enable: true
+      alias: multi-leaf
+      type: Cors
+      config:
+        allowOrigins: "*"
+        allowMethods: "GET,POST"
+        allowHeaders: "Content-Type"
+      conditions:
+        skip:
+          anyOf:
+            - name: both-debug-headers
+              allOf:
+                - type: keyExist
+                  key:
+                    type: header
+                    name: "X-Multi-A"
+                - type: keyExist
+                  key:
+                    type: header
+                    name: "X-Multi-B"

@@ -236,12 +236,16 @@ Two independent signals. Do not collapse them.
 | Signal | Where | When | Meaning |
 |--------|--------|------|---------|
 | `cond_skip` | `PluginLog.cond_skip` (`set_cond_skip`) | Plugin skipped by `PluginConditions` | Why it was skipped: `skip:<type>,<detail>` or `!run:<type>,<detail>`. Format and producer are unchanged (D-23). |
-| Compiled descriptors | plugin `log` array (`PluginLog::push`) | A condition **matches** on the request/response path | `<ordinal>:<type>[:<accessor>]`. Value-free. Non-match logs nothing. Body/dye stay silent (`evaluate` with `None`). |
+| Compiled descriptors | plugin `log` array (`PluginLog::push`) | A condition **matches** within a multi-leaf request/response decision scope | `<path>:<type>[:<accessor>]`. Value-free. Non-match logs nothing. Body/dye stay silent. |
 
-`skip` (OR) pushes only the first matching descriptor. `run` (AND) pushes
-each success in order and stops on the first failure (no push for the
-failure). Reconstruct the chain from that sequence; `cond_skip` still names
-the skip reason. See
+Within a `ConditionSet`, `anyOf` records only the first successful branch;
+`allOf` records each success in order and stops on the first failure. A logical
+decision scope with zero or one atomic leaf emits no match-only descriptor;
+`cond_skip`, the final policy/plugin decision, named-group attribution, and
+errors remain visible. The scope is combined `skip + run` for plugin entry
+conditions, the whole expression for RequestRestriction, and one typed
+rule/candidate supplemental expression for RequestAccessPolicy. Leaf counts
+and the emission flag are computed when the runtime snapshot is built. See
 [`docs/en/user-guide/http-route/filters/edgion-plugins/conditions.md`](../../../docs/en/user-guide/http-route/filters/edgion-plugins/conditions.md).
 
 ### Error-entry API constraint: must use `push_err`

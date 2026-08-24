@@ -4,14 +4,17 @@
 //! to determine whether a plugin should be executed or skipped.
 
 use crate::plugins::http::hmac_auth::{HmacVerifier, HmacVerifyOutcome};
+use crate::plugins::runtime::body_gate::body_read_failure_result;
 use crate::plugins::runtime::conditions::extract::{extract_jwt_claim_values, extract_mtls_values};
 use crate::plugins::runtime::log::PluginLog;
 use crate::plugins::runtime::PluginSession;
 use chrono::Utc;
+use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::conditions::{
-    Condition, JwtClaimMatchCondition, KeyExistCondition, KeyMatchCondition, MatchCore, MtlsMatchCondition,
-    PluginConditions, ProbabilityCondition, TimeRangeCondition,
+    AllOfGroup, AnyOfClause, Condition, ConditionSet, JwtClaimMatchCondition, KeyExistCondition, KeyMatchCondition,
+    MatchCore, MtlsMatchCondition, PluginConditions, ProbabilityCondition, TimeRangeCondition,
 };
+use edgion_resources::resources::edgion_plugins::BodyRequirement;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -29,94 +32,477 @@ pub struct ConditionEvalResult<'a> {
     pub result: EvaluationResult,
     /// The action that caused skip: "skip" or "!run"
     pub action: &'static str,
-    /// The condition that matched (for logging)
-    pub matched: Option<&'a Condition>,
+    /// Stable, value-free cause descriptor.
+    pub cause: Option<&'a str>,
 }
 
-/// Gateway-owned, build-time representation of one schema condition.
-/// Header-only HMAC owns one verifier for the lifetime of the runtime snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MatchState {
+    True,
+    False,
+    Unresolved,
+}
+
+pub(crate) struct SetEval<'a> {
+    pub(crate) state: MatchState,
+    pub(crate) cause: Option<&'a str>,
+}
+
+enum CompiledPredicate {
+    Sync {
+        condition: Condition,
+        hmac: Option<HmacVerifier>,
+    },
+    HmacBody {
+        verifier: HmacVerifier,
+        negate: bool,
+    },
+}
+
+/// Gateway-owned, immutable representation of one schema condition.
 pub(crate) struct CompiledCondition {
-    condition: Condition,
-    hmac_headers: Option<HmacVerifier>,
+    predicate: CompiledPredicate,
+    descriptor: Box<str>,
+    unresolved: bool,
 }
 
 impl CompiledCondition {
-    pub(crate) fn new(condition: Condition) -> Self {
-        let hmac_headers = match &condition {
-            Condition::HmacAuth(config) if !config.validate_request_body && !condition.has_unresolved_refs() => {
-                Some(HmacVerifier::new(config, None))
-            }
-            _ => None,
+    fn compile(condition: &Condition, descriptor: String, body_requirement: Option<BodyRequirement>) -> Self {
+        let unresolved = condition.has_unresolved_refs();
+        let descriptor = condition_descriptor(&descriptor, condition);
+        let predicate = match condition {
+            Condition::HmacAuth(config) if config.validate_request_body && !unresolved => CompiledPredicate::HmacBody {
+                verifier: HmacVerifier::new(config, body_requirement),
+                negate: config.negate,
+            },
+            _ => CompiledPredicate::Sync {
+                hmac: match condition {
+                    Condition::HmacAuth(config) if !unresolved => Some(HmacVerifier::new(config, None)),
+                    _ => None,
+                },
+                condition: condition.clone(),
+            },
         };
         Self {
-            condition,
-            hmac_headers,
+            predicate,
+            descriptor: descriptor.into(),
+            unresolved,
         }
     }
 
-    pub(crate) fn evaluate(&self, session: &dyn PluginSession, mut log: Option<&mut PluginLog>) -> bool {
-        if self.condition.has_unresolved_refs() {
-            return false;
+    fn evaluate_sync(&self, session: &dyn PluginSession) -> MatchState {
+        if self.unresolved {
+            return MatchState::Unresolved;
         }
-        let matched = match (&self.condition, &self.hmac_headers) {
-            (Condition::HmacAuth(config), Some(verifier)) => {
-                let base = matches!(verifier.verify_headers(session), HmacVerifyOutcome::Verified { .. });
-                apply_negate(base, config.negate)
+        match &self.predicate {
+            CompiledPredicate::Sync { condition, hmac } => {
+                let matched = match (condition, hmac) {
+                    (Condition::HmacAuth(config), Some(verifier)) => apply_negate(
+                        matches!(verifier.verify_headers(session), HmacVerifyOutcome::Verified { .. }),
+                        config.negate,
+                    ),
+                    _ => condition.evaluate(session, None),
+                };
+                if matched {
+                    MatchState::True
+                } else {
+                    MatchState::False
+                }
             }
-            _ => self.condition.evaluate(session, log.as_deref_mut()),
+            // A body predicate cannot be evaluated from a response/body-chunk
+            // callback. Schema validation prevents this combination.
+            CompiledPredicate::HmacBody { .. } => MatchState::Unresolved,
+        }
+    }
+
+    async fn evaluate_async(
+        &self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+    ) -> Result<MatchState, PluginRunningResult> {
+        if self.unresolved {
+            return Ok(MatchState::Unresolved);
+        }
+        let CompiledPredicate::HmacBody { verifier, negate } = &self.predicate else {
+            return Ok(self.evaluate_sync(session));
         };
-        if matched && self.hmac_headers.is_some() {
-            if let Some(log) = log {
-                log.push(self.condition.descriptor());
+        Ok(match verifier.verify(session).await {
+            HmacVerifyOutcome::Verified { .. } => {
+                if *negate {
+                    MatchState::False
+                } else {
+                    MatchState::True
+                }
             }
-        }
-        matched
+            HmacVerifyOutcome::NoMatch(_) | HmacVerifyOutcome::LogicalBodyLimit(_) => {
+                if *negate {
+                    MatchState::True
+                } else {
+                    MatchState::False
+                }
+            }
+            HmacVerifyOutcome::CaptureFailure(error) | HmacVerifyOutcome::DigestReadFailure(error) => {
+                return Err(body_read_failure_result(
+                    session,
+                    verifier.body_requirement(),
+                    log,
+                    &error,
+                ));
+            }
+        })
     }
 
-    pub(crate) fn condition(&self) -> &Condition {
-        &self.condition
+    pub(crate) fn descriptor(&self) -> &str {
+        &self.descriptor
     }
 
     #[cfg(test)]
     fn hmac_credentials_ptr(&self) -> Option<*const ()> {
-        self.hmac_headers.as_ref().map(HmacVerifier::credentials_ptr)
+        match &self.predicate {
+            CompiledPredicate::Sync {
+                hmac: Some(verifier), ..
+            }
+            | CompiledPredicate::HmacBody { verifier, .. } => Some(verifier.credentials_ptr()),
+            _ => None,
+        }
     }
 }
 
-/// Compiled skip-OR / run-AND condition container shared by every synchronous
-/// Gateway consumer (entry wrappers, body gates, and dye rules).
+fn condition_descriptor(path: &str, condition: &Condition) -> String {
+    match condition {
+        Condition::KeyExist(value) => format!("{path}:keyExist:{}", value.key.as_log_str()),
+        Condition::KeyMatch(value) => format!("{path}:keyMatch:{}", value.key.as_log_str()),
+        Condition::SecretMatch(value) => format!("{path}:secretMatch:{}", value.key.as_log_str()),
+        Condition::TimeRange(_) => format!("{path}:timeRange"),
+        Condition::Probability(_) => format!("{path}:probability"),
+        Condition::DirectPeerIpMatch(_) => format!("{path}:directPeerIpMatch"),
+        Condition::RemoteIpMatch(_) => format!("{path}:remoteIpMatch"),
+        Condition::HmacAuth(_) => format!("{path}:hmacAuth"),
+        Condition::JwtClaimMatch(_) => format!("{path}:jwtClaimMatch"),
+        Condition::MtlsMatch(_) => format!("{path}:mtlsMatch"),
+    }
+}
+
+struct CompiledAllOf {
+    name: Option<Box<str>>,
+    descriptor: Box<str>,
+    predicates: Vec<CompiledCondition>,
+}
+
+enum CompiledSetKind {
+    AllOf(CompiledAllOf),
+    AnyOf(Vec<CompiledAnyOfClause>),
+}
+
+enum CompiledAnyOfClause {
+    Condition(CompiledCondition),
+    AllOf(CompiledAllOf),
+}
+
+/// One immutable, bounded-DNF evaluator shared by every Gateway consumer.
+pub(crate) struct CompiledConditionSet {
+    kind: CompiledSetKind,
+    atomic_count: usize,
+    has_unresolved_refs: bool,
+}
+
+impl CompiledConditionSet {
+    pub(crate) fn new(set: &ConditionSet, prefix: &str, body_requirement: Option<BodyRequirement>) -> Self {
+        let mut has_unresolved_refs = false;
+        let (kind, atomic_count) = match set {
+            ConditionSet::AllOf { all_of } => {
+                let group = compile_all_of(
+                    all_of,
+                    None,
+                    format!("{prefix}.allOf"),
+                    body_requirement,
+                    &mut has_unresolved_refs,
+                );
+                let count = group.predicates.len();
+                (CompiledSetKind::AllOf(group), count)
+            }
+            ConditionSet::AnyOf { any_of } => {
+                let mut count = 0;
+                let clauses = any_of
+                    .iter()
+                    .enumerate()
+                    .map(|(index, clause)| match clause {
+                        AnyOfClause::Condition(condition) => {
+                            count += 1;
+                            has_unresolved_refs |= condition.has_unresolved_refs();
+                            CompiledAnyOfClause::Condition(CompiledCondition::compile(
+                                condition,
+                                format!("{prefix}.anyOf[{index}]"),
+                                body_requirement.clone(),
+                            ))
+                        }
+                        AnyOfClause::AllOf(AllOfGroup { name, all_of }) => {
+                            count += all_of.len();
+                            CompiledAnyOfClause::AllOf(compile_all_of(
+                                all_of,
+                                name.as_deref(),
+                                format!("{prefix}.anyOf[{index}].allOf"),
+                                body_requirement.clone(),
+                                &mut has_unresolved_refs,
+                            ))
+                        }
+                    })
+                    .collect();
+                (CompiledSetKind::AnyOf(clauses), count)
+            }
+        };
+        Self {
+            kind,
+            atomic_count,
+            has_unresolved_refs,
+        }
+    }
+
+    pub(crate) fn atomic_count(&self) -> usize {
+        self.atomic_count
+    }
+    pub(crate) fn has_unresolved_refs(&self) -> bool {
+        self.has_unresolved_refs
+    }
+
+    pub(crate) fn evaluate(
+        &self,
+        session: &dyn PluginSession,
+        mut log: Option<&mut PluginLog>,
+        emit: bool,
+    ) -> SetEval<'_> {
+        match &self.kind {
+            CompiledSetKind::AllOf(group) => eval_all_of_sync(group, session, log, emit),
+            CompiledSetKind::AnyOf(clauses) => {
+                let mut unresolved = false;
+                for clause in clauses {
+                    let eval = match clause {
+                        CompiledAnyOfClause::Condition(condition) => {
+                            eval_atom_sync(condition, session, log.as_deref_mut(), emit)
+                        }
+                        CompiledAnyOfClause::AllOf(group) => eval_all_of_sync(group, session, log.as_deref_mut(), emit),
+                    };
+                    match eval.state {
+                        MatchState::True => return eval,
+                        MatchState::False => {}
+                        MatchState::Unresolved => unresolved = true,
+                    }
+                }
+                SetEval {
+                    state: if unresolved {
+                        MatchState::Unresolved
+                    } else {
+                        MatchState::False
+                    },
+                    cause: Some("anyOf:exhausted"),
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn evaluate_async<'a>(
+        &'a self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+        emit: bool,
+    ) -> Result<SetEval<'a>, PluginRunningResult> {
+        match &self.kind {
+            CompiledSetKind::AllOf(group) => eval_all_of_async(group, session, log, emit).await,
+            CompiledSetKind::AnyOf(clauses) => {
+                let mut unresolved = false;
+                for clause in clauses {
+                    let eval = match clause {
+                        CompiledAnyOfClause::Condition(condition) => {
+                            eval_atom_async(condition, session, log, emit).await?
+                        }
+                        CompiledAnyOfClause::AllOf(group) => eval_all_of_async(group, session, log, emit).await?,
+                    };
+                    match eval.state {
+                        MatchState::True => return Ok(eval),
+                        MatchState::False => {}
+                        MatchState::Unresolved => unresolved = true,
+                    }
+                }
+                Ok(SetEval {
+                    state: if unresolved {
+                        MatchState::Unresolved
+                    } else {
+                        MatchState::False
+                    },
+                    cause: Some("anyOf:exhausted"),
+                })
+            }
+        }
+    }
+}
+
+fn compile_all_of(
+    conditions: &[Condition],
+    name: Option<&str>,
+    descriptor: String,
+    body_requirement: Option<BodyRequirement>,
+    unresolved: &mut bool,
+) -> CompiledAllOf {
+    let mut group_unresolved = false;
+    let predicates = conditions
+        .iter()
+        .enumerate()
+        .map(|(index, condition)| {
+            group_unresolved |= condition.has_unresolved_refs();
+            CompiledCondition::compile(condition, format!("{descriptor}[{index}]"), body_requirement.clone())
+        })
+        .collect();
+    *unresolved |= group_unresolved;
+    CompiledAllOf {
+        name: name.map(Into::into),
+        descriptor: descriptor.into(),
+        predicates,
+    }
+}
+
+fn eval_atom_sync<'a>(
+    condition: &'a CompiledCondition,
+    session: &dyn PluginSession,
+    log: Option<&mut PluginLog>,
+    emit: bool,
+) -> SetEval<'a> {
+    let state = condition.evaluate_sync(session);
+    if state == MatchState::Unresolved {
+        if let Some(log) = log {
+            log.push_err("condition reference unresolved");
+        }
+    } else if state == MatchState::True && emit {
+        if let Some(log) = log {
+            log.push(condition.descriptor());
+        }
+    }
+    SetEval {
+        state,
+        cause: Some(condition.descriptor()),
+    }
+}
+
+fn eval_all_of_sync<'a>(
+    group: &'a CompiledAllOf,
+    session: &dyn PluginSession,
+    mut log: Option<&mut PluginLog>,
+    emit: bool,
+) -> SetEval<'a> {
+    let mut unresolved = false;
+    for predicate in &group.predicates {
+        let eval = eval_atom_sync(predicate, session, log.as_deref_mut(), emit);
+        match eval.state {
+            MatchState::False => return eval,
+            MatchState::Unresolved => unresolved = true,
+            MatchState::True => {}
+        }
+    }
+    if unresolved {
+        return SetEval {
+            state: MatchState::Unresolved,
+            cause: Some(group.descriptor.as_ref()),
+        };
+    }
+    if let (Some(name), Some(log)) = (&group.name, log) {
+        log.push(name);
+    }
+    SetEval {
+        state: MatchState::True,
+        cause: Some(group.name.as_deref().unwrap_or(group.descriptor.as_ref())),
+    }
+}
+
+async fn eval_atom_async<'a>(
+    condition: &'a CompiledCondition,
+    session: &mut dyn PluginSession,
+    log: &mut PluginLog,
+    emit: bool,
+) -> Result<SetEval<'a>, PluginRunningResult> {
+    let state = condition.evaluate_async(session, log).await?;
+    if state == MatchState::Unresolved {
+        log.push_err("condition reference unresolved");
+    } else if state == MatchState::True && emit {
+        log.push(condition.descriptor());
+    }
+    Ok(SetEval {
+        state,
+        cause: Some(condition.descriptor()),
+    })
+}
+
+async fn eval_all_of_async<'a>(
+    group: &'a CompiledAllOf,
+    session: &mut dyn PluginSession,
+    log: &mut PluginLog,
+    emit: bool,
+) -> Result<SetEval<'a>, PluginRunningResult> {
+    let mut unresolved = false;
+    for predicate in &group.predicates {
+        let eval = eval_atom_async(predicate, session, log, emit).await?;
+        match eval.state {
+            MatchState::False => return Ok(eval),
+            MatchState::Unresolved => unresolved = true,
+            MatchState::True => {}
+        }
+    }
+    if unresolved {
+        return Ok(SetEval {
+            state: MatchState::Unresolved,
+            cause: Some(group.descriptor.as_ref()),
+        });
+    }
+    if let Some(name) = &group.name {
+        log.push(name);
+    }
+    Ok(SetEval {
+        state: MatchState::True,
+        cause: Some(group.name.as_deref().unwrap_or(group.descriptor.as_ref())),
+    })
+}
+
+/// Compiled skip-first / run-second plugin container.
 pub(crate) struct CompiledPluginConditions {
-    skip: Vec<CompiledCondition>,
-    run: Vec<CompiledCondition>,
+    skip: Option<CompiledConditionSet>,
+    run: Option<CompiledConditionSet>,
+    atomic_count: usize,
 }
 
 impl CompiledPluginConditions {
     pub(crate) fn new(conditions: PluginConditions) -> Self {
+        let skip = conditions
+            .skip
+            .as_ref()
+            .map(|set| CompiledConditionSet::new(set, "skip", None));
+        let run = conditions
+            .run
+            .as_ref()
+            .map(|set| CompiledConditionSet::new(set, "run", None));
+        let atomic_count = skip.as_ref().map_or(0, CompiledConditionSet::atomic_count)
+            + run.as_ref().map_or(0, CompiledConditionSet::atomic_count);
         Self {
-            skip: conditions
-                .skip
-                .unwrap_or_default()
-                .into_iter()
-                .map(CompiledCondition::new)
-                .collect(),
-            run: conditions
-                .run
-                .unwrap_or_default()
-                .into_iter()
-                .map(CompiledCondition::new)
-                .collect(),
+            skip,
+            run,
+            atomic_count,
         }
     }
 
     pub(crate) fn should_evaluate(&self) -> bool {
-        !self.skip.is_empty() || !self.run.is_empty()
+        self.skip.is_some() || self.run.is_some()
     }
 
     pub(crate) fn evaluate(&self, session: &dyn PluginSession) -> EvaluationResult {
-        if self.skip.iter().any(|condition| condition.evaluate(session, None)) {
+        if self
+            .skip
+            .as_ref()
+            .is_some_and(|set| set.evaluate(session, None, false).state == MatchState::True)
+        {
             return EvaluationResult::Skip;
         }
-        if self.run.iter().any(|condition| !condition.evaluate(session, None)) {
+        if self
+            .run
+            .as_ref()
+            .is_some_and(|set| set.evaluate(session, None, false).state != MatchState::True)
+        {
             return EvaluationResult::Skip;
         }
         EvaluationResult::Run
@@ -127,53 +513,78 @@ impl CompiledPluginConditions {
         session: &dyn PluginSession,
         log: &mut PluginLog,
     ) -> ConditionEvalResult<'a> {
-        for condition in &self.skip {
-            if condition.evaluate(session, Some(&mut *log)) {
+        let emit = self.atomic_count > 1;
+        if let Some(skip) = &self.skip {
+            let eval = skip.evaluate(session, Some(&mut *log), emit);
+            if eval.state == MatchState::True {
                 return ConditionEvalResult {
                     result: EvaluationResult::Skip,
                     action: "skip",
-                    matched: Some(condition.condition()),
+                    cause: eval.cause,
                 };
             }
         }
-        for condition in &self.run {
-            if !condition.evaluate(session, Some(&mut *log)) {
+        if let Some(run) = &self.run {
+            let eval = run.evaluate(session, Some(&mut *log), emit);
+            if eval.state != MatchState::True {
                 return ConditionEvalResult {
                     result: EvaluationResult::Skip,
                     action: "!run",
-                    matched: Some(condition.condition()),
+                    cause: eval.cause,
                 };
             }
         }
         ConditionEvalResult {
             result: EvaluationResult::Run,
             action: "",
-            matched: None,
+            cause: None,
         }
+    }
+
+    pub(crate) async fn evaluate_detail_async<'a>(
+        &'a self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+    ) -> Result<ConditionEvalResult<'a>, PluginRunningResult> {
+        let emit = self.atomic_count > 1;
+        if let Some(skip) = &self.skip {
+            let eval = skip.evaluate_async(session, log, emit).await?;
+            if eval.state == MatchState::True {
+                return Ok(ConditionEvalResult {
+                    result: EvaluationResult::Skip,
+                    action: "skip",
+                    cause: eval.cause,
+                });
+            }
+        }
+        if let Some(run) = &self.run {
+            let eval = run.evaluate_async(session, log, emit).await?;
+            if eval.state != MatchState::True {
+                return Ok(ConditionEvalResult {
+                    result: EvaluationResult::Skip,
+                    action: "!run",
+                    cause: eval.cause,
+                });
+            }
+        }
+        Ok(ConditionEvalResult {
+            result: EvaluationResult::Run,
+            action: "",
+            cause: None,
+        })
     }
 }
 
-// === Gateway-side evaluation extension traits ===
-//
-// The condition *data* types live in `edgion-resources` (the shared schema
-// crate). Their runtime evaluation depends on gateway types (`PluginSession`,
-// `PluginLog`, `EvaluationResult`), so the evaluation methods cannot be inherent
-// impls on the foreign types — the orphan rule forbids it across the crate
-// boundary. They are provided here as gateway-local extension traits instead;
-// call sites get the methods by importing the trait.
-
 pub(crate) trait PluginConditionsExt {
-    /// Log-less evaluation for body-stage filters and dye (no PluginLog, no cond_skip).
+    fn has_unresolved_refs(&self) -> bool;
     #[cfg(test)]
     fn evaluate(&self, session: &dyn PluginSession) -> EvaluationResult;
     #[cfg(test)]
-    fn evaluate_detail<'a>(&'a self, session: &dyn PluginSession, log: &mut PluginLog) -> ConditionEvalResult<'a>;
-    fn has_unresolved_refs(&self) -> bool;
+    fn evaluate_detail<'a>(&self, session: &dyn PluginSession, log: &'a mut PluginLog) -> ConditionEvalResult<'a>;
 }
 
 pub(crate) trait ConditionExt {
     fn evaluate(&self, session: &dyn PluginSession, log: Option<&mut PluginLog>) -> bool;
-    fn cond_detail(&self) -> String;
     fn has_unresolved_refs(&self) -> bool;
 }
 
@@ -195,76 +606,37 @@ pub(crate) trait ProbabilityConditionExt {
 }
 
 impl PluginConditionsExt for PluginConditions {
-    /// Log-less evaluation for body-stage filters and dye.
-    ///
-    /// Body filters run per-chunk and do not surface PluginLog entries, so this
-    /// path never allocates a PluginLog. The only diagnostic that the logged
-    /// path would emit ("regex not compiled") is silently dropped — that
-    /// condition indicates a build-time compile failure and should already be
-    /// visible through `EdgionPlugin::validation_error`.
+    fn has_unresolved_refs(&self) -> bool {
+        self.skip.as_ref().is_some_and(condition_set_has_unresolved)
+            || self.run.as_ref().is_some_and(condition_set_has_unresolved)
+    }
+
     #[cfg(test)]
     fn evaluate(&self, session: &dyn PluginSession) -> EvaluationResult {
-        if let Some(skip_conditions) = &self.skip {
-            for condition in skip_conditions {
-                if condition.evaluate(session, None) {
-                    return EvaluationResult::Skip;
-                }
-            }
-        }
-
-        if let Some(run_conditions) = &self.run {
-            for condition in run_conditions {
-                if !condition.evaluate(session, None) {
-                    return EvaluationResult::Skip;
-                }
-            }
-        }
-
-        EvaluationResult::Run
+        CompiledPluginConditions::new(self.clone()).evaluate(session)
     }
 
-    /// Evaluate conditions and return matched condition for logging.
     #[cfg(test)]
-    fn evaluate_detail<'a>(&'a self, session: &dyn PluginSession, log: &mut PluginLog) -> ConditionEvalResult<'a> {
-        // Check skip conditions (OR logic) - any match causes skip
-        if let Some(skip_conditions) = &self.skip {
-            for condition in skip_conditions {
-                if condition.evaluate(session, Some(&mut *log)) {
-                    return ConditionEvalResult {
-                        result: EvaluationResult::Skip,
-                        action: "skip",
-                        matched: Some(condition),
-                    };
-                }
-            }
-        }
-
-        // Check run conditions (AND logic) - all must match to run
-        if let Some(run_conditions) = &self.run {
-            for condition in run_conditions {
-                if !condition.evaluate(session, Some(&mut *log)) {
-                    return ConditionEvalResult {
-                        result: EvaluationResult::Skip,
-                        action: "!run",
-                        matched: Some(condition),
-                    };
-                }
-            }
-        }
-
+    fn evaluate_detail<'a>(&self, session: &dyn PluginSession, log: &'a mut PluginLog) -> ConditionEvalResult<'a> {
+        // Test-only convenience retains the compiled snapshot for the duration
+        // of this call; callers only assert the copied decision fields.
+        let compiled = CompiledPluginConditions::new(self.clone());
+        let eval = compiled.evaluate_detail(session, log);
         ConditionEvalResult {
-            result: EvaluationResult::Run,
-            action: "",
-            matched: None,
+            result: eval.result,
+            action: eval.action,
+            cause: None,
         }
     }
+}
 
-    fn has_unresolved_refs(&self) -> bool {
-        self.skip
-            .iter()
-            .chain(self.run.iter())
-            .flatten()
-            .any(ConditionExt::has_unresolved_refs)
+pub(crate) fn condition_set_has_unresolved(set: &ConditionSet) -> bool {
+    match set {
+        ConditionSet::AllOf { all_of } => all_of.iter().any(ConditionExt::has_unresolved_refs),
+        ConditionSet::AnyOf { any_of } => any_of.iter().any(|clause| match clause {
+            AnyOfClause::Condition(condition) => condition.has_unresolved_refs(),
+            AnyOfClause::AllOf(group) => group.all_of.iter().any(ConditionExt::has_unresolved_refs),
+        }),
     }
 }
 
@@ -292,32 +664,13 @@ impl ConditionExt for Condition {
             Condition::SecretMatch(c) => evaluate_secret_match(c, session),
             Condition::DirectPeerIpMatch(c) => evaluate_ip_match(c, session.direct_peer_ip()),
             Condition::RemoteIpMatch(c) => evaluate_ip_match(c, session.remote_ip()),
-            Condition::HmacAuth(c) => evaluate_hmac_headers(c, session),
+            // Runtime HMAC evaluation is available only through
+            // CompiledCondition, which owns the snapshot verifier.
+            Condition::HmacAuth(_) => false,
             Condition::JwtClaimMatch(c) => evaluate_jwt_claim_match(c, session, log.as_deref_mut()),
             Condition::MtlsMatch(c) => evaluate_mtls_match(c, session, log.as_deref_mut()),
         };
-        if matched {
-            if let Some(log) = log {
-                log.push(self.descriptor());
-            }
-        }
         matched
-    }
-
-    /// Get brief condition detail: key info
-    fn cond_detail(&self) -> String {
-        match self {
-            Condition::KeyExist(c) => c.key.as_log_str(),
-            Condition::KeyMatch(c) => c.key.as_log_str(),
-            Condition::TimeRange(_) => "time".to_string(),
-            Condition::Probability(c) => format!("{:.0}%", c.ratio * 100.0),
-            Condition::SecretMatch(c) => c.key.as_log_str(),
-            Condition::DirectPeerIpMatch(_) => "directPeerIp".to_string(),
-            Condition::RemoteIpMatch(_) => "remoteIp".to_string(),
-            Condition::HmacAuth(_) => "hmacAuth".to_string(),
-            Condition::JwtClaimMatch(c) => c.claim.clone(),
-            Condition::MtlsMatch(c) => c.field.as_log_str().to_string(),
-        }
     }
 
     fn has_unresolved_refs(&self) -> bool {
@@ -366,22 +719,6 @@ fn evaluate_ip_match(
         .ok()
         .and_then(|addr| condition.matcher.as_ref().map(|matcher| matcher.contains(&addr)))
         .unwrap_or(false);
-    apply_negate(base, condition.negate)
-}
-
-fn evaluate_hmac_headers(
-    condition: &edgion_resources::resources::edgion_plugins::hmac_match::HmacMatchConfig,
-    session: &dyn PluginSession,
-) -> bool {
-    // Entry-level HMAC is header-only (D-27). Body HMAC is illegal here;
-    // RequestRestriction allOf compiles those arms to HmacVerifier::verify.
-    if condition.validate_request_body {
-        return apply_negate(false, condition.negate);
-    }
-    let base = matches!(
-        HmacVerifier::verify_headers_config(condition, session),
-        HmacVerifyOutcome::Verified { .. }
-    );
     apply_negate(base, condition.negate)
 }
 
@@ -529,9 +866,13 @@ impl ProbabilityConditionExt for ProbabilityCondition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
     use edgion_resources::common::KeyGet;
     use edgion_resources::resources::edgion_plugins::{HmacCredential, HmacMatchConfig};
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
 
     /// Create a mock session with key_get that returns values based on the key
     fn create_mock_session_with_key_get(key_values: Vec<(KeyGet, Option<String>)>) -> MockPluginSession {
@@ -563,16 +904,171 @@ mod tests {
             descriptor: Box::from("0:hmacAuth"),
             ..Default::default()
         });
-        let compiled = CompiledCondition::new(condition);
+        let compiled = CompiledCondition::compile(&condition, "conditions.allOf[0]".to_string(), None);
         let credentials_ptr = compiled
             .hmac_credentials_ptr()
             .expect("header-only HMAC must prebuild one verifier");
         let mut session = MockPluginSession::new();
         session.expect_header_value().returning(|_| None);
 
-        assert!(!compiled.evaluate(&session, None));
-        assert!(!compiled.evaluate(&session, None));
+        assert_eq!(compiled.evaluate_sync(&session), MatchState::False);
+        assert_eq!(compiled.evaluate_sync(&session), MatchState::False);
         assert_eq!(compiled.hmac_credentials_ptr(), Some(credentials_ptr));
+    }
+
+    fn unresolved_secret_condition() -> Condition {
+        Condition::SecretMatch(
+            edgion_resources::resources::edgion_plugins::conditions::SecretMatchCondition {
+                key: KeyGet::Header {
+                    name: "X-Secret".to_string(),
+                },
+                secret_key: "token".to_string(),
+                secret_ref: edgion_resources::resources::common::SecretObjectReference {
+                    name: "missing".to_string(),
+                    group: None,
+                    kind: None,
+                    namespace: None,
+                },
+                negate: false,
+                resolved_values: None,
+                descriptor: Box::from(""),
+            },
+        )
+    }
+
+    #[test]
+    fn mixed_any_of_skips_unresolved_direct_and_attributes_named_fallback() {
+        let set = ConditionSet::AnyOf {
+            any_of: vec![
+                AnyOfClause::Condition(unresolved_secret_condition()),
+                AnyOfClause::AllOf(AllOfGroup {
+                    name: Some("header-fallback".to_string()),
+                    all_of: vec![key_match("X-Fallback", &["yes"])],
+                }),
+            ],
+        };
+        let compiled = CompiledConditionSet::new(&set, "conditions", None);
+        let session = create_mock_session_with_key_get(vec![(
+            KeyGet::Header {
+                name: "X-Fallback".to_string(),
+            },
+            Some("yes".to_string()),
+        )]);
+        let mut log = PluginLog::new("test");
+
+        let eval = compiled.evaluate(&session, Some(&mut log), true);
+        assert_eq!(eval.state, MatchState::True);
+        assert_eq!(eval.cause, Some("header-fallback"));
+        assert!(log.contains("header-fallback"));
+        assert!(log.contains("conditions.anyOf[1].allOf[0]:keyMatch:hdr:X-Fallback"));
+    }
+
+    #[test]
+    fn mixed_any_of_matching_direct_short_circuits_later_named_group() {
+        let set = ConditionSet::AnyOf {
+            any_of: vec![
+                AnyOfClause::Condition(key_match("X-First", &["yes"])),
+                AnyOfClause::AllOf(AllOfGroup {
+                    name: Some("must-not-run".to_string()),
+                    all_of: vec![key_match("X-Later", &["yes"])],
+                }),
+            ],
+        };
+        let compiled = CompiledConditionSet::new(&set, "conditions", None);
+        let session = create_mock_session_with_key_get(vec![(
+            KeyGet::Header {
+                name: "X-First".to_string(),
+            },
+            Some("yes".to_string()),
+        )]);
+        let mut log = PluginLog::new("test");
+
+        let eval = compiled.evaluate(&session, Some(&mut log), true);
+        assert_eq!(eval.state, MatchState::True);
+        assert_eq!(eval.cause, Some("conditions.anyOf[0]:keyMatch:hdr:X-First"));
+        assert!(!log.contains("must-not-run"));
+    }
+
+    #[tokio::test]
+    async fn unresolved_then_body_hmac_preserves_body_terminal_error() {
+        let secret = b"body-hmac-secret-at-least-32-bytes";
+        let date = Utc::now().to_rfc2822();
+        let digest = "SHA-256=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let signing_string = format!("date: {date}\ndigest: {digest}");
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("valid HMAC key");
+        mac.update(signing_string.as_bytes());
+        let signature = STANDARD.encode(mac.finalize().into_bytes());
+        let authorization = format!(
+            r#"hmac username="alice", algorithm="hmac-sha256", headers="date digest", signature="{signature}""#
+        );
+        let body_hmac = Condition::HmacAuth(HmacMatchConfig {
+            validate_request_body: true,
+            resolved_credentials: Some(std::collections::HashMap::from([(
+                "alice".to_string(),
+                HmacCredential {
+                    secret: secret.to_vec(),
+                    headers: std::collections::HashMap::new(),
+                    group: "default".to_string(),
+                },
+            )])),
+            ..Default::default()
+        });
+        let set = ConditionSet::all_of(vec![unresolved_secret_condition(), body_hmac]);
+        let compiled = CompiledConditionSet::new(&set, "conditions", Some(BodyRequirement::fail_close()));
+        let mut session = MockPluginSession::new();
+        session.expect_header_value().returning(move |name| match name {
+            "authorization" => Some(authorization.clone()),
+            "proxy-authorization" => None,
+            "date" => Some(date.clone()),
+            "digest" => Some(digest.to_string()),
+            _ => None,
+        });
+        session
+            .expect_ensure_request_body()
+            .returning(|_| Err(BodyReadError::Timeout));
+        session.expect_add_error().returning(|_| ());
+        let mut log = PluginLog::new("test");
+
+        assert!(matches!(
+            compiled.evaluate_async(&mut session, &mut log, true).await,
+            Err(PluginRunningResult::ErrResponse { status: 408, .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn top_all_of_false_dominates_unresolved_without_reading_body_hmac() {
+        let body_hmac = Condition::HmacAuth(HmacMatchConfig {
+            validate_request_body: true,
+            resolved_credentials: Some(std::collections::HashMap::from([(
+                "alice".to_string(),
+                HmacCredential {
+                    secret: b"body-hmac-secret-at-least-32-bytes".to_vec(),
+                    headers: std::collections::HashMap::new(),
+                    group: "default".to_string(),
+                },
+            )])),
+            ..Default::default()
+        });
+        let set = ConditionSet::all_of(vec![
+            unresolved_secret_condition(),
+            key_match("X-False", &["yes"]),
+            body_hmac,
+        ]);
+        let compiled = CompiledConditionSet::new(&set, "conditions", Some(BodyRequirement::fail_close()));
+        let mut session = create_mock_session_with_key_get(vec![(
+            KeyGet::Header {
+                name: "X-False".to_string(),
+            },
+            Some("no".to_string()),
+        )]);
+        let mut log = PluginLog::new("test");
+
+        let eval = compiled
+            .evaluate_async(&mut session, &mut log, true)
+            .await
+            .expect("false evaluation is non-terminal");
+        assert_eq!(eval.state, MatchState::False);
+        assert_eq!(eval.cause, Some("conditions.allOf[1]:keyMatch:hdr:X-False"));
     }
 
     fn core_values(values: Vec<&str>) -> MatchCore {
@@ -600,13 +1096,13 @@ mod tests {
     #[test]
     fn test_skip_condition_matched() {
         let conditions = PluginConditions {
-            skip: Some(vec![Condition::KeyExist(KeyExistCondition {
+            skip: Some(ConditionSet::all_of(vec![Condition::KeyExist(KeyExistCondition {
                 key: KeyGet::Header {
                     name: "X-Internal".to_string(),
                 },
                 negate: false,
                 descriptor: Box::from(""),
-            })]),
+            })])),
             run: None,
         };
 
@@ -622,13 +1118,13 @@ mod tests {
     #[test]
     fn test_skip_condition_not_matched() {
         let conditions = PluginConditions {
-            skip: Some(vec![Condition::KeyExist(KeyExistCondition {
+            skip: Some(ConditionSet::all_of(vec![Condition::KeyExist(KeyExistCondition {
                 key: KeyGet::Header {
                     name: "X-Internal".to_string(),
                 },
                 negate: false,
                 descriptor: Box::from(""),
-            })]),
+            })])),
             run: None,
         };
 
@@ -641,7 +1137,7 @@ mod tests {
     fn test_run_condition_all_satisfied() {
         let conditions = PluginConditions {
             skip: None,
-            run: Some(vec![
+            run: Some(ConditionSet::all_of(vec![
                 Condition::KeyExist(KeyExistCondition {
                     key: KeyGet::Header {
                         name: "Authorization".to_string(),
@@ -655,7 +1151,7 @@ mod tests {
                     negate: false,
                     descriptor: Box::from(""),
                 }),
-            ]),
+            ])),
         };
 
         let session = create_mock_session_with_key_get(vec![
@@ -674,7 +1170,7 @@ mod tests {
     fn test_run_condition_not_all_satisfied() {
         let conditions = PluginConditions {
             skip: None,
-            run: Some(vec![
+            run: Some(ConditionSet::all_of(vec![
                 Condition::KeyExist(KeyExistCondition {
                     key: KeyGet::Header {
                         name: "Authorization".to_string(),
@@ -688,7 +1184,7 @@ mod tests {
                     negate: false,
                     descriptor: Box::from(""),
                 }),
-            ]),
+            ])),
         };
 
         // Method is GET, not POST
@@ -1002,11 +1498,11 @@ values:
         // AND (run): first two match, third fails — only the two successes push.
         let mut run = PluginConditions {
             skip: None,
-            run: Some(vec![
+            run: Some(ConditionSet::all_of(vec![
                 key_match("X-A", &["yes"]),
                 key_match("X-B", &["yes"]),
                 key_match("X-C", &["yes"]),
-            ]),
+            ])),
         };
         run.compile().expect("compile run descriptors");
         let run_session = create_mock_session_with_key_get(vec![
@@ -1034,12 +1530,20 @@ values:
         assert_eq!(run_eval.result, EvaluationResult::Skip);
         assert_eq!(
             log_entries(&run_log),
-            vec!["0:keyMatch:hdr:X-A".to_string(), "1:keyMatch:hdr:X-B".to_string()]
+            vec![
+                "run.allOf[0]:keyMatch:hdr:X-A".to_string(),
+                "run.allOf[1]:keyMatch:hdr:X-B".to_string(),
+            ]
         );
 
         // OR (skip): first match short-circuits — only that descriptor is pushed.
         let mut skip = PluginConditions {
-            skip: Some(vec![key_match("X-A", &["yes"]), key_match("X-B", &["yes"])]),
+            skip: Some(ConditionSet::AnyOf {
+                any_of: vec![
+                    AnyOfClause::Condition(key_match("X-A", &["yes"])),
+                    AnyOfClause::Condition(key_match("X-B", &["yes"])),
+                ],
+            }),
             run: None,
         };
         skip.compile().expect("compile skip descriptors");
@@ -1060,18 +1564,21 @@ values:
         let mut skip_log = PluginLog::new("test");
         let skip_eval = skip.evaluate_detail(&skip_session, &mut skip_log);
         assert_eq!(skip_eval.result, EvaluationResult::Skip);
-        assert_eq!(log_entries(&skip_log), vec!["0:keyMatch:hdr:X-A".to_string()]);
+        assert_eq!(
+            log_entries(&skip_log),
+            vec!["skip.anyOf[0]:keyMatch:hdr:X-A".to_string()]
+        );
     }
 
     #[test]
     fn condition_log_stays_inside_tier1_or_records_spill() {
         let mut run = PluginConditions {
             skip: None,
-            run: Some(vec![
+            run: Some(ConditionSet::all_of(vec![
                 key_match("X-A", &["yes"]),
                 key_match("X-B", &["yes"]),
                 key_match("X-C", &["yes"]),
-            ]),
+            ])),
         };
         run.compile().expect("compile descriptors");
         let session = create_mock_session_with_key_get(vec![
@@ -1103,9 +1610,9 @@ values:
         assert_eq!(
             entries,
             vec![
-                "0:keyMatch:hdr:X-A".to_string(),
-                "1:keyMatch:hdr:X-B".to_string(),
-                "2:keyMatch:hdr:X-C".to_string(),
+                "run.allOf[0]:keyMatch:hdr:X-A".to_string(),
+                "run.allOf[1]:keyMatch:hdr:X-B".to_string(),
+                "run.allOf[2]:keyMatch:hdr:X-C".to_string(),
                 "Allow".to_string(),
             ]
         );
@@ -1121,7 +1628,7 @@ values:
     #[test]
     fn body_evaluate_stays_silent() {
         let mut skip = PluginConditions {
-            skip: Some(vec![key_match("X-A", &["yes"])]),
+            skip: Some(ConditionSet::all_of(vec![key_match("X-A", &["yes"])])),
             run: None,
         };
         skip.compile().expect("compile descriptors");
@@ -1144,7 +1651,7 @@ values:
         ip.validate_and_init().expect("compile IP matcher");
         let mut conds = PluginConditions {
             skip: None,
-            run: Some(vec![Condition::DirectPeerIpMatch(ip)]),
+            run: Some(ConditionSet::all_of(vec![Condition::DirectPeerIpMatch(ip)])),
         };
         conds.compile().expect("compile descriptors");
 

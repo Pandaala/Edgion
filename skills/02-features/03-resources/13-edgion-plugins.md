@@ -123,6 +123,41 @@ only be placed in stages admitted by the exhaustive Rust
 `validate::applicable_stages` table; the same resource may contain entries in
 multiple stage arrays. There is no generic `spec.plugins` field.
 
+## Shared condition expressions
+
+Plugin entry `conditions.skip` / `conditions.run`, `body.conditions`, dye rule
+conditions, RequestRestriction, and RequestAccessPolicy supplemental
+conditions all use the same bounded `ConditionSet` wire shape:
+
+```yaml
+conditions:
+  anyOf:
+    - type: keyExist
+      key:
+        type: header
+        name: X-Internal-Request
+    - name: production-write
+      allOf:
+        - type: keyMatch
+          key:
+            type: header
+            name: X-Env
+          values: [production]
+        - type: keyMatch
+          key:
+            type: method
+          values: [POST]
+```
+
+The top level must contain exactly one non-empty `allOf` or `anyOf`.
+Top-level `allOf` accepts direct `Condition` leaves only. Top-level `anyOf`
+accepts direct leaves or one-level `{ name?, allOf: [...] }` groups. Nested
+`allOf` contains direct leaves only; `allOf -> anyOf`, `anyOf -> anyOf`, deeper
+recursion, mixed operators, empty arrays, and blank group names
+are invalid. `conditions.skip` is evaluated before `conditions.run`, but each
+field's Boolean behavior is selected by its contained set rather than implied
+by the field name.
+
 ## `A2aGateway` configuration
 
 `A2aGateway` is valid only in `spec.requestPlugins`.

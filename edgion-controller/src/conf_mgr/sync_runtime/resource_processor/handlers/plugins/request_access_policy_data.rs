@@ -34,6 +34,9 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn expand(
         return;
     };
     for entry in entries {
+        if !entry.is_enabled() || entry.policy_action.is_some() {
+            continue;
+        }
         let EdgionPlugin::RequestAccessPolicy(config) = &mut entry.plugin else {
             continue;
         };
@@ -85,7 +88,7 @@ fn expand_url_rule(
             name: rule_name.to_string(),
             hosts: config.hosts.clone(),
             paths: config.paths.clone(),
-            all_of: config.all_of.clone(),
+            conditions: config.conditions.clone(),
         });
     }
 

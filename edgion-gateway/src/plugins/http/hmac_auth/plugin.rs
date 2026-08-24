@@ -125,20 +125,6 @@ impl HmacVerifier {
         )
     }
 
-    /// Config-borrowing fallback for schema-level condition evaluation.
-    /// It does not construct a verifier or clone the credential map; runtime
-    /// consumers normally use a prebuilt [`HmacVerifier`].
-    pub(crate) fn verify_headers_config(config: &HmacMatchConfig, session: &dyn PluginSession) -> HmacVerifyOutcome {
-        Self::verify_headers_with(
-            &config.algorithms,
-            config.clock_skew,
-            config.enforce_headers.as_deref(),
-            config.validate_request_body,
-            config.resolved_credentials.as_ref(),
-            session,
-        )
-    }
-
     fn verify_headers_with(
         algorithms: &[HmacAlgorithm],
         clock_skew: u64,

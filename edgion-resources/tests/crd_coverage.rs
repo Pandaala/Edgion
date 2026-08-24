@@ -173,7 +173,7 @@ fn gateway_config_spec_has_no_uncovered_fields() {
 fn plugin_key_get_enum_uses_remote_ip_names() {
     let spec = crd_section("edgion_plugins_crd.yaml", "spec");
     let values = spec["properties"]["requestPlugins"]["items"]["properties"]["conditions"]["properties"]["skip"]
-        ["items"]["properties"]["key"]["properties"]["type"]["enum"]
+        ["properties"]["allOf"]["items"]["properties"]["key"]["properties"]["type"]["enum"]
         .as_array()
         .unwrap_or_else(|| panic!("EdgionPlugins KeyGet enum is missing from the committed CRD"));
     let values: Vec<&str> = values

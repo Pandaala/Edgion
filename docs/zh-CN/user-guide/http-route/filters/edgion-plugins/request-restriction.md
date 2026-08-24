@@ -10,21 +10,22 @@
 
 它仍然是一个**本地 allow/deny 匹配器**，而非完整的 RBAC 编排层：一条条件仍是纯断言，由必填的 `mode` 决定命中意味着放行还是拒绝。
 
-## 模型：分组（OR-of-AND）+ `mode`
+## 模型：有界 ConditionSet + `mode`
 
-插件按析取范式（DNF）求值一组分组：
+必填的 `conditions` 字段使用共享的有界 DNF ConditionSet：
 
-- **`anyOf` 数组之间是 OR**——任一分组命中即生效。分组按配置顺序求值，首次命中即短路。
-- **每个分组内的 `allOf` 之间是 AND**——分组内每条条件都为真，该分组才命中。
+- 顶层 `allOf` 直接包含 Condition，全部匹配时集合才匹配。
+- 顶层 `anyOf` 可以包含直接 Condition，或一层 `{ name?, allOf: [...] }` 分组；任一候选匹配时集合即匹配。
+- 按配置顺序求值并短路。递归、空集合以及同时包含 `allOf`/`anyOf` 的对象都会被拒绝。
 - **`mode` 必填**，决定命中意味着什么：
-  - `Deny`：任一分组命中 ⇒ **拒绝**；未命中则放行。
-  - `Allow`：任一分组命中 ⇒ **放行**；未命中则拒绝。
+  - `Deny`：集合匹配 ⇒ **拒绝**；集合不匹配则放行。
+  - `Allow`：集合匹配 ⇒ **放行**；集合不匹配则拒绝。
 
 `mode` **没有默认值**。省略它是校验错误，而不是静默回退。
 
-**一条条件是纯断言**，自身不带 allow/deny——极性完全由 `mode` 决定。这样既能表达 `(A AND B) OR C`，又保持模型扁平（两层）。这与插件 `conditions.run`（合取）不同。
+**一条条件是纯断言**，自身不带 allow/deny——极性完全由 `mode` 决定。RequestRestriction 与插件 `conditions.run`/`skip` 使用同一套 ConditionSet 语法，只是外层字段决定的动作不同。
 
-值缺失时，`keyMatch` / 身份匹配为 **false**。若要「要求某个 header 必须存在」，使用 `keyExist` + `negate: true`（header 缺失时为真）。
+值缺失时，`keyMatch` / 身份匹配为 **false**。在 `mode: Deny` 下，可以用 `keyExist` + `negate: true` 匹配 header 缺失并拒绝请求。
 
 ## 功能特性
 
@@ -34,7 +35,7 @@
 - **内联与引用 IP 集合**：`directPeerIpMatch` / `remoteIpMatch` 的 `ips` 与 `ipRefs`（IpList ConfigData）
 - **精确匹配与正则匹配**：`values` 精确匹配，`regex` 正则匹配
 - **自动性能优化**：精确匹配列表超过 16 个值时自动使用 HashSet (O(1) 查找)
-- **布尔组合**：分组内 AND（`allOf`）、分组间 OR（`anyOf`）
+- **布尔组合**：显式的扁平 `allOf`、扁平 `anyOf` 或 OR-of-AND
 - **显式极性**：`mode: Deny | Allow`（必填，无默认值）
 - **自定义响应**：可配置拒绝时的状态码和消息
 
@@ -45,7 +46,7 @@
 | 维度 | Plugin Conditions | Request Restriction |
 |------|------------------|---------------------|
 | **定位** | 条件执行框架，决定是否运行某个插件 | 独立插件，直接拒绝不符合规则的请求 |
-| **组合** | `skip` 为 OR；`run` 为 AND | `anyOf` 为 OR；每个 `allOf` 为 AND |
+| **组合** | `run` 与 `skip` 各自包含 ConditionSet | `config.conditions` 包含同一套 ConditionSet |
 | **返回行为** | 跳过插件（继续处理链） | 拒绝请求（返回错误响应） |
 | **配置位置** | 挂在其他插件上作为条件 | 作为独立插件配置 |
 | **使用场景** | 灰度发布、A/B测试、条件执行 | 访问控制、安全防护 |
@@ -57,18 +58,21 @@
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `mode` | `string`（`Deny` \| `Allow`） | ✅ | - | 极性。`Deny`：任一分组命中即拒绝；`Allow`：任一分组命中即放行，否则拒绝。无默认值，省略即校验错误 |
-| `anyOf` | `RuleGroup[]` | ✅ | - | 分组列表，分组之间为 OR，按配置顺序求值 |
+| `conditions` | `ConditionSet` | ✅ | - | 必须且只能包含一个顶层 `allOf` 或 `anyOf` |
 | `status` | `integer` | ❌ | `403` | 拒绝时的 HTTP 状态码 |
 | `message` | `string` | ❌ | `Access denied...` | 拒绝时的响应消息 |
 
-### RuleGroup
+### ConditionSet
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `name` | `string` | ❌ | - | 分组名称（用于日志） |
-| `allOf` | `Condition[]` | ✅ | - | 分组内的条件，条件之间为 AND（不可为空） |
+| `allOf` | `Condition[]` | 二选一 | - | 直接 Condition，按 AND 组合 |
+| `anyOf` | `(Condition \| AllOfGroup)[]` | 二选一 | - | 直接 Condition 与一层 AND 分组，按 OR 组合 |
 
-`allOf` 中的每一项都是共享的 `Condition`（`type: keyMatch`、`keyExist`、`mtlsMatch`、`jwtClaimMatch`、`directPeerIpMatch` 等）。HMAC 的 `validateRequestBody: true` 在此处被接受。
+`AllOfGroup` 包含必填且非空的 `allOf`，以及用于归因的可选非空白 `name`。
+所有数组都必须非空。每个叶子都是共享的 `Condition`（`type: keyMatch`、
+`keyExist`、`mtlsMatch`、`jwtClaimMatch`、`directPeerIpMatch` 等）。
+HMAC 的 `validateRequestBody: true` 在此处被接受。
 
 ## 已迁移的数据源写法
 
@@ -128,19 +132,11 @@
 
 ```mermaid
 flowchart TD
-    A["Request Restriction"] --> B["按配置顺序遍历 anyOf 分组"]
-    B --> C["遍历分组内 allOf 条件"]
-    C --> D["Condition.evaluate"]
-    D --> E{"为真?"}
-    E -->|否| N["分组未命中"]
-    E -->|是| H{"全部条件为真?"}
-    H -->|是| M["分组命中；停止"]
-    H -->|否| C
-    N --> B
-    M --> J{"mode"}
-    B -->|没有分组命中| J
-    J -->|"Deny：有分组命中"| K["拒绝（status/message）"]
-    J -->|"Allow：没有分组命中"| K
+    A["Request Restriction"] --> B["按配置顺序求值 conditions"]
+    B --> C{"ConditionSet 是否匹配?"}
+    C --> J{"mode"}
+    J -->|"Deny + 匹配"| K["拒绝（status/message）"]
+    J -->|"Allow + 不匹配"| K
     J -->|否则| L["继续处理链"]
 ```
 
@@ -158,22 +154,21 @@ spec:
     - type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: header
-                  name: "User-Agent"
-                regex:
-                  - "(?i).*Bot.*"
-                  - "(?i).*Spider.*"
-                  - "(?i).*Crawler.*"
-          - allOf:
-              - type: keyExist
-                key:
-                  type: header
-                  name: "User-Agent"
-                negate: true
+        conditions:
+          anyOf:
+            - type: keyMatch
+              key:
+                type: header
+                name: "User-Agent"
+              regex:
+                - "(?i).*Bot.*"
+                - "(?i).*Spider.*"
+                - "(?i).*Crawler.*"
+            - type: keyExist
+              key:
+                type: header
+                name: "User-Agent"
+              negate: true
         status: 403
         message: "Bot access denied"
 ```
@@ -190,16 +185,17 @@ spec:
     - type: RequestRestriction
       config:
         mode: Allow
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: path
-                values:
-                  - "/health"
-                  - "/ready"
-                regex:
-                  - "^/api/.*"
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: path
+                  values:
+                    - "/health"
+                    - "/ready"
+                  regex:
+                    - "^/api/.*"
         status: 404
         message: "Not found"
 ```
@@ -216,15 +212,15 @@ spec:
     - type: RequestRestriction
       config:
         mode: Allow
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: method
-                values:
-                  - "GET"
-                  - "HEAD"
-                  - "OPTIONS"
+        conditions:
+          allOf:
+            - type: keyMatch
+              key:
+                type: method
+              values:
+                - "GET"
+                - "HEAD"
+                - "OPTIONS"
         status: 405
         message: "Method not allowed"
 ```
@@ -243,21 +239,22 @@ spec:
     - type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: header
-                  name: "X-Auth-Token"
-                values:
-                  - "invalid"
-                  - "expired"
-          - allOf:
-              - type: keyExist
-                key:
-                  type: header
-                  name: "X-Auth-Token"
-                negate: true
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: header
+                    name: "X-Auth-Token"
+                  values:
+                    - "invalid"
+                    - "expired"
+            - allOf:
+                - type: keyExist
+                  key:
+                    type: header
+                    name: "X-Auth-Token"
+                  negate: true
         status: 401
         message: "Authentication required"
 ```
@@ -276,15 +273,16 @@ spec:
     - type: RequestRestriction
       config:
         mode: Allow
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: header
-                  name: Referer
-                regex:
-                  - ".*example\\.com.*"
-                  - ".*example\\.org.*"
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: header
+                    name: Referer
+                  regex:
+                    - ".*example\\.com.*"
+                    - ".*example\\.org.*"
         status: 403
         message: "Invalid referer"
 ```
@@ -303,23 +301,24 @@ spec:
     - type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: query
-                  name: "debug"
-                values:
-                  - "true"
-                  - "1"
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: cookie
-                  name: "debug"
-                values:
-                  - "true"
-                  - "1"
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: query
+                    name: "debug"
+                  values:
+                    - "true"
+                    - "1"
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: cookie
+                    name: "debug"
+                  values:
+                    - "true"
+                    - "1"
         status: 403
         message: "Debug mode not allowed in production"
 ```
@@ -338,16 +337,17 @@ spec:
     - type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: method
-                values: ["DELETE"]
-              - type: keyMatch
-                key:
-                  type: path
-                regex: [".*/admin/.*"]
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: method
+                  values: ["DELETE"]
+                - type: keyMatch
+                  key:
+                    type: path
+                  regex: [".*/admin/.*"]
         status: 403
         message: "Deleting admin resources is not allowed"
 ```
@@ -366,14 +366,15 @@ spec:
     - type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: directPeerIpMatch
-                ips: ["127.0.0.1", "::1"]
-              - type: keyMatch
-                key:
-                  type: path
-                regex: [".*/admin/.*"]
+        conditions:
+          anyOf:
+            - allOf:
+                - type: directPeerIpMatch
+                  ips: ["127.0.0.1", "::1"]
+                - type: keyMatch
+                  key:
+                    type: path
+                  regex: [".*/admin/.*"]
         status: 403
         message: "Admin access denied from local peer"
 ```
@@ -390,16 +391,15 @@ spec:
     - type: RequestRestriction
       config:
         mode: Allow
-        anyOf:
-          - allOf:
-              - type: mtlsMatch
-                field: san
-                sanType: URI
-                values: ["spiffe://edgion.io/ns/payments/sa/checkout"]
-          - allOf:
-              - type: jwtClaimMatch
-                claim: "realm_access.roles"
-                values: ["admin"]
+        conditions:
+          anyOf:
+            - type: mtlsMatch
+              field: san
+              sanType: URI
+              values: ["spiffe://edgion.io/ns/payments/sa/checkout"]
+            - type: jwtClaimMatch
+              claim: "realm_access.roles"
+              values: ["admin"]
         status: 403
         message: "Identity not allowed"
 ```
@@ -420,24 +420,24 @@ Edgion 的 `RequestRestriction` 把多种限制能力收进一个插件，配置
 
 ## 注意事项
 
-1. **分组顺序**：分组按配置顺序求值，第一个命中的分组结束处理——`mode: Deny` 下拒绝，`mode: Allow` 下放行。
+1. **集合顺序**：Condition 与候选按配置顺序求值，并遵循 `allOf`/`anyOf` 短路。
 2. **极性是全局的**：条件是纯断言。命中意味着允许还是拒绝，由 `mode` 一次性决定。
 3. **大小写**：精确匹配（`values`）默认大小写敏感；用 `caseSensitive: false` 关闭；正则使用 `(?i)` 前缀。
 4. **正则性能**：多个正则模式合并成一条正则（用 `|` 连接），降低匹配开销。
 5. **HashSet 优化**：精确匹配列表超过 16 个值时自动使用 HashSet，O(1) 查找。
 6. **path 与 requestPath**：`key: { type: path }` 对照规范化后的当前路径（`values` 在加载时规范化）；`key: { type: requestPath }` 是入口时刻的 raw 路径。regex 从不规范化。
 7. **缺失值**：`keyMatch` / 身份匹配在值缺失时为 false。用 `keyExist` + `negate: true` 匹配缺失。
-8. **ipRefs**：分组条件可以使用内联 `ips` 和 `ipRefs`（IpList ConfigData）。Controller 在 apply 路径把 `ipRefs` 展开到 `resolvedIps`。缺失、未启用、类型错误或跨命名空间未授权的 IpList 引用 fail-closed（`ResolvedRefs=False`）；网关不会对未解析的操作员 `ipRefs` 编译空 matcher。
+8. **ipRefs**：条件可以使用内联 `ips` 和 `ipRefs`（IpList ConfigData）。Controller 在 apply 路径把 `ipRefs` 展开到 `resolvedIps`。缺失、未启用、类型错误或跨命名空间未授权的 IpList 引用 fail-closed（`ResolvedRefs=False`）；网关不会对未解析的操作员 `ipRefs` 编译空 matcher。
 
 ## FAQ
 
 ### Q1：如何表达黑名单和白名单？
 
-**A**：设置 `mode`。`Deny` 在任一分组命中时拒绝；`Allow` 在没有任何分组命中时拒绝。`mode` 必填，没有可回退的默认值。
+**A**：设置 `mode`。`Deny` 在集合匹配时拒绝；`Allow` 在集合不匹配时拒绝。`mode` 必填，没有可回退的默认值。
 
 ### Q2：如何表达 `(A AND B) OR C`？
 
-**A**：把 `A` 和 `B` 放进同一个分组的 `allOf`（AND），把 `C` 放进另一个 `anyOf` 分组（OR）。
+**A**：使用 `conditions.anyOf`，把 `A` 和 `B` 放进一个嵌套 `allOf`，再把 `C` 作为同级直接 Condition。
 
 ### Q3：什么时候需要键名？
 
@@ -445,7 +445,7 @@ Edgion 的 `RequestRestriction` 把多种限制能力收进一个插件，配置
 
 ### Q4：如何在 header 缺失时拒绝？
 
-**A**：增加一个分组，唯一条件是该 header 的 `keyExist` + `negate: true`。在 `mode: Deny` 下，header 缺失会使该分组命中并拒绝请求。
+**A**：把该 header 的 `keyExist` + `negate: true` 放成直接 `anyOf` 候选，或放入一个 `allOf` 分组。在 `mode: Deny` 下，header 缺失会使集合匹配并拒绝请求。
 
 ### Q5：如何让精确匹配不区分大小写？
 

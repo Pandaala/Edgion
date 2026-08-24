@@ -10,14 +10,15 @@ spec:
       type: RequestRestriction
       config:
         mode: Allow
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: path
-                values:
-                  - "/health"
-                regex:
-                  - "^/api/.*"
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: path
+                  values:
+                    - "/health"
+                  regex:
+                    - "^/api/.*"
         status: 404
         message: "Path not allowed"

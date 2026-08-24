@@ -9,11 +9,9 @@
 //!   reject, unmatched passes) or `Allow` (match => pass, unmatched is
 //!   rejected). There is no default: omitting it is a validation error, so the
 //!   polarity is always written out and can never silently flip.
-//! - `anyOf` is an array combined with **OR**: the policy fires if **any**
-//!   group matches. Groups are evaluated in configuration order; the first
-//!   match short-circuits.
-//! - Each group's `allOf` is combined with **AND**: a group matches only when
-//!   every condition is true.
+//! - `conditions` explicitly selects a top-level `allOf` or `anyOf`.
+//! - An `anyOf` alternative is either one direct Condition or one nested
+//!   `allOf` group. Evaluation follows configuration order and short-circuits.
 //!
 //! A condition is a shared [`Condition`] predicate. Predicates match request
 //! attributes (header/cookie/query/path/method) and, additionally,
@@ -29,18 +27,17 @@
 //! ```yaml
 //! requestRestriction:
 //!   mode: Deny
-//!   anyOf:
-//!     - allOf:
-//!         - type: keyMatch
-//!           key:
-//!             type: header
-//!             name: User-Agent
-//!           regex: ["(?i).*Bot.*"]
-//!     - allOf:
-//!         - type: keyMatch
-//!           key:
-//!             type: path
-//!           values: ["/admin"]
+//!   conditions:
+//!     anyOf:
+//!       - type: keyMatch
+//!         key:
+//!           type: header
+//!           name: User-Agent
+//!         regex: ["(?i).*Bot.*"]
+//!       - type: keyMatch
+//!         key:
+//!           type: path
+//!         values: ["/admin"]
 //!   message: "Access denied"
 //! ```
 //!
@@ -48,12 +45,12 @@
 //! ```yaml
 //! requestRestriction:
 //!   mode: Allow
-//!   anyOf:
-//!     - allOf:
-//!         - type: keyMatch
-//!           key:
-//!             type: method
-//!           values: ["GET", "HEAD", "OPTIONS"]
+//!   conditions:
+//!     allOf:
+//!       - type: keyMatch
+//!         key:
+//!           type: method
+//!         values: ["GET", "HEAD", "OPTIONS"]
 //!   status: 405
 //! ```
 //!
@@ -61,22 +58,22 @@
 //! ```yaml
 //! requestRestriction:
 //!   mode: Deny
-//!   anyOf:
-//!     - allOf:
-//!         - type: keyMatch
-//!           key:
-//!             type: method
-//!           values: ["DELETE"]
-//!         - type: keyMatch
-//!           key:
-//!             type: path
-//!           values: ["/admin"]
+//!   conditions:
+//!     allOf:
+//!       - type: keyMatch
+//!         key:
+//!           type: method
+//!         values: ["DELETE"]
+//!       - type: keyMatch
+//!         key:
+//!           type: path
+//!         values: ["/admin"]
 //! ```
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::resources::edgion_plugins::conditions::{conditions_validate_request_body, RuleGroup};
+use crate::resources::edgion_plugins::conditions::{ConditionSet, ConditionValidationProfile};
 
 /// What a matching rule group means. Required — there is no default, so the
 /// polarity is always stated explicitly in the configuration.
@@ -91,14 +88,14 @@ pub enum RestrictionMode {
 
 /// Request Restriction plugin configuration.
 ///
-/// DNF model: `anyOf` is OR; each group's `allOf` is AND. The required
+/// Bounded-DNF model: `conditions` explicitly selects `allOf` or `anyOf`. The required
 /// `mode` states what a match means. A condition is a shared [`Condition`]
 /// predicate (no per-condition allow/deny). Predicates match request
 /// attributes and post-authentication identity (mTLS subject/SAN/CN, verified
 /// JWT claims); it remains a local allow/deny matcher, not a full RBAC
 /// orchestration layer.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequestRestrictionConfig {
     /// Polarity — **required**. `Deny`: a matching group rejects. `Allow`: a
     /// matching group passes and anything unmatched is rejected.
@@ -110,9 +107,8 @@ pub struct RequestRestrictionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<RestrictionMode>,
 
-    /// Groups combined with OR. Evaluated in configuration order; first match
-    /// short-circuits. Distinct from `conditions.run` (conjunction).
-    pub any_of: Vec<RuleGroup>,
+    /// Explicit bounded Boolean expression evaluated in configuration order.
+    pub conditions: ConditionSet,
 
     /// HTTP status code for rejection (default: 403).
     #[serde(default = "default_status")]
@@ -132,7 +128,7 @@ impl Default for RequestRestrictionConfig {
     fn default() -> Self {
         Self {
             mode: None,
-            any_of: Vec::new(),
+            conditions: ConditionSet::default(),
             status: default_status(),
             message: None,
         }
@@ -167,11 +163,9 @@ impl RequestRestrictionConfig {
         !matches!(self.mode, Some(RestrictionMode::Deny))
     }
 
-    /// True if any group condition is HMAC with `validateRequestBody`.
+    /// True if any condition is HMAC with `validateRequestBody`.
     pub fn validates_request_body(&self) -> bool {
-        self.any_of
-            .iter()
-            .any(|group| conditions_validate_request_body(&group.all_of))
+        self.conditions.validates_request_body()
     }
 
     /// Validate and compile all conditions across all groups.
@@ -179,26 +173,15 @@ impl RequestRestrictionConfig {
         if self.mode.is_none() {
             return Err("mode must be specified (Deny | Allow)".to_string());
         }
-        if self.any_of.is_empty() {
-            return Err("At least one anyOf group must be specified".to_string());
-        }
         if self.status < 100 || self.status >= 600 {
             return Err(format!("Invalid status code: {}", self.status));
         }
-        for (gi, group) in self.any_of.iter_mut().enumerate() {
-            let group_name = group.name.clone().unwrap_or_else(|| format!("group[{gi}]"));
-            if group.all_of.is_empty() {
-                return Err(format!("Group '{group_name}': allOf must be non-empty"));
-            }
-            for (ordinal, condition) in group.all_of.iter_mut().enumerate() {
-                condition
-                    .compile(ordinal)
-                    .map_err(|e| format!("Group '{group_name}': invalid condition regex: {e}"))?;
-                condition
-                    .validate_all_of()
-                    .map_err(|e| format!("Group '{group_name}': {e}"))?;
-            }
-        }
+        self.conditions
+            .compile()
+            .map_err(|errors| format!("invalid condition regex: {}", errors[0]))?;
+        self.conditions
+            .validate(ConditionValidationProfile::RequestAsync)
+            .map_err(|errors| errors.join("; "))?;
         Ok(())
     }
 }
@@ -218,8 +201,8 @@ mod tests {
     use crate::resources::common::SecretObjectReference;
     use crate::resources::config_data_ref::EdgionConfigDataRef;
     use crate::resources::edgion_plugins::conditions::{
-        Condition, IpAccessMatch, JwtClaimMatchCondition, KeyExistCondition, KeyMatchCondition, MatchCore,
-        MtlsMatchCondition,
+        AllOfGroup, AnyOfClause, Condition, IpAccessMatch, JwtClaimMatchCondition, KeyExistCondition,
+        KeyMatchCondition, MatchCore, MtlsMatchCondition,
     };
     use crate::resources::edgion_plugins::hmac_match::HmacMatchConfig;
     use crate::resources::edgion_plugins::plugin_configs::HmacAuthSecretGroup;
@@ -264,14 +247,14 @@ mod tests {
         })
     }
 
-    fn group(all_of: Vec<Condition>) -> RuleGroup {
-        RuleGroup { name: None, all_of }
+    fn group(all_of: Vec<Condition>) -> AnyOfClause {
+        AnyOfClause::AllOf(AllOfGroup { name: None, all_of })
     }
 
-    fn deny_cfg(groups: Vec<RuleGroup>) -> RequestRestrictionConfig {
+    fn deny_cfg(groups: Vec<AnyOfClause>) -> RequestRestrictionConfig {
         RequestRestrictionConfig {
             mode: Some(RestrictionMode::Deny),
-            any_of: groups,
+            conditions: ConditionSet::AnyOf { any_of: groups },
             ..Default::default()
         }
     }
@@ -280,7 +263,7 @@ mod tests {
     fn test_default_config() {
         let config = RequestRestrictionConfig::default();
         assert_eq!(config.mode, None);
-        assert!(config.any_of.is_empty());
+        assert!(config.conditions.is_empty());
         assert_eq!(config.status, 403);
         assert_eq!(config.message, None);
     }
@@ -292,14 +275,16 @@ mod tests {
             ..Default::default()
         };
         let err = config.validate().unwrap_err();
-        assert!(err.contains("anyOf") || err.contains("group"), "{err}");
+        assert!(err.contains("allOf"), "{err}");
     }
 
     #[test]
     fn test_missing_mode_is_rejected() {
         let mut config = RequestRestrictionConfig {
             mode: None,
-            any_of: vec![group(vec![key_match(KeyGet::Path, &["/admin"])])],
+            conditions: ConditionSet::AnyOf {
+                any_of: vec![group(vec![key_match(KeyGet::Path, &["/admin"])])],
+            },
             ..Default::default()
         };
         let err = config.validate().unwrap_err();

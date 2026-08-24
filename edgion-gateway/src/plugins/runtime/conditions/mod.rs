@@ -9,7 +9,9 @@ mod extract;
 pub use evaluator::{ConditionEvalResult, EvaluationResult};
 pub use extract::{extract_jwt_claim_values, extract_mtls_values};
 // Gateway-internal evaluation extension traits (crate-private).
-pub(crate) use evaluator::{CompiledCondition, CompiledPluginConditions, ConditionExt, PluginConditionsExt};
+pub(crate) use evaluator::{
+    condition_set_has_unresolved, CompiledConditionSet, CompiledPluginConditions, MatchState, PluginConditionsExt,
+};
 // Condition config types live in the `edgion-resources` schema crate.
 // Re-exported here so `runtime::conditions::*` consumers need no import change.
 pub use edgion_resources::resources::edgion_plugins::conditions::{

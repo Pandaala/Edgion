@@ -24,31 +24,33 @@ spec:
                         - {type: Exact, value: /health}
                         - {type: Exact, value: /headers}
                         - {type: Exact, value: /fallback}
-                      allOf:
-                        - type: hmacAuth
-                          secretGroups:
-                            - name: policy
-                              secretRefs:
-                                - name: gac-hmac-credentials
-                                  namespace: edgion-test
-                          algorithms: [hmac-sha256]
-                          enforceHeaders: ["@request-target", host, date]
+                      conditions:
+                        allOf:
+                          - type: hmacAuth
+                            secretGroups:
+                              - name: policy
+                                secretRefs:
+                                  - name: gac-hmac-credentials
+                                    namespace: edgion-test
+                            algorithms: [hmac-sha256]
+                            enforceHeaders: ["@request-target", host, date]
                   - name: signed-body-request
                     type: url
                     config:
                       hosts: [gac-hmac.example.com]
                       paths:
                         - {type: Exact, value: /echo}
-                      allOf:
-                        - type: hmacAuth
-                          secretGroups:
-                            - name: policy
-                              secretRefs:
-                                - name: gac-hmac-credentials
-                                  namespace: edgion-test
-                          algorithms: [hmac-sha256]
-                          enforceHeaders: ["@request-target", host, date, digest]
-                          validateRequestBody: true
+                      conditions:
+                        allOf:
+                          - type: hmacAuth
+                            secretGroups:
+                              - name: policy
+                                secretRefs:
+                                  - name: gac-hmac-credentials
+                                    namespace: edgion-test
+                            algorithms: [hmac-sha256]
+                            enforceHeaders: ["@request-target", host, date, digest]
+                            validateRequestBody: true
                   - name: explicit-fallback
                     type: url
                     config:
@@ -56,7 +58,8 @@ spec:
                       paths:
                         - {type: Exact, value: /fallback}
                         - {type: Exact, value: /echo}
-                      allOf:
-                        - type: keyMatch
-                          key: {type: header, name: X-Hmac-Fallback}
-                          values: ["allow"]
+                      conditions:
+                        allOf:
+                          - type: keyMatch
+                            key: {type: header, name: X-Hmac-Fallback}
+                            values: ["allow"]

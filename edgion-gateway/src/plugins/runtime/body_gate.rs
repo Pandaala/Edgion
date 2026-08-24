@@ -113,8 +113,7 @@ impl RequestFilter for BodyGatedRequestFilter {
         // 1. Secondary gate: is the body required for this request?
         if let Some(conds) = &self.conditions {
             if conds.should_evaluate() {
-                let eval = conds.evaluate_detail(session, log);
-                if eval.result == EvaluationResult::Skip {
+                if conds.evaluate(session) == EvaluationResult::Skip {
                     // Body not required — run the plugin without body enforcement.
                     return self.inner.run_request(session, log).await;
                 }
@@ -182,8 +181,7 @@ impl UpstreamResponse for BodyGatedUpstreamResponse {
     async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         if let Some(conds) = &self.conditions {
             if conds.should_evaluate() {
-                let eval = conds.evaluate_detail(session, log);
-                if eval.result == EvaluationResult::Skip {
+                if conds.evaluate(session) == EvaluationResult::Skip {
                     return self.inner.run_upstream_response(session, log).await;
                 }
             }
@@ -288,7 +286,9 @@ mod tests {
     use crate::EdgionHttpContext;
     use bytes::Bytes;
     use edgion_resources::common::KeyGet;
-    use edgion_resources::resources::edgion_plugins::conditions::{Condition, KeyMatchCondition, PluginConditions};
+    use edgion_resources::resources::edgion_plugins::conditions::{
+        Condition, ConditionSet, KeyMatchCondition, PluginConditions,
+    };
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A mock session that carries a default ctx (so cap resolution has what
@@ -430,32 +430,49 @@ mod tests {
     #[tokio::test]
     async fn secondary_skip_runs_inner_without_buffering() {
         let inner = CountingFilter::new();
-        // Secondary run-condition: method must be POST. Request is GET → skip →
-        // body not required → inner runs, read_request_body is never called.
+        // The first leaf matches and the second fails. A multi-leaf body gate
+        // must remain log-less while skipping body capture.
         let req = BodyRequirement {
             conditions: Some(PluginConditions {
                 skip: None,
-                run: Some(vec![Condition::KeyMatch(KeyMatchCondition {
-                    key: KeyGet::Method,
-                    core: edgion_resources::resources::edgion_plugins::conditions::MatchCore {
-                        values: Some(vec!["POST".to_string()]),
-                        ..Default::default()
-                    },
-                    negate: false,
-                    descriptor: Box::from(""),
-                })]),
+                run: Some(ConditionSet::all_of(vec![
+                    Condition::KeyMatch(KeyMatchCondition {
+                        key: KeyGet::Method,
+                        core: edgion_resources::resources::edgion_plugins::conditions::MatchCore {
+                            values: Some(vec!["GET".to_string()]),
+                            ..Default::default()
+                        },
+                        negate: false,
+                        descriptor: Box::from(""),
+                    }),
+                    Condition::KeyMatch(KeyMatchCondition {
+                        key: KeyGet::Header {
+                            name: "X-Body-Gate".to_string(),
+                        },
+                        core: edgion_resources::resources::edgion_plugins::conditions::MatchCore {
+                            values: Some(vec!["yes".to_string()]),
+                            ..Default::default()
+                        },
+                        negate: false,
+                        descriptor: Box::from(""),
+                    }),
+                ])),
             }),
             ..Default::default()
         };
         let gate = BodyGatedRequestFilter::new(Box::new(inner), req);
 
         let mut session = MockPluginSession::new();
-        session.expect_key_get().return_const(Some("GET".to_string()));
+        session.expect_key_get().returning(|key| match key {
+            KeyGet::Method => Some("GET".to_string()),
+            _ => None,
+        });
         // read_request_body must NOT be called; no expectation set.
 
         let mut log = PluginLog::new("test");
         let result = gate.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
+        assert!(!log.contains("run.allOf[0]"));
     }
 
     #[tokio::test]
@@ -468,7 +485,7 @@ mod tests {
         // proves the compiled regex actually evaluated.
         let mut conds = PluginConditions {
             skip: None,
-            run: Some(vec![Condition::KeyMatch(KeyMatchCondition {
+            run: Some(ConditionSet::all_of(vec![Condition::KeyMatch(KeyMatchCondition {
                 key: KeyGet::Method,
                 core: edgion_resources::resources::edgion_plugins::conditions::MatchCore {
                     regex: Some(vec!["^POST$".to_string()]),
@@ -476,7 +493,7 @@ mod tests {
                 },
                 negate: false,
                 descriptor: Box::from(""),
-            })]),
+            })])),
         };
         conds.compile().expect("regex compiles");
         let req = BodyRequirement {

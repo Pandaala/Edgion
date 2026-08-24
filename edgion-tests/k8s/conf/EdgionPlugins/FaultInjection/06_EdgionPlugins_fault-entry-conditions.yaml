@@ -5,17 +5,25 @@ metadata:
   namespace: edgion-default
 spec:
   requestPlugins:
-  - enable: true
-    type: FaultInjection
-    config:
-      abort:
-        ratio: 1.0
-        statusCode: 503
-        body: gated
-    conditions:
-      run:
-      - type: keyMatch
-        key:
-          type: header
-          name: X-Fault
-        values: ["1"]
+    - enable: true
+      type: FaultInjection
+      config:
+        abort:
+          ratio: 1.0
+          statusCode: 503
+          body: "gated"
+      conditions:
+        run:
+          anyOf:
+            - type: keyMatch
+              key:
+                type: header
+                name: X-Fault
+              values: ["1"]
+            - name: explicit-fault-header
+              allOf:
+                - type: keyMatch
+                  key:
+                    type: header
+                    name: X-Fault
+                  values: ["1"]

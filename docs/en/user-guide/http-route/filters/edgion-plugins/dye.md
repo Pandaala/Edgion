@@ -29,8 +29,9 @@ gating, and which outcomes it actually records).
         value: degraded                # operator-authored literal override
         conditions:                    # optional; reuses the same PluginConditions shape as entry-level `conditions`
           run:
-            - type: keyExist
-              key: { type: header, name: X-Debug-Token }
+            allOf:
+              - type: keyExist
+                key: { type: header, name: X-Debug-Token }
       - name: X-Edgion-Debug
         on: [fallback]
         value: "fallback for ${header:X-Account-Id}"   # template on the shared ${type:name} engine
@@ -172,8 +173,8 @@ Gateway compile, single implementation):
 
 ## `conditions`
 
-Each rule may carry an optional `conditions` block, reusing the same
-`PluginConditions` run/skip shape used by entry-level `conditions`. See
+Each rule may carry an optional `conditions` block, reusing the same explicit
+`PluginConditions` `run`/`skip` ConditionSets used by entry-level conditions. See
 [Plugin Conditions](./conditions.md) for variants, `negate`, and `values`.
 Unlike the strip (which is unconditional), `conditions` gate whether a
 *matching* outcome actually renders its header — this doubles as the primary

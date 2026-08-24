@@ -1,15 +1,15 @@
 //! Request Restriction plugin implementation
 //!
 //! This plugin restricts access based on request attributes and identity,
-//! evaluated through the shared [`Condition`] enum.
+//! evaluated through the shared bounded condition-set grammar.
 //!
 //! ## Model (DNF: OR-of-AND)
 //! - `mode` is required: `Deny` (match => reject, unmatched passes) or `Allow`
 //!   (match => pass, unmatched is rejected). It has no default, so a config that
 //!   omits it is rejected instead of silently picking a polarity.
-//! - `anyOf` is OR: the policy fires if any group matches.
-//! - Each group's `allOf` is AND: a group matches only when every condition is
-//!   true. Groups are evaluated in configuration order; first match short-circuits.
+//! - `conditions` has exactly one root `allOf` or `anyOf`.
+//! - A root `anyOf` contains direct conditions or one-level named `allOf`
+//!   groups. Configuration order determines short-circuit order.
 //!
 //! ## Configuration Examples:
 //!
@@ -17,87 +17,36 @@
 //! ```yaml
 //! requestRestriction:
 //!   mode: Deny
-//!   anyOf:
-//!     - allOf:
-//!         - type: keyMatch
-//!           key:
-//!             type: header
-//!             name: User-Agent
-//!           regex: ["(?i).*Bot.*", "(?i).*Spider.*"]
-//!     - allOf:
-//!         - type: keyMatch
-//!           key:
-//!             type: path
-//!           values: ["/admin"]
+//!   conditions:
+//!     anyOf:
+//!       - type: keyMatch
+//!         key: { type: path }
+//!         values: ["/admin"]
+//!       - name: destructive-admin
+//!         allOf:
+//!           - type: keyMatch
+//!             key: { type: method }
+//!             values: ["DELETE"]
+//!           - type: keyMatch
+//!             key: { type: path }
+//!             regex: ["^/admin(?:/|$)"]
 //!   message: "Bot access denied"
-//! ```
-//!
-//! ### Allow: allow only specific paths:
-//! ```yaml
-//! requestRestriction:
-//!   mode: Allow
-//!   anyOf:
-//!     - allOf:
-//!         - type: keyMatch
-//!           key:
-//!             type: path
-//!           values: ["/health"]
-//!           regex: ["^/api/.*"]
-//! ```
-//!
-//! ### AND within a group: deny only DELETE to /admin:
-//! ```yaml
-//! requestRestriction:
-//!   mode: Deny
-//!   anyOf:
-//!     - allOf:
-//!         - type: keyMatch
-//!           key:
-//!             type: method
-//!           values: ["DELETE"]
-//!         - type: keyMatch
-//!           key:
-//!             type: path
-//!           regex: [".*/admin/.*"]
 //! ```
 
 use async_trait::async_trait;
 use bytes::Bytes;
 
 use crate::plugins::http::common::auth_common::send_gateway_plain_error_response;
-use crate::plugins::http::hmac_auth::{HmacVerifier, HmacVerifyOutcome};
-use crate::plugins::runtime::body_gate::body_read_failure_result;
-use crate::plugins::runtime::conditions::{CompiledCondition, ConditionExt};
+use crate::plugins::runtime::conditions::{condition_set_has_unresolved, CompiledConditionSet, MatchState};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::conditions::{Condition, RuleGroup};
 use edgion_resources::resources::edgion_plugins::{BodyRequirement, RequestRestrictionConfig};
-
-enum CompiledPredicate {
-    Sync(CompiledCondition),
-    HmacBody {
-        verifier: HmacVerifier,
-        negate: bool,
-        descriptor: Box<str>,
-    },
-}
-
-struct CompiledGroup {
-    predicates: Vec<CompiledPredicate>,
-    has_unresolved_refs: bool,
-}
-
-enum GroupMatch {
-    Yes,
-    No,
-    Terminal(PluginRunningResult),
-}
 
 /// Request Restriction plugin
 pub struct RequestRestriction {
     name: String,
     config: RequestRestrictionConfig,
-    groups: Vec<CompiledGroup>,
+    conditions: CompiledConditionSet,
     /// Validity computed once at construction. `Some` means the config is
     /// malformed (e.g. an invalid regex) and the plugin must fail closed.
     /// The config is immutable for the plugin's lifetime (a reload builds a new
@@ -106,6 +55,12 @@ pub struct RequestRestriction {
 }
 
 impl RequestRestriction {
+    pub(crate) fn would_fail_construction(config: &RequestRestrictionConfig) -> bool {
+        let mut validated = config.clone();
+        validated.validate().is_err()
+            || (!validated.allow_mode() && condition_set_has_unresolved(&validated.conditions))
+    }
+
     /// Create a new RequestRestriction plugin from configuration
     pub fn create(config: &RequestRestrictionConfig) -> Box<dyn RequestFilter> {
         Self::create_with_body(config, None)
@@ -119,119 +74,20 @@ impl RequestRestriction {
         // discard) the validity so run_request can fail closed without recompiling.
         let mut validated_config = config.clone();
         let mut config_error = validated_config.validate().err();
-        if !validated_config.allow_mode()
-            && validated_config
-                .any_of
-                .iter()
-                .flat_map(|group| &group.all_of)
-                .any(ConditionExt::has_unresolved_refs)
-        {
+        let conditions = CompiledConditionSet::new(&validated_config.conditions, "conditions", body_requirement);
+        if !validated_config.allow_mode() && conditions.has_unresolved_refs() {
             config_error.get_or_insert_with(|| "deny restriction contains unresolved references".to_string());
         }
-        let groups = compile_groups(&validated_config.any_of, body_requirement);
 
         let plugin = RequestRestriction {
             name: "RequestRestriction".to_string(),
             config: validated_config,
-            groups,
+            conditions,
             config_error,
         };
 
         Box::new(plugin)
     }
-
-    /// A group matches iff every compiled predicate is true.
-    /// HMAC `validateRequestBody` uses `HmacVerifier::verify` (D-27), not the
-    /// header-only shared evaluator short-circuit.
-    async fn group_matches(
-        &self,
-        group: &CompiledGroup,
-        session: &mut dyn PluginSession,
-        log: &mut PluginLog,
-    ) -> GroupMatch {
-        // Allow mode treats an incomplete allow candidate as unavailable and
-        // continues to the next group. Deny mode is rejected at construction.
-        if group.has_unresolved_refs {
-            return GroupMatch::No;
-        }
-        for predicate in &group.predicates {
-            match predicate {
-                CompiledPredicate::Sync(condition) => {
-                    if !condition.evaluate(session, Some(&mut *log)) {
-                        return GroupMatch::No;
-                    }
-                }
-                CompiledPredicate::HmacBody {
-                    verifier,
-                    negate,
-                    descriptor,
-                } => {
-                    let matched = match verifier.verify(session).await {
-                        HmacVerifyOutcome::Verified { .. } => !*negate,
-                        HmacVerifyOutcome::NoMatch(_) | HmacVerifyOutcome::LogicalBodyLimit(_) => *negate,
-                        HmacVerifyOutcome::CaptureFailure(error) | HmacVerifyOutcome::DigestReadFailure(error) => {
-                            return GroupMatch::Terminal(body_read_failure_result(
-                                session,
-                                verifier.body_requirement(),
-                                log,
-                                &error,
-                            ));
-                        }
-                    };
-                    if !matched {
-                        return GroupMatch::No;
-                    }
-                    log.push(descriptor);
-                }
-            }
-        }
-        GroupMatch::Yes
-    }
-
-    /// Evaluate groups in configuration order (OR, first match wins).
-    ///
-    /// Short-circuiting on the first holding group (`return (true, Some(i))`) is
-    /// the contract S10's log reconstruction rests on: a logged group name
-    /// means later groups were not considered.
-    async fn evaluate_groups(
-        &self,
-        session: &mut dyn PluginSession,
-        log: &mut PluginLog,
-    ) -> Result<(bool, Option<usize>), PluginRunningResult> {
-        for (i, group) in self.groups.iter().enumerate() {
-            match self.group_matches(group, session, log).await {
-                GroupMatch::Yes => return Ok((true, Some(i))),
-                GroupMatch::No => {}
-                GroupMatch::Terminal(result) => return Err(result),
-            }
-        }
-        Ok((false, None))
-    }
-}
-
-fn compile_groups(any_of: &[RuleGroup], body_requirement: Option<BodyRequirement>) -> Vec<CompiledGroup> {
-    any_of
-        .iter()
-        .map(|group| {
-            let has_unresolved_refs = group.all_of.iter().any(ConditionExt::has_unresolved_refs);
-            CompiledGroup {
-                has_unresolved_refs,
-                predicates: group
-                    .all_of
-                    .iter()
-                    .cloned()
-                    .map(|condition| match condition {
-                        Condition::HmacAuth(hmac) if hmac.validate_request_body => CompiledPredicate::HmacBody {
-                            negate: hmac.negate,
-                            descriptor: hmac.descriptor.clone(),
-                            verifier: HmacVerifier::new(&hmac, body_requirement.clone()),
-                        },
-                        other => CompiledPredicate::Sync(CompiledCondition::new(other)),
-                    })
-                    .collect(),
-            }
-        })
-        .collect()
 }
 
 #[async_trait]
@@ -250,25 +106,24 @@ impl RequestFilter for RequestRestriction {
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        // Evaluate all groups (OR), then apply the configured polarity: Allow mode
-        // denies what it does not match, Deny mode denies what it does.
+        // Apply polarity only after the shared tri-state evaluator completes.
         let allow_mode = self.config.allow_mode();
-        let (any_matched, matched_idx) = match self.evaluate_groups(session, plugin_log).await {
+        let eval = match self
+            .conditions
+            .evaluate_async(session, plugin_log, self.conditions.atomic_count() > 1)
+            .await
+        {
             Ok(result) => result,
             Err(terminal) => return terminal,
         };
+        let any_matched = eval.state == MatchState::True;
         let denied = any_matched != allow_mode;
 
         if denied {
-            let deny_msg = match matched_idx {
-                Some(i) => {
-                    let label = self.config.any_of[i]
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| format!("group[{}]", i));
-                    format!("Deny group {}", label)
-                }
-                None => "Deny (no allow group matched)".to_string(),
+            let deny_msg = if any_matched {
+                format!("Deny {}", eval.cause.unwrap_or("conditions"))
+            } else {
+                "Deny (no allow alternative matched)".to_string()
             };
             plugin_log.push(&deny_msg);
 
@@ -303,9 +158,10 @@ mod tests {
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use edgion_resources::common::KeyGet;
     use edgion_resources::resources::edgion_plugins::conditions::{
-        Condition, IpAccessMatch, KeyExistCondition, KeyMatchCondition, MatchCore,
+        AllOfGroup, AnyOfClause, Condition, ConditionSet, IpAccessMatch, KeyExistCondition, KeyMatchCondition,
+        MatchCore,
     };
-    use edgion_resources::resources::edgion_plugins::{RestrictionMode, RuleGroup};
+    use edgion_resources::resources::edgion_plugins::RestrictionMode;
 
     fn core_values(values: &[&str]) -> MatchCore {
         MatchCore {
@@ -338,17 +194,17 @@ mod tests {
         })
     }
 
-    fn named_group(name: &str, all_of: Vec<Condition>) -> RuleGroup {
-        RuleGroup {
+    fn named_group(name: &str, all_of: Vec<Condition>) -> AnyOfClause {
+        AnyOfClause::AllOf(AllOfGroup {
             name: Some(name.to_string()),
             all_of,
-        }
+        })
     }
 
-    fn cfg(mode: RestrictionMode, groups: Vec<RuleGroup>) -> RequestRestrictionConfig {
+    fn cfg(mode: RestrictionMode, groups: Vec<AnyOfClause>) -> RequestRestrictionConfig {
         let mut c = RequestRestrictionConfig {
             mode: Some(mode),
-            any_of: groups,
+            conditions: ConditionSet::AnyOf { any_of: groups },
             ..Default::default()
         };
         let _ = c.validate();
@@ -379,8 +235,6 @@ mod tests {
                 ],
             )],
         );
-        assert_eq!(config.any_of[0].all_of[0].descriptor(), "0:keyMatch:method");
-        assert_eq!(config.any_of[0].all_of[1].descriptor(), "1:keyExist:hdr:X-Audit-Token");
 
         let plugin = RequestRestriction::create(&config);
         let mut session = MockPluginSession::new();
@@ -398,9 +252,9 @@ mod tests {
             plugin.run_request(&mut session, &mut log).await,
             PluginRunningResult::ErrTerminateRequest
         );
-        assert!(log.contains("0:keyMatch:method"));
-        assert!(log.contains("1:keyExist:hdr:X-Audit-Token"));
-        assert!(log.contains("Deny group audited"));
+        assert!(log.contains("conditions.anyOf[0].allOf[0]:keyMatch:method"));
+        assert!(log.contains("conditions.anyOf[0].allOf[1]:keyExist:hdr:X-Audit-Token"));
+        assert!(log.contains("audited"));
     }
 
     #[tokio::test]
@@ -409,7 +263,6 @@ mod tests {
             RestrictionMode::Deny,
             vec![named_group("readonly", vec![key_match(KeyGet::Method, &["GET"])])],
         );
-        assert_eq!(config.any_of[0].all_of[0].descriptor(), "0:keyMatch:method");
 
         let plugin = RequestRestriction::create(&config);
         let mut session = MockPluginSession::new();
@@ -690,7 +543,7 @@ mod tests {
 
         let result = plugin.run_request(&mut s, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(log.contains("Deny group alpha"));
+        assert!(log.contains("Deny alpha"));
         assert!(!log.contains("beta"));
     }
 
@@ -785,7 +638,6 @@ mod tests {
             RestrictionMode::Deny,
             vec![named_group("signed-body", vec![Condition::HmacAuth(hmac)])],
         );
-        assert_eq!(config.any_of[0].all_of[0].descriptor(), "0:hmacAuth");
         let plugin = RequestRestriction::create_with_body(&config, Some(BodyRequirement::fail_close()));
 
         let mut session = MockPluginSession::new();
@@ -815,7 +667,10 @@ mod tests {
         let mut log = PluginLog::new("RequestRestriction");
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest, "{log:?}");
-        assert!(log.contains("0:hmacAuth"), "{log:?}");
+        assert!(
+            !log.contains("hmacAuth"),
+            "single-leaf match descriptor must be suppressed: {log:?}"
+        );
         assert!(log.contains("Deny"), "{log:?}");
     }
 
@@ -842,7 +697,6 @@ mod tests {
             RestrictionMode::Deny,
             vec![named_group("unsigned-body", vec![Condition::HmacAuth(hmac)])],
         );
-        assert_eq!(config.any_of[0].all_of[0].descriptor(), "0:hmacAuth");
         let plugin = RequestRestriction::create_with_body(&config, Some(BodyRequirement::fail_close()));
 
         let mut session = MockPluginSession::new();
@@ -857,7 +711,10 @@ mod tests {
             PluginRunningResult::ErrTerminateRequest,
             "{log:?}"
         );
-        assert!(log.contains("0:hmacAuth"), "{log:?}");
+        assert!(
+            !log.contains("hmacAuth"),
+            "single-leaf match descriptor must be suppressed: {log:?}"
+        );
         assert!(log.contains("Deny"), "{log:?}");
     }
 }

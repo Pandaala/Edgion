@@ -9,6 +9,13 @@ spec:
       type: Wasm
       body:
         maxBodySize: 1MiB
+        conditions:
+          run:
+            anyOf:
+              - type: keyMatch
+                key:
+                  type: method
+                values: [POST]
       config:
         source:
           file: ../../../edgion-tests/wasm/artifacts/header_demo.wasm

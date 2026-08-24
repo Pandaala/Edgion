@@ -770,7 +770,7 @@ mod request_access_policy_variant_tests {
                                         ips: vec!["10.0.0.0/8".to_string()],
                                         ..Default::default()
                                     },
-                                    all_of: vec![],
+                                    conditions: None,
                                 },
                             ),
                         }],
@@ -1091,7 +1091,7 @@ mod request_body_plugin_requirement_tests {
         let operator = BodyRequirement {
             conditions: Some(PluginConditions {
                 skip: None,
-                run: Some(vec![]),
+                run: Some(crate::ConditionSet::all_of(vec![])),
             }),
             on_read_failure: BodyReadFailureMode::FailOpen,
             ..Default::default()

@@ -10,14 +10,14 @@ spec:
       type: RequestRestriction
       config:
         mode: Allow
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: method
-                values:
-                  - "GET"
-                  - "HEAD"
-                  - "OPTIONS"
+        conditions:
+          allOf:
+            - type: keyMatch
+              key:
+                type: method
+              values:
+                - "GET"
+                - "HEAD"
+                - "OPTIONS"
         status: 405
         message: "Method not allowed"

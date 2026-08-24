@@ -8,6 +8,14 @@ closed: 2026-08-23
 
 # Unified Condition Layer — DESIGN-TRADEOFF
 
+> **Superseded grouping shape (2026-08-24):** the one-`Condition` rule remains
+> authoritative, but the flat `skip`/`run`, RequestRestriction `anyOf`, and RAP
+> `allOf` containers described below were replaced by the shared bounded
+> `ConditionSet`. See
+> `tasks/pending/condition-set-dnf-unification/01-design.md` and decision CSD-1.
+> The text below is retained as the historical rationale for
+> `condition-layer-s15`, not as current configuration guidance.
+
 ## Conclusion
 
 There is one `Condition` enum. Every consumer accepts every variant. Grouping

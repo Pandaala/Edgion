@@ -149,14 +149,15 @@ path normalization 会剥除每个 segment 中的 `;param=...`（防 `..;/` 类�
 - type: RequestRestriction
   config:
     mode: Deny
-    anyOf:
-      - allOf:
-          - type: keyMatch
-            key:
-              type: path             # current 视图，覆盖所有编码变体
-            values:
-              - "/admin"
-              - "/internal"
+    conditions:
+      anyOf:
+        - allOf:
+            - type: keyMatch
+              key:
+                type: path             # current 视图，覆盖所有编码变体
+              values:
+                - "/admin"
+                - "/internal"
 ```
 
 ### 审计日志记录客户端原始 URI

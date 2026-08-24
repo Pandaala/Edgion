@@ -277,17 +277,9 @@ fn config_data_url_allow_list_typo_is_advisory_with_gate_off_and_on() {
         (
             json!({
                 "data": {"type": "RequestAccessUrlAllowList", "config": {"items": [{
-                    "name": "health", "hosts": ["api.example.com"], "hostz": [],
-                    "paths": [{"type": "Exact", "value": "/health"}], "allOf": []
-                }]}}
-            }),
-            "data.config.items[0].hostz",
-        ),
-        (
-            json!({
-                "data": {"type": "RequestAccessUrlAllowList", "config": {"items": [{
                     "name": "health", "hosts": ["api.example.com"],
-                    "paths": [{"type": "Exact", "value": "/health", "valuez": "/ignored"}], "allOf": []
+                    "paths": [{"type": "Exact", "value": "/health", "valuez": "/ignored"}],
+                    "conditions": {"allOf": []}
                 }]}}
             }),
             "data.config.items[0].paths[0].valuez",
@@ -297,10 +289,10 @@ fn config_data_url_allow_list_typo_is_advisory_with_gate_off_and_on() {
                 "data": {"type": "RequestAccessUrlAllowList", "config": {"items": [{
                     "name": "health", "hosts": ["api.example.com"],
                     "paths": [{"type": "Exact", "value": "/health"}],
-                    "allOf": [{"type": "directPeerIpMatch", "ips": ["192.0.2.0/24"], "ipsz": []}]
+                    "conditions": {"allOf": [{"type": "directPeerIpMatch", "ips": ["192.0.2.0/24"], "ipsz": []}]}
                 }]}}
             }),
-            "data.config.items[0].allOf[0].ipsz",
+            "data.config.items[0].conditions.allOf[0].ipsz",
         ),
     ];
 
@@ -320,18 +312,37 @@ fn config_data_url_allow_list_typo_is_advisory_with_gate_off_and_on() {
 }
 
 #[test]
+fn config_data_url_allow_list_rejects_unknown_candidate_container_fields() {
+    for extra in [json!({"hostz": []}), json!({"allOf": []})] {
+        let mut candidate = json!({
+            "name": "health",
+            "hosts": ["api.example.com"],
+            "paths": [{"type": "Exact", "value": "/health"}]
+        });
+        candidate
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let doc = json!({
+            "data": {"type": "RequestAccessUrlAllowList", "config": {"items": [candidate]}}
+        });
+        assert!(serde_json::from_value::<EdgionConfigDataSpec>(doc).is_err());
+    }
+}
+
+#[test]
 fn config_data_url_allow_list_keeps_secret_match_strict() {
     let doc = json!({
         "data": {"type": "RequestAccessUrlAllowList", "config": {"items": [{
             "name": "health", "hosts": ["api.example.com"],
             "paths": [{"type": "Exact", "value": "/health"}],
-            "allOf": [{
+            "conditions": {"allOf": [{
                 "type": "secretMatch",
                 "key": {"type": "header", "name": "X-Access-Key"},
                 "secretKey": "token",
                 "secretRef": {"name": "access-secret"},
                 "unexpectedCredentialField": true
-            }]
+            }]}
         }]}}
     });
 

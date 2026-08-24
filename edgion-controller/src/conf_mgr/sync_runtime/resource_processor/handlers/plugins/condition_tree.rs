@@ -3,7 +3,7 @@
 //! Two ordered passes (do not swap):
 //! 1. **ConfigData expansion** writes RAP `resolved_profiles` / `resolved_candidates`
 //!    and fills `IpAccessMatch.resolved_ips` from `ipRefs` everywhere (entry-level
-//!    skip/run, body, dye, RAP sidecar, RequestRestriction `anyOf[].allOf`).
+//!    skip/run, body, dye, RAP sidecar, and RequestRestriction ConditionSets).
 //! 2. **Credential pass** runs after and reads those snapshots, filling
 //!    `resolved_values` / `resolved_credentials`. HMAC `secretGroups` that exist
 //!    only on expanded URL candidates are invisible if this pass runs first.
@@ -15,7 +15,7 @@
 
 use edgion_resources::prelude_resources::EdgionPlugins;
 use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataRef};
-use edgion_resources::resources::edgion_plugins::conditions::PluginConditions;
+use edgion_resources::resources::edgion_plugins::conditions::{ConditionSet, PluginConditions};
 use edgion_resources::resources::edgion_plugins::dye::DyeSuite;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{
     Condition, IpAccessMatch, RequestAccessPolicyConfig, RequestAccessRuleType, SecretMatchCondition,
@@ -100,6 +100,9 @@ fn enforce_ip_match_cap(ep: &mut EdgionPlugins) {
     let warning = format!("IP match conditions cannot exceed {MAX_REFERENCED_IP_RULES} after ConfigData expansion");
     if let Some(entries) = ep.spec.request_plugins.as_mut() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             if let EdgionPlugin::RequestAccessPolicy(config) = &mut entry.plugin {
                 request_access_policy_data::push_warning(&mut config.resolution_warnings, warning.clone());
             }
@@ -110,21 +113,33 @@ fn enforce_ip_match_cap(ep: &mut EdgionPlugins) {
 fn walk_all_ip_refs(ep: &mut EdgionPlugins, resolve_ctx: &ResolveCtx<'_>) {
     if let Some(entries) = ep.spec.request_plugins.as_mut() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             walk_request_entry_ip_refs(entry, resolve_ctx);
         }
     }
     if let Some(entries) = ep.spec.upstream_response_filter_plugins.as_mut() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             walk_upstream_filter_entry_ip_refs(entry, resolve_ctx);
         }
     }
     if let Some(entries) = ep.spec.upstream_response_body_filter_plugins.as_mut() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             walk_upstream_body_entry_ip_refs(entry, resolve_ctx);
         }
     }
     if let Some(entries) = ep.spec.upstream_response_plugins.as_mut() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             walk_upstream_response_entry_ip_refs(entry, resolve_ctx);
         }
     }
@@ -141,9 +156,7 @@ fn walk_request_entry_ip_refs(entry: &mut RequestFilterEntry, resolve_ctx: &Reso
     match &mut entry.plugin {
         EdgionPlugin::RequestAccessPolicy(config) => walk_rap_resolved_ip(config, resolve_ctx),
         EdgionPlugin::RequestRestriction(config) => {
-            for group in &mut config.any_of {
-                walk_conditions_ip(&mut group.all_of, resolve_ctx, None, IpRefFailure::FailClosed);
-            }
+            walk_conditions_ip(&mut config.conditions, resolve_ctx, None, IpRefFailure::FailClosed);
         }
         _ => {}
     }
@@ -218,8 +231,8 @@ fn walk_rap_resolved_ip(config: &mut RequestAccessPolicyConfig, resolve_ctx: &Re
                             Some(&mut config.resolution_warnings),
                             IpRefFailure::PartialGood,
                         );
-                        walk_conditions_ip(
-                            &mut ip.all_of,
+                        walk_optional_conditions_ip(
+                            ip.conditions.as_mut(),
                             resolve_ctx,
                             Some(&mut config.resolution_warnings),
                             IpRefFailure::PartialGood,
@@ -228,8 +241,8 @@ fn walk_rap_resolved_ip(config: &mut RequestAccessPolicyConfig, resolve_ctx: &Re
                     RequestAccessRuleType::Url(url) => {
                         if let Some(candidates) = url.resolved_candidates.as_mut() {
                             for candidate in candidates {
-                                walk_conditions_ip(
-                                    &mut candidate.all_of,
+                                walk_optional_conditions_ip(
+                                    candidate.conditions.as_mut(),
                                     resolve_ctx,
                                     Some(&mut config.resolution_warnings),
                                     IpRefFailure::PartialGood,
@@ -243,13 +256,25 @@ fn walk_rap_resolved_ip(config: &mut RequestAccessPolicyConfig, resolve_ctx: &Re
     }
 }
 
+fn walk_optional_conditions_ip(
+    conditions: Option<&mut ConditionSet>,
+    resolve_ctx: &ResolveCtx<'_>,
+    warnings: Option<&mut Vec<String>>,
+    failure: IpRefFailure,
+) {
+    let Some(conditions) = conditions else {
+        return;
+    };
+    walk_conditions_ip(conditions, resolve_ctx, warnings, failure);
+}
+
 fn walk_conditions_ip(
-    conditions: &mut [Condition],
+    conditions: &mut ConditionSet,
     resolve_ctx: &ResolveCtx<'_>,
     mut warnings: Option<&mut Vec<String>>,
     failure: IpRefFailure,
 ) {
-    for condition in conditions {
+    for condition in conditions.iter_conditions_mut() {
         match condition {
             Condition::DirectPeerIpMatch(ip) | Condition::RemoteIpMatch(ip) => {
                 resolve_ip_match(ip, resolve_ctx, warnings.as_deref_mut(), failure);
@@ -395,6 +420,9 @@ fn walk_all_credentials(
 ) {
     if let Some(entries) = ep.spec.request_plugins.as_mut() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             walk_plugin_conditions_credentials(entry.conditions.as_mut(), owner_namespace, resource_ref, ctx);
             walk_plugin_conditions_credentials(
                 entry.body.as_mut().and_then(|body| body.conditions.as_mut()),
@@ -408,9 +436,7 @@ fn walk_all_credentials(
                     walk_rap_resolved_credentials(config, owner_namespace, resource_ref, ctx);
                 }
                 EdgionPlugin::RequestRestriction(config) => {
-                    for group in &mut config.any_of {
-                        walk_conditions_credentials(&mut group.all_of, owner_namespace, resource_ref, ctx);
-                    }
+                    walk_conditions_credentials(&mut config.conditions, owner_namespace, resource_ref, ctx);
                 }
                 _ => {}
             }
@@ -418,18 +444,27 @@ fn walk_all_credentials(
     }
     if let Some(entries) = ep.spec.upstream_response_filter_plugins.as_mut() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             walk_plugin_conditions_credentials(entry.conditions.as_mut(), owner_namespace, resource_ref, ctx);
             walk_dye_credentials(entry.dye.as_mut(), owner_namespace, resource_ref, ctx);
         }
     }
     if let Some(entries) = ep.spec.upstream_response_body_filter_plugins.as_mut() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             walk_plugin_conditions_credentials(entry.conditions.as_mut(), owner_namespace, resource_ref, ctx);
             walk_dye_credentials(entry.dye.as_mut(), owner_namespace, resource_ref, ctx);
         }
     }
     if let Some(entries) = ep.spec.upstream_response_plugins.as_mut() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             walk_plugin_conditions_credentials(entry.conditions.as_mut(), owner_namespace, resource_ref, ctx);
             walk_plugin_conditions_credentials(
                 entry.body.as_mut().and_then(|body| body.conditions.as_mut()),
@@ -487,12 +522,16 @@ fn walk_rap_resolved_credentials(
             for rule in &mut group.any_of_rules {
                 match &mut rule.rule {
                     RequestAccessRuleType::DirectPeerIp(ip) | RequestAccessRuleType::RemoteIp(ip) => {
-                        walk_conditions_credentials(&mut ip.all_of, owner_namespace, resource_ref, ctx);
+                        if let Some(conditions) = ip.conditions.as_mut() {
+                            walk_conditions_credentials(conditions, owner_namespace, resource_ref, ctx);
+                        }
                     }
                     RequestAccessRuleType::Url(url) => {
                         if let Some(candidates) = url.resolved_candidates.as_mut() {
                             for candidate in candidates {
-                                walk_conditions_credentials(&mut candidate.all_of, owner_namespace, resource_ref, ctx);
+                                if let Some(conditions) = candidate.conditions.as_mut() {
+                                    walk_conditions_credentials(conditions, owner_namespace, resource_ref, ctx);
+                                }
                             }
                         }
                     }
@@ -503,12 +542,12 @@ fn walk_rap_resolved_credentials(
 }
 
 fn walk_conditions_credentials(
-    conditions: &mut [Condition],
+    conditions: &mut ConditionSet,
     owner_namespace: Option<&String>,
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    for condition in conditions {
+    for condition in conditions.iter_conditions_mut() {
         match condition {
             Condition::SecretMatch(condition) => {
                 resolve_secret_match(condition, owner_namespace, resource_ref, ctx);
@@ -602,6 +641,9 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn for_each_
 ) {
     if let Some(entries) = ep.spec.request_plugins.as_ref() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             visit_plugin_conditions_secret_matches(entry.conditions.as_ref(), &mut visit);
             visit_plugin_conditions_secret_matches(
                 entry.body.as_ref().and_then(|body| body.conditions.as_ref()),
@@ -617,12 +659,16 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn for_each_
                                     match &rule.rule {
                                         RequestAccessRuleType::DirectPeerIp(ip)
                                         | RequestAccessRuleType::RemoteIp(ip) => {
-                                            visit_conditions_secret_matches(&ip.all_of, &mut visit);
+                                            if let Some(conditions) = ip.conditions.as_ref() {
+                                                visit_conditions_secret_matches(conditions, &mut visit);
+                                            }
                                         }
                                         RequestAccessRuleType::Url(url) => {
                                             if let Some(candidates) = url.resolved_candidates.as_ref() {
                                                 for candidate in candidates {
-                                                    visit_conditions_secret_matches(&candidate.all_of, &mut visit);
+                                                    if let Some(conditions) = candidate.conditions.as_ref() {
+                                                        visit_conditions_secret_matches(conditions, &mut visit);
+                                                    }
                                                 }
                                             }
                                         }
@@ -633,9 +679,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn for_each_
                     }
                 }
                 EdgionPlugin::RequestRestriction(config) => {
-                    for group in &config.any_of {
-                        visit_conditions_secret_matches(&group.all_of, &mut visit);
-                    }
+                    visit_conditions_secret_matches(&config.conditions, &mut visit);
                 }
                 _ => {}
             }
@@ -643,18 +687,27 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn for_each_
     }
     if let Some(entries) = ep.spec.upstream_response_filter_plugins.as_ref() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             visit_plugin_conditions_secret_matches(entry.conditions.as_ref(), &mut visit);
             visit_dye_secret_matches(entry.dye.as_ref(), &mut visit);
         }
     }
     if let Some(entries) = ep.spec.upstream_response_body_filter_plugins.as_ref() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             visit_plugin_conditions_secret_matches(entry.conditions.as_ref(), &mut visit);
             visit_dye_secret_matches(entry.dye.as_ref(), &mut visit);
         }
     }
     if let Some(entries) = ep.spec.upstream_response_plugins.as_ref() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             visit_plugin_conditions_secret_matches(entry.conditions.as_ref(), &mut visit);
             visit_plugin_conditions_secret_matches(
                 entry.body.as_ref().and_then(|body| body.conditions.as_ref()),
@@ -672,11 +725,11 @@ fn visit_plugin_conditions_secret_matches(
     let Some(conditions) = conditions else {
         return;
     };
-    for list in [conditions.skip.as_deref(), conditions.run.as_deref()]
+    for set in [conditions.skip.as_ref(), conditions.run.as_ref()]
         .into_iter()
         .flatten()
     {
-        visit_conditions_secret_matches(list, visit);
+        visit_conditions_secret_matches(set, visit);
     }
 }
 
@@ -689,8 +742,8 @@ fn visit_dye_secret_matches(dye: Option<&DyeSuite>, visit: &mut impl FnMut(&Secr
     }
 }
 
-fn visit_conditions_secret_matches(conditions: &[Condition], visit: &mut impl FnMut(&SecretMatchCondition)) {
-    for condition in conditions {
+fn visit_conditions_secret_matches(conditions: &ConditionSet, visit: &mut impl FnMut(&SecretMatchCondition)) {
+    for condition in conditions.iter_conditions() {
         if let Condition::SecretMatch(condition) = condition {
             visit(condition);
         }
@@ -704,6 +757,9 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn for_each_
 ) {
     if let Some(entries) = ep.spec.request_plugins.as_ref() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             visit_plugin_conditions_ip_refs(entry.conditions.as_ref(), &mut visit);
             visit_plugin_conditions_ip_refs(
                 entry.body.as_ref().and_then(|body| body.conditions.as_ref()),
@@ -711,28 +767,35 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn for_each_
             );
             visit_dye_ip_refs(entry.dye.as_ref(), &mut visit);
             if let EdgionPlugin::RequestRestriction(config) = &entry.plugin {
-                for group in &config.any_of {
-                    for condition in &group.all_of {
-                        visit_condition_ip_refs(condition, &mut visit);
-                    }
+                for condition in config.conditions.iter_conditions() {
+                    visit_condition_ip_refs(condition, &mut visit);
                 }
             }
         }
     }
     if let Some(entries) = ep.spec.upstream_response_filter_plugins.as_ref() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             visit_plugin_conditions_ip_refs(entry.conditions.as_ref(), &mut visit);
             visit_dye_ip_refs(entry.dye.as_ref(), &mut visit);
         }
     }
     if let Some(entries) = ep.spec.upstream_response_body_filter_plugins.as_ref() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             visit_plugin_conditions_ip_refs(entry.conditions.as_ref(), &mut visit);
             visit_dye_ip_refs(entry.dye.as_ref(), &mut visit);
         }
     }
     if let Some(entries) = ep.spec.upstream_response_plugins.as_ref() {
         for entry in entries {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
             visit_plugin_conditions_ip_refs(entry.conditions.as_ref(), &mut visit);
             visit_plugin_conditions_ip_refs(
                 entry.body.as_ref().and_then(|body| body.conditions.as_ref()),
@@ -750,11 +813,11 @@ fn visit_plugin_conditions_ip_refs(
     let Some(conditions) = conditions else {
         return;
     };
-    for list in [conditions.skip.as_deref(), conditions.run.as_deref()] {
-        let Some(list) = list else {
-            continue;
-        };
-        for condition in list {
+    for set in [conditions.skip.as_ref(), conditions.run.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        for condition in set.iter_conditions() {
             visit_condition_ip_refs(condition, visit);
         }
     }

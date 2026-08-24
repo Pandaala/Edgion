@@ -406,8 +406,8 @@ fn internally_tagged_enum_reports_typo_inside_variant_and_not_the_discriminator(
 
 #[test]
 fn internally_tagged_enum_nested_reports_exact_indexed_path() {
-    // Mirrors the real corpus shape: `conditions.run[0]` where each element
-    // is an internally-tagged `Condition`.
+    // Synthetic array holder proving indexed traversal of internally-tagged
+    // enum elements. Product ConditionSet shapes are covered below.
     let schema = schemars::schema_for!(ConditionHolder);
     let value = json!({
         "run": [
@@ -424,7 +424,8 @@ fn real_schema_internally_tagged_conditions_run_has_zero_findings() {
     // The exact corpus shape that regressed: a well-formed `conditions.run`
     // block built from the real `Condition` enum, walked against the real
     // `schema_for!(EdgionPluginsSpec)`. Before the `$ref`-with-siblings fix,
-    // this produced a false positive on `requestPlugins[0].conditions.run[0].type`.
+    // this produced a false positive on
+    // `requestPlugins[0].conditions.run.allOf[0].type`.
     let schema = schemars::schema_for!(EdgionPluginsSpec);
     let value = json!({
         "requestPlugins": [
@@ -432,9 +433,11 @@ fn real_schema_internally_tagged_conditions_run_has_zero_findings() {
                 "type": "IpRestriction",
                 "config": {"defaultAction": "allow"},
                 "conditions": {
-                    "run": [
-                        {"type": "keyMatch", "key": {"type": "header", "name": "X-Test"}, "values": ["1"]}
-                    ]
+                    "run": {
+                        "allOf": [
+                            {"type": "keyMatch", "key": {"type": "header", "name": "X-Test"}, "values": ["1"]}
+                        ]
+                    }
                 }
             }
         ]
@@ -455,15 +458,17 @@ fn unknown_key_paths_reports_typo_inside_flattened_match_core_on_real_condition_
                 "type": "IpRestriction",
                 "config": {"defaultAction": "allow"},
                 "conditions": {
-                    "run": [
-                        {
-                            "type": "keyMatch",
-                            "key": {"type": "header", "name": "X-Test"},
-                            "values": ["ok"],
-                            "valuez": "typo",
-                            "regexx": ["^x"]
-                        }
-                    ]
+                    "run": {
+                        "anyOf": [
+                            {
+                                "type": "keyMatch",
+                                "key": {"type": "header", "name": "X-Test"},
+                                "values": ["ok"],
+                                "valuez": "typo",
+                                "regexx": ["^x"]
+                            }
+                        ]
+                    }
                 }
             }
         ]
@@ -495,7 +500,7 @@ fn config_data_typed_variants_report_exact_nested_paths() {
             "data.config.items[0].cidrz",
         ),
         (
-            json!({"data":{"type":"RequestAccessUrlAllowList","config":{"items":[{"name":"health","hosts":["api.example.com"],"paths":[{"type":"Exact","value":"/health","valuez":"/ignored"}],"allOf":[]}]}}}),
+            json!({"data":{"type":"RequestAccessUrlAllowList","config":{"items":[{"name":"health","hosts":["api.example.com"],"paths":[{"type":"Exact","value":"/health","valuez":"/ignored"}],"conditions":{"allOf":[]}}]}}}),
             "data.config.items[0].paths[0].valuez",
         ),
         (
@@ -523,7 +528,7 @@ fn config_data_clean_typed_variants_have_no_findings() {
     let cases = [
         json!({"data":{"type":"KeyList","config":{"matchMode":"exact","items":[{"name":"g","items":[{"key":"x"}]}]}}}),
         json!({"data":{"type":"IpList","config":{"items":[{"name":"g","cidrs":["10.0.0.0/8"]}]}}}),
-        json!({"data":{"type":"RequestAccessUrlAllowList","config":{"items":[{"name":"health","hosts":["api.example.com"],"paths":[{"type":"Exact","value":"/health"}],"allOf":[]}]}}}),
+        json!({"data":{"type":"RequestAccessUrlAllowList","config":{"items":[{"name":"health","hosts":["api.example.com"],"paths":[{"type":"Exact","value":"/health"}],"conditions":{"allOf":[]}}]}}}),
         json!({"data":{"type":"Selector","config":{"active":"lockdown","description":"x"}}}),
         json!({"data":{"type":"RegionRouteOverride","config":{"enable":true,"regions":null}}}),
     ];

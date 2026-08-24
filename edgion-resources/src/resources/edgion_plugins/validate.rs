@@ -590,7 +590,7 @@ impl EdgionPlugins {
         errors
     }
 
-    /// Count IP-match conditions across entry, body, dye, RAP `allOf`, and RR `anyOf`.
+    /// Count IP-match conditions across entry, body, dye, RAP, and RR sets.
     pub fn ip_match_count(&self) -> usize {
         let mut ip_matches = 0usize;
         if let Some(entries) = &self.spec.request_plugins {
@@ -606,11 +606,7 @@ impl EdgionPlugins {
                         ip_matches += cfg.ip_match_count();
                     }
                     EdgionPlugin::RequestRestriction(cfg) => {
-                        ip_matches += cfg
-                            .any_of
-                            .iter()
-                            .map(|group| super::conditions::ip_match_count(&group.all_of))
-                            .sum::<usize>();
+                        ip_matches += cfg.conditions.ip_match_count();
                     }
                     _ => {}
                 }
@@ -1023,11 +1019,13 @@ mod tests {
         bypassed.alias = Some("invalid alias".to_string());
         bypassed.conditions = Some(
             serde_json::from_value(json!({
-                "run": [{
-                    "type": "keyMatch",
-                    "key": {"type": "header", "name": "X-Test"},
-                    "regex": ["("]
-                }]
+                "run": {
+                    "allOf": [{
+                        "type": "keyMatch",
+                        "key": {"type": "header", "name": "X-Test"},
+                        "regex": ["("]
+                    }]
+                }
             }))
             .unwrap(),
         );
@@ -1187,31 +1185,37 @@ mod tests {
 
     #[test]
     fn ip_match_count_includes_rr_groups() {
-        use crate::resources::edgion_plugins::conditions::{Condition, IpAccessMatch, RuleGroup};
+        use crate::resources::edgion_plugins::conditions::{
+            AllOfGroup, AnyOfClause, Condition, ConditionSet, IpAccessMatch,
+        };
         use crate::resources::edgion_plugins::plugin_configs::{RequestRestrictionConfig, RestrictionMode};
 
         let mut entry = RequestFilterEntry::new(EdgionPlugin::RequestRestriction(RequestRestrictionConfig {
             mode: Some(RestrictionMode::Deny),
-            any_of: vec![RuleGroup {
-                name: None,
-                all_of: vec![
-                    Condition::DirectPeerIpMatch(IpAccessMatch {
-                        ips: vec!["10.0.0.0/8".to_string()],
-                        ..Default::default()
-                    }),
-                    Condition::RemoteIpMatch(IpAccessMatch {
-                        ips: vec!["192.0.2.0/24".to_string()],
-                        ..Default::default()
-                    }),
-                ],
-            }],
+            conditions: ConditionSet::AnyOf {
+                any_of: vec![AnyOfClause::AllOf(AllOfGroup {
+                    name: None,
+                    all_of: vec![
+                        Condition::DirectPeerIpMatch(IpAccessMatch {
+                            ips: vec!["10.0.0.0/8".to_string()],
+                            ..Default::default()
+                        }),
+                        Condition::RemoteIpMatch(IpAccessMatch {
+                            ips: vec!["192.0.2.0/24".to_string()],
+                            ..Default::default()
+                        }),
+                    ],
+                })],
+            },
             ..Default::default()
         }));
         entry.conditions = Some(crate::resources::edgion_plugins::conditions::PluginConditions {
-            run: Some(vec![Condition::DirectPeerIpMatch(IpAccessMatch {
-                ips: vec!["127.0.0.1".to_string()],
-                ..Default::default()
-            })]),
+            run: Some(ConditionSet::all_of(vec![Condition::DirectPeerIpMatch(
+                IpAccessMatch {
+                    ips: vec!["127.0.0.1".to_string()],
+                    ..Default::default()
+                },
+            )])),
             ..Default::default()
         });
         let ep = with_request_plugins(vec![entry]);
@@ -1246,11 +1250,12 @@ spec:
       config: {}
       conditions:
         run:
-          - type: keyMatch
-            key:
-              type: header
-              name: X-Test
-            regex: ["("]
+          allOf:
+            - type: keyMatch
+              key:
+                type: header
+                name: X-Test
+              regex: ["("]
 "#,
         );
         assert!(
@@ -1277,11 +1282,12 @@ spec:
       config: {}
       conditions:
         run:
-          - type: keyMatch
-            key:
-              type: header
-              name: X-Test
-            regex: ["("]
+          allOf:
+            - type: keyMatch
+              key:
+                type: header
+                name: X-Test
+              regex: ["("]
 "#,
         );
         assert!(

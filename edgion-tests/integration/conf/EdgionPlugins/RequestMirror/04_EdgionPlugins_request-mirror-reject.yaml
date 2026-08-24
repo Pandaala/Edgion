@@ -42,12 +42,13 @@ spec:
       type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: path
-                regex:
-                  - ".*"
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: path
+                  regex:
+                    - ".*"
         status: 403
         message: "Denied after mirror"

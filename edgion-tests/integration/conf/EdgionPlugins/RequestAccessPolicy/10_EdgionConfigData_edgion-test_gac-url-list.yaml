@@ -12,25 +12,28 @@ spec:
           hosts: [gac-url.example.com]
           paths:
             - {type: PathPrefix, value: /test/gac/url/secret/:vendor}
-          allOf:
-            - type: secretMatch
-              key: {type: header, name: X-CF-Secret}
-              secretKey: token
-              secretRef: {name: gac-origin-secret}
+          conditions:
+            allOf:
+              - type: secretMatch
+                key: {type: header, name: X-CF-Secret}
+                secretKey: token
+                secretRef: {name: gac-origin-secret}
         - name: nested-ip-allow
           hosts: [gac-url.example.com]
           paths:
             - {type: Exact, value: /test/gac/url/ip-allow}
-          allOf:
-            - type: directPeerIpMatch
-              ipRefs: [{name: gac-url-loopback}]
+          conditions:
+            allOf:
+              - type: directPeerIpMatch
+                ipRefs: [{name: gac-url-loopback}]
         - name: nested-ip-deny
           hosts: [gac-url.example.com]
           paths:
             - {type: Exact, value: /test/gac/url/ip-deny}
-          allOf:
-            - type: directPeerIpMatch
-              ipRefs: [{name: gac-url-external}]
+          conditions:
+            allOf:
+              - type: directPeerIpMatch
+                ipRefs: [{name: gac-url-external}]
         - name: exact
           hosts: [gac-url.example.com]
           paths:
@@ -51,10 +54,11 @@ spec:
           hosts: [gac-url.example.com]
           paths:
             - {type: Exact, value: /test/gac/url/hmac}
-          allOf:
-            - type: hmacAuth
-              secretGroups:
-                - name: policy
-                  secretRefs: [{name: gac-hmac-credentials}]
-              algorithms: [hmac-sha256]
-              enforceHeaders: ["@request-target", host, date]
+          conditions:
+            allOf:
+              - type: hmacAuth
+                secretGroups:
+                  - name: policy
+                    secretRefs: [{name: gac-hmac-credentials}]
+                algorithms: [hmac-sha256]
+                enforceHeaders: ["@request-target", host, date]

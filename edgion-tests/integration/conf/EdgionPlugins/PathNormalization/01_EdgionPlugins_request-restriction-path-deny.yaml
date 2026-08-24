@@ -12,23 +12,24 @@ spec:
       type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              # path key: compared against normalized current path.
-              # Covers /%61dmin, /admin%2F, /admin//x, /admin/..;jsessionid=x/admin, etc.
-              - type: keyMatch
-                key:
-                  type: path
-                values:
-                  - "/admin"
-          - allOf:
-              # requestPath key: compared against entry-time raw path (not normalized).
-              # Use this for audit-style rules that target specific raw encoding patterns.
-              # regex is never normalized — operator writes patterns in raw form.
-              - type: keyMatch
-                key:
-                  type: requestPath
-                regex:
-                  - "%2[fF]"
+        conditions:
+          anyOf:
+            - allOf:
+                # path key: compared against normalized current path.
+                # Covers /%61dmin, /admin%2F, /admin//x, /admin/..;jsessionid=x/admin, etc.
+                - type: keyMatch
+                  key:
+                    type: path
+                  values:
+                    - "/admin"
+            - allOf:
+                # requestPath key: compared against entry-time raw path (not normalized).
+                # Use this for audit-style rules that target specific raw encoding patterns.
+                # regex is never normalized — operator writes patterns in raw form.
+                - type: keyMatch
+                  key:
+                    type: requestPath
+                  regex:
+                    - "%2[fF]"
         status: 403
         message: "Access denied by path normalization policy"

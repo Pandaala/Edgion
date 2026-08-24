@@ -11,14 +11,15 @@ spec:
       type: RequestRestriction
       config:
         mode: Allow
-        anyOf:
-          - allOf:
-              - type: hmacAuth
-                secretGroups:
-                  - name: rr
-                    secretRefs:
-                      - name: rr-hmac-credentials
-                algorithms: [hmac-sha256]
-                enforceHeaders: ["@request-target", host, date]
+        conditions:
+          anyOf:
+            - allOf:
+                - type: hmacAuth
+                  secretGroups:
+                    - name: rr
+                      secretRefs:
+                        - name: rr-hmac-credentials
+                  algorithms: [hmac-sha256]
+                  enforceHeaders: ["@request-target", host, date]
         status: 403
         message: "HMAC restriction did not match"

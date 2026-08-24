@@ -13,9 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::path_normalization::{get_path_normalization_config, normalize_config_path};
 use crate::resources::edgion_config_data::EdgionConfigDataRef;
-use crate::resources::edgion_plugins::conditions::{
-    conditions_validate_request_body, ip_match_count, Condition, IpAccessMatch,
-};
+use crate::resources::edgion_plugins::conditions::{ConditionSet, ConditionValidationProfile, IpAccessMatch};
 use crate::resources::edgion_plugins::PluginValidation;
 
 pub const DEFAULT_MAX_REFERENCED_URL_RULES: usize = 100;
@@ -112,8 +110,8 @@ pub enum RequestAccessRuleType {
 pub struct IpAccessRuleConfig {
     #[serde(flatten)]
     pub ip: IpAccessMatch,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub all_of: Vec<Condition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<ConditionSet>,
 }
 
 /// One URL typed rule. Its inline candidate and every referenced item are OR-ed.
@@ -124,8 +122,8 @@ pub struct UrlAccessRuleConfig {
     pub hosts: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<AccessPathMatch>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub all_of: Vec<Condition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<ConditionSet>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config_refs: Vec<RequestAccessUrlAllowListRef>,
 
@@ -137,14 +135,14 @@ pub struct UrlAccessRuleConfig {
 
 /// One named URL candidate stored in RequestAccessUrlAllowList ConfigData.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UrlAccessCandidate {
     pub name: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hosts: Vec<String>,
     pub paths: Vec<AccessPathMatch>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub all_of: Vec<Condition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<ConditionSet>,
 }
 
 /// Reference to a typed RequestAccessUrlAllowList and its consumer-side limits.
@@ -214,7 +212,7 @@ impl RequestAccessPolicyConfig {
         self.resolved_profiles.as_ref().unwrap_or(&self.profiles)
     }
 
-    /// Count IP-match conditions across every allOf (inline rules and resolved URL candidates).
+    /// Count IP-match conditions across every supplemental expression.
     pub fn ip_match_count(&self) -> usize {
         self.runtime_profiles()
             .values()
@@ -222,10 +220,10 @@ impl RequestAccessPolicyConfig {
             .flat_map(|group| group.any_of_rules.iter())
             .map(|rule| match &rule.rule {
                 RequestAccessRuleType::DirectPeerIp(config) | RequestAccessRuleType::RemoteIp(config) => {
-                    ip_match_count(&config.all_of)
+                    config.conditions.as_ref().map_or(0, ConditionSet::ip_match_count)
                 }
                 RequestAccessRuleType::Url(config) => {
-                    ip_match_count(&config.all_of)
+                    config.conditions.as_ref().map_or(0, ConditionSet::ip_match_count)
                         + config
                             .resolved_candidates
                             .as_ref()
@@ -240,13 +238,21 @@ impl RequestAccessPolicyConfig {
         self.runtime_profiles().values().any(|profile| {
             profile.required_rule_groups.iter().any(|group| {
                 group.any_of_rules.iter().any(|rule| match &rule.rule {
-                    RequestAccessRuleType::DirectPeerIp(config) | RequestAccessRuleType::RemoteIp(config) => {
-                        conditions_validate_request_body(&config.all_of)
-                    }
+                    RequestAccessRuleType::DirectPeerIp(config) | RequestAccessRuleType::RemoteIp(config) => config
+                        .conditions
+                        .as_ref()
+                        .is_some_and(ConditionSet::validates_request_body),
                     RequestAccessRuleType::Url(config) => {
-                        conditions_validate_request_body(&config.all_of)
+                        config
+                            .conditions
+                            .as_ref()
+                            .is_some_and(ConditionSet::validates_request_body)
                             || config.resolved_candidates.as_ref().is_some_and(|items| {
-                                items.iter().any(|item| conditions_validate_request_body(&item.all_of))
+                                items.iter().any(|item| {
+                                    item.conditions
+                                        .as_ref()
+                                        .is_some_and(ConditionSet::validates_request_body)
+                                })
                             })
                     }
                 })
@@ -331,7 +337,7 @@ impl RequestAccessRule {
 impl IpAccessRuleConfig {
     fn validate_and_init(&mut self) -> Result<(), String> {
         self.ip.validate_and_init()?;
-        validate_conditions(&mut self.all_of)
+        validate_optional_conditions(&mut self.conditions)
     }
 }
 
@@ -340,9 +346,9 @@ impl UrlAccessRuleConfig {
         let has_inline = !self.hosts.is_empty() || !self.paths.is_empty();
         if has_inline {
             validate_url_parts(&self.hosts, &mut self.paths, false)?;
-            validate_conditions(&mut self.all_of)?;
-        } else if !self.all_of.is_empty() {
-            return Err("allOf requires an inline hosts/paths candidate".to_string());
+            validate_optional_conditions(&mut self.conditions)?;
+        } else if self.conditions.is_some() {
+            return Err("conditions requires an inline hosts/paths candidate".to_string());
         }
         if !has_inline && self.config_refs.is_empty() {
             return Err("an inline URL candidate or configRefs must be configured".to_string());
@@ -366,11 +372,11 @@ impl UrlAccessCandidate {
     pub fn validate_and_init(&mut self, allow_no_hosts: bool) -> Result<(), String> {
         validate_name(&self.name, "name")?;
         validate_url_parts(&self.hosts, &mut self.paths, allow_no_hosts)?;
-        validate_conditions(&mut self.all_of)
+        validate_optional_conditions(&mut self.conditions)
     }
 
     pub fn ip_rule_count(&self) -> usize {
-        ip_match_count(&self.all_of)
+        self.conditions.as_ref().map_or(0, ConditionSet::ip_match_count)
     }
 }
 
@@ -418,18 +424,16 @@ fn validate_url_parts(hosts: &[String], paths: &mut [AccessPathMatch], allow_no_
     Ok(())
 }
 
-fn validate_conditions(conditions: &mut [Condition]) -> Result<(), String> {
-    for (ordinal, condition) in conditions.iter_mut().enumerate() {
-        validate_condition(condition, ordinal)?;
-    }
-    Ok(())
-}
-
-fn validate_condition(condition: &mut Condition, ordinal: usize) -> Result<(), String> {
-    condition
-        .compile(ordinal)
-        .map_err(|error| format!("invalid keyMatch regex: {error}"))?;
-    condition.validate_all_of()
+fn validate_optional_conditions(conditions: &mut Option<ConditionSet>) -> Result<(), String> {
+    let Some(conditions) = conditions else {
+        return Ok(());
+    };
+    conditions
+        .compile()
+        .map_err(|errors| format!("invalid condition regex: {}", errors[0]))?;
+    conditions
+        .validate(ConditionValidationProfile::RequestAsync)
+        .map_err(|errors| errors.join("; "))
 }
 
 fn validate_name(value: &str, field: &str) -> Result<(), String> {
@@ -452,7 +456,8 @@ mod tests {
     use crate::common::KeyGet;
     use crate::resources::common::SecretObjectReference;
     use crate::resources::edgion_plugins::conditions::{
-        JwtClaimMatchCondition, KeyMatchCondition, MatchCore, MtlsField, MtlsMatchCondition, SecretMatchCondition,
+        Condition, JwtClaimMatchCondition, KeyMatchCondition, MatchCore, MtlsField, MtlsMatchCondition,
+        SecretMatchCondition,
     };
     use crate::resources::edgion_plugins::plugin_configs::HmacMatchConfig;
 
@@ -464,7 +469,7 @@ mod tests {
                     ips: vec![cidr.to_string()],
                     ..Default::default()
                 },
-                all_of: vec![],
+                conditions: None,
             }),
         }
     }
@@ -528,7 +533,7 @@ mod tests {
             else {
                 panic!("expected remote IP rule")
             };
-            rule.all_of = vec![condition];
+            rule.conditions = Some(ConditionSet::all_of(vec![condition]));
 
             let checked = value.check_fields();
             let error = value
@@ -547,15 +552,17 @@ mod tests {
         else {
             panic!("expected remote IP rule")
         };
-        rule.all_of = vec![Condition::JwtClaimMatch(JwtClaimMatchCondition {
-            claim: "\t ".to_string(),
-            core: MatchCore {
-                values: Some(vec!["admin".to_string()]),
-                ..MatchCore::default()
+        rule.conditions = Some(ConditionSet::all_of(vec![Condition::JwtClaimMatch(
+            JwtClaimMatchCondition {
+                claim: "\t ".to_string(),
+                core: MatchCore {
+                    values: Some(vec!["admin".to_string()]),
+                    ..MatchCore::default()
+                },
+                negate: false,
+                descriptor: Box::from(""),
             },
-            negate: false,
-            descriptor: Box::from(""),
-        })];
+        )]));
 
         let checked = value.check_fields();
         let error = value.validate_and_init().expect_err("blank JWT claim must be rejected");
@@ -742,21 +749,23 @@ mod tests {
                 match_type: AccessPathMatchType::Exact,
                 value: "/callback".to_string(),
             }],
-            all_of: vec![Condition::SecretMatch(SecretMatchCondition {
-                key: KeyGet::Header {
-                    name: "X-Origin-Token".to_string(),
+            conditions: Some(ConditionSet::all_of(vec![Condition::SecretMatch(
+                SecretMatchCondition {
+                    key: KeyGet::Header {
+                        name: "X-Origin-Token".to_string(),
+                    },
+                    secret_key: "token".to_string(),
+                    secret_ref: SecretObjectReference {
+                        name: "origin-token".to_string(),
+                        group: None,
+                        kind: None,
+                        namespace: None,
+                    },
+                    negate: false,
+                    resolved_values: Some(vec!["nested-policy-secret".to_string()]),
+                    descriptor: Box::from(""),
                 },
-                secret_key: "token".to_string(),
-                secret_ref: SecretObjectReference {
-                    name: "origin-token".to_string(),
-                    group: None,
-                    kind: None,
-                    namespace: None,
-                },
-                negate: false,
-                resolved_values: Some(vec!["nested-policy-secret".to_string()]),
-                descriptor: Box::from(""),
-            })],
+            )])),
         };
         value.resolved_profiles = Some(HashMap::from([(
             "default".to_string(),
@@ -768,7 +777,7 @@ mod tests {
                         rule: RequestAccessRuleType::Url(UrlAccessRuleConfig {
                             hosts: vec![],
                             paths: vec![],
-                            all_of: vec![],
+                            conditions: None,
                             config_refs: vec![RequestAccessUrlAllowListRef {
                                 reference: EdgionConfigDataRef {
                                     name: "vendor-list".to_string(),
@@ -797,7 +806,14 @@ mod tests {
         else {
             panic!("expected URL rule")
         };
-        let Condition::SecretMatch(secret) = &url.resolved_candidates.as_ref().unwrap()[0].all_of[0] else {
+        let secret_condition = url.resolved_candidates.as_ref().unwrap()[0]
+            .conditions
+            .as_ref()
+            .unwrap()
+            .iter_conditions()
+            .next()
+            .unwrap();
+        let Condition::SecretMatch(secret) = secret_condition else {
             panic!("expected Secret match")
         };
         assert_eq!(
@@ -833,7 +849,7 @@ mod tests {
                     ips: vec!["10.0.0.0/8".to_string()],
                     ..Default::default()
                 },
-                all_of: vec![Condition::HmacAuth(HmacMatchConfig {
+                conditions: Some(ConditionSet::all_of(vec![Condition::HmacAuth(HmacMatchConfig {
                     validate_request_body: true,
                     secret_groups: Some(vec![
                         crate::resources::edgion_plugins::plugin_configs::HmacAuthSecretGroup {
@@ -848,7 +864,7 @@ mod tests {
                         },
                     ]),
                     ..Default::default()
-                })],
+                })])),
             });
         assert!(value.validates_request_body());
     }

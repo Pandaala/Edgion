@@ -17,10 +17,11 @@ spec:
           - name: X-Debug-Outcome
             conditions:
               run:
-                - type: keyExist
-                  key:
-                    type: header
-                    name: X-Debug-Token
+                allOf:
+                  - type: keyExist
+                    key:
+                      type: header
+                      name: X-Debug-Token
       config:
         enable: true
         activeProfile: stable

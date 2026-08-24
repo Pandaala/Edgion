@@ -12,13 +12,14 @@ spec:
       type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: query
-                  name: "name"
-                values:
-                  - "hello world"
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: query
+                    name: "name"
+                  values:
+                    - "hello world"
         status: 403
         message: "Query value blocked"

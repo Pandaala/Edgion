@@ -10,15 +10,16 @@ spec:
       type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: header
-                  name: "User-Agent"
-                regex:
-                  - "(?i).*Bot.*"
-                  - "(?i).*Spider.*"
-                  - "(?i).*Crawler.*"
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: header
+                    name: "User-Agent"
+                  regex:
+                    - "(?i).*Bot.*"
+                    - "(?i).*Spider.*"
+                    - "(?i).*Crawler.*"
         status: 403
         message: "Bot access denied"

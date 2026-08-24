@@ -11,10 +11,11 @@ spec:
         - name: signed-health
           hosts: [gac-hmac-dynamic.example.com]
           paths: [{type: Exact, value: /health}]
-          allOf:
-            - type: hmacAuth
-              secretGroups:
-                - name: dynamic
-                  secretRefs: [{name: gac-hmac-dynamic}]
-              algorithms: [hmac-sha256]
-              enforceHeaders: ["@request-target", host, date]
+          conditions:
+            allOf:
+              - type: hmacAuth
+                secretGroups:
+                  - name: dynamic
+                    secretRefs: [{name: gac-hmac-dynamic}]
+                algorithms: [hmac-sha256]
+                enforceHeaders: ["@request-target", host, date]

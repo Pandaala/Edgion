@@ -350,13 +350,15 @@ mod tests {
     async fn conditionally_skipped_validator_does_not_claim_request_slot() {
         use crate::plugins::runtime::conditional_filter::ConditionalRequestFilter;
         use edgion_resources::common::KeyGet;
-        use edgion_resources::resources::edgion_plugins::conditions::{Condition, KeyMatchCondition, PluginConditions};
+        use edgion_resources::resources::edgion_plugins::conditions::{
+            Condition, ConditionSet, KeyMatchCondition, PluginConditions,
+        };
 
         let skipped = ConditionalRequestFilter::new(
             plugin(json!({"type": "object"})),
             Some(PluginConditions {
                 skip: None,
-                run: Some(vec![Condition::KeyMatch(KeyMatchCondition {
+                run: Some(ConditionSet::all_of(vec![Condition::KeyMatch(KeyMatchCondition {
                     key: KeyGet::Method,
                     core: edgion_resources::resources::edgion_plugins::conditions::MatchCore {
                         values: Some(vec!["POST".to_string()]),
@@ -364,7 +366,7 @@ mod tests {
                     },
                     negate: false,
                     descriptor: Box::from(""),
-                })]),
+                })])),
             }),
         );
         let active = plugin(json!({"type": "object"}));

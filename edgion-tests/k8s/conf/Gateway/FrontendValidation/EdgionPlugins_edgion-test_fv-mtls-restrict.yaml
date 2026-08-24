@@ -14,12 +14,13 @@ spec:
       type: RequestRestriction
       config:
         mode: Allow
-        anyOf:
-          - allOf:
-              - type: mtlsMatch
-                field: cn
-                values:
-                  - "valid-client"
+        conditions:
+          anyOf:
+            - allOf:
+                - type: mtlsMatch
+                  field: cn
+                  values:
+                    - "valid-client"
         status: 403
         message: "Client CN not allowed"
 ---
@@ -36,12 +37,13 @@ spec:
       type: RequestRestriction
       config:
         mode: Allow
-        anyOf:
-          - allOf:
-              - type: mtlsMatch
-                field: san
-                sanType: Email
-                values:
-                  - "test@edgion.io"
+        conditions:
+          anyOf:
+            - allOf:
+                - type: mtlsMatch
+                  field: san
+                  sanType: Email
+                  values:
+                    - "test@edgion.io"
         status: 403
         message: "Client SAN not allowed"

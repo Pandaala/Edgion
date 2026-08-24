@@ -732,11 +732,11 @@ mod compile_plugins_tests {
         let mut entry = RequestFilterEntry::new(header_modifier());
         entry.conditions = Some(
             serde_json::from_value(serde_json::json!({
-                "run": [{
-                    "type": "remoteIpMatch",
-                    "ipRefs": [{ "name": "missing" }],
-                    "negate": true
-                }]
+                "run": { "allOf": [{
+                        "type": "remoteIpMatch",
+                        "ipRefs": [{ "name": "missing" }],
+                        "negate": true
+                }] }
             }))
             .unwrap(),
         );
@@ -922,11 +922,11 @@ mod compile_plugins_tests {
             let mut e = RequestFilterEntry::with_enable(rhm(), false);
             e.conditions = Some(
                 serde_json::from_value(serde_json::json!({
-                    "run": [{
-                        "type": "keyMatch",
-                        "key": { "type": "header", "name": "X-Test" },
-                        "regex": ["("]
-                    }]
+                    "run": { "allOf": [{
+                            "type": "keyMatch",
+                            "key": { "type": "header", "name": "X-Test" },
+                            "regex": ["("]
+                    }] }
                 }))
                 .expect("build malformed conditions"),
             );
@@ -957,12 +957,12 @@ mod compile_plugins_tests {
         // `body conditions regex` compilation parity (F3).
         fn with_bad_body_regex(mut e: RequestFilterEntry) -> RequestFilterEntry {
             use edgion_resources::resources::edgion_plugins::conditions::{
-                Condition, KeyMatchCondition, PluginConditions,
+                Condition, ConditionSet, KeyMatchCondition, PluginConditions,
             };
             e.body = Some(edgion_resources::resources::edgion_plugins::BodyRequirement {
                 conditions: Some(PluginConditions {
                     skip: None,
-                    run: Some(vec![Condition::KeyMatch(KeyMatchCondition {
+                    run: Some(ConditionSet::all_of(vec![Condition::KeyMatch(KeyMatchCondition {
                         key: edgion_resources::common::KeyGet::Header { name: "x".to_string() },
                         core: edgion_resources::resources::edgion_plugins::conditions::MatchCore {
                             regex: Some(vec!["[".to_string()]),
@@ -970,7 +970,7 @@ mod compile_plugins_tests {
                         },
                         negate: false,
                         descriptor: Box::from(""),
-                    })]),
+                    })])),
                 }),
                 ..Default::default()
             });

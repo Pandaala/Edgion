@@ -321,13 +321,21 @@ not in-process checks.
 
 - **Canon**: schema in
   `edgion-resources/src/resources/edgion_plugins/conditions.rs`
-  (`Condition`, `MatchCore`, `RuleGroup`); gateway evaluator under
+  (`Condition`, `MatchCore`, `ConditionSet`); gateway evaluator under
   `edgion-gateway/src/plugins/runtime/conditions/`.
-- **Grouping**: `PluginConditions.skip` is OR, `.run` is AND;
-  `RequestRestriction.anyOf` is OR of groups and each group's `allOf` is
-  AND; `RequestAccessPolicy` stays a conjunctive `allOf`.
+- **Grouping**: every consumer uses the same bounded `ConditionSet`. The top
+  level contains exactly one `allOf` or `anyOf`. Top-level `allOf` contains
+  direct `Condition` leaves. Top-level `anyOf` contains direct leaves or one
+  nested `{ name?, allOf: [...] }` group. No other nesting is valid, and all
+  arrays must be non-empty. `PluginConditions.skip` is evaluated before
+  `run`, but neither field implies its set's Boolean operator.
 - **Naming criterion**: a container field name must state how its
   elements combine (`anyOf` / `allOf`, not `ruleGroups` / `rules`).
+- **Observability rule**: match-only atomic descriptors are emitted only for a
+  logical decision scope containing more than one atomic `Condition`. A
+  zero/one-leaf scope relies on its action/result signal; `cond_skip`, final
+  policy decisions, group attribution, and errors are never suppressed. Count
+  leaves at compile time, not on the request path.
 - **Rule**: new predicates MUST reuse `Condition`. Do not add a
   plugin-local predicate enum, `Include`/`Exclude`, `RestrictionSource`,
   or wildcard `values`. See

@@ -1,4 +1,4 @@
-//! Drift guard for the EdgionPlugins CRD `&conditionsSchema` leaf object.
+//! Drift guard for the EdgionPlugins CRD bounded ConditionSet subtree.
 //!
 //! The hand-written CRD models a condition as one flat merged property bag —
 //! `type`, `key`, `values`, `regex`, `caseSensitive`, `negate`, `after`,
@@ -18,8 +18,9 @@
 //! * type-enum set vs CRD `properties.type.enum`
 //! * unioned leaf-field set vs CRD `properties` keys minus `type`
 //!
-//! Flattening loses per-variant scoping. That is acceptable: it matches the
-//! CRD the API server actually uses (one merged bag, no `oneOf`).
+//! Flattening loses per-variant scoping. That is acceptable for atomic leaves:
+//! the CRD uses one closed merged bag for each atomic Condition. Container
+//! guards below separately pin the fixed-depth `allOf` / `anyOf` grammar.
 //!
 //! `#[schemars(skip)]` runtime fields (`values_set`, `compiled_regex`) are
 //! already absent from the schema; they are not special-cased here.
@@ -33,8 +34,7 @@
 //! `crd_coverage.rs::plugin_key_get_enum_uses_remote_ip_names` is a hard-coded
 //! snapshot of the CRD enum only: adding a Rust variant without a CRD entry
 //! still passes. This guard reads `schema_for!(KeyGet)` and compares the
-//! type-enum both directions against
-//! `conditions.skip.items.properties.key.properties.type.enum`.
+//! type-enum both directions against the top-level `allOf` atomic leaf.
 //!
 //! Nested KeyGet property names (`name`) are not compared. Walking nested
 //! KeyGet leaves is out of scope for this type-enum guard.
@@ -61,20 +61,35 @@ fn plugins_crd_doc() -> Value {
     serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
 }
 
-/// Leaf condition object after YAML-anchor expansion:
+/// Top-level `allOf` atomic leaf after YAML-anchor expansion:
 /// `spec.versions[0].schema.openAPIV3Schema.properties.spec.properties
-///  .requestPlugins.items.properties.conditions.properties.skip.items.properties`
+///  .requestPlugins.items.properties.conditions.properties.skip.properties
+///  .allOf.items.properties`
 fn crd_condition_properties() -> Map<String, Value> {
     let doc = plugins_crd_doc();
     doc["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]["requestPlugins"]
-        ["items"]["properties"]["conditions"]["properties"]["skip"]["items"]["properties"]
+        ["items"]["properties"]["conditions"]["properties"]["skip"]["properties"]["allOf"]["items"]["properties"]
         .as_object()
         .unwrap_or_else(|| {
             panic!(
-                "plugin CRD skip.items.properties is not an object; \
+                "plugin CRD skip.allOf.items.properties is not an object; \
                  the CRD YAML path may have changed"
             )
         })
+        .clone()
+}
+
+fn crd_conditions_node() -> Value {
+    let doc = plugins_crd_doc();
+    doc["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]["requestPlugins"]
+        ["items"]["properties"]["conditions"]
+        .clone()
+}
+
+fn crd_any_of_clause_properties() -> Map<String, Value> {
+    crd_conditions_node()["properties"]["skip"]["properties"]["anyOf"]["items"]["properties"]
+        .as_object()
+        .expect("plugin CRD skip.anyOf.items.properties must be an object")
         .clone()
 }
 
@@ -202,7 +217,7 @@ fn crd_key_get_types() -> BTreeSet<String> {
     let props = crd_condition_properties();
     crd_enum_values(
         &props["key"]["properties"]["type"]["enum"],
-        "CRD conditions.skip.items.properties.key.properties.type.enum",
+        "CRD conditions.skip.allOf.items.properties.key.properties.type.enum",
     )
 }
 
@@ -291,9 +306,149 @@ fn key_get_type_enum_matches_crd_both_directions() {
         "KeyGet type-enum CRD drift:\n  \
          Direction-1 missing from CRD: {d1:?}\n  \
          Direction-2 stale in CRD: {d2:?}\n\
-         Fix: add the missing value(s) to conditions.skip.items.properties.key.properties.type.enum \
+         Fix: add the missing value(s) to conditions.skip.allOf.items.properties.key.properties.type.enum \
          in edgion_plugins_crd.yaml, or remove the stale CRD entry / unused KeyGet variant."
     );
+}
+
+fn required_set(node: &Value, label: &str) -> BTreeSet<String> {
+    node.get("required")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("{label}.required must be an array"))
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .unwrap_or_else(|| panic!("{label}.required contains a non-string: {value}"))
+                .to_string()
+        })
+        .collect()
+}
+
+fn validation_rules(node: &Value, label: &str) -> BTreeSet<String> {
+    node.get("x-kubernetes-validations")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("{label}.x-kubernetes-validations must be an array"))
+        .iter()
+        .map(|entry| {
+            entry
+                .get("rule")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{label} validation is missing a string rule: {entry}"))
+                .to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn condition_set_crd_is_fixed_depth_and_structural() {
+    let conditions = crd_conditions_node();
+    assert_eq!(conditions["type"], "object");
+    assert!(conditions.get("x-kubernetes-preserve-unknown-fields").is_none());
+
+    let skip = &conditions["properties"]["skip"];
+    let run = &conditions["properties"]["run"];
+    assert_eq!(skip, run, "skip and run must reuse the same ConditionSet schema");
+    assert_eq!(skip["type"], "object");
+    assert!(skip.get("x-kubernetes-preserve-unknown-fields").is_none());
+    let set_fields: BTreeSet<String> = skip["properties"]
+        .as_object()
+        .expect("ConditionSet properties must be an object")
+        .keys()
+        .cloned()
+        .collect();
+    assert_eq!(set_fields, BTreeSet::from(["allOf".to_string(), "anyOf".to_string()]));
+    assert!(validation_rules(skip, "ConditionSet").contains("has(self.allOf) != has(self.anyOf)"));
+    assert_eq!(skip["oneOf"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        required_set(&skip["oneOf"][0], "ConditionSet.oneOf[0]"),
+        BTreeSet::from(["allOf".to_string()])
+    );
+    assert_eq!(
+        required_set(&skip["oneOf"][1], "ConditionSet.oneOf[1]"),
+        BTreeSet::from(["anyOf".to_string()])
+    );
+
+    for operator in ["allOf", "anyOf"] {
+        let array = &skip["properties"][operator];
+        assert_eq!(array["type"], "array");
+        assert!(
+            array.get("minItems").is_none(),
+            "{operator} must remain lenient-admission"
+        );
+    }
+
+    let atom = &skip["properties"]["allOf"]["items"];
+    assert_eq!(atom["type"], "object");
+    assert!(atom.get("x-kubernetes-preserve-unknown-fields").is_none());
+    assert!(required_set(atom, "Condition").contains("type"));
+
+    let clause = &skip["properties"]["anyOf"]["items"];
+    assert_eq!(clause["type"], "object");
+    assert!(clause.get("x-kubernetes-preserve-unknown-fields").is_none());
+    assert_eq!(clause["oneOf"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        required_set(&clause["oneOf"][0], "AnyOfClause.oneOf[0]"),
+        BTreeSet::from(["type".to_string()])
+    );
+    assert_eq!(
+        required_set(&clause["oneOf"][0]["not"], "AnyOfClause.oneOf[0].not"),
+        BTreeSet::from(["allOf".to_string()])
+    );
+    assert_eq!(
+        required_set(&clause["oneOf"][1], "AnyOfClause.oneOf[1]"),
+        BTreeSet::from(["allOf".to_string()])
+    );
+    assert_eq!(
+        required_set(&clause["oneOf"][1]["not"], "AnyOfClause.oneOf[1].not"),
+        BTreeSet::from(["type".to_string()])
+    );
+    let rules = validation_rules(clause, "AnyOfClause");
+    assert!(rules.contains("has(self.type) != has(self.allOf)"));
+    assert!(rules.contains("!has(self.name) || has(self.allOf)"));
+    assert!(
+        clause["properties"].get("anyOf").is_none(),
+        "AnyOfClause must not recurse"
+    );
+    let nested = &clause["properties"]["allOf"];
+    assert_eq!(nested["type"], "array");
+    assert!(
+        nested.get("minItems").is_none(),
+        "nested allOf must remain lenient-admission"
+    );
+    assert!(required_set(&nested["items"], "AllOfGroup.allOf.items").contains("type"));
+    assert!(
+        nested["items"]["properties"].get("allOf").is_none(),
+        "nested allOf must contain atoms only"
+    );
+    assert!(
+        nested["items"]["properties"].get("anyOf").is_none(),
+        "nested allOf must contain atoms only"
+    );
+}
+
+#[test]
+fn direct_and_nested_atomic_condition_coverage_match() {
+    let (rust_types, rust_fields) = rust_condition_sets();
+    let direct = crd_any_of_clause_properties();
+    let direct_types = crd_enum_values(&direct["type"]["enum"], "AnyOfClause properties.type.enum");
+    let direct_fields: BTreeSet<String> = direct
+        .keys()
+        .filter(|key| !matches!(key.as_str(), "type" | "name" | "allOf"))
+        .cloned()
+        .collect();
+    let direct_cov = compare_condition_coverage(&rust_types, &rust_fields, &direct_types, &direct_fields);
+    assert!(direct_cov.is_clean(), "direct anyOf atom: {}", direct_cov.report());
+
+    let nested_props = crd_conditions_node()["properties"]["skip"]["properties"]["anyOf"]["items"]["properties"]
+        ["allOf"]["items"]["properties"]
+        .as_object()
+        .expect("nested allOf Condition properties must be an object")
+        .clone();
+    let nested_types = crd_enum_values(&nested_props["type"]["enum"], "nested Condition properties.type.enum");
+    let nested_fields: BTreeSet<String> = nested_props.keys().filter(|key| *key != "type").cloned().collect();
+    let nested_cov = compare_condition_coverage(&rust_types, &rust_fields, &nested_types, &nested_fields);
+    assert!(nested_cov.is_clean(), "nested allOf atom: {}", nested_cov.report());
 }
 
 #[test]
@@ -314,6 +469,24 @@ fn conditions_schema_anchor_is_reused_at_all_five_sites() {
         "*conditionsSchema must be aliased at exactly five sites in edgion_plugins_crd.yaml, \
          found {aliases}"
     );
+
+    for (anchor, expected_defs, expected_aliases) in [
+        ("conditionSetSchema", 1, 1),
+        ("conditionSchema", 1, 1),
+        ("anyOfClauseSchema", 1, 0),
+        ("allOfGroupSchema", 1, 0),
+    ] {
+        assert_eq!(
+            text.matches(&format!("&{anchor}")).count(),
+            expected_defs,
+            "&{anchor} definition count drifted"
+        );
+        assert_eq!(
+            text.matches(&format!("*{anchor}")).count(),
+            expected_aliases,
+            "*{anchor} alias count drifted"
+        );
+    }
 }
 
 #[test]

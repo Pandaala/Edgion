@@ -10,28 +10,27 @@ spec:
       type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: header
-                  name: "User-Agent"
-                regex:
-                  - "(?i).*Bot.*"
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: path
-                regex:
-                  - ".*/admin/.*"
-                  - ".*/internal/.*"
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: cookie
-                  name: "debug"
-                values:
-                  - "true"
-                  - "1"
+        conditions:
+          anyOf:
+            - type: keyMatch
+              key:
+                type: header
+                name: "User-Agent"
+              regex:
+                - "(?i).*Bot.*"
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: path
+                  regex:
+                    - ".*/admin/.*"
+                    - ".*/internal/.*"
+            - type: keyMatch
+              key:
+                type: cookie
+                name: "debug"
+              values:
+                - "true"
+                - "1"
         status: 403
         message: "Access denied by security policy"

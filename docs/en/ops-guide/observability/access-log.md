@@ -294,7 +294,7 @@ estimated usage recorded here and is not a claim that all reserved tokens were c
 | `logs[].name` | String | Plugin name |
 | `logs[].time_cost` | Integer | Plugin execution time in **microseconds** |
 | `logs[].cond_skip` | String | Why the plugin was skipped (`skip:<type>,<detail>` or `!run:<type>,<detail>`). Unchanged; omitted when the plugin ran. |
-| `logs[].log` | Array\<String\> | Log lines emitted by the plugin. Matching `PluginConditions` also push a compiled descriptor here (`<ordinal>:<type>[:<accessor>]`); a non-match logs nothing. Body/dye evaluation stays silent. |
+| `logs[].log` | Array\<String\> | Log lines emitted by the plugin. A composite condition scope (more than one atomic leaf) also pushes value-free descriptors for matched leaves, including their stable set location. Zero/one-leaf scopes suppress this redundant match-only signal. `cond_skip`, named-group attribution, final policy outcomes, and errors are unaffected. Body/dye evaluation stays silent. |
 | `logs[].log_full` | Boolean | Present and `true` only when the plugin's log buffer overflowed and entries were dropped |
 
 Common plugin log lines:

@@ -5,6 +5,12 @@ description: Use when reviewing RequestRestriction condition observability. Requ
 
 # RequestRestriction predicates log descriptors — FIXED (cl-08)
 
+> **Current-shape note (2026-08-24):** RequestRestriction now consumes the
+> shared bounded `ConditionSet`. The match-only guarantee below still applies,
+> with the additional rule that a zero/one-leaf expression suppresses atomic
+> match descriptors while retaining final decisions, named-group attribution,
+> and errors. See `tasks/pending/condition-set-dnf-unification/01-design.md`.
+
 ## Conclusion
 
 Fixed on 2026-08-24. `RequestRestriction::group_matches` previously evaluated

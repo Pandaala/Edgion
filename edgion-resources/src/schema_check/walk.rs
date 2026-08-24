@@ -30,9 +30,11 @@
 //! 3. `oneOf` / `anyOf`: pick the branch whose `const` discriminator matches
 //!    the input's value for that same key — checked against the branch's
 //!    OWN merged (chain-resolved) properties, so an internally-tagged
-//!    branch's `$ref`-sibling discriminator is visible. If no branch
-//!    matches, report only the keys unknown in EVERY branch and do not
-//!    recurse — never guess.
+//!    branch's `$ref`-sibling discriminator is visible. For an untagged
+//!    structural union, a property owned by exactly one branch is also a
+//!    discriminator; all such properties must point to the same branch. If
+//!    no branch is selected, report only the keys unknown in EVERY branch
+//!    and do not recurse — never guess.
 //! 4. Arrays: walk `items` per element, appending `[i]` to the path.
 //! 5. `Option<T>` yields a nullable union; a `null` input is a leaf (silent).
 //! 6. Bounds: cap recursion depth and total visited nodes, reusing
@@ -268,6 +270,10 @@ fn merge_view<'a>(view: &mut ObjectView<'a>, sub: ObjectView<'a>) {
 ///   internally-tagged branch the discriminator lives in the branch node's
 ///   OWN sibling `properties`, not its `$ref` target, which is exactly why
 ///   this must read the chain-merged view rather than the raw branch node).
+/// - For untagged structural unions, an input property known by exactly one
+///   branch selects that branch, provided every uniquely-owned input property
+///   selects the same branch. This covers bounded shapes such as
+///   `{allOf: ...} | {anyOf: ...}` without treating branch order as meaning.
 /// - If no unique branch is identified, never guess: union every candidate
 ///   branch's keys (so a key legal in ANY branch is not reported) but mark
 ///   them all non-recursable — only keys unknown in EVERY branch surface,
@@ -312,9 +318,41 @@ fn apply_tagged_branches<'a>(
         return;
     }
 
+    let candidate_views: Vec<ObjectView<'a>> = candidates
+        .iter()
+        .map(|branch| object_view(branch, value_obj, defs))
+        .collect();
+    let mut structural_match: Option<usize> = None;
+    let mut structural_ambiguous = false;
+    for input_key in value_obj.keys() {
+        let owners: Vec<usize> = candidate_views
+            .iter()
+            .enumerate()
+            .filter_map(|(index, candidate)| candidate.known.contains_key(input_key.as_str()).then_some(index))
+            .collect();
+        if let [owner] = owners.as_slice() {
+            match structural_match {
+                None => structural_match = Some(*owner),
+                Some(previous) if previous == *owner => {}
+                Some(_) => structural_ambiguous = true,
+            }
+        }
+    }
+    if !structural_ambiguous {
+        if let Some(index) = structural_match {
+            merge_view(
+                view,
+                candidate_views
+                    .into_iter()
+                    .nth(index)
+                    .expect("candidate index is valid"),
+            );
+            return;
+        }
+    }
+
     // Ambiguous: union candidate keys, but never recurse into any of them.
-    for branch in &candidates {
-        let sub = object_view(branch, value_obj, defs);
+    for sub in candidate_views {
         if sub.free_form {
             view.free_form = true;
             view.is_object = true;

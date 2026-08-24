@@ -149,14 +149,15 @@ The upstream still receives the raw path with `;param` intact; applications rely
 - type: RequestRestriction
   config:
     mode: Deny
-    anyOf:
-      - allOf:
-          - type: keyMatch
-            key:
-              type: path             # current view, covers all encoding variants
-            values:
-              - "/admin"
-              - "/internal"
+    conditions:
+      anyOf:
+        - allOf:
+            - type: keyMatch
+              key:
+                type: path             # current view, covers all encoding variants
+              values:
+                - "/admin"
+                - "/internal"
 ```
 
 ### Audit log records client raw URI

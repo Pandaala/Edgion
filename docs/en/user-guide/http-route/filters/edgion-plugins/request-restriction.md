@@ -10,21 +10,28 @@ The `RequestRestriction` plugin restricts access using the shared `Condition` en
 
 It remains a **local allow/deny matcher**, not a full RBAC orchestration layer: a condition is still a pure predicate, and a single required `mode` decides whether a match means admit or reject.
 
-## Model: groups (OR-of-AND) + `mode`
+## Model: bounded ConditionSet + `mode`
 
-The plugin evaluates a list of groups in disjunctive normal form (DNF):
+The required `conditions` field uses the shared bounded-DNF ConditionSet:
 
-- **`anyOf` is an array combined with OR** — the policy fires if **any** group matches. Groups are evaluated in configuration order; the first match short-circuits.
-- **Each group's `allOf` is combined with AND** — a group matches only when **every** condition is true.
+- A top-level `allOf` contains direct Conditions and matches when all match.
+- A top-level `anyOf` contains direct Conditions or one-level
+  `{ name?, allOf: [...] }` groups and matches when any alternative matches.
+- Evaluation follows configuration order and short-circuits. Recursive or
+  empty sets and mixed `allOf`/`anyOf` objects are rejected.
 - **`mode` is required** and decides what a match means:
-  - `Deny`: any matching group ⇒ **reject**; anything unmatched passes.
-  - `Allow`: any matching group ⇒ **pass**; anything unmatched is rejected.
+  - `Deny`: a matching set ⇒ **reject**; an unmatched set passes.
+  - `Allow`: a matching set ⇒ **pass**; an unmatched set is rejected.
 
 `mode` has **no default**. Omitting it is a validation error, not a silent fallback.
 
-A **condition is a pure predicate**. It carries no per-condition allow/deny — the polarity lives entirely at `mode`. This lets you express `(A AND B) OR C` while keeping the model flat (two levels). This is distinct from plugin `conditions.run`, which is a conjunction.
+A **condition is a pure predicate**. It carries no per-condition allow/deny —
+the polarity lives entirely at `mode`. RequestRestriction and plugin
+`conditions.run`/`skip` use the same ConditionSet grammar; their surrounding
+fields decide different actions.
 
-A missing value is **false** for `keyMatch` / identity matches. To require a header to be present, use `keyExist` with `negate: true` (true when the header is absent).
+A missing value is **false** for `keyMatch` / identity matches. In `mode: Deny`,
+use `keyExist` with `negate: true` to match a missing header and reject it.
 
 ## Features
 
@@ -34,7 +41,7 @@ A missing value is **false** for `keyMatch` / identity matches. To require a hea
 - **Inline and referenced IP sets**: `directPeerIpMatch` / `remoteIpMatch` with `ips` and `ipRefs` (IpList ConfigData)
 - **Exact and regex matching**: `values` for exact matching, `regex` for regex matching
 - **Automatic performance optimization**: Exact match lists exceeding 16 values automatically use HashSet (O(1) lookup)
-- **Boolean composition**: AND within a group (`allOf`), OR across groups (`anyOf`)
+- **Boolean composition**: explicit flat `allOf`, flat `anyOf`, or OR-of-AND
 - **Explicit polarity**: `mode: Deny | Allow` (required, no default)
 - **Custom responses**: Configurable status code and message on denial
 
@@ -45,7 +52,7 @@ Plugin `run`/`skip` predicates are documented in [Plugin Conditions](./condition
 | Dimension | Plugin Conditions | Request Restriction |
 |-----------|------------------|---------------------|
 | **Purpose** | Conditional execution framework, decides whether to run a plugin | Standalone plugin, directly rejects non-compliant requests |
-| **Combination** | `skip` is OR; `run` is AND | `anyOf` is OR; each `allOf` is AND |
+| **Combination** | `run` and `skip` each contain a ConditionSet | `config.conditions` contains the same ConditionSet |
 | **Return behavior** | Skips the plugin (continues processing chain) | Rejects the request (returns error response) |
 | **Configuration location** | Attached to other plugins as conditions | Configured as a standalone plugin |
 | **Use cases** | Canary releases, A/B testing, conditional execution | Access control, security protection |
@@ -57,18 +64,22 @@ Plugin `run`/`skip` predicates are documented in [Plugin Conditions](./condition
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `mode` | Enum (`Deny` \| `Allow`) | **Required** | Polarity. `Deny`: a matching group rejects. `Allow`: a matching group passes, otherwise reject. No default — omitting it is a validation error. |
-| `anyOf` | Array\<RuleGroup\> | **Required** | Groups combined with OR, evaluated in configuration order |
+| `conditions` | ConditionSet | **Required** | Exactly one top-level `allOf` or `anyOf` expression |
 | `status` | Integer | `403` | HTTP status code on denial |
 | `message` | String | `Access denied...` | Response message on denial |
 
-### RuleGroup
+### ConditionSet
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `name` | String | none | Group name (for logging) |
-| `allOf` | Array\<Condition\> | **Required** | Conditions combined with AND (must be non-empty) |
+| `allOf` | Array\<Condition\> | mutually exclusive | Direct Conditions combined with AND |
+| `anyOf` | Array\<Condition \| AllOfGroup\> | mutually exclusive | Direct Conditions and one-level AND groups combined with OR |
 
-Each `allOf` entry is a shared `Condition` (`type: keyMatch`, `keyExist`, `mtlsMatch`, `jwtClaimMatch`, `directPeerIpMatch`, …). HMAC `validateRequestBody: true` is accepted here.
+An `AllOfGroup` has a required non-empty `allOf` and an optional nonblank
+`name` used for attribution. All arrays must be non-empty. Each leaf is a
+shared `Condition` (`type: keyMatch`, `keyExist`, `mtlsMatch`,
+`jwtClaimMatch`, `directPeerIpMatch`, …). HMAC
+`validateRequestBody: true` is accepted here.
 
 ## Migrated data-source spellings
 
@@ -128,19 +139,11 @@ A missing header that used to use a presence-only match is now `keyExist` + `neg
 
 ```mermaid
 flowchart TD
-    A["Request Restriction"] --> B["For each anyOf group in config order"]
-    B --> C["For each condition in allOf"]
-    C --> D["Condition.evaluate"]
-    D --> E{"true?"}
-    E -->|No| N["group does not match"]
-    E -->|Yes| H{"every condition true?"}
-    H -->|Yes| M["group matches; stop"]
-    H -->|No| C
-    N --> B
-    M --> J{"mode"}
-    B -->|no group matched| J
-    J -->|"Deny: a group matched"| K["Reject (status/message)"]
-    J -->|"Allow: no group matched"| K
+    A["Request Restriction"] --> B["Evaluate conditions in config order"]
+    B --> C{"ConditionSet matched?"}
+    C --> J{"mode"}
+    J -->|"Deny + matched"| K["Reject (status/message)"]
+    J -->|"Allow + unmatched"| K
     J -->|otherwise| L["Continue processing chain"]
 ```
 
@@ -158,22 +161,21 @@ spec:
     - type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: header
-                  name: "User-Agent"
-                regex:
-                  - "(?i).*Bot.*"
-                  - "(?i).*Spider.*"
-                  - "(?i).*Crawler.*"
-          - allOf:
-              - type: keyExist
-                key:
-                  type: header
-                  name: "User-Agent"
-                negate: true
+        conditions:
+          anyOf:
+            - type: keyMatch
+              key:
+                type: header
+                name: "User-Agent"
+              regex:
+                - "(?i).*Bot.*"
+                - "(?i).*Spider.*"
+                - "(?i).*Crawler.*"
+            - type: keyExist
+              key:
+                type: header
+                name: "User-Agent"
+              negate: true
         status: 403
         message: "Bot access denied"
 ```
@@ -190,16 +192,17 @@ spec:
     - type: RequestRestriction
       config:
         mode: Allow
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: path
-                values:
-                  - "/health"
-                  - "/ready"
-                regex:
-                  - "^/api/.*"
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: path
+                  values:
+                    - "/health"
+                    - "/ready"
+                  regex:
+                    - "^/api/.*"
         status: 404
         message: "Not found"
 ```
@@ -216,15 +219,15 @@ spec:
     - type: RequestRestriction
       config:
         mode: Allow
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: method
-                values:
-                  - "GET"
-                  - "HEAD"
-                  - "OPTIONS"
+        conditions:
+          allOf:
+            - type: keyMatch
+              key:
+                type: method
+              values:
+                - "GET"
+                - "HEAD"
+                - "OPTIONS"
         status: 405
         message: "Method not allowed"
 ```
@@ -243,21 +246,22 @@ spec:
     - type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: header
-                  name: "X-Auth-Token"
-                values:
-                  - "invalid"
-                  - "expired"
-          - allOf:
-              - type: keyExist
-                key:
-                  type: header
-                  name: "X-Auth-Token"
-                negate: true
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: header
+                    name: "X-Auth-Token"
+                  values:
+                    - "invalid"
+                    - "expired"
+            - allOf:
+                - type: keyExist
+                  key:
+                    type: header
+                    name: "X-Auth-Token"
+                  negate: true
         status: 401
         message: "Authentication required"
 ```
@@ -276,15 +280,16 @@ spec:
     - type: RequestRestriction
       config:
         mode: Allow
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: header
-                  name: Referer
-                regex:
-                  - ".*example\\.com.*"
-                  - ".*example\\.org.*"
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: header
+                    name: Referer
+                  regex:
+                    - ".*example\\.com.*"
+                    - ".*example\\.org.*"
         status: 403
         message: "Invalid referer"
 ```
@@ -303,23 +308,24 @@ spec:
     - type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: query
-                  name: "debug"
-                values:
-                  - "true"
-                  - "1"
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: cookie
-                  name: "debug"
-                values:
-                  - "true"
-                  - "1"
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: query
+                    name: "debug"
+                  values:
+                    - "true"
+                    - "1"
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: cookie
+                    name: "debug"
+                  values:
+                    - "true"
+                    - "1"
         status: 403
         message: "Debug mode not allowed in production"
 ```
@@ -338,16 +344,17 @@ spec:
     - type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: method
-                values: ["DELETE"]
-              - type: keyMatch
-                key:
-                  type: path
-                regex: [".*/admin/.*"]
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: method
+                  values: ["DELETE"]
+                - type: keyMatch
+                  key:
+                    type: path
+                  regex: [".*/admin/.*"]
         status: 403
         message: "Deleting admin resources is not allowed"
 ```
@@ -366,14 +373,15 @@ spec:
     - type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: directPeerIpMatch
-                ips: ["127.0.0.1", "::1"]
-              - type: keyMatch
-                key:
-                  type: path
-                regex: [".*/admin/.*"]
+        conditions:
+          anyOf:
+            - allOf:
+                - type: directPeerIpMatch
+                  ips: ["127.0.0.1", "::1"]
+                - type: keyMatch
+                  key:
+                    type: path
+                  regex: [".*/admin/.*"]
         status: 403
         message: "Admin access denied from local peer"
 ```
@@ -390,16 +398,15 @@ spec:
     - type: RequestRestriction
       config:
         mode: Allow
-        anyOf:
-          - allOf:
-              - type: mtlsMatch
-                field: san
-                sanType: URI
-                values: ["spiffe://edgion.io/ns/payments/sa/checkout"]
-          - allOf:
-              - type: jwtClaimMatch
-                claim: "realm_access.roles"
-                values: ["admin"]
+        conditions:
+          anyOf:
+            - type: mtlsMatch
+              field: san
+              sanType: URI
+              values: ["spiffe://edgion.io/ns/payments/sa/checkout"]
+            - type: jwtClaimMatch
+              claim: "realm_access.roles"
+              values: ["admin"]
         status: 403
         message: "Identity not allowed"
 ```
@@ -420,24 +427,24 @@ Edgion's `RequestRestriction` plugin unifies multiple restriction capabilities i
 
 ## Notes
 
-1. **Group order**: Groups are evaluated in configuration order and processing stops at the first matching group — a deny under `mode: Deny`, a pass under `mode: Allow`.
+1. **Set order**: Conditions and alternatives are evaluated in configuration order with `allOf`/`anyOf` short-circuiting.
 2. **Polarity is global**: A condition is a pure predicate. Whether a match means allow or deny is decided once by `mode`.
 3. **Case sensitivity**: Exact matching (`values`) is case-sensitive by default; use `caseSensitive: false` to disable; for regex, use the `(?i)` prefix.
 4. **Regex performance**: Multiple regex patterns are merged into a single regex (joined with `|`), reducing matching overhead.
 5. **HashSet optimization**: Exact match lists exceeding 16 values automatically use HashSet for O(1) lookup.
 6. **Path vs requestPath**: `key: { type: path }` is compared against the normalized current path (and `values` are normalized at load time); `key: { type: requestPath }` is the entry-time raw path. Regex is never normalized.
 7. **Missing values**: `keyMatch` / identity matches are false when the value is absent. Use `keyExist` + `negate: true` to match absence.
-8. **ipRefs**: group conditions may use inline `ips` and `ipRefs` (IpList ConfigData). The Controller expands `ipRefs` onto `resolvedIps` on apply. A missing, disabled, wrong-type, or unpermitted IpList reference is fail-closed (`ResolvedRefs=False`); the gateway does not compile an empty matcher from unresolved operator `ipRefs`.
+8. **ipRefs**: conditions may use inline `ips` and `ipRefs` (IpList ConfigData). The Controller expands `ipRefs` onto `resolvedIps` on apply. A missing, disabled, wrong-type, or unpermitted IpList reference is fail-closed (`ResolvedRefs=False`); the gateway does not compile an empty matcher from unresolved operator `ipRefs`.
 
 ## FAQ
 
 ### Q1: How do I express a blacklist vs a whitelist?
 
-**A**: Set `mode`. `Deny` rejects a request when any group matches; `Allow` rejects a request unless some group matches. `mode` is required — there is no default to fall back on.
+**A**: Set `mode`. `Deny` rejects a request when the set matches; `Allow` rejects a request unless the set matches. `mode` is required — there is no default to fall back on.
 
 ### Q2: How do I express `(A AND B) OR C`?
 
-**A**: Put `A` and `B` as two conditions in one group's `allOf` (AND), and `C` as a separate `anyOf` group (OR).
+**A**: Use `conditions.anyOf`, place `A` and `B` in one nested `allOf`, and put `C` directly beside that group.
 
 ### Q3: When is a key name required?
 
@@ -445,7 +452,7 @@ Edgion's `RequestRestriction` plugin unifies multiple restriction capabilities i
 
 ### Q4: How do I deny when a header is missing?
 
-**A**: Add a group whose only condition is `keyExist` + `negate: true` on that header. Under `mode: Deny`, an absent header makes the group match and the request is rejected.
+**A**: Add `keyExist` + `negate: true` for that header as a direct `anyOf` alternative or in an `allOf` group. Under `mode: Deny`, an absent header makes the set match and the request is rejected.
 
 ### Q5: How do I make exact matching case-insensitive?
 

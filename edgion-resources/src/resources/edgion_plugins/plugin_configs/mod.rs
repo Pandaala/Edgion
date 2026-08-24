@@ -50,7 +50,9 @@ mod wasm;
 mod wasm_oci;
 mod webhook_key_get;
 
-pub use super::conditions::{Condition, IpAccessMatch, RuleGroup, SecretMatchCondition};
+pub use super::conditions::{
+    AllOfGroup, AnyOfClause, Condition, ConditionSet, ConditionValidationProfile, IpAccessMatch, SecretMatchCondition,
+};
 pub use super::mtls_field::SanType;
 pub use a2a_gateway::{A2aGatewayConfig, A2A_AGENT_CARD_MAX_BYTES};
 pub use access_log_extern::{is_blocked, AccessLogExternField, LogExtSource, ACCESS_LOG_BLOCKED_CTX_KEYS};

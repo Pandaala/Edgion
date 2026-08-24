@@ -1241,8 +1241,8 @@ mod tests {
         condition: Option<edgion_resources::resources::edgion_plugins::plugin_configs::Condition>,
     ) -> edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessPolicyConfig {
         use edgion_resources::resources::edgion_plugins::plugin_configs::{
-            IpAccessMatch, IpAccessRuleConfig, RequestAccessProfile, RequestAccessRule, RequestAccessRuleType,
-            RequiredRuleGroup,
+            ConditionSet, IpAccessMatch, IpAccessRuleConfig, RequestAccessProfile, RequestAccessRule,
+            RequestAccessRuleType, RequiredRuleGroup,
         };
         edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessPolicyConfig {
             default_profile: "lockdown".to_string(),
@@ -1258,7 +1258,7 @@ mod tests {
                                     ips: vec!["0.0.0.0/0".to_string(), "::/0".to_string()],
                                     ..Default::default()
                                 },
-                                all_of: condition.into_iter().collect(),
+                                conditions: condition.map(|condition| ConditionSet::all_of(vec![condition])),
                             }),
                         }],
                     }],
@@ -1278,10 +1278,13 @@ mod tests {
     ) -> &edgion_resources::resources::edgion_plugins::plugin_configs::Condition {
         use edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessRuleType;
         let rule = &config.runtime_profiles()["lockdown"].required_rule_groups[0].any_of_rules[0];
-        match &rule.rule {
-            RequestAccessRuleType::DirectPeerIp(ip) | RequestAccessRuleType::RemoteIp(ip) => &ip.all_of[0],
-            RequestAccessRuleType::Url(url) => &url.all_of[0],
-        }
+        let conditions = match &rule.rule {
+            RequestAccessRuleType::DirectPeerIp(ip) | RequestAccessRuleType::RemoteIp(ip) => ip.conditions.as_ref(),
+            RequestAccessRuleType::Url(url) => url.conditions.as_ref(),
+        };
+        conditions
+            .and_then(|conditions| conditions.iter_conditions().next())
+            .expect("request access rule condition")
     }
 
     fn request_access_url_policy(config_refs_yaml: &str) -> EdgionPlugins {
@@ -1331,7 +1334,9 @@ profiles:
         name: &str,
         conditions: Vec<edgion_resources::resources::edgion_plugins::plugin_configs::Condition>,
     ) -> edgion_resources::resources::edgion_plugins::plugin_configs::UrlAccessCandidate {
-        use edgion_resources::resources::edgion_plugins::plugin_configs::{AccessPathMatch, AccessPathMatchType};
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{
+            AccessPathMatch, AccessPathMatchType, ConditionSet,
+        };
         edgion_resources::resources::edgion_plugins::plugin_configs::UrlAccessCandidate {
             name: name.to_string(),
             hosts: vec!["callbacks.example.com".to_string()],
@@ -1339,7 +1344,7 @@ profiles:
                 match_type: AccessPathMatchType::PathPrefix,
                 value: format!("/callbacks/{name}"),
             }],
-            all_of: conditions,
+            conditions: (!conditions.is_empty()).then(|| ConditionSet::all_of(conditions)),
         }
     }
 
@@ -1356,6 +1361,16 @@ profiles:
             panic!("expected URL rule")
         };
         url.resolved_candidates.as_deref().expect("resolved URL candidates")
+    }
+
+    fn first_url_candidate_condition(
+        candidate: &edgion_resources::resources::edgion_plugins::plugin_configs::UrlAccessCandidate,
+    ) -> &edgion_resources::resources::edgion_plugins::plugin_configs::Condition {
+        candidate
+            .conditions
+            .as_ref()
+            .and_then(|conditions| conditions.iter_conditions().next())
+            .expect("URL candidate condition")
     }
 
     fn build_basic_auth_secret(namespace: &str, name: &str, username: &str, password: &str) -> Secret {
@@ -3193,7 +3208,7 @@ profiles:
                             match_type: AccessPathMatchType::PathPrefix,
                             value: "/callbacks/:vendor".to_string(),
                         }],
-                        all_of: Vec::new(),
+                        conditions: None,
                     }],
                 }),
             },
@@ -3209,7 +3224,7 @@ profiles:
             rule: RequestAccessRuleType::Url(UrlAccessRuleConfig {
                 hosts: Vec::new(),
                 paths: Vec::new(),
-                all_of: Vec::new(),
+                conditions: None,
                 config_refs: vec![RequestAccessUrlAllowListRef {
                     reference: EdgionConfigDataRef {
                         name: "vendor-callbacks".to_string(),
@@ -3285,7 +3300,7 @@ profiles:
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
         let candidates = first_resolved_url_candidates(&parsed);
-        let Condition::SecretMatch(secret) = &candidates[0].all_of[0] else {
+        let Condition::SecretMatch(secret) = first_url_candidate_condition(&candidates[0]) else {
             panic!("expected nested Secret match")
         };
         assert_eq!(
@@ -3346,7 +3361,8 @@ profiles:
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
         EdgionPluginsHandler.update_status(&mut missing, &ctx, &[]);
-        let Condition::SecretMatch(secret) = &first_resolved_url_candidates(&missing)[0].all_of[0] else {
+        let Condition::SecretMatch(secret) = first_url_candidate_condition(&first_resolved_url_candidates(&missing)[0])
+        else {
             panic!("expected nested Secret")
         };
         assert!(secret.resolved_values.is_none());
@@ -3371,7 +3387,9 @@ profiles:
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
         EdgionPluginsHandler.update_status(&mut recovered, &ctx, &[]);
-        let Condition::SecretMatch(secret) = &first_resolved_url_candidates(&recovered)[0].all_of[0] else {
+        let Condition::SecretMatch(secret) =
+            first_url_candidate_condition(&first_resolved_url_candidates(&recovered)[0])
+        else {
             panic!("expected nested Secret")
         };
         assert_eq!(
@@ -3483,7 +3501,9 @@ profiles:
         };
         EdgionPluginsHandler.update_status(&mut url_only, &ctx, &[]);
         assert_eq!(first_resolved_url_candidates(&url_only).len(), 1);
-        let Condition::SecretMatch(secret) = &first_resolved_url_candidates(&url_only)[0].all_of[0] else {
+        let Condition::SecretMatch(secret) =
+            first_url_candidate_condition(&first_resolved_url_candidates(&url_only)[0])
+        else {
             panic!("expected Secret match")
         };
         assert!(secret.resolved_values.is_none());
@@ -3512,7 +3532,9 @@ profiles:
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
         EdgionPluginsHandler.update_status(&mut both_grants, &ctx, &[]);
-        let Condition::SecretMatch(secret) = &first_resolved_url_candidates(&both_grants)[0].all_of[0] else {
+        let Condition::SecretMatch(secret) =
+            first_url_candidate_condition(&first_resolved_url_candidates(&both_grants)[0])
+        else {
             panic!("expected Secret match")
         };
         assert_eq!(
@@ -3606,7 +3628,8 @@ profiles:
             ProcessResult::Continue(value) => value,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
-        let Condition::RemoteIpMatch(ip) = &first_resolved_url_candidates(&parsed)[0].all_of[0] else {
+        let Condition::RemoteIpMatch(ip) = first_url_candidate_condition(&first_resolved_url_candidates(&parsed)[0])
+        else {
             panic!("expected nested remote IP match")
         };
         let resolved = ip.resolved_ips.as_ref().expect("resolved nested IP union");
@@ -3843,7 +3866,9 @@ profiles:
             ProcessResult::Continue(value) => value,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
-        let Condition::SecretMatch(first_secret) = &first_resolved_url_candidates(&first)[0].all_of[0] else {
+        let Condition::SecretMatch(first_secret) =
+            first_url_candidate_condition(&first_resolved_url_candidates(&first)[0])
+        else {
             panic!("expected Secret match")
         };
         assert_eq!(
@@ -3868,7 +3893,9 @@ profiles:
         };
         assert!(ctx.secret_ref_manager().get_refs("default/token-a").is_empty());
         assert_eq!(ctx.secret_ref_manager().get_refs("default/token-b").len(), 1);
-        let Condition::SecretMatch(second_secret) = &first_resolved_url_candidates(&second)[0].all_of[0] else {
+        let Condition::SecretMatch(second_secret) =
+            first_url_candidate_condition(&first_resolved_url_candidates(&second)[0])
+        else {
             panic!("expected Secret match")
         };
         assert_eq!(
@@ -3946,7 +3973,9 @@ profiles:
         };
         assert!(runtime.edgion_config_data_refs.get_refs("default/ip-a").is_empty());
         assert_eq!(runtime.edgion_config_data_refs.get_refs("default/ip-b").len(), 1);
-        let Condition::DirectPeerIpMatch(ip) = &first_resolved_url_candidates(&second)[0].all_of[0] else {
+        let Condition::DirectPeerIpMatch(ip) =
+            first_url_candidate_condition(&first_resolved_url_candidates(&second)[0])
+        else {
             panic!("expected direct peer IP match")
         };
         assert!(!ip.resolved_ips.as_ref().unwrap().contains(&"192.0.2.0/24".to_string()));
@@ -3973,7 +4002,7 @@ profiles:
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
         assert!(runtime.edgion_config_data_refs.get_refs("default/ip-b").is_empty());
-        assert!(first_resolved_url_candidates(&third)[0].all_of.is_empty());
+        assert!(first_resolved_url_candidates(&third)[0].conditions.is_none());
         assert_eq!(runtime.edgion_config_data_refs.get_refs("default/vendor-list").len(), 1);
     }
 
@@ -4014,7 +4043,8 @@ profiles:
             ProcessResult::Continue(value) => value,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
-        let Condition::HmacAuth(hmac) = &first_resolved_url_candidates(&parsed)[0].all_of[0] else {
+        let Condition::HmacAuth(hmac) = first_url_candidate_condition(&first_resolved_url_candidates(&parsed)[0])
+        else {
             panic!("expected nested HMAC")
         };
         assert!(hmac
@@ -5369,14 +5399,17 @@ profiles:
     fn rr_deny_groups(
         groups: Vec<Vec<edgion_resources::resources::edgion_plugins::plugin_configs::Condition>>,
     ) -> edgion_resources::resources::edgion_plugins::plugin_configs::RequestRestrictionConfig {
-        use edgion_resources::resources::edgion_plugins::conditions::RuleGroup;
-        use edgion_resources::resources::edgion_plugins::plugin_configs::{RequestRestrictionConfig, RestrictionMode};
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{
+            AllOfGroup, AnyOfClause, ConditionSet, RequestRestrictionConfig, RestrictionMode,
+        };
         RequestRestrictionConfig {
             mode: Some(RestrictionMode::Deny),
-            any_of: groups
-                .into_iter()
-                .map(|all_of| RuleGroup { name: None, all_of })
-                .collect(),
+            conditions: ConditionSet::AnyOf {
+                any_of: groups
+                    .into_iter()
+                    .map(|all_of| AnyOfClause::AllOf(AllOfGroup { name: None, all_of }))
+                    .collect(),
+            },
             ..Default::default()
         }
     }
@@ -5388,18 +5421,22 @@ profiles:
         ep
     }
 
-    fn first_rr_all_of(
+    fn first_rr_condition(
         ep: &EdgionPlugins,
-    ) -> &[edgion_resources::resources::edgion_plugins::plugin_configs::Condition] {
+    ) -> &edgion_resources::resources::edgion_plugins::plugin_configs::Condition {
         match &ep.spec.request_plugins.as_ref().unwrap()[0].plugin {
-            EdgionPlugin::RequestRestriction(config) => &config.any_of[0].all_of,
+            EdgionPlugin::RequestRestriction(config) => config
+                .conditions
+                .iter_conditions()
+                .next()
+                .expect("request restriction condition"),
             _ => panic!("expected RequestRestriction"),
         }
     }
 
-    fn first_entry_run(
+    fn first_entry_run_condition(
         ep: &EdgionPlugins,
-    ) -> &[edgion_resources::resources::edgion_plugins::plugin_configs::Condition] {
+    ) -> &edgion_resources::resources::edgion_plugins::plugin_configs::Condition {
         ep.spec
             .request_plugins
             .as_ref()
@@ -5409,21 +5446,30 @@ profiles:
                 entry
                     .conditions
                     .as_ref()
-                    .and_then(|conditions| conditions.run.as_deref())
+                    .and_then(|conditions| conditions.run.as_ref())
+                    .and_then(|conditions| conditions.iter_conditions().next())
             })
             .expect("entry-level run")
     }
 
     #[tokio::test]
     async fn condition_tree_ip_refs_from_rr_group_and_entry_level_run() {
-        use edgion_resources::resources::edgion_plugins::plugin_configs::Condition;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{
+            AllOfGroup, AnyOfClause, Condition, ConditionSet,
+        };
         use edgion_resources::resources::http_route::HTTPHeaderFilter;
 
         let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
-        runtime.edgion_config_data_store.replace_all(HashMap::from([(
-            "default/office-nets".to_string(),
-            ip_list_config_data("default", "office-nets", "203.0.113.0/24"),
-        )]));
+        runtime.edgion_config_data_store.replace_all(HashMap::from([
+            (
+                "default/office-nets".to_string(),
+                ip_list_config_data("default", "office-nets", "203.0.113.0/24"),
+            ),
+            (
+                "default/backup-nets".to_string(),
+                ip_list_config_data("default", "backup-nets", "198.51.100.0/24"),
+            ),
+        ]));
 
         let mut run_entry = RequestFilterEntry::new(EdgionPlugin::RequestHeaderModifier(HTTPHeaderFilter {
             set: None,
@@ -5432,7 +5478,15 @@ profiles:
         }));
         run_entry.conditions = Some(
             edgion_resources::resources::edgion_plugins::conditions::PluginConditions {
-                run: Some(vec![condition_ip_refs(&["office-nets"])]),
+                run: Some(ConditionSet::AnyOf {
+                    any_of: vec![
+                        AnyOfClause::Condition(condition_ip_refs(&["office-nets"])),
+                        AnyOfClause::AllOf(AllOfGroup {
+                            name: Some("backup".to_string()),
+                            all_of: vec![condition_ip_refs(&["backup-nets"])],
+                        }),
+                    ],
+                }),
                 ..Default::default()
             },
         );
@@ -5450,25 +5504,45 @@ profiles:
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
 
-        let Condition::DirectPeerIpMatch(rr_ip) = &first_rr_all_of(&parsed)[0] else {
+        let Condition::DirectPeerIpMatch(rr_ip) = first_rr_condition(&parsed) else {
             panic!("expected RR ipRefs condition")
         };
         assert_eq!(
             rr_ip.resolved_ips.as_deref(),
             Some(["203.0.113.0/24".to_string()].as_slice())
         );
-        let Condition::DirectPeerIpMatch(run_ip) = &first_entry_run(&parsed)[0] else {
+        let Condition::DirectPeerIpMatch(run_ip) = first_entry_run_condition(&parsed) else {
             panic!("expected entry-level run ipRefs")
         };
         assert_eq!(
             run_ip.resolved_ips.as_deref(),
             Some(["203.0.113.0/24".to_string()].as_slice())
         );
+        let run = parsed.spec.request_plugins.as_ref().unwrap()[1]
+            .conditions
+            .as_ref()
+            .and_then(|conditions| conditions.run.as_ref())
+            .expect("entry-level run");
+        let resolved: Vec<_> = run
+            .iter_conditions()
+            .map(|condition| match condition {
+                Condition::DirectPeerIpMatch(ip) => ip.resolved_ips.clone().unwrap(),
+                _ => panic!("expected entry-level run ipRefs"),
+            })
+            .collect();
+        assert_eq!(
+            resolved,
+            vec![vec!["203.0.113.0/24".to_string()], vec!["198.51.100.0/24".to_string()],]
+        );
         let refs = runtime.edgion_config_data_refs.get_refs("default/office-nets");
         assert!(
             refs.contains(&"EdgionPlugins:default/rr-and-run".to_string()),
             "RR group and entry-level run must register the same owner for requeue, got: {refs:?}"
         );
+        assert!(runtime
+            .edgion_config_data_refs
+            .get_refs("default/backup-nets")
+            .contains(&"EdgionPlugins:default/rr-and-run".to_string()));
         assert!(super::resolve_ip_list_refs(&parsed, &ctx).is_empty());
     }
 
@@ -5492,7 +5566,7 @@ profiles:
             ProcessResult::Continue(value) => value,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
-        let Condition::DirectPeerIpMatch(ip) = &first_rr_all_of(&parsed)[0] else {
+        let Condition::DirectPeerIpMatch(ip) = first_rr_condition(&parsed) else {
             panic!("expected RR ipRefs condition")
         };
         assert!(
@@ -5514,6 +5588,28 @@ profiles:
     }
 
     #[tokio::test]
+    async fn condition_tree_ignores_refs_on_disabled_entries() {
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let entry = RequestFilterEntry::with_enable(
+            EdgionPlugin::RequestRestriction(rr_deny_groups(vec![vec![condition_ip_refs(&["inactive-nets"])]])),
+            false,
+        );
+        let parsed = match EdgionPluginsHandler
+            .parse(plugins_with_request_entries("disabled-ref", vec![entry]), &ctx)
+            .await
+        {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+
+        assert!(runtime
+            .edgion_config_data_refs
+            .get_refs("default/inactive-nets")
+            .is_empty());
+        assert!(super::resolve_ip_list_refs(&parsed, &ctx).is_empty());
+    }
+
+    #[tokio::test]
     async fn condition_tree_config_data_change_requeues_entry_level_and_rr() {
         let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
         runtime.edgion_config_data_store.replace_all(HashMap::from([(
@@ -5530,7 +5626,11 @@ profiles:
         ));
         run_entry.conditions = Some(
             edgion_resources::resources::edgion_plugins::conditions::PluginConditions {
-                run: Some(vec![condition_ip_refs(&["watch-nets"])]),
+                run: Some(
+                    edgion_resources::resources::edgion_plugins::conditions::ConditionSet::all_of(vec![
+                        condition_ip_refs(&["watch-nets"]),
+                    ]),
+                ),
                 ..Default::default()
             },
         );
@@ -5611,7 +5711,9 @@ profiles:
         let mut expanded_then_credentials = request_access_url_policy("                - name: vendor-list");
         super::super::plugins::condition_tree::expand_config_data(&mut expanded_then_credentials, &resource_ref, &ctx);
         super::super::plugins::condition_tree::resolve_credentials(&mut expanded_then_credentials, &resource_ref, &ctx);
-        let Condition::HmacAuth(hmac) = &first_resolved_url_candidates(&expanded_then_credentials)[0].all_of[0] else {
+        let Condition::HmacAuth(hmac) =
+            first_url_candidate_condition(&first_resolved_url_candidates(&expanded_then_credentials)[0])
+        else {
             panic!("expected nested HMAC after expansion")
         };
         assert!(
@@ -5698,7 +5800,7 @@ profiles:
             ProcessResult::Continue(value) => value,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
-        let Condition::HmacAuth(hmac) = &first_rr_all_of(&parsed)[0] else {
+        let Condition::HmacAuth(hmac) = first_rr_condition(&parsed) else {
             panic!("expected RR HMAC condition")
         };
         assert!(
@@ -5708,5 +5810,234 @@ profiles:
             "RR HMAC must reuse hmac.rs credential resolution"
         );
         assert_eq!(ctx.secret_ref_manager().get_refs("default/rr-hmac").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn condition_tree_body_and_dye_walk_both_passes_and_clear_removed_refs() {
+        use edgion_resources::common::KeyGet;
+        use edgion_resources::resources::edgion_plugins::conditions::PluginConditions;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{
+            AllOfGroup, AnyOfClause, Condition, ConditionSet, HmacMatchConfig, RequestBodyBufferConfig,
+            SecretMatchCondition,
+        };
+        use edgion_resources::resources::edgion_plugins::{BodyRequirement, DyeOutcome, DyeRule, DyeSuite};
+
+        fn secret_match(name: &str) -> Condition {
+            Condition::SecretMatch(SecretMatchCondition {
+                key: KeyGet::Header {
+                    name: "X-Condition-Token".to_string(),
+                },
+                secret_key: "token".to_string(),
+                secret_ref: SecretObjectReference {
+                    name: name.to_string(),
+                    group: None,
+                    kind: None,
+                    namespace: None,
+                },
+                negate: false,
+                resolved_values: None,
+                descriptor: Box::from(""),
+            })
+        }
+
+        fn hmac_match(name: &str, group: &str) -> Condition {
+            Condition::HmacAuth(HmacMatchConfig {
+                secret_groups: Some(vec![HmacAuthSecretGroup {
+                    name: group.to_string(),
+                    description: None,
+                    secret_refs: vec![SecretObjectReference {
+                        name: name.to_string(),
+                        group: None,
+                        kind: None,
+                        namespace: None,
+                    }],
+                }]),
+                ..Default::default()
+            })
+        }
+
+        fn mixed_conditions(direct: Condition, nested: Vec<Condition>) -> PluginConditions {
+            PluginConditions {
+                run: Some(ConditionSet::AnyOf {
+                    any_of: vec![
+                        AnyOfClause::Condition(direct),
+                        AnyOfClause::AllOf(AllOfGroup {
+                            name: Some("nested".to_string()),
+                            all_of: nested,
+                        }),
+                    ],
+                }),
+                ..Default::default()
+            }
+        }
+
+        let credentials = "- username: condition-user\n  secret: condition-secret-at-least-32-bytes-0001\n";
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::from([
+            (
+                "default/body-token".to_string(),
+                build_secret("default", "body-token", "token", "body-value"),
+            ),
+            (
+                "default/dye-token".to_string(),
+                build_secret("default", "dye-token", "token", "dye-value"),
+            ),
+            (
+                "default/condition-hmac".to_string(),
+                build_secret("default", "condition-hmac", "credentials.yaml", credentials),
+            ),
+        ]));
+        runtime.edgion_config_data_store.replace_all(HashMap::from([
+            (
+                "default/body-nets".to_string(),
+                ip_list_config_data("default", "body-nets", "192.0.2.0/24"),
+            ),
+            (
+                "default/dye-nets".to_string(),
+                ip_list_config_data("default", "dye-nets", "198.51.100.0/24"),
+            ),
+        ]));
+
+        let mut body_entry =
+            RequestFilterEntry::new(EdgionPlugin::RequestBodyBuffer(RequestBodyBufferConfig::default()));
+        body_entry.body = Some(BodyRequirement {
+            conditions: Some(mixed_conditions(
+                condition_ip_refs(&["body-nets"]),
+                vec![secret_match("body-token"), hmac_match("condition-hmac", "body")],
+            )),
+            ..Default::default()
+        });
+
+        let mut dye_entry = RequestFilterEntry::new(EdgionPlugin::RegionRoute(Default::default()));
+        dye_entry.dye = Some(DyeSuite {
+            request: Vec::new(),
+            response: vec![DyeRule {
+                name: "X-Condition-Dye".to_string(),
+                on: vec![DyeOutcome::Success],
+                value: None,
+                conditions: Some(mixed_conditions(
+                    secret_match("dye-token"),
+                    vec![condition_ip_refs(&["dye-nets"]), hmac_match("condition-hmac", "dye")],
+                )),
+            }],
+        });
+
+        let parsed = match EdgionPluginsHandler
+            .parse(
+                plugins_with_request_entries("body-dye-refs", vec![body_entry, dye_entry]),
+                &ctx,
+            )
+            .await
+        {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+
+        let body_conditions = parsed.spec.request_plugins.as_ref().unwrap()[0]
+            .body
+            .as_ref()
+            .and_then(|body| body.conditions.as_ref())
+            .and_then(|conditions| conditions.run.as_ref())
+            .expect("body conditions");
+        let body_atoms: Vec<_> = body_conditions.iter_conditions().collect();
+        let Condition::DirectPeerIpMatch(body_ip) = body_atoms[0] else {
+            panic!("expected direct body IP condition")
+        };
+        assert_eq!(
+            body_ip.resolved_ips.as_deref(),
+            Some(["192.0.2.0/24".to_string()].as_slice())
+        );
+        let Condition::SecretMatch(body_secret) = body_atoms[1] else {
+            panic!("expected nested body SecretMatch condition")
+        };
+        assert_eq!(
+            body_secret.resolved_values.as_deref(),
+            Some(["body-value".to_string()].as_slice())
+        );
+        let Condition::HmacAuth(body_hmac) = body_atoms[2] else {
+            panic!("expected nested body HMAC condition")
+        };
+        assert!(body_hmac
+            .resolved_credentials
+            .as_ref()
+            .is_some_and(|credentials| credentials.contains_key("condition-user")));
+
+        let dye_conditions = parsed.spec.request_plugins.as_ref().unwrap()[1]
+            .dye
+            .as_ref()
+            .and_then(|dye| dye.response[0].conditions.as_ref())
+            .and_then(|conditions| conditions.run.as_ref())
+            .expect("dye conditions");
+        let dye_atoms: Vec<_> = dye_conditions.iter_conditions().collect();
+        let Condition::SecretMatch(dye_secret) = dye_atoms[0] else {
+            panic!("expected direct dye SecretMatch condition")
+        };
+        assert_eq!(
+            dye_secret.resolved_values.as_deref(),
+            Some(["dye-value".to_string()].as_slice())
+        );
+        let Condition::DirectPeerIpMatch(dye_ip) = dye_atoms[1] else {
+            panic!("expected nested dye IP condition")
+        };
+        assert_eq!(
+            dye_ip.resolved_ips.as_deref(),
+            Some(["198.51.100.0/24".to_string()].as_slice())
+        );
+        let Condition::HmacAuth(dye_hmac) = dye_atoms[2] else {
+            panic!("expected nested dye HMAC condition")
+        };
+        assert!(dye_hmac
+            .resolved_credentials
+            .as_ref()
+            .is_some_and(|credentials| credentials.contains_key("condition-user")));
+
+        for key in ["default/body-nets", "default/dye-nets"] {
+            assert_eq!(
+                runtime.edgion_config_data_refs.get_refs(key),
+                vec!["EdgionPlugins:default/body-dye-refs".to_string()],
+                "condition IP ref must register its owner: {key}"
+            );
+        }
+        for key in ["default/body-token", "default/dye-token", "default/condition-hmac"] {
+            assert_eq!(
+                ctx.secret_ref_manager().get_refs(key),
+                vec![ResourceRef::new(
+                    edgion_resources::ResourceKind::EdgionPlugins,
+                    Some("default".to_string()),
+                    "body-dye-refs".to_string(),
+                )],
+                "condition Secret ref must register its owner: {key}"
+            );
+        }
+
+        let reparsed = match EdgionPluginsHandler
+            .parse(
+                plugins_with_request_entries(
+                    "body-dye-refs",
+                    vec![
+                        RequestFilterEntry::new(EdgionPlugin::RequestBodyBuffer(RequestBodyBufferConfig::default())),
+                        RequestFilterEntry::new(EdgionPlugin::RegionRoute(Default::default())),
+                    ],
+                ),
+                &ctx,
+            )
+            .await
+        {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        assert!(reparsed.spec.request_plugins.as_ref().unwrap()[0].body.is_none());
+        assert!(reparsed.spec.request_plugins.as_ref().unwrap()[1].dye.is_none());
+        for key in ["default/body-nets", "default/dye-nets"] {
+            assert!(
+                runtime.edgion_config_data_refs.get_refs(key).is_empty(),
+                "removed condition IP ref must clear reverse refs: {key}"
+            );
+        }
+        for key in ["default/body-token", "default/dye-token", "default/condition-hmac"] {
+            assert!(
+                ctx.secret_ref_manager().get_refs(key).is_empty(),
+                "removed condition Secret ref must clear reverse refs: {key}"
+            );
+        }
     }
 }

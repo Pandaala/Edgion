@@ -11,16 +11,17 @@ spec:
       type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: directPeerIpMatch
-                ips:
-                  - "127.0.0.1"
-                  - "::1"
-              - type: keyMatch
-                key:
-                  type: path
-                regex:
-                  - ".*/admin/.*"
+        conditions:
+          anyOf:
+            - allOf:
+                - type: directPeerIpMatch
+                  ips:
+                    - "127.0.0.1"
+                    - "::1"
+                - type: keyMatch
+                  key:
+                    type: path
+                  regex:
+                    - ".*/admin/.*"
         status: 403
         message: "Admin access denied from local peer"

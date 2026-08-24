@@ -10,10 +10,11 @@ spec:
       type: RequestHeaderModifier
       conditions:
         run:
-          - type: directPeerIpMatch
-            ipRefs:
-              - name: rr-missing-run-ip-list
-            negate: true
+          allOf:
+            - type: directPeerIpMatch
+              ipRefs:
+                - name: rr-missing-run-ip-list
+              negate: true
       config:
         set:
           - name: X-Unresolved-Run

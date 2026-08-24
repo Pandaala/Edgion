@@ -4,7 +4,8 @@
 //! `PluginRuntime` build time, into a `CompiledDyePlan` carried by the entry's
 //! conditional wrapper. Validation (`DyeSuite::validation_error`) already ran
 //! on ingest and guarantees every template parses, every name is a valid
-//! non-denied header token, and no rule references `secretRef` — so a
+//! non-denied header token, and no Dye value template references `secretRef`
+//! (conditions retain their normal reference support) — so a
 //! `CompiledTemplate::compile` failure here is a bug, not an operator error.
 //! It is still surfaced through the normal compile-error vec (fail-closed,
 //! matching every other `PluginRuntime` compile error), never a panic.
@@ -112,7 +113,7 @@ mod tests {
     #[test]
     fn compile_plan_carries_rule_conditions() {
         let suite: DyeSuite = serde_yaml::from_str(
-            "response:\n  - name: X-O\n    conditions:\n      run:\n        - type: keyExist\n          key:\n            type: header\n            name: X-Debug\n",
+            "response:\n  - name: X-O\n    conditions:\n      run:\n        allOf:\n          - type: keyExist\n            key:\n              type: header\n              name: X-Debug\n",
         )
         .unwrap();
         let plan = CompiledDyePlan::compile(&suite, "canary").unwrap();

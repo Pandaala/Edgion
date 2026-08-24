@@ -23,16 +23,17 @@ spec:
       type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              # path key: compared against the current path after normalization.
-              # When preserve_path_parameters = false (default):
-              #   /admin/..;jsessionid=x/secret -> normalized to /secret -> matches -> 403
-              # When preserve_path_parameters = true (opt-out):
-              #   /admin/..;jsessionid=x/secret kept as-is -> /secret does not match -> 200
-              - type: keyMatch
-                key:
-                  type: path
-                values:
-                  - "/secret"
+        conditions:
+          anyOf:
+            - allOf:
+                # path key: compared against the current path after normalization.
+                # When preserve_path_parameters = false (default):
+                #   /admin/..;jsessionid=x/secret -> normalized to /secret -> matches -> 403
+                # When preserve_path_parameters = true (opt-out):
+                #   /admin/..;jsessionid=x/secret kept as-is -> /secret does not match -> 200
+                - type: keyMatch
+                  key:
+                    type: path
+                  values:
+                    - "/secret"
         status: 403

@@ -2,22 +2,79 @@
 
 > Shared `run` / `skip` predicates on `EdgionPlugins` entries (and on entry-level `dye` rules). This is not a standalone plugin.
 
-Plugin conditions decide whether a plugin entry (or a dye rule) runs for the current request. They reuse one `PluginConditions` object:
-
-- **`skip`**: OR. If any condition is true, skip.
-- **`run`**: AND. Every condition must be true to run; otherwise skip.
-- When both are set, `skip` is evaluated first.
+Plugin conditions decide whether a plugin entry, a body gate, or a dye rule
+runs for the current request. `skip` and `run` are action fields; each contains
+an explicit `ConditionSet`. When both are present, `skip` is evaluated first.
+A matching `skip` set skips the action, while a non-matching `run` set also
+skips it.
 
 ```yaml
 conditions:
   skip:
-    - type: keyExist
-      key: { type: header, name: X-Internal-Request }
+    anyOf:
+      - type: keyExist
+        key: { type: header, name: X-Internal-Request }
   run:
-    - type: keyMatch
-      key: { type: header, name: X-Env }
-      values: ["production"]
+    allOf:
+      - type: keyMatch
+        key: { type: header, name: X-Env }
+        values: ["production"]
 ```
+
+## ConditionSet grammar
+
+A set has exactly one top-level operator:
+
+- `allOf` contains only direct Conditions and matches when every item matches.
+- `anyOf` contains direct Conditions or one-level `{ name?, allOf: [...] }`
+  groups and matches when any alternative matches.
+
+This bounded DNF grammar supports flat AND, flat OR, and `(A AND B) OR C`:
+
+```yaml
+conditions:
+  run:
+    anyOf:
+      - type: directPeerIpMatch
+        ips: [10.0.0.0/8]
+      - name: authenticated-production
+        allOf:
+          - type: keyMatch
+            key: { type: header, name: X-Env }
+            values: [production]
+          - type: keyExist
+            key: { type: header, name: X-Authenticated-User }
+```
+
+The grammar is intentionally non-recursive. Arrays must be non-empty. A set
+cannot contain both operators, and the following shapes are rejected:
+`allOf -> anyOf`, `anyOf -> anyOf`, nested `allOf -> allOf`, deeper nesting,
+unknown container fields, and a clause containing both `type` and `allOf`.
+An optional group `name` must be nonblank and affects attribution only.
+
+### Body gates and dye rules
+
+Entry-level `conditions`, supported `body.conditions`, and dye-rule
+`conditions` all use the same `PluginConditions` action container. For
+example, this body gate applies only to requests with a body-producing method:
+
+```yaml
+body:
+  maxBodySize: 1MiB
+  conditions:
+    run:
+      anyOf:
+        - type: keyMatch
+          key: { type: method }
+          values: [POST, PUT, PATCH]
+```
+
+Body conditions decide whether the generic body gate applies; they do not
+skip the inner plugin. Some intrinsic fail-close body plugins deliberately
+reject `body.conditions`; their plugin-specific page documents that boundary.
+Dye conditions decide only whether an already-matched outcome renders its
+header. WebhookKeyGet has ordinary entry-level conditions, but does not gain a
+body gate: its outbound webhook body is unrelated to the proxied request body.
 
 ## Variants
 
@@ -36,11 +93,16 @@ conditions:
 
 There is no separate `include` / `exclude` type. A former `include` is `keyMatch`; a former `exclude` is `keyMatch` with `negate: true`.
 
-`hmacAuth.validateRequestBody` is rejected on entry-level `run` / `skip`, body gates, and dye conditions. It is valid inside `RequestAccessPolicy` `allOf` and `RequestRestriction` `anyOf[].allOf`. An ordinary request-value miss or failed HMAC verification is base false, then `negate` applies. An unresolved ConfigData or Secret reference is different: it never matches and `negate` never inverts it.
+`hmacAuth.validateRequestBody` is rejected on entry-level `run` / `skip`, body
+gates, and dye conditions. It is valid inside RequestAccessPolicy and
+RequestRestriction ConditionSets. An ordinary request-value miss or failed
+HMAC verification is base false, then `negate` applies. An unresolved
+ConfigData or Secret reference is different: it never matches and `negate`
+never inverts it.
 
 ## ConfigData and Secret references
 
-`directPeerIpMatch` / `remoteIpMatch` may list `ipRefs` to an IpList `EdgionConfigData`. `secretMatch` uses `secretRef` plus required `secretKey`; it resolves exactly `Secret.data[secretKey]`, never every value in the Secret. `hmacAuth` resolves `secretGroups[].secretRefs`. The Controller walks every Condition tree (entry `run`/`skip`, body, dye, RequestAccessPolicy `allOf`, RequestRestriction `anyOf`) and writes `resolvedIps` / `resolvedValues` / `resolvedCredentials` **in place** on those Condition objects.
+`directPeerIpMatch` / `remoteIpMatch` may list `ipRefs` to an IpList `EdgionConfigData`. `secretMatch` uses `secretRef` plus required `secretKey`; it resolves exactly `Secret.data[secretKey]`, never every value in the Secret. `hmacAuth` resolves `secretGroups[].secretRefs`. The Controller walks every direct and grouped Condition in entry, body, dye, RequestRestriction, and RequestAccessPolicy sets, and writes `resolvedIps` / `resolvedValues` / `resolvedCredentials` **in place** on those Condition objects.
 
 - A missing, disabled, wrong-type, or unpermitted **IpList** `ipRefs` target is reported as `ResolvedRefs=False`; the Controller does not compile an empty matcher from unresolved `ipRefs`. A missing **Secret** referenced by `secretMatch` or HMAC `secretRefs` is reported the same way. For `secretMatch`, a missing, non-UTF-8, or empty selected `secretKey` value is also unresolved. These errors are included in the `edgion_controller_resource_abnormal` metric.
 
@@ -102,7 +164,7 @@ Matching is **exact**. There is no wildcard syntax in `values` (`/api/*` is the 
 `keyMatch`, `jwtClaimMatch`, and `mtlsMatch` must configure at least one
 non-empty `values` or `regex` list. This is validated uniformly wherever a
 condition appears, including plugin `run`/`skip`, body and dye conditions,
-RequestRestriction groups, and RequestAccessPolicy `allOf` lists.
+RequestRestriction sets, and RequestAccessPolicy supplemental sets.
 If `values` is present, it must not be an empty list even when a non-empty
 `regex` is also present.
 
@@ -122,62 +184,49 @@ Regex patterns are **never** normalized. Write regex against the path form you a
 
 ## Compiled descriptors (access log)
 
-Each compiled condition carries a runtime-only descriptor of the form
-`<ordinal>:<type>[:<accessor>]`. The ordinal is the index inside that
-`skip` or `run` list (each list starts at 0). `type` is `keyExist`,
-`keyMatch`, `timeRange`, `probability`, `secretMatch`, `directPeerIpMatch`,
-`remoteIpMatch`, `hmacAuth`, `jwtClaimMatch`, or `mtlsMatch`. The accessor is
-`KeyGet::as_log_str()` when the variant has a key (`keyExist`, `keyMatch`,
-`secretMatch`, and `probability` when a key is set). `jwtClaimMatch` uses the
-claim name (`3:jwtClaimMatch:sub`); `mtlsMatch` uses the field name
-(`3:mtlsMatch:san`). IP and HMAC descriptors have no accessor.
+Each compiled condition carries a runtime-only descriptor with its stable
+location in the set, condition type, and accessor when applicable. Locations
+distinguish direct leaves from nested groups, for example
+`run.allOf[1]:keyMatch:hdr:X-Env` or a compact wire equivalent. Descriptors
+never contain match values, regexes, CIDRs, claims, or secrets.
 
-The descriptor never contains match values (`values`, `regex`, secrets, or
-IP lists). Two conditions that share an accessor still differ by ordinal:
-`0:keyMatch:hdr:X-A` vs `1:keyMatch:hdr:X-A`.
+Match-only atomic descriptors are emitted only when one logical decision scope
+contains more than one atomic Condition. For plugin conditions, the count spans
+both `skip` and `run`; RequestRestriction counts its complete set; each
+RequestAccessPolicy candidate counts its supplemental set. A zero- or one-leaf
+scope is already explained by the plugin or policy outcome, so repeating the
+successful leaf would add noise. Composite scopes retain matched descriptors
+in configuration evaluation order so the successful branch or prefix can be
+reconstructed.
 
-**Match-only:** a condition that matches is pushed into the plugin `log`
-array. A condition that does not match logs nothing. Body-phase and dye
-evaluation stay silent (no `PluginLog`).
-
-This is a second signal next to `cond_skip`. `cond_skip` is unchanged and
-still answers "why was this plugin skipped".
-
-### Reconstructing AND / OR from the `log` array
-
-| List | Logic | What is pushed | How to reconstruct |
-|------|--------|----------------|--------------------|
-| `skip` | OR | Only the first matching descriptor | That skip condition fired; later skip entries were not evaluated |
-| `run` | AND | Each success in order; first failure stops and is **not** pushed | The pushed prefix all matched; if the plugin also ran, the whole `run` list matched. A `cond_skip` of `!run:…` names the first failure |
-
-Example: `log: ["0:keyMatch:hdr:X-A", "1:keyMatch:hdr:X-B"]` on a `run` list
-of three means the first two matched and the third did not (or was not
-needed). The same two strings on a `skip` list cannot occur — skip
-short-circuits after the first match.
+This threshold never suppresses `cond_skip`, final allow/deny/reject outcomes,
+named-group attribution, unresolved/configuration errors, or body-read errors.
+Body-phase and dye evaluation remain silent regardless of leaf count.
 
 ## Example
 
 ```yaml
 conditions:
   run:
-    - type: keyMatch
-      key: { type: path }
-      values: ["/health", "/ready"]
-      caseSensitive: true
-    - type: keyMatch
-      key: { type: path }
-      regex: ["^/api/.*"]
-    - type: keyMatch
-      key: { type: path }
-      values: ["/health", "/ready"]
-      negate: true   # exclude spelling
-    - type: keyExist
-      key: { type: header, name: X-Canary }
-      negate: true   # run when the header is absent
+    allOf:
+      - type: keyMatch
+        key: { type: path }
+        values: ["/health", "/ready"]
+        caseSensitive: true
+      - type: keyMatch
+        key: { type: path }
+        regex: ["^/api/.*"]
+      - type: keyMatch
+        key: { type: path }
+        values: ["/health", "/ready"]
+        negate: true   # exclude spelling
+      - type: keyExist
+        key: { type: header, name: X-Canary }
+        negate: true   # run when the header is absent
 ```
 
 ## Related
 
-- [Request Restriction](./request-restriction.md) — standalone allow/deny plugin with its own rule groups
-- [Request Access Policy](./request-access-policy.md) — L7 policy; `allOf` is the same `Condition` enum
+- [Request Restriction](./request-restriction.md) — standalone allow/deny plugin using the same ConditionSet
+- [Request Access Policy](./request-access-policy.md) — L7 policy with supplemental ConditionSets
 - [Dye](./dye.md) — entry-level dye rules reuse this `conditions` block

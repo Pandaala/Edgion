@@ -11,18 +11,19 @@ spec:
       type: RequestRestriction
       config:
         mode: Deny
-        anyOf:
-          - allOf:
-              - type: keyMatch
-                key:
-                  type: header
-                  name: "X-Env"
-                values:
-                  - "prod"
-              - type: keyMatch
-                key:
-                  type: path
-                regex:
-                  - ".*/admin/.*"
+        conditions:
+          anyOf:
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: header
+                    name: "X-Env"
+                  values:
+                    - "prod"
+                - type: keyMatch
+                  key:
+                    type: path
+                  regex:
+                    - ".*/admin/.*"
         status: 403
         message: "Admin access denied in prod"
