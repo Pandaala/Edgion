@@ -50,7 +50,7 @@ edgion-gateway/src`.
 
 | Deleted site | Channel that already carried it |
 |---|---|
-| discovery SAN `warn!` | `record_outbound_tls_san_mismatch()` fires unconditionally on the adjacent line; `request_filter_impl.rs` and `callback.rs` additionally stamp `EdgionStatus::OutboundTlsSanMismatch` + `PluginLog` |
+| discovery SAN `warn!` | `record_outbound_tls_san_mismatch()` fires unconditionally on the adjacent line; `request_filter_impl.rs` and `callback.rs` additionally record `EdgionErrorCode::OutboundTlsSanMismatch` + `PluginLog` |
 | JWKS SAN `warn!` | same counter |
 | `"serving stale cache"` `warn!` | `discovery_jwks.rs::get_or_fetch_jwks` records `DyeOutcome::FailOpen("jwks-stale-cache")` → access log |
 | `"JWKS refreshed successfully"` `info!` | nothing — a *successful* refresh is not an event worth a log line; it fires every `jwksCacheTtl` (default 300 s) per plugin instance forever |

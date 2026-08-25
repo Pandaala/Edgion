@@ -63,7 +63,7 @@ The data-plane hot path (`request_filter`, `upstream_peer`, `response_filter`, `
 | Scenario | Alternative |
 |------|---------|
 | Per-request result/decision | `PluginLog` → access log |
-| Per-connection error/event | `ctx.err_log` / `ctx.add_error()` |
+| Per-connection or per-request error/event | `ctx.err_log` / `ctx.record_error(EdgionErrorCode::...)` |
 | Aggregate counts | `global_metrics().xxx()` |
 
 **Exceptions** (only the following scenarios are permitted):

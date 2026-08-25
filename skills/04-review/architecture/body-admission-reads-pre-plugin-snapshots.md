@@ -100,14 +100,14 @@ HEAD = `Buffer` = an attempted read that can fail loudly), matching
 the unsafe direction. Pick the representation from which default is safe, not
 by symmetry with the neighbouring field.
 
-**4. (F5) A bug signal must not share an `EdgionStatus` with expected traffic**
+**4. (F5) A bug signal must not share an `EdgionErrorCode` with expected traffic**
 
 `request_admission`'s `body_declared == None` arm means the pre-plugin snapshot
 never ran — a code-path defect. Its wrong-stage arm fires on every request for
 any body consumer placed in a post-request stage — expected traffic. They used
 to return the same `BodyRefusedStage`, making the defect statistically invisible
-in the access log. They are now `BodyRefusedNoSnapshot` (500_22) and
-`BodyRefusedStage` respectively. Both `EdgionStatus` doc comments state which
+in the access log. They are now `BodyRefusedNoSnapshot` and
+`BodyRefusedStage` respectively. Both `EdgionErrorCode` doc comments state which
 one is alertable.
 
 ## Fix Suggestions Not Accepted

@@ -650,6 +650,7 @@ pub struct PreflightPolicy {
 
     /// Status code to return when no CORS plugin is configured (default: 204)
     #[serde(default = "default_preflight_status_code")]
+    #[schemars(range(min = 200, max = 599))]
     pub status_code: u16,
 }
 
@@ -802,6 +803,20 @@ impl UnmaskedKeys {
 }
 
 impl EdgionGatewayConfigSpec {
+    /// Validate the status emitted by the built-in preflight response.
+    pub fn validate_preflight_policy(&self) -> Vec<String> {
+        self.preflight_policy
+            .as_ref()
+            .filter(|policy| !crate::http_status::is_valid_final_http_status(policy.status_code))
+            .map(|policy| {
+                vec![format!(
+                    "preflightPolicy.statusCode must be between 200 and 599, got {}",
+                    policy.status_code
+                )]
+            })
+            .unwrap_or_default()
+    }
+
     /// Validate the GatewayClass-wide request-body buffering policy.
     pub fn validate_request_body(&self) -> Vec<String> {
         self.request_body.validate()
@@ -1018,6 +1033,23 @@ mod tcp_timeout_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preflight_policy_accepts_only_ordinary_final_statuses() {
+        let valid: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "preflightPolicy": {"statusCode": 204}
+        }))
+        .unwrap();
+        assert!(valid.validate_preflight_policy().is_empty());
+
+        for status in [100, 101, 103, 600, 700] {
+            let invalid: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+                "preflightPolicy": {"statusCode": status}
+            }))
+            .unwrap();
+            assert_eq!(invalid.validate_preflight_policy().len(), 1, "{status}");
+        }
+    }
 
     #[test]
     fn forwarded_headers_default_to_x_real_ip() {

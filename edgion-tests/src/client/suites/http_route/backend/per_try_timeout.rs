@@ -107,17 +107,72 @@ impl PerTryTimeoutTestSuite {
                             // other retry path: access-log diagnostics must carry
                             // BackendRequestTimeoutRetry for the canceled attempt.
                             let al_client = ctx.access_log_client();
-                            if let Ok(entry) = al_client.get_access_log_with_retry(&test_id, 10, 200).await {
-                                let has_marker = entry.has_diagnostic("error", "BackendRequestTimeoutRetry");
-                                if !has_marker {
+                            let entry = match al_client.get_access_log_with_retry(&test_id, 10, 200).await {
+                                Ok(entry) => entry,
+                                Err(e) => {
                                     return TestResult::failed(
                                         start.elapsed(),
-                                        format!(
-                                            "Access log diagnostics missing BackendRequestTimeoutRetry: {}",
-                                            entry.data["diagnostics"]
-                                        ),
-                                    );
+                                        format!("Access log fetch failed after successful retry: {e}"),
+                                    )
                                 }
+                            };
+
+                            if entry.status_code() != Some(200) {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected access-log request_info.status=200, got {:?}: {}",
+                                        entry.status_code(),
+                                        entry.data
+                                    ),
+                                );
+                            }
+
+                            if !entry.has_diagnostic("error", "BackendRequestTimeoutRetry") {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Access log diagnostics missing error/BackendRequestTimeoutRetry: {}",
+                                        entry.data["diagnostics"]
+                                    ),
+                                );
+                            }
+
+                            let Some(upstreams) = entry.data["backend_context"]["upstreams"].as_array() else {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Access log has no upstream attempt array: {}", entry.data),
+                                );
+                            };
+                            if upstreams.len() != 2 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected exactly 2 ordered attempts, got {}: {upstreams:?}",
+                                        upstreams.len()
+                                    ),
+                                );
+                            }
+
+                            let first_status = upstreams[0]["status"].as_u64();
+                            let first_timed_out = upstreams[0]["err"].as_array().is_some_and(|errors| {
+                                errors.iter().any(|error| error.as_str() == Some("ReadTimedout"))
+                            });
+                            if first_status != Some(504) || !first_timed_out {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Attempt 1 must be the timed-out 504 before the success, got: {}",
+                                        upstreams[0]
+                                    ),
+                                );
+                            }
+
+                            if upstreams[1]["status"].as_u64() != Some(200) {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Attempt 2 must be the successful 200, got: {}", upstreams[1]),
+                                );
                             }
 
                             TestResult::passed_with_message(

@@ -140,7 +140,7 @@ errorPolicy:
 
 **denyWith**
 
-与 `deny` 类似，但可以自定义返回的 HTTP 状态码和响应体内容。`status` 必须在 100–599 范围内，`body` 为纯文本字符串。适合需要向客户端返回特定错误格式的场景。
+与 `deny` 类似，但可以自定义返回的 HTTP 状态码和响应体内容。`status` 必须在 200–599 范围内，`body` 为纯文本字符串。适合需要向客户端返回特定错误格式的场景。
 
 生产环境中，对于安全相关的脚本（权限检查、速率标记等），建议使用 `deny` 或 `denyWith`；对于增强性脚本（添加调试头、设置上下文），可以保留 `ignore`。
 
@@ -216,7 +216,7 @@ DSL 插件可以在两个阶段运行，不同阶段的可用 API 有所不同�
 | `time_format` | 格式字符串最大 256 字符 | 防止格式字符串过长导致的资源消耗 |
 | `regex_find` / `regex_replace` | 模式最大 1,024 字节 | 防止 ReDoS |
 | `req.header_names` / `resp.header_names` | 最多返回 256 个头名称 | 防止大量请求头导致的内存问题 |
-| `resp.set_status` | 状态码范围 100–599 | 超出范围时返回 `ApiError` |
+| `resp.set_status` | 最终状态码范围 200–599 | 超出范围时返回 `ApiError` |
 | `range` | 最多生成 1,000 个元素 | 防止大列表占用过多内存 |
 | `http.call` | 超时上限 `httpMaxTimeoutMs`（默认 5,000 ms）；不透明 `Body` 上限为 `min(httpMaxRequestBodyBytes, 物理 body 上限)`（默认 1 MiB，配置最大 32 MiB）；响应体上限 `httpMaxResponseBodyBytes`（默认 1 MiB）；按配置拦截私有 IP | 防止网关资源耗尽和 SSRF 攻击 |
 

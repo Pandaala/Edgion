@@ -41,6 +41,12 @@ pub(super) fn has_final_response_written(session: &Session) -> bool {
         .is_some_and(|header| !is_interim_informational(header.status))
 }
 
+#[inline]
+pub(super) fn select_normalized_upstream_candidate(ctx: &mut EdgionHttpContext, status: u16) {
+    ctx.pre_plugin_response_status = Some(status);
+    ctx.select_final_downstream_status(status);
+}
+
 /// Whether the response-stage plugin chains have already produced a terminal
 /// outcome, so no further chain may run: either a stashed local reply, or a
 /// denial that could not be stashed and will abort the exchange.
@@ -299,8 +305,7 @@ pub fn upstream_response_filter(
     // the provider's raw status; the request-level status is finalized later.
     normalize_final_response_headers(upstream_response, ctx, &edgion_http.server_header_opts);
     let normalized_status = upstream_response.status.as_u16();
-    ctx.pre_plugin_response_status = Some(normalized_status);
-    ctx.select_final_downstream_status(normalized_status);
+    select_normalized_upstream_candidate(ctx, normalized_status);
 
     // Inject session persistence cookie/header if needed. Runs here, AFTER the
     // retry-on-status decision, so a response about to be discarded for retry

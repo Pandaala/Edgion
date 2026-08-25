@@ -108,6 +108,9 @@ pub struct PingoraSessionAdapter<'a> {
     /// Set to true after a gRPC trailers-only error response has been sent.
     /// Subsequent write_response_body and shutdown calls become no-ops.
     grpc_response_terminated: bool,
+    /// Prevent repeated header/body failures from emitting duplicate transport
+    /// diagnostics during one adapter-owned plugin stage.
+    delivery_failure_recorded: bool,
 }
 
 /// Build a fresh local-reply `ResponseHeader` + body and stash them in `ctx`
@@ -167,6 +170,7 @@ impl<'a> PingoraSessionAdapter<'a> {
             ctx,
             response_header: None,
             grpc_response_terminated: false,
+            delivery_failure_recorded: false,
         }
     }
 
@@ -181,7 +185,17 @@ impl<'a> PingoraSessionAdapter<'a> {
             ctx,
             response_header: Some(response_header),
             grpc_response_terminated: false,
+            delivery_failure_recorded: false,
         }
+    }
+
+    #[inline]
+    fn observe_delivery<T>(&mut self, result: PluginSessionResult<T>) -> PluginSessionResult<T> {
+        if result.is_err() && !self.delivery_failure_recorded {
+            self.ctx.record_error(EdgionErrorCode::ClientClosed);
+            self.delivery_failure_recorded = true;
+        }
+        result
     }
 
     #[inline]
@@ -458,9 +472,10 @@ impl<'a> PingoraSessionAdapter<'a> {
         resp.remove_header(&http::header::TRANSFER_ENCODING);
         resp.insert_header("content-type", "application/grpc")
             .map_err(|e| Box::new(e) as PluginSessionError)?;
-        send_grpc_trailers_only_frame(self.inner, resp, grpc_status, message)
+        let result = send_grpc_trailers_only_frame(self.inner, resp, grpc_status, message)
             .await
-            .map_err(|e| Box::new(e) as PluginSessionError)
+            .map_err(|e| Box::new(e) as PluginSessionError);
+        self.observe_delivery(result)
     }
 
     /// Extract path parameters from route pattern (lazy extraction).
@@ -497,28 +512,25 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// converting an HTTP status code to the corresponding gRPC status code. Mirrors
     /// `send_grpc_error_direct` but is the dispatch target for the `write_response_header`
     /// trait path when `is_grpc_request` and an error status are seen.
-    async fn send_grpc_trailers_only(
-        inner: &mut Session,
-        ctx: &mut EdgionHttpContext,
-        http_status: u16,
-    ) -> PluginSessionResult<()> {
+    async fn send_grpc_trailers_only(&mut self, http_status: u16) -> PluginSessionResult<()> {
         let (grpc_status, grpc_message) = http_to_grpc_status(http_status);
-        if !ctx.claim_final_response(200) {
+        if !self.ctx.claim_final_response(200) {
             return Ok(());
         }
-        ctx.request_info.grpc_status = Some(grpc_status);
+        self.ctx.request_info.grpc_status = Some(grpc_status);
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
         // Drain queued response-header ops, strip framing headers, then re-assert content-type
         // LAST. See send_grpc_error_direct for why content-length / transfer-encoding are removed.
-        ctx.drain_pending_response_header_ops(&mut resp);
+        self.ctx.drain_pending_response_header_ops(&mut resp);
         resp.remove_header(&http::header::CONTENT_LENGTH);
         resp.remove_header(&http::header::TRANSFER_ENCODING);
         resp.insert_header("content-type", "application/grpc")
             .map_err(|e| Box::new(e) as PluginSessionError)?;
-        send_grpc_trailers_only_frame(inner, resp, grpc_status, Some(grpc_message))
+        let result = send_grpc_trailers_only_frame(self.inner, resp, grpc_status, Some(grpc_message))
             .await
-            .map_err(|e| Box::new(e) as PluginSessionError)
+            .map_err(|e| Box::new(e) as PluginSessionError);
+        self.observe_delivery(result)
     }
 
     /// Parse path parameters from pattern and actual path.
@@ -784,7 +796,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         let http_status = resp.status.as_u16();
         if self.ctx.request_info.is_grpc_request && http_status != 200 {
             self.grpc_response_terminated = true;
-            return Self::send_grpc_trailers_only(self.inner, self.ctx, http_status).await;
+            return self.send_grpc_trailers_only(http_status).await;
         }
         if !self.ctx.claim_final_response(http_status) {
             return Ok(());
@@ -823,7 +835,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .write_response_header(resp, end_of_stream)
             .await
             .map_err(|e| Box::new(e) as PluginSessionError);
-        result
+        self.observe_delivery(result)
     }
 
     fn set_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
@@ -894,6 +906,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_response_status(&mut self, status: u16) -> PluginSessionResult<()> {
+        if !edgion_resources::http_status::is_valid_final_http_status(status) {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Invalid final response status code: {status}"),
+            )));
+        }
         if let Some(resp) = &mut self.response_header {
             let status_code = http::StatusCode::from_u16(status).map_err(|_| {
                 Box::new(std::io::Error::new(
@@ -979,10 +997,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             // trailers-only response already sent; discard body from HTTP plugin
             return Ok(());
         }
-        self.inner
+        let result = self
+            .inner
             .write_response_body(body, end_of_stream)
             .await
-            .map_err(|e| Box::new(e) as PluginSessionError)
+            .map_err(|e| Box::new(e) as PluginSessionError);
+        self.observe_delivery(result)
     }
 
     async fn shutdown(&mut self) {
@@ -2769,6 +2789,55 @@ mod record_outcome_tests {
             "no transfer-encoding should be introduced by the drain"
         );
         assert!(pending_ops(&ctx).is_empty());
+    }
+
+    #[tokio::test]
+    async fn direct_writer_cannot_claim_an_informational_response() {
+        let (mut session, _client) = test_session_with_client().await;
+        let mut ctx = EdgionHttpContext::default();
+        let resp = ResponseHeader::build(103, None).expect("103 is a valid informational header");
+
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            adapter
+                .write_response_header(Box::new(resp), true)
+                .await
+                .expect("a rejected claim is not a transport error");
+        }
+
+        assert!(session.response_written().is_none());
+        assert!(!ctx.response_write_started());
+        assert_eq!(ctx.final_downstream_status(), None);
+    }
+
+    #[tokio::test]
+    async fn response_status_mutation_rejects_informational_status() {
+        let (mut session, _client) = test_session_with_client().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut response = ResponseHeader::build(200, None).unwrap();
+
+        {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response);
+            assert!(adapter.set_response_status(103).is_err());
+        }
+
+        assert_eq!(response.status.as_u16(), 200);
+    }
+
+    #[tokio::test]
+    async fn actual_switching_protocols_write_is_terminal_at_finalization() {
+        let (mut session, _client) = test_session_with_client().await;
+        let mut ctx = EdgionHttpContext::default();
+        let response = ResponseHeader::build(101, None).unwrap();
+
+        session
+            .write_response_header(Box::new(response), true)
+            .await
+            .expect("101 response header should reach the transport");
+        let written_status = session.response_written().map(|header| header.status.as_u16());
+        ctx.finalize_downstream_status(written_status);
+
+        assert_eq!(ctx.request_info.status(), 101);
     }
 
     /// Task 10 regression pin: the gRPC reroute inside `write_response_header`

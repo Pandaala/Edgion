@@ -2089,8 +2089,130 @@ pub(crate) fn check_response_stage_terminate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::observe::RequestDiagnostic;
+    use async_trait::async_trait;
     use edgion_resources::resources::edgion_plugins::DslConfig;
     use edgion_resources::resources::{EdgionPlugin, KeyAuthConfig, RequestFilterEntry};
+    use edgion_resources::EdgionErrorCode;
+    use std::sync::Mutex;
+    use tokio::io::AsyncWriteExt;
+
+    struct FixedResultFilter(PluginRunningResult);
+
+    #[async_trait]
+    impl RequestFilter for FixedResultFilter {
+        fn name(&self) -> &str {
+            "FixedResult"
+        }
+
+        async fn run_request(
+            &self,
+            _session: &mut dyn PluginSession,
+            _plugin_log: &mut PluginLog,
+        ) -> PluginRunningResult {
+            self.0.clone()
+        }
+    }
+
+    struct SelfWritingFilter {
+        client: Mutex<Option<tokio::io::DuplexStream>>,
+    }
+
+    #[async_trait]
+    impl RequestFilter for SelfWritingFilter {
+        fn name(&self) -> &str {
+            "SelfWriting"
+        }
+
+        async fn run_request(
+            &self,
+            session: &mut dyn PluginSession,
+            _plugin_log: &mut PluginLog,
+        ) -> PluginRunningResult {
+            let mut response = ResponseHeader::build(401, None).unwrap();
+            response.insert_header("content-length", "6").unwrap();
+            session
+                .write_response_header(Box::new(response), false)
+                .await
+                .expect("header should be delivered before the test closes the client");
+            drop(self.client.lock().unwrap().take());
+            let _ = session
+                .write_response_body(Some(bytes::Bytes::from_static(b"denied")), true)
+                .await;
+            PluginRunningResult::ErrTerminateRequest
+        }
+    }
+
+    async fn plugin_test_session() -> (Session, tokio::io::DuplexStream) {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(b"GET /plugin-test HTTP/1.1\r\nHost: test\r\n\r\n")
+            .await
+            .unwrap();
+        session.read_request().await.unwrap();
+        (session, client)
+    }
+
+    fn client_closed_count(ctx: &EdgionHttpContext) -> usize {
+        ctx.diagnostics
+            .entries()
+            .iter()
+            .filter(|entry| **entry == RequestDiagnostic::Error(EdgionErrorCode::ClientClosed))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn err_response_writer_failures_record_client_closed_once() {
+        let (mut session, client) = plugin_test_session().await;
+        drop(client);
+        let mut ctx = EdgionHttpContext::default();
+        let mut runtime = PluginRuntime::new();
+        runtime.add_request_filter(Box::new(FixedResultFilter(PluginRunningResult::ErrResponse {
+            status: 403,
+            body: Some("denied".to_string()),
+        })));
+
+        runtime.run_request_plugins(&mut session, &mut ctx).await;
+
+        assert_eq!(ctx.final_downstream_status(), Some(403));
+        assert_eq!(client_closed_count(&ctx), 1);
+    }
+
+    #[tokio::test]
+    async fn err_grpc_error_writer_failure_preserves_both_statuses() {
+        let (mut session, client) = plugin_test_session().await;
+        drop(client);
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.is_grpc_request = true;
+        let mut runtime = PluginRuntime::new();
+        runtime.add_request_filter(Box::new(FixedResultFilter(PluginRunningResult::ErrGrpcError {
+            grpc_status: 7,
+            message: Some("denied".to_string()),
+        })));
+
+        runtime.run_request_plugins(&mut session, &mut ctx).await;
+
+        assert_eq!(ctx.final_downstream_status(), Some(200));
+        assert_eq!(ctx.request_info.grpc_status, Some(7));
+        assert_eq!(client_closed_count(&ctx), 1);
+    }
+
+    #[tokio::test]
+    async fn self_written_writer_failure_records_client_closed() {
+        let (mut session, client) = plugin_test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut runtime = PluginRuntime::new();
+        runtime.add_request_filter(Box::new(SelfWritingFilter {
+            client: Mutex::new(Some(client)),
+        }));
+
+        runtime.run_request_plugins(&mut session, &mut ctx).await;
+
+        assert_eq!(ctx.final_downstream_status(), Some(401));
+        assert_eq!(client_closed_count(&ctx), 1);
+    }
 
     #[test]
     fn invalid_update_policy_uses_plugin_variants_and_strictest_policy_wins() {

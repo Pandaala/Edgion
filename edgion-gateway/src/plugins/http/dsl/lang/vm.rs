@@ -1397,11 +1397,10 @@ impl Vm {
                     let status_code = match &status {
                         Value::Int(n) => {
                             let code = *n;
-                            if !(100..=599).contains(&code) {
-                                500u16
-                            } else {
-                                code as u16
-                            }
+                            u16::try_from(code)
+                                .ok()
+                                .filter(|status| edgion_resources::http_status::is_valid_final_http_status(*status))
+                                .unwrap_or(500)
                         }
                         _ => 500,
                     };
@@ -1537,7 +1536,9 @@ fn apply_error_policy(session: &mut dyn PluginSession, policy: &DslErrorPolicy) 
         DslErrorPolicy::DenyWith { status, body } => {
             session.record_outcome(DyeOutcome::FailClose, "script-error");
             PluginRunningResult::ErrResponse {
-                status: *status,
+                status: edgion_resources::http_status::is_valid_final_http_status(*status)
+                    .then_some(*status)
+                    .unwrap_or(500),
                 body: body.clone(),
             }
         }

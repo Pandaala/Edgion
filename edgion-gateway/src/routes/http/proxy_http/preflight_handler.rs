@@ -59,11 +59,18 @@ impl PreflightHandler {
 
         // No CORS config: return simple empty response
         let status = self.policy.as_ref().map(|p| p.status_code).unwrap_or(204);
+        if !edgion_resources::http_status::is_valid_final_http_status(status) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid preflight final status: {status}"),
+            )
+            .into());
+        }
+        let resp = ResponseHeader::build(status, None)?;
         if !ctx.claim_final_response(status) {
             return Ok(true);
         }
 
-        let resp = ResponseHeader::build(status, None)?;
         session.write_response_header(Box::new(resp), true).await?;
         session.write_response_body(Some(Bytes::new()), true).await?;
 
@@ -190,5 +197,19 @@ mod tests {
             .expect("preflight handling should succeed");
 
         assert!(!response_sent);
+    }
+
+    #[tokio::test]
+    async fn invalid_preflight_status_does_not_claim_response_ownership() {
+        let handler = PreflightHandler::new(Some(PreflightPolicy {
+            mode: PreflightMode::AllOptions,
+            status_code: 700,
+        }));
+        let mut session = session_from_request(b"OPTIONS / HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+
+        assert!(handler.handle_preflight(&mut session, &mut ctx, None).await.is_err());
+        assert!(!ctx.response_write_started());
+        assert_eq!(ctx.final_downstream_status(), None);
     }
 }

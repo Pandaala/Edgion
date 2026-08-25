@@ -438,7 +438,7 @@ return next()
 
 Rejects the request with the specified HTTP status code and response body:
 
-- `status`: integer, valid range 100–599
+- `status`: integer, valid final-response range 200–599
 - `body`: string or `nil` (nil means no response body)
 
 ```dsl

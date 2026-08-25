@@ -232,7 +232,7 @@ accessLogExtern:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `mode` | `String` | `cors-standard` | `cors-standard`：选入带 `Origin` + `ACRM` 的 OPTIONS 请求；`all-options`：将所有 OPTIONS 请求选入全局处理。路由 CORS filter 仍决定是否在本地响应。详见 [Preflight 策略](../gateway/preflight-policy.md)。 |
-| `statusCode` | `Integer` | `204` | 无 CORS 插件时 preflight 响应的状态码 |
+| `statusCode` | `Integer` | `204` | 无 CORS 插件时 preflight 最终响应的状态码（200-599） |
 
 ## 常见配置场景
 

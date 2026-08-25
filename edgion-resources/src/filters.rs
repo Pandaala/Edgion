@@ -37,13 +37,13 @@ pub enum PluginRunningResult {
     /// **Runtime fail-safe**: if the plugin returns `ErrTerminateRequest` without
     /// having started a response write, the runtime will
     /// automatically write a 502 Bad Gateway (HTTP) or gRPC INTERNAL (gRPC) and
-    /// record [`EdgionErrorCode::PluginTerminateWithoutResponse`] in the access log.
+    /// record [`crate::EdgionErrorCode::PluginTerminateWithoutResponse`] in the access log.
     /// This is a fail-safe — operators should treat the access-log marker as a signal
     /// to fix the offending plugin.
     ///
     /// If a plugin cannot write a response at its current stage (e.g. the sync
     /// `UpstreamResponseFilter` hook where `await` is unavailable), prefer
-    /// [`ErrResponse`] so the runtime can emit the status/body downstream, or
+    /// [`Self::ErrResponse`] so the runtime can emit the status/body downstream, or
     /// document explicitly why a naked terminate is acceptable in that path.
     ErrTerminateRequest,
     /// Filter returns an error response with custom status and body

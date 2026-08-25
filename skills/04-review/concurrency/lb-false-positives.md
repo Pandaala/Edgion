@@ -159,7 +159,7 @@ description: Use when reviewing load-balancer module concurrency findings; disti
 
 ## pick Multi-Parameter Does Not Need Refactoring
 
-**False-positive scenario**: `pick` (in `selector.rs`) wraps EdgionStatus error codes (per-policy combination); a suggestion may be to further abstract into source enum mapping.
+**False-positive scenario**: `pick` (in `selector.rs`) wraps `EdgionErrorCode` values (per-policy combination); a suggestion may be to further abstract into source enum mapping.
 
 **Reality**: The only caller is `select_from_endpoint_slice` (defined in the same file nearby). Error code variants are only used in `backends/mod.rs` repo-wide; no external consumer. New LB algorithms are added very infrequently. Refactoring to a source enum + mapping function would only convert explicit parameters to implicit mapping, adding a layer to debugging.
 

@@ -47,7 +47,7 @@ design note before altering the observable contract.
 | `req.set_header` / `req.append_header` / `req.remove_header` | Pingora session returns `Err` | `"req.set_header"` / `"req.append_header"` / `"req.remove_header"` |
 | `req.set_uri` / `req.set_host` / `req.set_method` | session returns `Err` | `"req.set_uri"` / `"req.set_host"` / `"req.set_method"` |
 | `resp.set_header` / `resp.append_header` / `resp.remove_header` | session returns `Err` | `"resp.set_header"` / `"resp.append_header"` / `"resp.remove_header"` |
-| `resp.set_status` | status code outside `100..=599`, or session returns `Err` | `"resp.set_status"` |
+| `resp.set_status` | final status code outside `200..=599`, or session returns `Err` | `"resp.set_status"` |
 | `time_format` | format string exceeds 256 bytes, or contains an invalid chrono specifier | `"time_format"` |
 | `ctx.set` / `ctx.remove` | host returns `Err` | `"ctx.set"` / `"ctx.remove"` |
 

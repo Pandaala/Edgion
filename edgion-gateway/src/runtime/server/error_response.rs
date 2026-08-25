@@ -336,8 +336,8 @@ pub async fn end_response_502(
 /// - Otherwise: adds [`EdgionErrorCode::PluginTerminateWithoutResponse`] to the access
 ///   log and writes a 502 (HTTP) / gRPC INTERNAL=13 fallback response.
 ///
-/// The `let _ =` at call sites is intentional: a write error on a broken downstream
-/// socket is not actionable. Pingora surfaces it via connection state.
+/// Call sites may discard the returned write error because this function records
+/// the independent downstream delivery failure before returning it.
 pub async fn terminate_with_fallback(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
@@ -347,7 +347,11 @@ pub async fn terminate_with_fallback(
         return Ok(());
     }
     ctx.record_error(EdgionErrorCode::PluginTerminateWithoutResponse);
-    end_response_502(session, ctx, server_header_opts).await
+    let result = end_response_502(session, ctx, server_header_opts).await;
+    if result.is_err() {
+        ctx.record_error(EdgionErrorCode::ClientClosed);
+    }
+    result
 }
 
 /// Send 503 Service Temporarily Unavailable error response (nginx-style).
@@ -375,6 +379,39 @@ mod tests {
     use super::*;
     use crate::EdgionHttpContext;
     use edgion_resources::EdgionErrorCode;
+    use pingora_proxy::Session;
+    use tokio::io::AsyncWriteExt;
+
+    async fn closed_downstream_session() -> Session {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(b"GET /fallback-test HTTP/1.1\r\nHost: test\r\n\r\n")
+            .await
+            .unwrap();
+        session.read_request().await.unwrap();
+        drop(client);
+        session
+    }
+
+    #[tokio::test]
+    async fn terminate_fallback_writer_failure_records_client_closed() {
+        let mut session = closed_downstream_session().await;
+        let mut ctx = EdgionHttpContext::new();
+
+        assert!(
+            terminate_with_fallback(&mut session, &mut ctx, &ServerHeaderOpts::default(),)
+                .await
+                .is_err()
+        );
+
+        assert_eq!(ctx.final_downstream_status(), Some(502));
+        assert!(ctx
+            .diagnostics
+            .contains_error(EdgionErrorCode::PluginTerminateWithoutResponse));
+        assert!(ctx.diagnostics.contains_error(EdgionErrorCode::ClientClosed));
+    }
 
     /// When response ownership is claimed, `terminate_with_fallback` must be a no-op:
     /// it must NOT record `PluginTerminateWithoutResponse` in diagnostics.

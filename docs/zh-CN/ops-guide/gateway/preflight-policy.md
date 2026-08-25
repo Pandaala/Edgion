@@ -45,7 +45,7 @@ spec:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `mode` | Enum | `cors-standard` | 哪些 `OPTIONS` 请求被视为预检。可选值：`cors-standard` \| `all-options` |
-| `statusCode` | Integer | `204` | 路由未挂载 CORS 插件时的预检响应状态码 |
+| `statusCode` | Integer | `204` | 路由未挂载 CORS 插件时的预检最终响应状态码（200-599） |
 
 ### `mode` 取值说明
 

@@ -5,7 +5,7 @@ use super::pg_upstream_response_filter::{is_interim_informational, response_deni
 use super::EdgionHttpProxy;
 use crate::ctx::ResponseStreamKind;
 use crate::EdgionHttpContext;
-use edgion_resources::EdgionInfoCode;
+use edgion_resources::{EdgionErrorCode, EdgionInfoCode};
 use pingora_core::modules::http::compression::ResponseCompression;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
@@ -45,6 +45,23 @@ fn enable_compression(edgion_http: &EdgionHttpProxy) -> bool {
         .as_ref()
         .map(|server| server.enable_compression)
         .unwrap_or(false)
+}
+
+#[inline]
+fn complete_local_reply_delivery(
+    ctx: &mut EdgionHttpContext,
+    body_result: pingora_core::Result<()>,
+) -> pingora_core::Result<()> {
+    match body_result {
+        Ok(()) => {
+            ctx.record_info(EdgionInfoCode::PluginResponseReplaced);
+            Ok(())
+        }
+        Err(error) => {
+            ctx.record_error(EdgionErrorCode::ClientClosed);
+            Err(error)
+        }
+    }
 }
 
 #[inline]
@@ -185,11 +202,17 @@ pub async fn response_filter(
         // surfacing as an intermittent transport-level send error.
         session.set_keepalive(None);
         session.write_response_header(header, body_empty).await?;
+        // Mark immediately after the header commits and before awaiting a body.
+        // Pingora may cancel this hook future if the duplex pump's other side
+        // fails; the sentinel must already suppress a second response and
+        // upstream-failure accounting in that cancellation window.
         ctx.mark_local_reply_written();
-        if !body_empty {
-            session.write_response_body(Some(body), true).await?;
-        }
-        ctx.record_info(EdgionInfoCode::PluginResponseReplaced);
+        let body_result = if body_empty {
+            Ok(())
+        } else {
+            session.write_response_body(Some(body), true).await
+        };
+        complete_local_reply_delivery(ctx, body_result)?;
         return Err(pingora_core::Error::explain(
             pingora_core::ErrorType::InternalError,
             "edgion response local reply",
@@ -223,9 +246,16 @@ pub async fn response_filter(
 
 #[cfg(test)]
 mod tests {
-    use super::{final_response_eligibility, response_compression_level, DEFAULT_COMPRESSION_LEVEL};
+    use super::{
+        complete_local_reply_delivery, final_response_eligibility, response_compression_level,
+        DEFAULT_COMPRESSION_LEVEL,
+    };
     use crate::ctx::ResponseStreamKind;
+    use crate::observe::RequestDiagnostic;
+    use crate::EdgionHttpContext;
+    use edgion_resources::{EdgionErrorCode, EdgionInfoCode};
     use pingora_core::protocols::http::compression::ResponseCompressionCtx;
+    use pingora_core::{Error, ErrorType};
     use pingora_http::{RequestHeader, ResponseHeader};
 
     fn response(content_length: Option<&str>) -> ResponseHeader {
@@ -235,6 +265,39 @@ mod tests {
             response.insert_header("content-length", content_length).unwrap();
         }
         response
+    }
+
+    #[test]
+    fn local_reply_body_failure_records_client_closed_and_preserves_status() {
+        let mut ctx = EdgionHttpContext::default();
+        assert!(ctx.claim_final_response(403));
+        ctx.mark_local_reply_written();
+
+        let result = complete_local_reply_delivery(&mut ctx, Err(Error::new(ErrorType::WriteError)));
+
+        assert!(result.is_err());
+        assert!(ctx.local_reply_written());
+        assert_eq!(ctx.final_downstream_status(), Some(403));
+        assert_eq!(
+            ctx.diagnostics.entries(),
+            &[RequestDiagnostic::Error(EdgionErrorCode::ClientClosed)]
+        );
+    }
+
+    #[test]
+    fn successful_local_reply_records_replacement_once() {
+        let mut ctx = EdgionHttpContext::default();
+        assert!(ctx.claim_final_response(403));
+        ctx.mark_local_reply_written();
+
+        complete_local_reply_delivery(&mut ctx, Ok(())).unwrap();
+
+        assert!(ctx.local_reply_written());
+        assert_eq!(ctx.final_downstream_status(), Some(403));
+        assert_eq!(
+            ctx.diagnostics.entries(),
+            &[RequestDiagnostic::Info(EdgionInfoCode::PluginResponseReplaced)]
+        );
     }
 
     #[test]

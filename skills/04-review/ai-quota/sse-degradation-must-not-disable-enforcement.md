@@ -110,7 +110,7 @@ concurrent streams. Accepted because reaching it requires a hostile or broken
   field plus validation plus paired docs is a feature, not a review fix. The
   constant is sized against real model output bounds instead.
 - **"Emit a metric for degradation"** — the project routes data-plane signals
-  through the access log and `EdgionStatus`, not new metrics. Two statuses were
+  through the access log and `EdgionErrorCode`, not new metrics. Two codes were
   added instead: `AiSseDecodeDegraded` (precision loss, any request) and
   `AiSseDegradedQuotaTerminated` (a stream was cut).
 - **"Terminate on degradation regardless of quota"** — degradation predates

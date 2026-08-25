@@ -53,6 +53,7 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         errors.extend(egc.spec.validate_dns_resolver());
         errors.extend(egc.spec.validate_request_body());
         errors.extend(egc.spec.validate_forwarded_headers());
+        errors.extend(egc.spec.validate_preflight_policy());
         errors
     }
 

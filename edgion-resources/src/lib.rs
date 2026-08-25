@@ -8,6 +8,7 @@ pub mod err;
 pub mod filters;
 pub mod geoip_codes;
 pub mod gwapi_types;
+pub mod http_status;
 pub mod listener_key;
 pub mod matcher;
 pub mod observe;

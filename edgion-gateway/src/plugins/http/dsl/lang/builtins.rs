@@ -553,10 +553,13 @@ impl Vm {
                 let code = match &code_val {
                     Value::Int(n) => {
                         let c = *n;
-                        if !(100..=599).contains(&c) {
+                        if u16::try_from(c)
+                            .ok()
+                            .is_none_or(|status| !edgion_resources::http_status::is_valid_final_http_status(status))
+                        {
                             return Err(RuntimeError::ApiError {
                                 function: "resp.set_status".into(),
-                                message: format!("invalid status code: {} (must be 100-599)", c),
+                                message: format!("invalid final status code: {} (must be 200-599)", c),
                             });
                         }
                         c as u16

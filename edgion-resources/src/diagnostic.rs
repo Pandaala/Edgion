@@ -1,7 +1,7 @@
 //! Stable request-diagnostic codes.
 
 /// Normal, noteworthy request handling outcomes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EdgionInfoCode {
     /// ACME HTTP-01 challenge served locally by the gateway.
     AcmeChallengeServed,
@@ -10,12 +10,28 @@ pub enum EdgionInfoCode {
     PluginResponseReplaced,
 }
 
+impl EdgionInfoCode {
+    const fn wire_code(self) -> &'static str {
+        match self {
+            Self::AcmeChallengeServed => "AcmeChallengeServed",
+            Self::PluginResponseReplaced => "PluginResponseReplaced",
+        }
+    }
+}
+
+impl serde::Serialize for EdgionInfoCode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.wire_code())
+    }
+}
+
 /// Error code for Edgion gateway
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EdgionErrorCode {
     Unknown,
-
-    UnknownGRPCERR,
 
     /// AccessLogEntry self-serialization failed; emitted as a fixed-string JSON
     /// fallback so downstream log parsers still see a parseable record.
@@ -94,9 +110,6 @@ pub enum EdgionErrorCode {
     /// SNI and Host header mismatch (HTTP 421)
     SniHostMismatch,
 
-    /// Client certificate validation failed (HTTP 403)
-    ClientCertInvalid,
-
     /// The downstream client was gone before the response could be delivered:
     /// either the proxy-ending error itself was a downstream read/write/close
     /// failure (mapped to 499), or writing the final error response failed.
@@ -148,9 +161,6 @@ pub enum EdgionErrorCode {
 
     /// Backend address parsing failed
     BackendAddressParsingFailed,
-
-    /// LoadBalancer backend selection failed
-    BackendLoadBalancerSelectionFailed,
 
     /// ServiceImport not yet implemented
     BackendServiceImportNotImplemented,
@@ -317,8 +327,7 @@ pub enum EdgionErrorCode {
     /// longer a replaceable HTTP response (a real `101`, an established CONNECT
     /// tunnel, or a gRPC route), so the denial was enforced by aborting the
     /// exchange with the plugin's status instead of stashing a local reply. The
-    /// upstream response is never forwarded. No fixed HTTP status (the plugin
-    /// chose it), so `999` family.
+    /// upstream response is never forwarded. The plugin chooses the HTTP status.
     PluginResponseDenyAborted,
 
     /// Outbound TLS skip-verify was requested, but the target provider does not
@@ -338,20 +347,262 @@ pub enum EdgionErrorCode {
     OutboundTlsSanMismatch,
 }
 
+impl EdgionErrorCode {
+    const fn wire_code(self) -> &'static str {
+        match self {
+            Self::Unknown => "Unknown",
+            Self::AccessLogSerializeFailed => "AccessLogSerializeFailed",
+            Self::AiResponseTranslationFailed => "AiResponseTranslationFailed",
+            Self::AiQuotaReconciliationFailed => "AiQuotaReconciliationFailed",
+            Self::AiQuotaOverLimitTerminated => "AiQuotaOverLimitTerminated",
+            Self::AiQuotaErrorEventDropped => "AiQuotaErrorEventDropped",
+            Self::AiSseDecodeDegraded => "AiSseDecodeDegraded",
+            Self::AiSseDegradedQuotaTerminated => "AiSseDegradedQuotaTerminated",
+            Self::AiSseDecodeMalformed => "AiSseDecodeMalformed",
+            Self::AiSseMalformedQuotaTerminated => "AiSseMalformedQuotaTerminated",
+            Self::HostMissing => "HostMissing",
+            Self::XffHeaderTooLong => "XffHeaderTooLong",
+            Self::PathEscapedSlashRejected => "PathEscapedSlashRejected",
+            Self::PathInvalidPercentEncoding => "PathInvalidPercentEncoding",
+            Self::DuplicateHostHeader => "DuplicateHostHeader",
+            Self::RouteNotFound => "RouteNotFound",
+            Self::SniHostMismatch => "SniHostMismatch",
+            Self::ClientClosed => "ClientClosed",
+            Self::UpstreamNotRouteMatched => "UpstreamNotRouteMatched",
+            Self::UpstreamNotBackendRefs => "UpstreamNotBackendRefs",
+            Self::UpstreamInconsistentWeight => "UpstreamInconsistentWeight",
+            Self::GrpcUpstreamNotRouteMatched => "GrpcUpstreamNotRouteMatched",
+            Self::BackendEndpointSliceNotFoundByConsistent => "BackendEndpointSliceNotFoundByConsistent",
+            Self::BackendEndpointSliceNotFoundByLeastConn => "BackendEndpointSliceNotFoundByLeastConn",
+            Self::BackendEndpointSliceNotFoundByRoundRobin => "BackendEndpointSliceNotFoundByRoundRobin",
+            Self::BackendEndpointSliceNotFoundByRoundRobinDefault => "BackendEndpointSliceNotFoundByRoundRobinDefault",
+            Self::BackendEndpointSliceNotFoundByEwma => "BackendEndpointSliceNotFoundByEwma",
+            Self::RetryBudgetExhausted => "RetryBudgetExhausted",
+            Self::BackendServiceNotFound => "BackendServiceNotFound",
+            Self::BackendClusterIpNotFound => "BackendClusterIpNotFound",
+            Self::BackendExternalNameNotFound => "BackendExternalNameNotFound",
+            Self::BackendPortResolutionFailed => "BackendPortResolutionFailed",
+            Self::BackendAddressParsingFailed => "BackendAddressParsingFailed",
+            Self::BackendServiceImportNotImplemented => "BackendServiceImportNotImplemented",
+            Self::BackendLocalhostNotAllowed => "BackendLocalhostNotAllowed",
+            Self::Http2Required => "Http2Required",
+            Self::GrpcUpstreamNotBackendRefs => "GrpcUpstreamNotBackendRefs",
+            Self::RefDenied => "RefDenied",
+            Self::BackendAddrLinkLocalNotAllowed => "BackendAddrLinkLocalNotAllowed",
+            Self::BackendDnsResolutionFailed => "BackendDnsResolutionFailed",
+            Self::BackendUnsupportedKind => "BackendUnsupportedKind",
+            Self::StickyBackendUnhealthy => "StickyBackendUnhealthy",
+            Self::BackendTlsSanValidationFailed => "BackendTlsSanValidationFailed",
+            Self::BackendTlsCaInvalid => "BackendTlsCaInvalid",
+            Self::UpstreamAuthorityRejected => "UpstreamAuthorityRejected",
+            Self::PluginTerminateWithoutResponse => "PluginTerminateWithoutResponse",
+            Self::ForwardAuthServiceUnreachable => "ForwardAuthServiceUnreachable",
+            Self::RequestTimeoutExceeded => "RequestTimeoutExceeded",
+            Self::BodyRefusedWebsocket => "BodyRefusedWebsocket",
+            Self::BodyRefusedGrpc => "BodyRefusedGrpc",
+            Self::BodyRefusedStage => "BodyRefusedStage",
+            Self::BodyReadAborted => "BodyReadAborted",
+            Self::BodyReadTimeout => "BodyReadTimeout",
+            Self::BodyReadTooLarge => "BodyReadTooLarge",
+            Self::BodyReadUnimplemented => "BodyReadUnimplemented",
+            Self::BodyRefusedNoSnapshot => "BodyRefusedNoSnapshot",
+            Self::BodyReplayFailed => "BodyReplayFailed",
+            Self::BodyCaptureStorageFailed => "BodyCaptureStorageFailed",
+            Self::BodyMutationConflict => "BodyMutationConflict",
+            Self::GrpcClientDeadlineExceeded => "GrpcClientDeadlineExceeded",
+            Self::BackendRequestTimeoutRetry => "BackendRequestTimeoutRetry",
+            Self::PluginResponseReplaceUnsupportedGrpc => "PluginResponseReplaceUnsupportedGrpc",
+            Self::PluginResponseDenyAborted => "PluginResponseDenyAborted",
+            Self::OutboundTlsVerifyUnsupported => "OutboundTlsVerifyUnsupported",
+            Self::OutboundTlsCaMissing => "OutboundTlsCaMissing",
+            Self::OutboundTlsClientCertInvalid => "OutboundTlsClientCertInvalid",
+            Self::OutboundTlsSanMismatch => "OutboundTlsSanMismatch",
+        }
+    }
+}
+
+impl serde::Serialize for EdgionErrorCode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.wire_code())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn diagnostic_codes_serialize_as_stable_strings() {
-        assert_eq!(
-            serde_json::to_string(&EdgionInfoCode::AcmeChallengeServed).unwrap(),
-            r#""AcmeChallengeServed""#
-        );
-        assert_eq!(
-            serde_json::to_string(&EdgionErrorCode::OutboundTlsSanMismatch).unwrap(),
-            r#""OutboundTlsSanMismatch""#
-        );
+        let info_codes = [
+            (EdgionInfoCode::AcmeChallengeServed, "AcmeChallengeServed"),
+            (EdgionInfoCode::PluginResponseReplaced, "PluginResponseReplaced"),
+        ];
+        let error_codes = [
+            (EdgionErrorCode::Unknown, "Unknown"),
+            (EdgionErrorCode::AccessLogSerializeFailed, "AccessLogSerializeFailed"),
+            (
+                EdgionErrorCode::AiResponseTranslationFailed,
+                "AiResponseTranslationFailed",
+            ),
+            (
+                EdgionErrorCode::AiQuotaReconciliationFailed,
+                "AiQuotaReconciliationFailed",
+            ),
+            (
+                EdgionErrorCode::AiQuotaOverLimitTerminated,
+                "AiQuotaOverLimitTerminated",
+            ),
+            (EdgionErrorCode::AiQuotaErrorEventDropped, "AiQuotaErrorEventDropped"),
+            (EdgionErrorCode::AiSseDecodeDegraded, "AiSseDecodeDegraded"),
+            (
+                EdgionErrorCode::AiSseDegradedQuotaTerminated,
+                "AiSseDegradedQuotaTerminated",
+            ),
+            (EdgionErrorCode::AiSseDecodeMalformed, "AiSseDecodeMalformed"),
+            (
+                EdgionErrorCode::AiSseMalformedQuotaTerminated,
+                "AiSseMalformedQuotaTerminated",
+            ),
+            (EdgionErrorCode::HostMissing, "HostMissing"),
+            (EdgionErrorCode::XffHeaderTooLong, "XffHeaderTooLong"),
+            (EdgionErrorCode::PathEscapedSlashRejected, "PathEscapedSlashRejected"),
+            (
+                EdgionErrorCode::PathInvalidPercentEncoding,
+                "PathInvalidPercentEncoding",
+            ),
+            (EdgionErrorCode::DuplicateHostHeader, "DuplicateHostHeader"),
+            (EdgionErrorCode::RouteNotFound, "RouteNotFound"),
+            (EdgionErrorCode::SniHostMismatch, "SniHostMismatch"),
+            (EdgionErrorCode::ClientClosed, "ClientClosed"),
+            (EdgionErrorCode::UpstreamNotRouteMatched, "UpstreamNotRouteMatched"),
+            (EdgionErrorCode::UpstreamNotBackendRefs, "UpstreamNotBackendRefs"),
+            (
+                EdgionErrorCode::UpstreamInconsistentWeight,
+                "UpstreamInconsistentWeight",
+            ),
+            (
+                EdgionErrorCode::GrpcUpstreamNotRouteMatched,
+                "GrpcUpstreamNotRouteMatched",
+            ),
+            (
+                EdgionErrorCode::BackendEndpointSliceNotFoundByConsistent,
+                "BackendEndpointSliceNotFoundByConsistent",
+            ),
+            (
+                EdgionErrorCode::BackendEndpointSliceNotFoundByLeastConn,
+                "BackendEndpointSliceNotFoundByLeastConn",
+            ),
+            (
+                EdgionErrorCode::BackendEndpointSliceNotFoundByRoundRobin,
+                "BackendEndpointSliceNotFoundByRoundRobin",
+            ),
+            (
+                EdgionErrorCode::BackendEndpointSliceNotFoundByRoundRobinDefault,
+                "BackendEndpointSliceNotFoundByRoundRobinDefault",
+            ),
+            (
+                EdgionErrorCode::BackendEndpointSliceNotFoundByEwma,
+                "BackendEndpointSliceNotFoundByEwma",
+            ),
+            (EdgionErrorCode::RetryBudgetExhausted, "RetryBudgetExhausted"),
+            (EdgionErrorCode::BackendServiceNotFound, "BackendServiceNotFound"),
+            (EdgionErrorCode::BackendClusterIpNotFound, "BackendClusterIpNotFound"),
+            (
+                EdgionErrorCode::BackendExternalNameNotFound,
+                "BackendExternalNameNotFound",
+            ),
+            (
+                EdgionErrorCode::BackendPortResolutionFailed,
+                "BackendPortResolutionFailed",
+            ),
+            (
+                EdgionErrorCode::BackendAddressParsingFailed,
+                "BackendAddressParsingFailed",
+            ),
+            (
+                EdgionErrorCode::BackendServiceImportNotImplemented,
+                "BackendServiceImportNotImplemented",
+            ),
+            (
+                EdgionErrorCode::BackendLocalhostNotAllowed,
+                "BackendLocalhostNotAllowed",
+            ),
+            (EdgionErrorCode::Http2Required, "Http2Required"),
+            (
+                EdgionErrorCode::GrpcUpstreamNotBackendRefs,
+                "GrpcUpstreamNotBackendRefs",
+            ),
+            (EdgionErrorCode::RefDenied, "RefDenied"),
+            (
+                EdgionErrorCode::BackendAddrLinkLocalNotAllowed,
+                "BackendAddrLinkLocalNotAllowed",
+            ),
+            (
+                EdgionErrorCode::BackendDnsResolutionFailed,
+                "BackendDnsResolutionFailed",
+            ),
+            (EdgionErrorCode::BackendUnsupportedKind, "BackendUnsupportedKind"),
+            (EdgionErrorCode::StickyBackendUnhealthy, "StickyBackendUnhealthy"),
+            (
+                EdgionErrorCode::BackendTlsSanValidationFailed,
+                "BackendTlsSanValidationFailed",
+            ),
+            (EdgionErrorCode::BackendTlsCaInvalid, "BackendTlsCaInvalid"),
+            (EdgionErrorCode::UpstreamAuthorityRejected, "UpstreamAuthorityRejected"),
+            (
+                EdgionErrorCode::PluginTerminateWithoutResponse,
+                "PluginTerminateWithoutResponse",
+            ),
+            (
+                EdgionErrorCode::ForwardAuthServiceUnreachable,
+                "ForwardAuthServiceUnreachable",
+            ),
+            (EdgionErrorCode::RequestTimeoutExceeded, "RequestTimeoutExceeded"),
+            (EdgionErrorCode::BodyRefusedWebsocket, "BodyRefusedWebsocket"),
+            (EdgionErrorCode::BodyRefusedGrpc, "BodyRefusedGrpc"),
+            (EdgionErrorCode::BodyRefusedStage, "BodyRefusedStage"),
+            (EdgionErrorCode::BodyReadAborted, "BodyReadAborted"),
+            (EdgionErrorCode::BodyReadTimeout, "BodyReadTimeout"),
+            (EdgionErrorCode::BodyReadTooLarge, "BodyReadTooLarge"),
+            (EdgionErrorCode::BodyReadUnimplemented, "BodyReadUnimplemented"),
+            (EdgionErrorCode::BodyRefusedNoSnapshot, "BodyRefusedNoSnapshot"),
+            (EdgionErrorCode::BodyReplayFailed, "BodyReplayFailed"),
+            (EdgionErrorCode::BodyCaptureStorageFailed, "BodyCaptureStorageFailed"),
+            (EdgionErrorCode::BodyMutationConflict, "BodyMutationConflict"),
+            (
+                EdgionErrorCode::GrpcClientDeadlineExceeded,
+                "GrpcClientDeadlineExceeded",
+            ),
+            (
+                EdgionErrorCode::BackendRequestTimeoutRetry,
+                "BackendRequestTimeoutRetry",
+            ),
+            (
+                EdgionErrorCode::PluginResponseReplaceUnsupportedGrpc,
+                "PluginResponseReplaceUnsupportedGrpc",
+            ),
+            (EdgionErrorCode::PluginResponseDenyAborted, "PluginResponseDenyAborted"),
+            (
+                EdgionErrorCode::OutboundTlsVerifyUnsupported,
+                "OutboundTlsVerifyUnsupported",
+            ),
+            (EdgionErrorCode::OutboundTlsCaMissing, "OutboundTlsCaMissing"),
+            (
+                EdgionErrorCode::OutboundTlsClientCertInvalid,
+                "OutboundTlsClientCertInvalid",
+            ),
+            (EdgionErrorCode::OutboundTlsSanMismatch, "OutboundTlsSanMismatch"),
+        ];
+
+        for (code, expected) in info_codes {
+            assert_eq!(serde_json::to_value(code).unwrap(), expected);
+        }
+        for (code, expected) in error_codes {
+            assert_eq!(serde_json::to_value(code).unwrap(), expected);
+        }
     }
 
     #[test]

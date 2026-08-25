@@ -65,9 +65,9 @@ truncation.
 
 ## Signals and client contract
 
-- `AiSseDecodeMalformed` (`999_16`) is recorded once per request after the first
+- `AiSseDecodeMalformed` is recorded once per request after the first
   completed poisoned event, regardless of quota enforcement.
-- `AiSseMalformedQuotaTerminated` (`999_17`) records a cutoff caused by the
+- `AiSseMalformedQuotaTerminated` records a cutoff caused by the
   cumulative malformed-event threshold.
 - No metric is emitted. Request-level diagnosis stays in the access log.
 - The client receives the existing boundary-safe `token_quota_unavailable` SSE

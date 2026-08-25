@@ -29,7 +29,11 @@ pub enum DslErrorPolicy {
     Deny,
     /// Return a specific status code + body
     #[serde(alias = "denyWith")]
-    DenyWith { status: u16, body: Option<String> },
+    DenyWith {
+        #[schemars(range(min = 200, max = 599))]
+        status: u16,
+        body: Option<String>,
+    },
 }
 
 /// DSL plugin configuration — stored in EdgionPlugin enum
@@ -229,8 +233,8 @@ impl PluginValidation for DslConfig {
             }
         }
         if let Some(DslErrorPolicy::DenyWith { status, .. }) = &self.error_policy {
-            if *status < 100 || *status > 599 {
-                return Some("errorPolicy denyWith status must be between 100 and 599".to_string());
+            if !crate::http_status::is_valid_final_http_status(*status) {
+                return Some("errorPolicy denyWith status must be between 200 and 599".to_string());
             }
         }
         // Deep static checks last. `compile_and_validate` preserves the
@@ -280,13 +284,15 @@ mod tests {
 
     #[test]
     fn validation_error_rejects_out_of_range_deny_status() {
-        let config = DslConfig {
-            name: "x".to_string(),
-            source: Some("let x = 1".to_string()),
-            error_policy: Some(DslErrorPolicy::DenyWith { status: 99, body: None }),
-            ..Default::default()
-        };
-        assert!(config.validation_error().is_some());
+        for status in [99, 103, 600] {
+            let config = DslConfig {
+                name: "x".to_string(),
+                source: Some("let x = 1".to_string()),
+                error_policy: Some(DslErrorPolicy::DenyWith { status, body: None }),
+                ..Default::default()
+            };
+            assert!(config.validation_error().is_some(), "{status}");
+        }
     }
 
     #[test]

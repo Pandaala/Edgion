@@ -16,7 +16,7 @@ used to verify the **backend** server cert under `BackendTLSPolicy`) now:
 - parses the whole `ca.crt` bundle with `X509::stack_from_pem` and `extend`s the
   chain with **every** certificate (was `X509::from_pem` → first block only); and
 - propagates a parse error / empty stack instead of silently swallowing it
-  (`if let Ok(ca)` is gone), returning `EdgionStatus::BackendTlsCaInvalid` (502).
+  (`if let Ok(ca)` is gone), returning `EdgionErrorCode::BackendTlsCaInvalid` (502).
 
 `create_tls_peer` now **fails closed** when `use_system_ca == false`
 (`wellKnownCACertificates != System`) and no CA can be built: it returns
@@ -47,10 +47,10 @@ accepted** — they are no longer true.
 
 ## Code shape today
 
-- `peer_builder.rs` `build_ca_chain` → `Result<Option<Arc<CaType>>, EdgionStatus>`,
+- `peer_builder.rs` `build_ca_chain` → `Result<Option<Arc<CaType>>, EdgionErrorCode>`,
   `X509::stack_from_pem` + `extend`, empty/unparseable `ca.crt` → `BackendTlsCaInvalid`.
 - `peer_builder.rs` `create_tls_peer` → `match build_ca_chain(policy)? { None => Err(BackendTlsCaInvalid), .. }` under `!use_system_ca`.
-- `EdgionStatus::BackendTlsCaInvalid = 502_03`.
+- `EdgionErrorCode::BackendTlsCaInvalid` is recorded when this error reaches the request path.
 
 ## Out of scope (intentional)
 

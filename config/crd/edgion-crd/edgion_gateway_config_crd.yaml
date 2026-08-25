@@ -299,7 +299,7 @@ spec:
                       description: "Status code to return when no CORS plugin is configured (default: 204)"
                       format: int32
                       default: 204
-                      minimum: 100
+                      minimum: 200
                       maximum: 599
 
                 tcpTimeout:

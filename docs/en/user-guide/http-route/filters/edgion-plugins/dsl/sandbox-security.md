@@ -147,7 +147,7 @@ When a script fails, the gateway returns HTTP 500 and aborts request processing.
 
 **denyWith**
 
-Similar to `deny`, but allows customizing the returned HTTP status code and response body. `status` must be in the range 100–599; `body` is a plain-text string. Use this when the client needs to receive a specific error format.
+Similar to `deny`, but allows customizing the returned HTTP status code and response body. `status` must be in the range 200–599; `body` is a plain-text string. Use this when the client needs to receive a specific error format.
 
 In production, use `deny` or `denyWith` for security-related scripts (permission checks, rate-limit marking, etc.) and keep `ignore` for enhancement scripts (adding debug headers, setting context values).
 
@@ -224,7 +224,7 @@ Some built-in functions have their own parameter or result limits in addition to
 | `time_format` | Format string up to 256 characters | Prevents excessive resource consumption from overly long format strings |
 | `regex_find` / `regex_replace` | Pattern up to 1,024 bytes | Guards against ReDoS |
 | `req.header_names` / `resp.header_names` | Returns at most 256 header names | Guards against memory issues from requests with many headers |
-| `resp.set_status` | Status code must be in range 100–599 | Returns `ApiError` if out of range |
+| `resp.set_status` | Final status code must be in range 200–599 | Returns `ApiError` if out of range |
 | `range` | Generates at most 1,000 elements | Guards against large lists consuming excessive memory |
 | `http.call` | Timeout capped at `httpMaxTimeoutMs` (default 5,000 ms); opaque `Body` capped by `min(httpMaxRequestBodyBytes, physical body cap)` (default 1 MiB, configured maximum 32 MiB); response capped at `httpMaxResponseBodyBytes` (default 1 MiB); private IPs blocked when configured | Prevents gateway resource exhaustion and SSRF attacks |
 

@@ -95,7 +95,7 @@ arrived. Both entry points share `is_interim_informational` and return early;
 | Case | Delivered as | Evidence |
 |---|---|---|
 | `Upgrade: foo` + upstream 200 + `deny(403)` | local reply, 403 | `dsl_resp_deny_survives_unrecognized_upgrade`; access log `replace response 403` |
-| real `101` + `deny(403)` | abort, 403, upgrade never completes | `websocket_response_stage_deny_blocks_upgrade`; access log `deny response 403` + `errors:["PluginResponseDenyAborted"]` + `upstream.err:["HTTPStatus"]` |
+| real `101` + `deny(403)` | abort, 403, upgrade never completes | `websocket_response_stage_deny_blocks_upgrade`; access log `deny response 403` + `diagnostics:[{"kind":"error","code":"PluginResponseDenyAborted"}]` + `upstream.err:["HTTPStatus"]` |
 | CONNECT answered non-2xx | local reply | unit: `local_reply_replaces_rejected_connect` |
 | CONNECT answered 2xx / interim 1xx | refused (unchanged) | unit: `local_reply_refused_for_established_connect_tunnel`, `..._interim_informational` |
 | naked `terminate()` at the response stage | abort, 502 + `PluginTerminateWithoutResponse` | unit: `response_stage_naked_terminate_arms_the_abort` |

@@ -788,14 +788,14 @@ let b = resp.body
 
 **Signature**: `resp.set_status(code)` → `Nil`
 
-Modifies the response status code sent to the client. `code` must be an integer between 100 and 599; otherwise a runtime error is raised.
+Modifies the final response status code sent to the client. `code` must be an integer between 200 and 599; otherwise a runtime error is raised.
 
 **Parameters**:
-- `code` (Int) — HTTP status code, in the range 100–599
+- `code` (Int) — final HTTP status code, in the range 200–599
 
 **Return value**: `nil`
 
-**Constraints**: `code` must be an integer type and within the range 100–599; a runtime error is raised if it is out of range.
+**Constraints**: `code` must be an integer type and within the range 200–599; a runtime error is raised if it is out of range.
 
 **Example**:
 ```
@@ -1950,7 +1950,7 @@ The following functions terminate the current request processing pipeline. They 
 Returns the specified HTTP error response to the client and terminates processing. If `status` is out of range, it is automatically downgraded to 500. If `body` is `nil`, the response body is empty.
 
 **Parameters**:
-- `status` (Int) — HTTP status code, in the range 100–599
+- `status` (Int) — final HTTP status code, in the range 200–599
 - `body` (Str | Nil) — Response body string; pass `nil` for no response body
 
 **Example**:

@@ -52,7 +52,7 @@ spec:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `mode` | Enum | `cors-standard` | Which `OPTIONS` requests are treated as preflight. Allowed values: `cors-standard` \| `all-options` |
-| `statusCode` | Integer | `204` | Preflight response status code used when no CORS plugin is attached to the route |
+| `statusCode` | Integer | `204` | Final preflight response status (200-599) used when no CORS plugin is attached to the route |
 
 ### `mode` values
 

@@ -126,7 +126,7 @@ spec:
   # ─── Preflight policy ───
   preflightPolicy:
     mode: "cors-standard"                   # "cors-standard" | "all-options"
-    statusCode: 204                         # uint16, response status when no CORS plugin is present
+    statusCode: 204                         # final HTTP status (200-599) when no CORS plugin is present
 
   # ─── LinkSys global configuration ───
   linkSys:
@@ -238,7 +238,7 @@ parses sizes or takes a blocking lock.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `mode` | `String` | `cors-standard` | Global selection: `cors-standard` selects OPTIONS + Origin + ACRM; `all-options` selects all OPTIONS. A route CORS filter still decides local response ownership. |
-| `statusCode` | `u16` | `204` | Preflight response status code when no CORS plugin is present |
+| `statusCode` | `u16` | `204` | Final preflight response status (200-599) when no CORS plugin is present |
 
 ### spec.linkSys
 

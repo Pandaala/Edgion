@@ -15,7 +15,7 @@ the `handle_callback` discovery-error arm (`callback.rs`) emitted `tracing::warn
 hot path. Both were removed on 2026-07-26. The helper now increments
 `edgion_gateway_outbound_tls_san_mismatch_total{plugin="openid_connect"}` and nothing else; the
 callback arm now uses the same channel as its already-correct sibling in `request_filter_impl.rs` —
-`session.add_error(EdgionStatus::OutboundTlsSanMismatch)` + `plugin_log.push_err("outbound tls san
+`session.record_error(EdgionErrorCode::OutboundTlsSanMismatch)` + `plugin_log.push_err("outbound tls san
 mismatch")` + `plugin_log.push_fmt("san {}", …)`. Note it is not a full mirror: the sibling also has
 an `else` arm (`push_fmt("discovery fetch fail {}", …)`) for **non**-SAN discovery errors, which the
 callback arm still lacks — a pre-existing gap left untouched, not part of this finding.
@@ -58,8 +58,8 @@ that the log line is an observability channel.
 **Precision note:** four of the five paths reach neither the session nor the `PluginLog`.
 `verify_token_via_introspection` (`token_verify.rs`) is the exception — it already takes a
 deliberately-unused `_session: &mut dyn PluginSession` (present only so its signature lines up with
-`verify_jwt_token` for the `verify_token` dispatch), so `_session.add_error(
-EdgionStatus::OutboundTlsSanMismatch)` there would be a genuine one-liner with no cascade. It was
+`verify_jwt_token` for the `verify_token` dispatch), so `_session.record_error(
+EdgionErrorCode::OutboundTlsSanMismatch)` there would be a genuine one-liner with no cascade. It was
 left out of this finding on purpose: it would stamp a per-request status on exactly one of the five
 outbound paths for no operational gain, and asymmetric partial stamping is worse than none. A
 proposal to stamp **all** reachable paths uniformly is a separate, legitimate task — not a re-open
@@ -70,7 +70,7 @@ log".)
 **4. The callback arm had a session and was simply using the wrong channel.**
 
 `handle_callback` takes `plugin_log: &mut PluginLog` and already called
-`session.add_error(EdgionStatus::OutboundTlsSanMismatch)` next to the warn — so the correct
+`session.record_error(EdgionErrorCode::OutboundTlsSanMismatch)` next to the warn — so the correct
 data-plane channel was one line away, and the identical `JwksProviderError::TlsSanMismatch` arm in
 `request_filter_impl.rs` was already written that way. This was channel drift between two copies of
 the same branch, not a missing capability.
@@ -88,7 +88,7 @@ the same branch, not a missing capability.
   `userinfo`) to `record_outbound_tls_san_mismatch` to recover the lost dimension — it would make
   the label set asymmetric with the `ldap_auth` emitter for a dimension no alert or runbook uses.
   If a concrete ops need appears, that is a metrics-inventory change via `tasks/todo/`.
-- Thread `EdgionStatus::OutboundTlsSanMismatch` out of the outbound call paths — see rationale 3,
+- Thread `EdgionErrorCode::OutboundTlsSanMismatch` out of the outbound call paths — see rationale 3,
   including the `verify_token_via_introspection` precision note.
 
 ## Known gate coverage gap

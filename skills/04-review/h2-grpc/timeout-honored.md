@@ -27,7 +27,7 @@ Suggestions of the form "the gateway still ignores `grpc-timeout`", "no upstream
 - `edgion-gateway/src/ctx.rs::RequestInfo::grpc_client_deadline: Option<Instant>` — `#[serde(skip)]`, set once per request from `start_time + parsed_value`.
 - `edgion-gateway/src/ctx.rs::EdgionHttpContext::grpc_remaining()` / `grpc_deadline_exceeded()` — helpers used by peer-timeout configuration and the early-abort check.
 - `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs::build_request_metadata` — parses the header for any `is_grpc_request == true` request after protocol detection.
-- `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs::upstream_peer` — runs the deadline check parallel to `request_timeout_exceeded`; `EdgionStatus::GrpcClientDeadlineExceeded = 504_02` is recorded.
+- `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs::upstream_peer` — runs the deadline check parallel to `request_timeout_exceeded`; `EdgionErrorCode::GrpcClientDeadlineExceeded` is recorded and the response path selects HTTP 504.
 - `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs::configure_peer_timeouts` — folds `grpc_remaining` into `effective_read_write_timeout` via `min()`, sharing the same `Duration::ZERO` guard as the existing `request_remaining` branch.
 - `edgion-gateway/src/routes/http/proxy_http/pg_upstream_request_filter.rs` — new `upstream_request_filter` hook that rewrites `grpc-timeout` on the upstream-bound `RequestHeader` to the formatted `grpc_remaining`.
 - Retry-decision sites (`pg_fail_to_connect.rs`, `pg_error_while_proxy.rs`, `pg_upstream_response_filter.rs` status-code retry branch) treat `request_timeout_exceeded() || grpc_deadline_exceeded()` as the unified "deadline blown — do not retry" guard, preventing a fresh LB pick / circuit-breaker counter increment after the caller has given up.
@@ -53,7 +53,7 @@ Pingora's `peer.options.read_timeout` / `write_timeout` are **per-I/O-call**, no
 1. **SHOULD/MAY clauses with no design conflict.** Gateway API conformance (GATEWAY-GRPC Core 13/13, ALL PASS) does not require this behavior but also does not preclude it; the fix is additive.
 2. **Operator timeout knob preserved.** Route-level `request_timeout` (Gateway API field) still acts as the upper bound; client `grpc-timeout` only tightens it further when shorter. No opt-out flag was added.
 3. **Hot-path overhead is bounded.** Parse only runs once per gRPC request (`grpc_client_deadline.is_none()` guard); `grpc_remaining()` is a single `Instant` arithmetic; the upstream header rewrite is a single `insert_header`.
-4. **No `tracing::*` on the data-plane hot path.** Status surfacing goes through `EdgionStatus::GrpcClientDeadlineExceeded` + the access log, never through `tracing` macros (see `skills/03-coding/01-log-safety.md`).
+4. **No `tracing::*` on the data-plane hot path.** Diagnostic surfacing goes through `EdgionErrorCode::GrpcClientDeadlineExceeded` + the access log, never through `tracing` macros (see `skills/03-coding/01-log-safety.md`).
 
 ## Re-evaluation triggers
 

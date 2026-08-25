@@ -1552,7 +1552,11 @@ pub struct EdgionHttpContext {
     /// response plugin chain. Never serialized.
     pub(crate) pre_plugin_response_status: Option<u16>,
 
-    /// Final downstream status selected by the response/terminal path. Private:
+    /// Replaceable downstream status candidate selected before any writer or
+    /// terminal outcome owns the request.
+    candidate_downstream_status: Option<u16>,
+
+    /// Downstream status owned by a writer claim or terminal selection. Private:
     /// writers must use the guarded lifecycle methods below.
     final_downstream_status: Option<u16>,
 
@@ -1820,6 +1824,7 @@ impl EdgionHttpContext {
             active_response_processor_slot: None,
             response_terminal_state: ResponseTerminalState::Open,
             pre_plugin_response_status: None,
+            candidate_downstream_status: None,
             final_downstream_status: None,
             response_write_started: false,
             stream_processors: Vec::new(),
@@ -1917,20 +1922,27 @@ impl EdgionHttpContext {
     /// Select a candidate final response while response processing may still
     /// replace it. Rejected after a writer claims ownership.
     pub(crate) fn select_final_downstream_status(&mut self, status: u16) -> bool {
-        if self.response_write_started {
+        if self.response_write_started
+            || self.final_downstream_status.is_some()
+            || !edgion_resources::http_status::is_valid_final_http_status(status)
+        {
             return false;
         }
-        self.final_downstream_status = Some(status);
+        self.candidate_downstream_status = Some(status);
         true
     }
 
     /// Select the response and claim the sole final-header write in one state
     /// transition. The selected status survives a later write failure.
     pub(crate) fn claim_final_response(&mut self, status: u16) -> bool {
-        if self.response_write_started {
+        if self.response_write_started
+            || self.final_downstream_status.is_some()
+            || !edgion_resources::http_status::is_valid_final_http_status(status)
+        {
             return false;
         }
         self.final_downstream_status = Some(status);
+        self.candidate_downstream_status = None;
         self.response_write_started = true;
         true
     }
@@ -1938,10 +1950,14 @@ impl EdgionHttpContext {
     /// Record a request-ending status only when no response already owns the
     /// outcome. Used for narrow terminal outcomes such as downstream 499.
     pub(crate) fn select_terminal_downstream_status(&mut self, status: u16) -> bool {
-        if self.response_write_started || self.final_downstream_status.is_some() {
+        if self.response_write_started
+            || self.final_downstream_status.is_some()
+            || !edgion_resources::http_status::is_valid_final_http_status(status)
+        {
             return false;
         }
         self.final_downstream_status = Some(status);
+        self.candidate_downstream_status = None;
         true
     }
 
@@ -1952,15 +1968,20 @@ impl EdgionHttpContext {
 
     #[inline]
     pub(crate) fn final_downstream_status(&self) -> Option<u16> {
-        self.final_downstream_status
+        self.final_downstream_status.or(self.candidate_downstream_status)
     }
 
     /// Finalize the serialized access-log status exactly once at terminal
     /// logging. Interim 1xx values are ignored except terminal 101.
     pub(crate) fn finalize_downstream_status(&mut self, session_status: Option<u16>) {
-        let session_status = session_status.filter(|status| *status == 101 || !(100..200).contains(status));
+        let session_status = session_status
+            .filter(|status| *status == 101 || edgion_resources::http_status::is_valid_final_http_status(*status));
+        let selected_status = self
+            .final_downstream_status
+            .or(self.candidate_downstream_status)
+            .filter(|status| edgion_resources::http_status::is_valid_final_http_status(*status));
         self.request_info
-            .finalize_status(session_status.or(self.final_downstream_status).unwrap_or(0));
+            .finalize_status(session_status.or(selected_status).unwrap_or(0));
     }
 
     /// Get (and lazily build) the per-request decoded query parameter map.
@@ -3013,6 +3034,28 @@ mod final_downstream_status_tests {
     }
 
     #[test]
+    fn candidates_and_claims_reject_informational_or_invalid_statuses() {
+        for status in [100, 101, 102, 103, 199, 600, 700] {
+            let mut ctx = EdgionHttpContext::default();
+            assert!(!ctx.select_final_downstream_status(status), "candidate {status}");
+            assert!(!ctx.claim_final_response(status), "claim {status}");
+            assert!(!ctx.select_terminal_downstream_status(status), "terminal {status}");
+            assert!(!ctx.response_write_started());
+            assert_eq!(ctx.final_downstream_status(), None);
+        }
+    }
+
+    #[test]
+    fn terminal_finalization_filters_an_invalid_internal_candidate() {
+        let mut ctx = EdgionHttpContext {
+            final_downstream_status: Some(103),
+            ..Default::default()
+        };
+        ctx.finalize_downstream_status(None);
+        assert_eq!(ctx.request_info.status_option(), None);
+    }
+
+    #[test]
     fn write_claim_rejects_late_replacement_and_terminal_499() {
         let mut ctx = EdgionHttpContext::default();
         assert!(ctx.claim_final_response(200));
@@ -3021,6 +3064,27 @@ mod final_downstream_status_tests {
         assert!(!ctx.claim_final_response(503));
         ctx.finalize_downstream_status(None);
         assert_eq!(ctx.request_info.status(), 200);
+    }
+
+    #[test]
+    fn claimed_error_status_survives_delivery_failure() {
+        let mut ctx = EdgionHttpContext::default();
+        assert!(ctx.select_final_downstream_status(200));
+        assert!(ctx.claim_final_response(502));
+        assert!(!ctx.select_terminal_downstream_status(499));
+        assert!(!ctx.select_final_downstream_status(504));
+
+        ctx.finalize_downstream_status(None);
+        assert_eq!(ctx.request_info.status(), 502);
+    }
+
+    #[test]
+    fn selected_terminal_status_blocks_later_candidate_or_writer() {
+        let mut ctx = EdgionHttpContext::default();
+        assert!(ctx.select_terminal_downstream_status(499));
+        assert!(!ctx.select_final_downstream_status(502));
+        assert!(!ctx.claim_final_response(502));
+        assert_eq!(ctx.final_downstream_status(), Some(499));
     }
 
     #[test]

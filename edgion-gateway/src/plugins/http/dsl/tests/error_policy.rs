@@ -45,6 +45,17 @@ fn test_policy_deny_with() {
     assert_eq!(result, err_response_body(418, "teapot"));
 }
 
+#[test]
+fn test_policy_deny_with_informational_status_fails_safe() {
+    let vm = limited_vm();
+    let policy = DslErrorPolicy::DenyWith {
+        status: 103,
+        body: Some("invalid".to_string()),
+    };
+    let result = run_vm_policy(&vm, MockPluginSession::new(), &policy);
+    assert_eq!(result, err_response_body(500, "invalid"));
+}
+
 // ── Task 9: dye-suite record_outcome wiring ─────────────────────────────
 //
 // `apply_error_policy` (the single choke point for every DSL error-policy

@@ -485,8 +485,9 @@ the runtime writes the response on the plugin's behalf.
 
 **Runtime fail-safe**: a plugin that violates this convention receives a 502
 Bad Gateway fallback from the runtime, and `PluginTerminateWithoutResponse`
-appears in the access log `errors[]` field. Fix the plugin so it writes its
-own response and the marker disappears.
+appears in the ordered access-log `diagnostics` array as
+`{"kind":"error","code":"PluginTerminateWithoutResponse"}`. Fix the plugin so
+it writes its own response and the marker disappears.
 
 ## Project-specific rules
 

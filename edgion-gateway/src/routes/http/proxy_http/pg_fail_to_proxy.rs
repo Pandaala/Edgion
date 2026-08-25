@@ -7,6 +7,39 @@ use pingora_core::{ConnectionClosed, Error, ErrorSource, ErrorType, HTTPStatus, 
 use pingora_proxy::{FailToProxy, Session};
 
 #[inline]
+fn classify_proxy_status(e: &Error) -> u16 {
+    match e.etype() {
+        HTTPStatus(code) => *code,
+        ErrorType::ReadTimedout | ErrorType::WriteTimedout => match e.esource() {
+            ErrorSource::Downstream => 499,
+            ErrorSource::Upstream => 504,
+            _ => 504,
+        },
+        ErrorType::ConnectTimedout | ErrorType::TLSHandshakeTimedout => 504,
+        _ => match e.esource() {
+            ErrorSource::Upstream => 502,
+            ErrorSource::Downstream => match e.etype() {
+                WriteError | ReadError | ConnectionClosed => 499,
+                _ => 400,
+            },
+            ErrorSource::Internal | ErrorSource::Unset => 500,
+        },
+    }
+}
+
+#[inline]
+fn select_proxy_outcome_status(ctx: &mut EdgionHttpContext, e: &Error, code: u16) {
+    if code == 0 {
+        return;
+    }
+    if code == 499 && !matches!(e.etype(), HTTPStatus(_)) {
+        ctx.select_terminal_downstream_status(499);
+    } else {
+        ctx.select_final_downstream_status(code);
+    }
+}
+
+#[inline]
 pub async fn fail_to_proxy(
     edgion_http: &EdgionHttpProxy,
     session: &mut Session,
@@ -49,23 +82,7 @@ pub async fn fail_to_proxy(
         }
     }
 
-    let code = match e.etype() {
-        HTTPStatus(code) => *code,
-        ErrorType::ReadTimedout | ErrorType::WriteTimedout => match e.esource() {
-            ErrorSource::Downstream => 499,
-            ErrorSource::Upstream => 504,
-            _ => 504,
-        },
-        ErrorType::ConnectTimedout | ErrorType::TLSHandshakeTimedout => 504,
-        _ => match e.esource() {
-            ErrorSource::Upstream => 502,
-            ErrorSource::Downstream => match e.etype() {
-                WriteError | ReadError | ConnectionClosed => 499,
-                _ => 400,
-            },
-            ErrorSource::Internal | ErrorSource::Unset => 500,
-        },
-    };
+    let code = classify_proxy_status(e);
 
     // The proxy-ending error was a downstream failure — the client is gone.
     // Recorded in the request-level diagnostics so access-log analysis can
@@ -91,11 +108,7 @@ pub async fn fail_to_proxy(
     }
 
     if code > 0 {
-        if code == 499 && !matches!(e.etype(), HTTPStatus(_)) {
-            ctx.select_terminal_downstream_status(499);
-        } else {
-            ctx.select_final_downstream_status(code);
-        }
+        select_proxy_outcome_status(ctx, e, code);
 
         if let Some(upstream) = ctx.get_current_upstream_mut() {
             // Preserve a real response status stamped by upstream_response_filter;
@@ -140,5 +153,27 @@ pub async fn fail_to_proxy(
     FailToProxy {
         error_code: code,
         can_reuse_downstream: matches!(code, 400 | 403 | 404 | 429),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_proxy_status, select_proxy_outcome_status};
+    use crate::routes::http::proxy_http::pg_upstream_response_filter::select_normalized_upstream_candidate;
+    use crate::EdgionHttpContext;
+    use pingora_core::{ConnectionClosed, Error};
+
+    #[test]
+    fn early_upstream_candidate_does_not_hide_downstream_close() {
+        let mut ctx = EdgionHttpContext::default();
+        select_normalized_upstream_candidate(&mut ctx, 200);
+
+        let error = Error::new_down(ConnectionClosed);
+        let code = classify_proxy_status(&error);
+        assert_eq!(code, 499);
+        select_proxy_outcome_status(&mut ctx, &error, code);
+
+        ctx.finalize_downstream_status(None);
+        assert_eq!(ctx.request_info.status(), 499);
     }
 }
