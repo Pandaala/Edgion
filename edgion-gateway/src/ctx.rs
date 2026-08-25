@@ -1181,6 +1181,27 @@ pub enum ResponseStageDenial {
     Grpc { status: u16, message: Option<String> },
 }
 
+/// Exceptional response replacement or denial state.
+///
+/// Kept behind one lazy box in [`EdgionHttpContext`] so ordinary requests pay
+/// only for a nullable pointer and terminal outcomes remain mutually exclusive.
+#[derive(Debug)]
+enum ResponseOverride {
+    /// A response-stage plugin built a complete replacement response that has
+    /// not yet been written downstream.
+    PendingLocalReply {
+        header: Box<ResponseHeader>,
+        body: bytes::Bytes,
+    },
+
+    /// A local reply header was written successfully. The body write may still
+    /// fail, but generic proxy error handling must not emit a second response.
+    LocalReplyWritten,
+
+    /// The response-stage denial could not be represented as a local reply.
+    Denied(ResponseStageDenial),
+}
+
 /// Classification of the upstream response as a streaming protocol. Set once
 /// per upstream attempt in `pg_upstream_response_filter` from the normalized
 /// Content-Type; reassigned on retry (a later attempt may answer with a
@@ -1560,27 +1581,9 @@ pub struct EdgionHttpContext {
     pub response_body_processing_started: bool,
 
     // --- Response replacement, denial, and final classification ---
-    /// Response-phase local-reply body, set by a response-phase plugin that
-    /// returned `ErrResponse { status, body }` (Phase 6 sync or Phase 7 async)
-    /// and consumed by `upstream_response_body_filter` (Phase 8). `Some` until
-    /// the body filter injects it on the first chunk; the replacement response
-    /// header (status + framing) was already rewritten in place during the
-    /// plugin phase.
-    pub local_reply_body: Option<bytes::Bytes>,
-
-    /// Stashed response-phase local-reply header. `Some` means a
-    /// reply is pending; `response_filter` writes it downstream and aborts the
-    /// pump. The gateway Server header is applied at write time.
-    pub local_reply_header: Option<Box<ResponseHeader>>,
-
-    /// Set true once `response_filter` has written the local reply downstream.
-    /// Read by error_while_proxy / fail_to_proxy / suppress_error_log to treat
-    /// the sentinel abort as an intentional reply, not a proxy failure.
-    pub local_reply_written: bool,
-
-    /// A response-phase plugin denial the response stage could not deliver
-    /// itself. See [`ResponseStageDenial`].
-    pub response_denial: Option<ResponseStageDenial>,
+    /// Lazily allocated, mutually exclusive response replacement/denial state.
+    /// Also records request-body handlers that directly wrote a local reply.
+    response_override: Option<Box<ResponseOverride>>,
 
     /// See [`ResponseStreamKind`]. Consumed by the compression exemption and by
     /// streaming processors/plugins that must know how to interpret chunks.
@@ -1823,13 +1826,82 @@ impl EdgionHttpContext {
             attached_ext_proc: std::collections::HashMap::new(),
             attached_response_framing_reservations: 0,
             response_body_processing_started: false,
-            local_reply_body: None,
-            local_reply_header: None,
-            local_reply_written: false,
-            response_denial: None,
+            response_override: None,
             response_stream_kind: ResponseStreamKind::None,
             cb_permit: None,
         }
+    }
+
+    /// Clear response control left by a discarded upstream attempt.
+    #[inline]
+    pub(crate) fn reset_response_override(&mut self) {
+        self.response_override = None;
+    }
+
+    /// Stage a complete response-phase local reply for `response_filter`.
+    #[inline]
+    pub(crate) fn stage_response_local_reply(&mut self, header: Box<ResponseHeader>, body: bytes::Bytes) {
+        self.response_override = Some(Box::new(ResponseOverride::PendingLocalReply { header, body }));
+    }
+
+    /// Take a pending response-phase local reply without disturbing another
+    /// terminal state.
+    pub(crate) fn take_pending_response_local_reply(&mut self) -> Option<(Box<ResponseHeader>, bytes::Bytes)> {
+        if !matches!(
+            self.response_override.as_deref(),
+            Some(ResponseOverride::PendingLocalReply { .. })
+        ) {
+            return None;
+        }
+        match *self.response_override.take()? {
+            ResponseOverride::PendingLocalReply { header, body } => Some((header, body)),
+            ResponseOverride::LocalReplyWritten | ResponseOverride::Denied(_) => None,
+        }
+    }
+
+    /// Record that a local reply header was successfully written downstream.
+    #[inline]
+    pub(crate) fn mark_local_reply_written(&mut self) {
+        self.response_override = Some(Box::new(ResponseOverride::LocalReplyWritten));
+    }
+
+    #[inline]
+    pub(crate) fn local_reply_written(&self) -> bool {
+        matches!(
+            self.response_override.as_deref(),
+            Some(ResponseOverride::LocalReplyWritten)
+        )
+    }
+
+    #[inline]
+    pub(crate) fn set_response_denial(&mut self, denial: ResponseStageDenial) {
+        self.response_override = Some(Box::new(ResponseOverride::Denied(denial)));
+    }
+
+    #[inline]
+    pub(crate) fn response_denial(&self) -> Option<&ResponseStageDenial> {
+        match self.response_override.as_deref() {
+            Some(ResponseOverride::Denied(denial)) => Some(denial),
+            Some(ResponseOverride::PendingLocalReply { .. }) | Some(ResponseOverride::LocalReplyWritten) | None => None,
+        }
+    }
+
+    pub(crate) fn take_response_denial(&mut self) -> Option<ResponseStageDenial> {
+        if !matches!(self.response_override.as_deref(), Some(ResponseOverride::Denied(_))) {
+            return None;
+        }
+        match *self.response_override.take()? {
+            ResponseOverride::Denied(denial) => Some(denial),
+            ResponseOverride::PendingLocalReply { .. } | ResponseOverride::LocalReplyWritten => None,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn response_stage_settled(&self) -> bool {
+        matches!(
+            self.response_override.as_deref(),
+            Some(ResponseOverride::PendingLocalReply { .. } | ResponseOverride::Denied(_))
+        )
     }
 
     /// Record an intrinsically classified error diagnostic.
@@ -2840,15 +2912,68 @@ mod geo_context_tests {
 }
 
 #[cfg(test)]
-mod local_reply_tests {
+mod response_override_tests {
     use super::*;
 
     #[test]
-    fn local_reply_defaults_are_inactive() {
+    fn lazy_holder_is_pointer_sized_and_defaults_inactive() {
+        let former_inline_fields = std::mem::size_of::<Option<bytes::Bytes>>()
+            + std::mem::size_of::<Option<Box<ResponseHeader>>>()
+            + std::mem::size_of::<bool>()
+            + std::mem::size_of::<Option<ResponseStageDenial>>();
+        assert_eq!(
+            std::mem::size_of::<Option<Box<ResponseOverride>>>(),
+            std::mem::size_of::<usize>()
+        );
+        assert!(std::mem::size_of::<Option<Box<ResponseOverride>>>() < former_inline_fields);
         let ctx = EdgionHttpContext::default();
-        assert!(ctx.local_reply_header.is_none());
-        assert!(ctx.local_reply_body.is_none());
-        assert!(!ctx.local_reply_written);
+        assert!(!ctx.response_stage_settled());
+        assert!(!ctx.local_reply_written());
+        assert_eq!(ctx.response_denial(), None);
+    }
+
+    #[test]
+    fn terminal_states_are_mutually_exclusive() {
+        let mut ctx = EdgionHttpContext::default();
+        let header = ResponseHeader::build(403, None).unwrap();
+        ctx.stage_response_local_reply(Box::new(header), bytes::Bytes::from_static(b"denied"));
+        assert!(ctx.response_stage_settled());
+        assert_eq!(ctx.response_denial(), None);
+
+        ctx.set_response_denial(ResponseStageDenial::Http(502));
+        assert!(ctx.take_pending_response_local_reply().is_none());
+        assert_eq!(ctx.response_denial(), Some(&ResponseStageDenial::Http(502)));
+
+        ctx.mark_local_reply_written();
+        assert!(ctx.local_reply_written());
+        assert!(!ctx.response_stage_settled());
+        assert_eq!(ctx.response_denial(), None);
+    }
+
+    #[test]
+    fn pending_reply_round_trips_and_clears_state() {
+        let mut ctx = EdgionHttpContext::default();
+        let header = ResponseHeader::build(403, None).unwrap();
+        ctx.stage_response_local_reply(Box::new(header), bytes::Bytes::from_static(b"denied"));
+
+        let (header, body) = ctx.take_pending_response_local_reply().unwrap();
+        assert_eq!(header.status.as_u16(), 403);
+        assert_eq!(body, bytes::Bytes::from_static(b"denied"));
+        assert!(!ctx.response_stage_settled());
+    }
+
+    #[test]
+    fn denial_round_trips_and_clears_state() {
+        let mut ctx = EdgionHttpContext::default();
+        let denial = ResponseStageDenial::Grpc {
+            status: 8,
+            message: Some("quota exceeded".to_string()),
+        };
+        ctx.set_response_denial(denial.clone());
+
+        assert_eq!(ctx.take_response_denial(), Some(denial));
+        assert_eq!(ctx.response_denial(), None);
+        assert!(!ctx.response_stage_settled());
     }
 }
 

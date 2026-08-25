@@ -2028,7 +2028,7 @@ impl PluginRuntime {
 /// Building the local reply is synchronous, so this is shared by both the sync
 /// (`run_upstream_response_plugins_sync`) and async
 /// (`run_upstream_response_plugins_async`) loops: it stashes the built reply in
-/// `ctx` (`local_reply_header`/`local_reply_body`). `response_filter` then writes
+/// the context's pending response override. `response_filter` then writes
 /// that reply to the downstream and returns a sentinel `Err` to abort the
 /// upstream forward — this is what makes a body-less upstream (where Pingora
 /// never calls the body filter) still emit the replacement body. gRPC routes

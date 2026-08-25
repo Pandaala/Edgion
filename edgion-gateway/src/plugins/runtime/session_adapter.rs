@@ -147,8 +147,7 @@ pub(crate) fn build_response_local_reply(
         let _ = fresh.remove_header(&http::header::TRANSFER_ENCODING);
         let _ = fresh.insert_header("content-length", body_bytes.len().to_string());
     }
-    ctx.local_reply_header = Some(Box::new(fresh));
-    ctx.local_reply_body = Some(if bodyless { bytes::Bytes::new() } else { body_bytes });
+    ctx.stage_response_local_reply(Box::new(fresh), if bodyless { bytes::Bytes::new() } else { body_bytes });
     true
 }
 
@@ -362,7 +361,7 @@ impl<'a> PingoraSessionAdapter<'a> {
     ///
     /// A refusal means "this exchange cannot carry a replacement response", NOT
     /// "let the upstream response through". The response-stage entry point reads
-    /// [`EdgionHttpContext::response_denial`] after the plugin chains and aborts,
+    /// the context's response denial after the plugin chains and aborts,
     /// so the denial is downstream-visible.
     ///
     /// The access-log status is overwritten with the plugin's status on purpose:
@@ -371,7 +370,7 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// would attribute the request to the response the client never received.
     pub fn set_response_denied(&mut self, status: u16) {
         self.ctx.select_final_downstream_status(status);
-        self.ctx.response_denial = Some(ResponseStageDenial::Http(status));
+        self.ctx.set_response_denial(ResponseStageDenial::Http(status));
         self.ctx.record_error(EdgionErrorCode::PluginResponseDenyAborted);
     }
 
@@ -401,7 +400,8 @@ impl<'a> PingoraSessionAdapter<'a> {
     pub fn set_response_denied_grpc(&mut self, status: u16, message: Option<String>) {
         self.ctx.select_final_downstream_status(200);
         self.ctx.request_info.grpc_status = Some(status);
-        self.ctx.response_denial = Some(ResponseStageDenial::Grpc { status, message });
+        self.ctx
+            .set_response_denial(ResponseStageDenial::Grpc { status, message });
         self.ctx.record_error(EdgionErrorCode::PluginResponseDenyAborted);
     }
 
@@ -1713,42 +1713,41 @@ mod local_reply_tests {
         let mut ctx = EdgionHttpContext::default();
         let applied = build_response_local_reply(&mut ctx, 403, Some("{\"error\":\"forbidden\"}".to_string()), false);
         assert!(applied);
-        let h = ctx.local_reply_header.as_ref().expect("header stashed");
+        let (h, body) = ctx
+            .take_pending_response_local_reply()
+            .expect("successful build must stage a complete local reply");
         assert_eq!(h.status.as_u16(), 403);
         assert_eq!(h.headers.get("content-type").unwrap().to_str().unwrap(), "text/plain");
         assert_eq!(h.headers.get("content-length").unwrap().to_str().unwrap(), "21");
         assert!(h.headers.get("content-encoding").is_none());
-        assert_eq!(
-            ctx.local_reply_body.as_ref().unwrap().as_ref(),
-            b"{\"error\":\"forbidden\"}"
-        );
+        assert_eq!(body.as_ref(), b"{\"error\":\"forbidden\"}");
     }
 
     #[test]
     fn build_none_body_is_zero_length() {
         let mut ctx = EdgionHttpContext::default();
         assert!(build_response_local_reply(&mut ctx, 500, None, false));
-        let h = ctx.local_reply_header.as_ref().unwrap();
+        let (h, body) = ctx.take_pending_response_local_reply().unwrap();
         assert_eq!(h.headers.get("content-length").unwrap().to_str().unwrap(), "0");
-        assert_eq!(ctx.local_reply_body.as_ref().unwrap().len(), 0);
+        assert!(body.is_empty());
     }
 
     #[test]
     fn build_head_is_bodyless() {
         let mut ctx = EdgionHttpContext::default();
         assert!(build_response_local_reply(&mut ctx, 403, Some("denied".into()), true));
-        let h = ctx.local_reply_header.as_ref().unwrap();
+        let (h, body) = ctx.take_pending_response_local_reply().unwrap();
         assert!(h.headers.get("content-length").is_none());
-        assert_eq!(ctx.local_reply_body.as_ref().unwrap().len(), 0);
+        assert!(body.is_empty());
     }
 
     #[test]
     fn build_204_is_bodyless() {
         let mut ctx = EdgionHttpContext::default();
         assert!(build_response_local_reply(&mut ctx, 204, Some("ignored".into()), false));
-        let h = ctx.local_reply_header.as_ref().unwrap();
+        let (h, body) = ctx.take_pending_response_local_reply().unwrap();
         assert!(h.headers.get("content-length").is_none());
-        assert_eq!(ctx.local_reply_body.as_ref().unwrap().len(), 0);
+        assert!(body.is_empty());
     }
 
     #[test]
@@ -1756,8 +1755,7 @@ mod local_reply_tests {
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.is_grpc_request = true;
         assert!(!build_response_local_reply(&mut ctx, 502, Some("x".into()), false));
-        assert!(ctx.local_reply_header.is_none());
-        assert!(ctx.local_reply_body.is_none());
+        assert!(!ctx.response_stage_settled());
     }
 
     #[test]
@@ -1772,7 +1770,7 @@ mod local_reply_tests {
             value: "999".to_string(),
         });
         assert!(build_response_local_reply(&mut ctx, 502, Some("{}".into()), false));
-        let h = ctx.local_reply_header.as_ref().unwrap();
+        let (h, _) = ctx.take_pending_response_local_reply().unwrap();
         // queued content-type wins; queued content-length is overridden by the framing re-assert.
         assert_eq!(
             h.headers.get("content-type").unwrap().to_str().unwrap(),
@@ -1812,7 +1810,7 @@ mod local_reply_tests {
         let mut upstream = ResponseHeader::build(200, None).unwrap();
         ctx.apply_pending_response_header_ops(&mut upstream);
         assert!(build_response_local_reply(&mut ctx, 403, Some("denied".into()), false));
-        let reply = ctx.local_reply_header.as_ref().unwrap();
+        let (reply, _) = ctx.take_pending_response_local_reply().unwrap();
         assert_eq!(reply.headers.get("x-foo").unwrap().to_str().unwrap(), "bar");
         // The builder's destructive drain consumed the queue.
         assert!(ctx.pending_response_header_ops.is_empty());
@@ -3517,10 +3515,12 @@ mod record_outcome_tests {
     /// `ctx.plugin_running_result`.
     #[tokio::test]
     async fn local_reply_replaces_response_for_unrecognized_upgrade_token() {
-        let (applied, ctx) = apply_local_reply("GET /x HTTP/1.1\r\nHost: test\r\nUpgrade: foo\r\n\r\n", 200).await;
+        let (applied, mut ctx) = apply_local_reply("GET /x HTTP/1.1\r\nHost: test\r\nUpgrade: foo\r\n\r\n", 200).await;
         assert!(applied, "an unrecognized Upgrade token must not block the denial");
-        assert!(ctx.local_reply_header.is_some());
-        assert_eq!(ctx.local_reply_header.as_deref().unwrap().status.as_u16(), 403);
+        let (header, _) = ctx
+            .take_pending_response_local_reply()
+            .expect("accepted replacement must remain pending");
+        assert_eq!(header.status.as_u16(), 403);
     }
 
     /// The genuine switch stays refused: the upstream answered 101, so the
@@ -3533,7 +3533,7 @@ mod record_outcome_tests {
         )
         .await;
         assert!(!applied, "a real 101 must stay unreplaceable");
-        assert!(ctx.local_reply_header.is_none());
+        assert!(!ctx.response_stage_settled());
     }
 
     /// Interim informational responses (100/103) are not the final response
@@ -3555,9 +3555,12 @@ mod record_outcome_tests {
     /// ordinary replaceable response.
     #[tokio::test]
     async fn local_reply_replaces_rejected_connect() {
-        let (applied, ctx) = apply_connect_local_reply(403).await;
+        let (applied, mut ctx) = apply_connect_local_reply(403).await;
         assert!(applied, "a CONNECT the upstream refused carries no tunnel");
-        assert!(ctx.local_reply_header.is_some());
+        let (header, _) = ctx
+            .take_pending_response_local_reply()
+            .expect("rejected CONNECT must carry the replacement reply");
+        assert_eq!(header.status.as_u16(), 403);
     }
 
     async fn terminate_for(request: &str, upstream_status: u16) -> (bool, EdgionHttpContext) {
@@ -3596,10 +3599,9 @@ mod record_outcome_tests {
         .await;
 
         assert!(terminate);
-        assert!(ctx.local_reply_header.is_none(), "a 101 carries no local reply");
         assert_eq!(
-            ctx.response_denial,
-            Some(ResponseStageDenial::Http(403)),
+            ctx.response_denial(),
+            Some(&ResponseStageDenial::Http(403)),
             "the denial must survive as an abort the entry point can act on"
         );
         assert!(ctx
@@ -3619,8 +3621,8 @@ mod record_outcome_tests {
         let (terminate, ctx) = terminate_for("GET /x HTTP/1.1\r\nHost: test\r\n\r\n", 200).await;
 
         assert!(terminate);
-        assert!(ctx.local_reply_header.is_some());
-        assert_eq!(ctx.response_denial, None);
+        assert!(ctx.response_stage_settled());
+        assert_eq!(ctx.response_denial(), None);
         assert!(!ctx
             .diagnostics
             .contains_error(EdgionErrorCode::PluginResponseDenyAborted));
@@ -3654,8 +3656,8 @@ mod record_outcome_tests {
 
         assert!(terminate);
         assert_eq!(
-            ctx.response_denial,
-            Some(ResponseStageDenial::Grpc {
+            ctx.response_denial(),
+            Some(&ResponseStageDenial::Grpc {
                 status: 8,
                 message: Some("quota exceeded".to_string()),
             })
@@ -3694,7 +3696,7 @@ mod record_outcome_tests {
         };
 
         assert!(terminate);
-        assert_eq!(ctx.response_denial, Some(ResponseStageDenial::Http(502)));
+        assert_eq!(ctx.response_denial(), Some(&ResponseStageDenial::Http(502)));
         assert!(ctx
             .diagnostics
             .contains_error(EdgionErrorCode::PluginTerminateWithoutResponse));

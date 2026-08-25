@@ -46,7 +46,7 @@ pub(super) fn has_final_response_written(session: &Session) -> bool {
 /// denial that could not be stashed and will abort the exchange.
 #[inline]
 pub(super) fn response_stage_settled(ctx: &EdgionHttpContext) -> bool {
-    ctx.local_reply_header.is_some() || ctx.response_denial.is_some()
+    ctx.response_stage_settled()
 }
 
 /// Raise the abort for a response-stage denial the stage could not deliver.
@@ -55,7 +55,7 @@ pub(super) fn response_stage_settled(ctx: &EdgionHttpContext) -> bool {
 /// un-attributed to the backend, and `fail_to_proxy` writes it downstream
 /// because nothing has been committed yet. A gRPC denial carries 200 — the wire
 /// status of a gRPC error — and `fail_to_proxy` writes its exact trailers from
-/// `ctx.response_denial` before the generic status handling would see it.
+/// the context's response denial before the generic status handling would see it.
 #[inline]
 pub(super) fn response_denial_error(denial: &ResponseStageDenial) -> Box<pingora_core::Error> {
     let status = match denial {
@@ -107,11 +107,9 @@ pub fn upstream_response_filter(
         return Ok(());
     }
 
-    // filter-04b: clear any stale local-reply stash from a previous upstream
+    // filter-04b: clear any stale response override from a previous upstream
     // attempt before this attempt's response-phase plugins run.
-    ctx.local_reply_header = None;
-    ctx.local_reply_body = None;
-    ctx.local_reply_written = false;
+    ctx.reset_response_override();
 
     let status_code = upstream_response.status.as_u16();
 
@@ -458,7 +456,7 @@ pub fn upstream_response_filter(
 
     // A denial no local reply could carry aborts here: returning Ok would hand
     // the untouched upstream response to `response_filter` and on to the client.
-    if let Some(denial) = ctx.response_denial.as_ref() {
+    if let Some(denial) = ctx.response_denial() {
         return Err(response_denial_error(denial));
     }
 

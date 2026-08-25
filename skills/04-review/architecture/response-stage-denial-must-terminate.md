@@ -25,7 +25,8 @@ either one turns a denial into a silent ALLOW:
 2. **"Terminate" must be expressed as state a response-stage reader consults.**
    Whenever the reply cannot be stashed — or was never a reply at all —
    `check_response_stage_terminate`
-   (`plugins/runtime/plugin_runtime.rs`) arms `ctx.response_denial`, and both
+   (`plugins/runtime/plugin_runtime.rs`) arms `ResponseOverride::Denied` through
+   the context API, and both
    response-stage entry points (`pg_upstream_response_filter`,
    `pg_response_filter`) return `Err(HTTPStatus(..))` so `fail_to_proxy`
    delivers the denial and the upstream connection is torn down.
@@ -55,10 +56,12 @@ so the response is still in hand and replaceable.
 `PingoraSessionAdapter::set_terminate` writes only
 `ctx.plugin_running_result`. Every reader of that field is request-stage
 (`pg_request_filter`, `pg_upstream_peer`, `grpc/integration`);
-`pg_response_filter` consults `ctx.local_reply_header` instead. So "log and
+`pg_response_filter` consults the context's pending `ResponseOverride` instead.
+So "log and
 `set_terminate`" is indistinguishable from "allow" once the reply was refused.
 This is why the residual cases — a real `101`, an established CONNECT tunnel, a
-gRPC route — need `ctx.response_denial` and a real abort, not a stronger log.
+gRPC route — need `ResponseOverride::Denied` and a real abort, not a stronger
+log.
 
 **3. A naked `ErrTerminateRequest` leaked with no precondition at all**
 

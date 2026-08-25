@@ -149,7 +149,7 @@ async fn write_terminate_reply(
         false
     };
     if written {
-        ctx.local_reply_written = true;
+        ctx.mark_local_reply_written();
     }
 }
 

@@ -262,7 +262,7 @@ impl ProxyHttp for EdgionHttpProxy {
     fn suppress_error_log(&self, _session: &Session, ctx: &Self::CTX, _error: &Error) -> bool {
         // filter-04b: the sentinel abort from a written local reply is not a real
         // error; hide its error-log line (the access log still records the reply).
-        ctx.local_reply_written
+        ctx.local_reply_written()
     }
 
     fn request_summary(&self, session: &Session, ctx: &Self::CTX) -> String {

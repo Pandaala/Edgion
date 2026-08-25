@@ -64,7 +64,7 @@ pub fn error_while_proxy(
     // filter-04b: the sentinel error from a written local reply is intentional,
     // not an upstream failure. Skip body-size accounting and outlier-detection
     // failure recording, and leave the error non-retryable.
-    if ctx.local_reply_written {
+    if ctx.local_reply_written() {
         return e.more_context(format!("Peer: {}", peer));
     }
 

@@ -156,7 +156,7 @@ pub async fn response_filter(
     // A denial no local reply could carry aborts before the forward path below.
     // Nothing has been written downstream yet, so `fail_to_proxy` still gets to
     // deliver the plugin's status.
-    if let Some(denial) = ctx.response_denial.as_ref() {
+    if let Some(denial) = ctx.response_denial() {
         return Err(response_denial_error(denial));
     }
 
@@ -164,11 +164,14 @@ pub async fn response_filter(
     // directly to the downstream and abort the pump so the upstream response is
     // not forwarded. This is the single write+abort point; it handles both
     // body-less and body-present upstreams (Phase 8 is never reached).
-    if ctx.local_reply_header.is_some() && !ctx.response_write_started() {
-        let mut header = ctx.local_reply_header.take().expect("checked is_some");
+    let pending_local_reply = if ctx.response_write_started() {
+        None
+    } else {
+        ctx.take_pending_response_local_reply()
+    };
+    if let Some((mut header, body)) = pending_local_reply {
         // Stamp the gateway Server identity onto the freshly-built reply header.
         edgion_http.server_header_opts.apply_to_response(&mut header);
-        let body = ctx.local_reply_body.take().unwrap_or_default();
         let body_empty = body.is_empty();
         let status = header.status.as_u16();
         if !ctx.claim_final_response(status) {
@@ -182,7 +185,7 @@ pub async fn response_filter(
         // surfacing as an intermittent transport-level send error.
         session.set_keepalive(None);
         session.write_response_header(header, body_empty).await?;
-        ctx.local_reply_written = true;
+        ctx.mark_local_reply_written();
         if !body_empty {
             session.write_response_body(Some(body), true).await?;
         }

@@ -21,7 +21,7 @@ pub async fn fail_to_proxy(
     // This is safe because response_filter disables keepalive before writing;
     // preserving reuse is a separate Pingora lifecycle feature. See
     // skills/04-review/architecture/response-local-reply-h1-close-is-feature.md.
-    if ctx.local_reply_written {
+    if ctx.local_reply_written() {
         return FailToProxy {
             error_code: ctx.final_downstream_status().unwrap_or(500),
             can_reuse_downstream: true,
@@ -33,7 +33,7 @@ pub async fn fail_to_proxy(
     // of the generic status handling below, which would otherwise re-derive a
     // code from the synthetic HTTP 200 the abort carries. Marks the response
     // committed, so that generic block then skips this request.
-    if let Some(ResponseStageDenial::Grpc { status, message }) = ctx.response_denial.take() {
+    if let Some(ResponseStageDenial::Grpc { status, message }) = ctx.take_response_denial() {
         if send_grpc_status_trailers_only(
             session,
             ctx,
