@@ -165,11 +165,11 @@ edgion-cli get service backend-svc -n default -o json
 从 YAML 文件创建或更新资源。**仅 center target 支持此命令。**
 
 ```bash
-edgion-cli apply -f <FILE|DIR> [OPTIONS]
+edgion-cli apply -f <FILE|DIR> [-f <FILE|DIR> ...] [OPTIONS]
 ```
 
 **选项:**
-- `-f, --file <PATH>`: YAML 文件或目录路径（必需）
+- `-f, --file <PATH>`: YAML 文件或目录路径（必需，可重复；按命令行顺序处理）
 - `--dry-run`: 试运行，不实际应用
 
 **示例:**
@@ -180,6 +180,9 @@ edgion-cli apply -f route.yaml
 
 # 应用目录下所有 YAML 文件
 edgion-cli apply -f ./configs/
+
+# 按顺序批量应用，并复用一个 CLI 运行时和客户端
+edgion-cli apply -f gateway.yaml -f backend.yaml -f route.yaml
 
 # 试运行
 edgion-cli apply -f route.yaml --dry-run

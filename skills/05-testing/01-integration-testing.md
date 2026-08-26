@@ -65,6 +65,9 @@ preflights, run its `cicd/checks/*` entry point directly.
 # Already built, skip prepare
 ./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r EdgionPlugins -i KeyAuth
 
+# Bound parallel standalone scenarios in a default full sweep (default: 4)
+./edgion-tests/integration/scripts/integration/run_integration.sh --jobs 2
+
 # Keep the scene after the run for manual investigation
 ./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare --keep-alive -r Gateway -i StreamPlugins
 ```
@@ -125,7 +128,7 @@ Do not search for code or cert scripts using older test-directory conventions. C
 
 The actual responsibilities of `run_integration.sh` are:
 
-1. Call `prepare.sh` to build `edgion-controller`, `edgion-gateway`, `edgion-cli`, `test_server`, `test_client`, `test_client_direct`, `resource_diff`, `config_load_validator`
+1. Call `prepare.sh` once to build `edgion-controller`, `edgion-gateway`, `edgion-cli`, `test_server`, `test_client`, `test_client_direct`, `resource_diff`, and `config_load_validator` in one Cargo invocation
 2. Call `start_all_with_conf.sh` to clean the scene and create `tmp/integration_testing/testing_<timestamp>/`
 3. Generate runtime Secrets under `${WORK_DIR}/generated-secrets/` and load them once after the suite YAML
 4. Start `test_server`, controller, gateway, and wait for health checks
@@ -139,6 +142,15 @@ A few key facts:
 - `--full-test` additionally includes slow tests and requires Docker to be available
 - `run_integration.sh` first checks `ulimit -n` and tries to raise it to `65535` if insufficient
 - `start_all_with_conf.sh` exports `EDGION_WORK_DIR` and `EDGION_GENERATED_SECRET_DIR`
+- The default full sweep runs its isolated standalone scenarios through a bounded parallel queue.
+  They use separate ports and work directories; `--jobs N` or `EDGION_INTEGRATION_JOBS=N`
+  controls the limit. Shared-topology suites remain serial because several mutate resources or
+  assert cumulative access-log and metric state.
+- Each suite's sorted YAML list is submitted with repeated `edgion-cli apply -f` flags. This reuses
+  one CLI runtime and HTTP client while preserving the existing resource submission order.
+- Base configuration is loaded once, and inferred dependency suites are de-duplicated in first-seen
+  order. Any batch failure aborts startup before tests run; the runner no longer continues with a
+  partially loaded topology.
 - conf_sync mTLS certs live at `${WORK_DIR}/certs/grpc/{primary,secondary}/`, generated in place
   by `conf_sync_distribute_certs "$WORK_DIR"` (the script that creates a work directory owns its
   certs — standalone scripts generate into their own `WORK_DIR`/`mktemp` dir; nothing is written

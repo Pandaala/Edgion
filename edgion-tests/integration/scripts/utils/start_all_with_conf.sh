@@ -606,19 +606,28 @@ load_base_config() {
         return 0
     fi
 
+    local apply_args=()
+    local count=0
     for file in "$conf_src"/*.yaml; do
         if [ -f "$file" ]; then
-            local filename=$(basename "$file")
-            log_info "Load $filename via API..."
-            if "$edgion_cli" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1; then
-                log_success "$filename Loadsuccess"
-            else
-                log_warning "$filename Loadfailed"
-            fi
+            apply_args+=("-f" "$file")
+            count=$((count + 1))
         fi
     done
-    
-    log_success "configcompleted"
+
+    if [ "$count" -eq 0 ]; then
+        log_warning "No base YAML files found in: $conf_src"
+        return 1
+    fi
+
+    log_info "Loading $count base config files with one ordered CLI batch..."
+    if ! "$edgion_cli" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" \
+        apply "${apply_args[@]}"; then
+        log_error "Base config load failed"
+        return 1
+    fi
+
+    log_success "Base config load completed"
 }
 
 # =============================================================================
@@ -693,23 +702,20 @@ load_generated_secrets() {
         return 0
     fi
 
-    local failed=false
     local count=0
+    local apply_args=()
     for file in $files; do
         local relative_file="${file#${GENERATED_SECRET_DIR}/}"
-        log_info "Load generated Secret $relative_file via API..."
-        if "$edgion_cli" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" apply -f "$file" > /dev/null 2>&1; then
-            log_success "$relative_file Loadsuccess"
-        else
-            log_warning "$relative_file Loadfailed"
-            failed=true
-        fi
+        log_info "Queue generated Secret: $relative_file"
+        apply_args+=("-f" "$file")
         count=$((count + 1))
     done
 
-    if $failed; then
-        log_error "Partial generated Secret config load failed"
-        exit 1
+    log_info "Loading $count generated Secret files with one ordered CLI batch..."
+    if ! "$edgion_cli" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" \
+        apply "${apply_args[@]}" > /dev/null; then
+        log_error "Generated Secret config load failed"
+        return 1
     fi
 
     log_success "Generated Secret configs loaded: $count"
@@ -806,6 +812,16 @@ get_suites_to_load() {
     local supported=""
     local suite
     for suite in $suites; do
+        # Base is loaded exactly once by load_base_config(). Target inference
+        # can also name the same dependency suite twice (for example an exact
+        # HTTPRoute/Basic run). Preserve first-seen order while dropping both
+        # forms of redundant API work.
+        if [ "$suite" = "base" ]; then
+            continue
+        fi
+        case " $supported " in
+            *" $suite "*) continue ;;
+        esac
         if suite_is_supported "$suite"; then
             supported="${supported} ${suite}"
         else
@@ -820,9 +836,10 @@ get_suites_to_load() {
 # =============================================================================
 load_configs() {
     log_section "LoadTestconfig"
-    
+
     local suites_to_load=$(get_suites_to_load)
-    
+    local failed=false
+
     if [ -z "$suites_to_load" ]; then
         log_warning "LoadTestconfig"
         return 0
@@ -843,14 +860,21 @@ load_configs() {
         if bash "$load_script" --wait 0 "$suite" 2>&1 | tee -a "${LOG_DIR}/load_config.log"; then
             log_success "$suite configLoadcompleted"
         else
-            log_warning "$suite configLoadfailed"
+            log_error "$suite configLoadfailed"
+            failed=true
         fi
     done
-    
-    # ，（Controller ）
-    log_info "Waitconfigtake effect (2s)..."
-    sleep 2
-    
+
+    if $failed; then
+        log_error "One or more config suites failed to load"
+        return 1
+    fi
+
+    # resource_diff below is the synchronization barrier. Starting it
+    # immediately avoids an unconditional delay on fast machines while keeping
+    # bounded retries for slower Controller/Gateway convergence.
+    log_info "Config submission complete; resource_diff will wait for convergence"
+
     log_success "allconfigLoadcompleted"
 }
 

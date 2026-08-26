@@ -179,11 +179,11 @@ edgion-cli get service backend-svc -n default -o json
 Create or update resources from a YAML file. **Only supported with the center target.**
 
 ```bash
-edgion-cli apply -f <FILE|DIR> [OPTIONS]
+edgion-cli apply -f <FILE|DIR> [-f <FILE|DIR> ...] [OPTIONS]
 ```
 
 **Options:**
-- `-f, --file <PATH>`: YAML file or directory path (required)
+- `-f, --file <PATH>`: YAML file or directory path (required and repeatable; processed in command-line order)
 - `--dry-run`: Dry run, do not actually apply
 
 **Examples:**
@@ -194,6 +194,9 @@ edgion-cli apply -f route.yaml
 
 # Apply all YAML files in a directory
 edgion-cli apply -f ./configs/
+
+# Apply an ordered batch while reusing one CLI runtime and client
+edgion-cli apply -f gateway.yaml -f backend.yaml -f route.yaml
 
 # Dry run
 edgion-cli apply -f route.yaml --dry-run

@@ -14,22 +14,23 @@ Apply configuration resources from a file or directory; only supports the center
 ### Syntax
 
 ```bash
-edgion-cli apply -f <file|directory> [--dry-run]
+edgion-cli apply -f <file|directory> [-f <file|directory> ...] [--dry-run]
 ```
 
 ### Arguments
 
 | Argument | Description |
 |------|------|
-| `-f, --file` | YAML file path or a directory containing YAML files |
+| `-f, --file` | YAML file path or a directory containing YAML files; repeatable and processed in command-line order using one client |
 | `--dry-run` | Local preview: parse resource metadata and print the intended operation without contacting the Controller |
 
 ### Implementation logic
 
-1. Determine path type: file → single-file processing; directory → traverse all `.yaml`/`.yml` files in the directory
-2. Split multi-document YAML streams and parse `kind`, `metadata.name`, and `metadata.namespace` from each document
-3. In `--dry-run` mode, print `Would apply ...` and return without any network request; this is not schema validation
-4. Otherwise determine whether the resource already exists:
+1. Process each `-f` path in command-line order using one CLI runtime and HTTP client
+2. Determine path type: file → single-file processing; directory → traverse all `.yaml`/`.yml` files in the directory
+3. Split multi-document YAML streams and parse `kind`, `metadata.name`, and `metadata.namespace` from each document
+4. In `--dry-run` mode, print `Would apply ...` and return without any network request; this is not schema validation
+5. Otherwise determine whether the resource already exists:
    - Does not exist → call `POST /api/v1/namespaced/{kind}/{ns}` to create
    - Already exists → call `PUT /api/v1/namespaced/{kind}/{ns}/{name}` to update
 
@@ -41,6 +42,9 @@ edgion-cli apply -f gateway.yaml
 
 # Apply all YAMLs in a directory
 edgion-cli apply -f manifests/
+
+# Apply an ordered batch while reusing one client
+edgion-cli apply -f gateway.yaml -f backend.yaml -f route.yaml
 
 # Dry-run validation
 edgion-cli apply -f gateway.yaml --dry-run

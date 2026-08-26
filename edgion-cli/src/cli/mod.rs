@@ -74,9 +74,9 @@ pub struct Cli {
 pub enum Commands {
     /// Apply a configuration from a file or directory
     Apply {
-        /// File or directory path
-        #[arg(short, long)]
-        file: String,
+        /// File or directory path; repeat the flag to reuse one client for an ordered batch
+        #[arg(short, long, required = true, action = clap::ArgAction::Append)]
+        file: Vec<String>,
 
         /// Perform a dry run without actually applying changes
         #[arg(long, default_value = "false")]
@@ -250,7 +250,7 @@ impl Cli {
                 if self.target != TargetType::Center {
                     anyhow::bail!("apply command only supported for 'center' target");
                 }
-                commands::apply::apply(&client, file, *dry_run).await
+                commands::apply::apply_many(&client, file, *dry_run).await
             }
             Commands::Get {
                 kind,

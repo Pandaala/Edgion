@@ -68,6 +68,12 @@ REDIS_CONTAINER_NAME="edgion-test-redis"
 
 CONTROLLER_GRPC_PORT=12151
 
+# Standalone scenarios use isolated ports and work directories, so they can run
+# concurrently without touching the shared Controller/Gateway topology. Keep the
+# default bounded because each job may start its own Controller and Gateway.
+INTEGRATION_JOBS="${EDGION_INTEGRATION_JOBS:-4}"
+ISOLATED_SCENARIO_PIDS=()
+
 # Gateway admin bearer token. The gateway admin API (incl. the /api/v1/testing/*
 # access-log endpoints) is auth-guarded, so test_client's AccessLogClient must
 # present this token. start_all_with_conf.sh defaults the same value, but it runs
@@ -404,9 +410,133 @@ run_dynamic_scenarios() {
 }
 
 # =============================================================================
+# Isolated standalone scenarios
+# =============================================================================
+run_isolated_scenarios() {
+    local names=(
+        "controller_auth"
+        "gateway_admin_auth"
+        "fips_policy"
+        "geoip_db_states"
+        "plugin_policy"
+        "unknown_config_fields"
+    )
+    local commands=(
+        "${SCRIPT_DIR}/test_controller_no_auth.sh"
+        "${SCRIPT_DIR}/test_gateway_admin_auth.sh"
+        "${SCRIPT_DIR}/test_fips_policy.sh"
+        "${SCRIPT_DIR}/test_geoip_db_states.sh"
+        "${SCRIPT_DIR}/test_plugin_policy.sh"
+        "${SCRIPT_DIR}/test_unknown_config_fields.sh"
+    )
+
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        names+=("proxy_protocol_inbound" "proxy_protocol_chain")
+        commands+=(
+            "${SCRIPT_DIR}/test_proxy_protocol_inbound.sh"
+            "${SCRIPT_DIR}/test_proxy_protocol_chain.sh"
+        )
+    else
+        log_warn "docker unavailable; skipping PROXY protocol suites"
+    fi
+
+    local log_dir="${PROJECT_ROOT}/tmp/integration_testing/isolated_$(date +%Y%m%d_%H%M%S)_$$"
+    mkdir -p "$log_dir"
+    log_section "Isolated scenarios (parallelism: ${INTEGRATION_JOBS})"
+    log_info "Isolated scenario logs: ${log_dir}"
+
+    local pids=()
+    local logs=()
+    local starts=()
+    local states=()
+    local index=0
+    local active=0
+    local failed=false
+
+    wait_for_isolated_scenario() {
+        local wait_index=$1
+        local name="${names[$wait_index]}"
+        local pid="${pids[$wait_index]}"
+        local log_file="${logs[$wait_index]}"
+        local duration
+
+        if wait "$pid"; then
+            duration=$(( $(date +%s) - ${starts[$wait_index]} ))
+            log_success "${name} passed (${duration}s)"
+        else
+            local rc=$?
+            duration=$(( $(date +%s) - ${starts[$wait_index]} ))
+            log_error "${name} failed (rc=${rc}, ${duration}s): ${log_file}"
+            tail -20 "$log_file" 2>/dev/null || true
+            failed=true
+        fi
+        states[$wait_index]="done"
+        active=$((active - 1))
+        ISOLATED_SCENARIO_PIDS[$wait_index]=""
+    }
+
+    reap_finished_isolated_scenarios() {
+        local scan_index=0
+        local reaped=false
+        while [ "$scan_index" -lt "${#pids[@]}" ]; do
+            if [ "${states[$scan_index]}" = "running" ] \
+                && ! kill -0 "${pids[$scan_index]}" 2>/dev/null; then
+                wait_for_isolated_scenario "$scan_index"
+                reaped=true
+            fi
+            scan_index=$((scan_index + 1))
+        done
+        $reaped
+    }
+
+    while [ "$index" -lt "${#names[@]}" ]; do
+        while [ "$active" -ge "$INTEGRATION_JOBS" ]; do
+            if ! reap_finished_isolated_scenarios; then
+                sleep 1
+            fi
+        done
+
+        local name="${names[$index]}"
+        local log_file="${log_dir}/${name}.log"
+        log_info "Starting isolated scenario: ${name}"
+        "${commands[$index]}" > "$log_file" 2>&1 &
+        pids+=("$!")
+        ISOLATED_SCENARIO_PIDS+=("$!")
+        logs+=("$log_file")
+        starts+=("$(date +%s)")
+        states+=("running")
+        active=$((active + 1))
+        index=$((index + 1))
+    done
+
+    while [ "$active" -gt 0 ]; do
+        if ! reap_finished_isolated_scenarios; then
+            sleep 1
+        fi
+    done
+
+    unset -f reap_finished_isolated_scenarios
+    unset -f wait_for_isolated_scenario
+    if $failed; then
+        log_error "One or more isolated scenarios failed"
+        return 1
+    fi
+    log_success "All isolated scenarios passed"
+}
+
+# =============================================================================
 # Cleanup function
 # =============================================================================
 cleanup() {
+    local isolated_pid
+    for isolated_pid in "${ISOLATED_SCENARIO_PIDS[@]}"; do
+        if [ -n "$isolated_pid" ] && kill -0 "$isolated_pid" 2>/dev/null; then
+            kill "$isolated_pid" 2>/dev/null || true
+            wait "$isolated_pid" 2>/dev/null || true
+        fi
+    done
+    ISOLATED_SCENARIO_PIDS=()
+
     if $DO_CLEANUP; then
         log_section "Cleanup: Stop all services"
         if $LDAP_SERVICE_STARTED; then
@@ -1057,6 +1187,7 @@ show_help() {
     echo "  --no-start             Skip start step"
     echo "  --keep-alive           Keep services running after end (default will stop)"
     echo "  --full-test            Run all tests including slow tests (timeout, etc.)"
+    echo "  --jobs <N>             Max parallel isolated scenarios (default: 4)"
     echo "  --controller-grpc-port <port>  Override controller/gateway gRPC sync port (default: 12151)"
     echo "  --suites <list>        Specify test suites to load (comma separated)"
     echo "  --with-reload          Run tests twice with reload in between (verify server_id changes)"
@@ -1646,6 +1777,10 @@ main() {
                 FULL_TEST=true
                 shift
                 ;;
+            --jobs)
+                INTEGRATION_JOBS="$2"
+                shift 2
+                ;;
             --controller-grpc-port)
                 CONTROLLER_GRPC_PORT="$2"
                 shift 2
@@ -1673,6 +1808,17 @@ main() {
                 ;;
         esac
     done
+
+    case "$INTEGRATION_JOBS" in
+        ''|*[!0-9]*)
+            log_error "--jobs must be a positive integer"
+            exit 2
+            ;;
+    esac
+    if [ "$INTEGRATION_JOBS" -lt 1 ]; then
+        log_error "--jobs must be at least 1"
+        exit 2
+    fi
     
     # Setup cleanup on exit
     trap cleanup EXIT
@@ -1954,12 +2100,10 @@ main() {
     #     without a Bearer header (auth active, not 503 fail-close) and 200 with the
     #     correct Bearer token.
     if [ -z "$G_RESOURCE" ]; then
-        log_section "Controller no-auth and env-var-auth startup"
-        if ! "${SCRIPT_DIR}/test_controller_no_auth.sh"; then
-            log_error "FAIL: Controller no-auth/env-var-auth startup"
+        if ! run_isolated_scenarios; then
+            log_error "FAIL: isolated standalone scenarios"
             exit 1
         fi
-        log_success "Controller no-auth and env-var-auth startup passed"
     fi
 
     # Step 1.7: Gateway admin API auth (standalone preflight, boots its own
@@ -1968,14 +2112,6 @@ main() {
     # /configclient/* 503 fail-close (+ startup WARN); token configured -> 401
     # without a header and 200 with the correct Bearer token; the probe port
     # (/health, /ready) stays auth-free (200 without any token).
-    if [ -z "$G_RESOURCE" ]; then
-        log_section "Gateway admin auth"
-        if ! "${SCRIPT_DIR}/test_gateway_admin_auth.sh"; then
-            log_error "FAIL: Gateway admin auth"
-            exit 1
-        fi
-        log_success "Gateway admin auth passed"
-    fi
 
     # Step 1.8: FIPS-approved TLS policy (standalone, boots its own minimal
     # Controller + Gateway with EDGION_FIPS_POLICY=on on isolated ports). Only runs
@@ -1983,14 +2119,6 @@ main() {
     # FIPS policy toggle is process-global, so it must not run on the main sweep's
     # single shared gateway. Verifies a ChaCha20-only TLS 1.2 client is rejected
     # and an approved AES-GCM client is accepted.
-    if [ -z "$G_RESOURCE" ]; then
-        log_section "FIPS TLS policy"
-        if ! "${SCRIPT_DIR}/test_fips_policy.sh"; then
-            log_error "FAIL: FIPS TLS policy"
-            exit 1
-        fi
-        log_success "FIPS TLS policy passed"
-    fi
 
     # Step 1.9: GeoIP database-state matrix (standalone, boots its own minimal
     # Controller + Gateway on isolated 586xx ports, restarted once per phase
@@ -2012,14 +2140,6 @@ main() {
     # turns a previously-inert city rule live (the behavioral proof the swap
     # actually happened — there is no admin-endpoint snapshot), writes
     # <db_path>.meta, and leaves no <db_path>.tmp.
-    if [ -z "$G_RESOURCE" ]; then
-        log_section "GeoIP database-state matrix"
-        if ! "${SCRIPT_DIR}/test_geoip_db_states.sh"; then
-            log_error "FAIL: GeoIP database-state matrix"
-            exit 1
-        fi
-        log_success "GeoIP database-state matrix passed"
-    fi
 
     # Step 1.10: Controller plugin policy (allowlist/denylist) end-to-end
     # (standalone, boots its own minimal test_server + file_system Controller +
@@ -2033,14 +2153,6 @@ main() {
     # reached), status conditions (PluginPolicyRestricted + Accepted), and
     # relaxation (policy removed -> condition cleared, plugin runs again, plus
     # a stream positive control proving the earlier close was policy-driven).
-    if [ -z "$G_RESOURCE" ]; then
-        log_section "Controller plugin policy"
-        if ! "${SCRIPT_DIR}/test_plugin_policy.sh"; then
-            log_error "FAIL: Controller plugin policy"
-            exit 1
-        fi
-        log_success "Controller plugin policy passed"
-    fi
 
     # Step 1.11: Unknown config fields -- presence proof (standalone, boots its
     # own minimal file_system Controller, no gateway, no K8s, on isolated
@@ -2058,14 +2170,6 @@ main() {
     # `UnknownConfigFields` status condition (not just upsert); deletion
     # leaves no ghost entry; and `POST /api/v1/validate/{kind}` reports a
     # typo without persisting anything.
-    if [ -z "$G_RESOURCE" ]; then
-        log_section "Unknown config fields"
-        if ! "${SCRIPT_DIR}/test_unknown_config_fields.sh"; then
-            log_error "FAIL: Unknown config fields"
-            exit 1
-        fi
-        log_success "Unknown config fields passed"
-    fi
 
     # Inbound PROXY protocol (standalone, boots its own stack on isolated 584xx
     # ports; the chain suite uses 585xx). Isolated on purpose: a listener with
@@ -2079,26 +2183,6 @@ main() {
     # suite drives both v1 and v2; the chain suite drives v2 only, since what it
     # tests is address propagation across hops, not the parsers. Skipped where
     # docker is unavailable rather than failing.
-    if [ -z "$G_RESOURCE" ]; then
-        if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-            log_section "Inbound PROXY protocol"
-            if ! "${SCRIPT_DIR}/test_proxy_protocol_inbound.sh"; then
-                log_error "FAIL: Inbound PROXY protocol"
-                exit 1
-            fi
-            log_success "Inbound PROXY protocol passed"
-
-            log_section "PROXY protocol gateway chain"
-            if ! "${SCRIPT_DIR}/test_proxy_protocol_chain.sh"; then
-                log_error "FAIL: PROXY protocol gateway chain"
-                exit 1
-            fi
-            log_success "PROXY protocol gateway chain passed"
-        else
-            log_warn "docker unavailable; skipping PROXY protocol suites"
-        fi
-    fi
-
     # Admin token for the main suite (token-only model).
     #
     # The Controller authenticates the Admin API with a single pre-shared bearer
@@ -2277,12 +2361,23 @@ main() {
             exit 1
         fi
         
-        # Wait for reload to complete and Gateway to sync
-        log_info "Waiting 5 seconds for reload to complete and Gateway to sync..."
-        sleep 5
-        
+        # Wait for the observable reload state instead of imposing a fixed delay.
+        local controller_id_after=""
+        local gateway_id_after=""
+        reload_server_ids_synced() {
+            controller_id_after=$(get_controller_server_id "$controller_url")
+            gateway_id_after=$(get_gateway_server_id "$gateway_url")
+            [ "$controller_id_after" != "unknown" ] \
+                && [ "$gateway_id_after" != "unknown" ] \
+                && [ "$controller_id_after" != "$controller_id_before" ] \
+                && [ "$gateway_id_after" != "$gateway_id_before" ] \
+                && [ "$controller_id_after" = "$gateway_id_after" ]
+        }
+        log_info "Waiting for Controller reload and Gateway resynchronization..."
+        edgion_wait_until 30 1 reload_server_ids_synced || true
+        unset -f reload_server_ids_synced
+
         # ========== Verify Controller server_id changed ==========
-        local controller_id_after=$(get_controller_server_id "$controller_url")
         log_info "New Controller server_id: ${controller_id_after}"
         
         if [ "$controller_id_before" = "$controller_id_after" ]; then
@@ -2300,7 +2395,6 @@ main() {
         fi
         
         # ========== Verify Gateway server_id changed ==========
-        local gateway_id_after=$(get_gateway_server_id "$gateway_url")
         log_info "New Gateway server_id: ${gateway_id_after}"
         
         if [ "$gateway_id_before" = "$gateway_id_after" ]; then

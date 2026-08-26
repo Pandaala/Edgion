@@ -183,7 +183,11 @@ if $DO_PREPARE; then
         -p edgion-controller --bin edgion-controller \
         -p edgion-gateway --bin edgion-gateway \
         -p edgion-cli --bin edgion-cli \
-        -p edgion-tests --bin test_server) \
+        -p edgion-tests --bin test_server \
+        -p edgion-tests --bin test_client \
+        -p edgion-tests --bin test_client_direct \
+        -p edgion-tests --bin resource_diff \
+        -p edgion-tests --bin config_load_validator) \
         2>&1 | tee "${WORK_DIR}/build.log" | tail -5; then
         log_success "Build complete"
     else

@@ -40,26 +40,6 @@ log_section() {
 }
 
 # =============================================================================
-# Build
-# =============================================================================
-
-# Buildbinaryfile
-build_binary() {
-    local name=$1
-    local target=$2
-    
-    log_info "Build $name..."
-    
-    if cargo build $target 2>&1; then
-        log_success "$name Buildsuccess"
-        return 0
-    else
-        log_error "$name Buildfailed"
-        return 1
-    fi
-}
-
-# =============================================================================
 # 
 # =============================================================================
 main() {
@@ -90,63 +70,23 @@ main() {
         log_info "LLVM_PROFILE_FILE=${LLVM_PROFILE_FILE}"
     fi
 
-    # Build Controller (exit immediately on failure)
-    # Now its own workspace crate — needs -p to disambiguate the package from the
-    # equally-named binary.
-    log_section "Build edgion-controller"
-    if ! build_binary "edgion-controller" "-p edgion-controller --bin edgion-controller"; then
-        log_error "Build failed! Exiting..."
+    # One Cargo invocation lets Cargo schedule the complete dependency graph
+    # once and guarantees that --no-prepare child jobs consume a coherent set
+    # of binaries from the same source revision.
+    log_section "Build integration binaries"
+    if ! cargo build \
+        -p edgion-controller --bin edgion-controller \
+        -p edgion-gateway --bin edgion-gateway \
+        -p edgion-cli --bin edgion-cli \
+        -p edgion-tests --bin test_server \
+        -p edgion-tests --bin test_client \
+        -p edgion-tests --bin test_client_direct \
+        -p edgion-tests --bin resource_diff \
+        -p edgion-tests --bin config_load_validator; then
+        log_error "Integration binary build failed"
         exit 1
     fi
-    
-    log_section "Build edgion-gateway"
-    if ! build_binary "edgion-gateway" "-p edgion-gateway --bin edgion-gateway"; then
-        log_error "Build failed! Exiting..."
-        exit 1
-    fi
-    
-    # Build edgion-cli (now its own workspace crate — needs -p to disambiguate
-    # the package from the equally-named binary).
-    log_section "Build edgion-cli"
-    if ! build_binary "edgion-cli" "-p edgion-cli --bin edgion-cli"; then
-        log_error "Build failed! Exiting..."
-        exit 1
-    fi
-
-    # Build test_server
-    log_section "Build test_server"
-    if ! build_binary "test_server" "-p edgion-tests --bin test_server"; then
-        log_error "Build failed! Exiting..."
-        exit 1
-    fi
-    
-    # Build test_client
-    log_section "Build test_client"
-    if ! build_binary "test_client" "-p edgion-tests --bin test_client"; then
-        log_error "Build failed! Exiting..."
-        exit 1
-    fi
-    
-    # Build test_client_direct
-    log_section "Build test_client_direct"
-    if ! build_binary "test_client_direct" "-p edgion-tests --bin test_client_direct"; then
-        log_error "Build failed! Exiting..."
-        exit 1
-    fi
-    
-    # Build resource_diff
-    log_section "Build resource_diff"
-    if ! build_binary "resource_diff" "-p edgion-tests --bin resource_diff"; then
-        log_error "Build failed! Exiting..."
-        exit 1
-    fi
-    
-    # Build config_load_validator
-    log_section "Build config_load_validator"
-    if ! build_binary "config_load_validator" "-p edgion-tests --bin config_load_validator"; then
-        log_error "Build failed! Exiting..."
-        exit 1
-    fi
+    log_success "Integration binaries built successfully"
 
     # NOTE: prepare.sh is build-only. conf_sync mTLS certificates are runtime
     # material and are generated per work directory by the script that creates
