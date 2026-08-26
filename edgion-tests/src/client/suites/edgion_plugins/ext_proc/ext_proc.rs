@@ -25,6 +25,8 @@ const FAILOPEN_HOST: &str = "ext-proc-failopen.example.com";
 const COEXIST_HOST: &str = "ext-proc-coexist.example.com";
 const TLS_HOST: &str = "ext-proc-tls.example.com";
 const TLS_NOVERIFY_HOST: &str = "ext-proc-tls-noverify.example.com";
+const MTLS_HOST: &str = "ext-proc-mtls.example.com";
+const LONG_IDLE_HOST: &str = "ext-proc-long-idle.example.com";
 const STREAMED_HOST: &str = "ext-proc-streamed.example.com";
 const STREAMED_FAILOPEN_HOST: &str = "ext-proc-streamed-failopen.example.com";
 
@@ -38,7 +40,9 @@ fn is_sanitized_fail_close_body(body: &str) -> bool {
             .any(|detail| lower.contains(detail))
 }
 
-pub struct ExtProcTestSuite;
+pub struct ExtProcTestSuite {
+    full_test: bool,
+}
 
 /// Shared assertion for the over-TLS scenarios: the processor adds a request
 /// header (echoed by the backend `/headers`) and a response header (visible to
@@ -90,6 +94,10 @@ async fn assert_headers_applied_over_tls(ctx: TestContext, host: &str) -> TestRe
 }
 
 impl ExtProcTestSuite {
+    pub fn new(full_test: bool) -> Self {
+        Self { full_test }
+    }
+
     /// Basic: the processor adds a request header (echoed by the backend) and a
     /// response header (visible to the client).
     fn test_basic_request_and_response_headers() -> TestCase {
@@ -163,6 +171,146 @@ impl ExtProcTestSuite {
             "tls_noverify_request_and_response_headers",
             "ext_proc over TLS (verify=false) still establishes the stream and applies headers",
             |ctx: TestContext| Box::pin(async move { assert_headers_applied_over_tls(ctx, TLS_NOVERIFY_HOST).await }),
+        )
+    }
+
+    /// ExtProc over mTLS: the server requires a client identity signed by the
+    /// integration client CA, while the gateway also verifies the server CA.
+    fn test_mtls_request_and_response_headers() -> TestCase {
+        TestCase::new(
+            "mtls_request_and_response_headers",
+            "ext_proc over mTLS presents a client identity and applies request and response headers",
+            |ctx: TestContext| Box::pin(async move { assert_headers_applied_over_tls(ctx, MTLS_HOST).await }),
+        )
+    }
+
+    /// A clean processor half-close without a request-header verdict is a bad
+    /// dependency outcome and must follow fail-close.
+    fn test_processor_closes_before_request_verdict() -> TestCase {
+        TestCase::new(
+            "processor_closes_before_request_verdict",
+            "a processor clean-close before the request verdict fails closed",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/headers", ctx.http_url());
+                    let response = match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", BASIC_HOST)
+                        .header("x-ext-proc-test-mode", "close-before-verdict")
+                        .send()
+                        .await
+                    {
+                        Ok(response) => response,
+                        Err(error) => {
+                            return TestResult::failed(start.elapsed(), format!("Request failed: {}", error));
+                        }
+                    };
+                    let status = response.status().as_u16();
+                    let body = response.text().await.unwrap_or_default();
+                    if status == 500 && is_sanitized_fail_close_body(&body) {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "clean-close before request verdict failed closed".to_string(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected sanitized 500, got status={} body={}", status, body),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    /// The attached transaction also fails closed if the processor accepts the
+    /// request phase but closes before the response-header verdict.
+    fn test_processor_closes_before_response_verdict() -> TestCase {
+        TestCase::new(
+            "processor_closes_before_response_verdict",
+            "a processor clean-close before the response verdict fails closed",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/headers", ctx.http_url());
+                    let response = match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", BASIC_HOST)
+                        .header("x-ext-proc-test-mode", "close-on-response-headers")
+                        .send()
+                        .await
+                    {
+                        Ok(response) => response,
+                        Err(error) => {
+                            return TestResult::failed(start.elapsed(), format!("Request failed: {}", error));
+                        }
+                    };
+                    let status = response.status().as_u16();
+                    let body = response.text().await.unwrap_or_default();
+                    if status == 500 && is_sanitized_fail_close_body(&body) {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "clean-close before response verdict failed closed".to_string(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected sanitized 500, got status={} body={}", status, body),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    /// Full-test-only wall-clock idle coverage. Short timeout behavior belongs
+    /// in deterministic unit tests; this case deliberately holds the side
+    /// stream idle for three seconds and verifies the transaction survives.
+    fn test_long_idle_stream_survives() -> TestCase {
+        TestCase::new(
+            "long_idle_stream_survives",
+            "an attached ext_proc stream survives a three-second idle verdict window",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/headers", ctx.http_url());
+                    let response = match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", LONG_IDLE_HOST)
+                        .header("x-ext-proc-test-mode", "long-idle")
+                        .timeout(std::time::Duration::from_secs(10))
+                        .send()
+                        .await
+                    {
+                        Ok(response) => response,
+                        Err(error) => {
+                            return TestResult::failed(start.elapsed(), format!("Request failed: {}", error));
+                        }
+                    };
+                    let elapsed = start.elapsed();
+                    let status = response.status().as_u16();
+                    let response_header = response
+                        .headers()
+                        .get("x-ext-proc-resp")
+                        .and_then(|value| value.to_str().ok())
+                        == Some("seen");
+                    if status == 200 && response_header && elapsed >= std::time::Duration::from_secs(3) {
+                        TestResult::passed_with_message(elapsed, "long-idle stream completed normally".to_string())
+                    } else {
+                        TestResult::failed(
+                            elapsed,
+                            format!(
+                                "Expected 200 after a three-second idle with response mutation; status={} header={} elapsed={:?}",
+                                status, response_header, elapsed
+                            ),
+                        )
+                    }
+                })
+            },
         )
     }
 
@@ -636,10 +784,13 @@ impl TestSuite for ExtProcTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
+        let mut cases = vec![
             Self::test_basic_request_and_response_headers(),
             Self::test_tls_request_and_response_headers(),
             Self::test_tls_noverify_request_and_response_headers(),
+            Self::test_mtls_request_and_response_headers(),
+            Self::test_processor_closes_before_request_verdict(),
+            Self::test_processor_closes_before_response_verdict(),
             Self::test_immediate_response_403(),
             Self::test_fail_close_returns_500(),
             Self::test_fail_open_passes(),
@@ -650,6 +801,10 @@ impl TestSuite for ExtProcTestSuite {
             Self::test_streamed_degenerate_continue_and_replace_fail_closes(),
             Self::test_streamed_fail_open_passes_original_body(),
             Self::test_coexist_with_forward_auth(),
-        ]
+        ];
+        if self.full_test {
+            cases.push(Self::test_long_idle_stream_survives());
+        }
+        cases
     }
 }

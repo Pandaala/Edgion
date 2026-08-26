@@ -64,6 +64,9 @@ spec:
         - name: probe
           containerPort: 12000
           protocol: TCP
+        - name: ai-policy
+          containerPort: 31945
+          protocol: TCP
         env:
         - name: RUST_LOG
           value: "info"

@@ -1505,4 +1505,78 @@ mod tests {
         );
         assert!(before.get_effective(&target_a).is_none(), "old handle is immutable");
     }
+
+    #[test]
+    fn multi_target_partial_update_publishes_both_ai_targets_atomically() {
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = BackendTrafficPolicyStore::new();
+        let target_a = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionBackend,
+            namespace: "partial-batch".to_string(),
+            name: "a".to_string(),
+        };
+        let target_b = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionBackend,
+            namespace: "partial-batch".to_string(),
+            name: "b".to_string(),
+        };
+        let policy_key = "partial-batch/policy".to_string();
+
+        let mut initial = ai_policy("partial-batch", "policy", "a", 20, "100ms");
+        Arc::get_mut(&mut initial)
+            .unwrap()
+            .spec
+            .target_refs
+            .push(PolicyTargetRef {
+                group: "edgion.io".to_string(),
+                kind: "EdgionBackend".to_string(),
+                name: "b".to_string(),
+            });
+        assert_eq!(
+            store.partial_update_policies(
+                HashMap::from([(policy_key.clone(), initial)]),
+                HashMap::new(),
+                HashSet::new(),
+            ),
+            2
+        );
+        let first = store.snapshot();
+        assert_eq!(first.generation(), 1, "one multi-target add yields one publication");
+        assert_eq!(
+            first.get_effective(&target_a).unwrap().connect_timeout,
+            Some(std::time::Duration::from_millis(100))
+        );
+        assert_eq!(
+            first.get_effective(&target_b).unwrap().connect_timeout,
+            Some(std::time::Duration::from_millis(100))
+        );
+
+        let mut updated = ai_policy("partial-batch", "policy", "a", 20, "2s");
+        Arc::get_mut(&mut updated)
+            .unwrap()
+            .spec
+            .target_refs
+            .push(PolicyTargetRef {
+                group: "edgion.io".to_string(),
+                kind: "EdgionBackend".to_string(),
+                name: "b".to_string(),
+            });
+        assert_eq!(
+            store.partial_update_policies(HashMap::new(), HashMap::from([(policy_key, updated)]), HashSet::new(),),
+            2
+        );
+        let second = store.snapshot();
+        assert_eq!(second.generation(), 2, "one multi-target update yields one publication");
+        for target in [&target_a, &target_b] {
+            assert_eq!(
+                second.get_effective(target).unwrap().connect_timeout,
+                Some(std::time::Duration::from_secs(2))
+            );
+            assert_eq!(
+                first.get_effective(target).unwrap().connect_timeout,
+                Some(std::time::Duration::from_millis(100)),
+                "the captured pre-update generation stays immutable"
+            );
+        }
+    }
 }

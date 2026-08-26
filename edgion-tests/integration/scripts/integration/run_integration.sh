@@ -1569,7 +1569,11 @@ run_all_tests() {
                     run_test "EdgionPlugins_PathNormalization_ForwardView" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i PathNormalization/ForwardView" || test_failed=true
                     run_test "EdgionPlugins_FaultInjection" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i FaultInjection" || test_failed=true
                     run_test "EdgionPlugins_ForwardAuth" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
-                    run_test "EdgionPlugins_ExtProc" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ExtProc" || test_failed=true
+                    if $FULL_TEST; then
+                        run_test "EdgionPlugins_ExtProc" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ExtProc --full-test" || test_failed=true
+                    else
+                        run_test "EdgionPlugins_ExtProc" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ExtProc" || test_failed=true
+                    fi
                     run_test "EdgionPlugins_AiGuard" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i AiGuard" || test_failed=true
                     run_test "EdgionPlugins_Guardrail" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i Guardrail" || test_failed=true
                     run_test "EdgionPlugins_OpenidConnect" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
@@ -1598,7 +1602,11 @@ run_all_tests() {
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     local test_name="EdgionPlugins_${item_safe}"
                     if ! should_skip_test "$test_name"; then
-                        run_test "$test_name" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ${G_ITEM}" || test_failed=true
+                        if $FULL_TEST && [ "$G_ITEM" = "ExtProc" ]; then
+                            run_test "$test_name" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ${G_ITEM} --full-test" || test_failed=true
+                        else
+                            run_test "$test_name" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ${G_ITEM}" || test_failed=true
+                        fi
                     else
                         log_info "Skipping complex test: ${test_name} (requires --full-test)"
                     fi
@@ -1825,7 +1833,11 @@ run_all_tests() {
         run_test "EdgionPlugins_PathNormalization_ForwardView" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i PathNormalization/ForwardView" || test_failed=true
         run_test "EdgionPlugins_FaultInjection" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i FaultInjection" || test_failed=true
         run_test "EdgionPlugins_ForwardAuth" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
-        run_test "EdgionPlugins_ExtProc" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ExtProc" || test_failed=true
+        if $FULL_TEST; then
+            run_test "EdgionPlugins_ExtProc" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ExtProc --full-test" || test_failed=true
+        else
+            run_test "EdgionPlugins_ExtProc" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ExtProc" || test_failed=true
+        fi
         run_test "EdgionPlugins_AiGuard" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i AiGuard" || test_failed=true
         run_test "EdgionPlugins_Guardrail" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i Guardrail" || test_failed=true
         run_test "EdgionPlugins_OpenidConnect" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i OpenidConnect" || test_failed=true

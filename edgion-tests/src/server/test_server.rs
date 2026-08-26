@@ -81,6 +81,7 @@ enum AiResiliencePrimaryMode {
     Healthy,
     Fail,
     ProbeSuccess,
+    ProbeFail,
 }
 
 #[derive(Debug, Default)]
@@ -175,6 +176,10 @@ struct Cli {
     /// Serves the same processor over HTTPS/h2; needs --ext-proc-tls-cert/key.
     #[arg(long)]
     ext_proc_tls_port: Option<u16>,
+
+    /// Fake ext_proc gRPC server mTLS port (requires a client certificate).
+    #[arg(long)]
+    ext_proc_mtls_port: Option<u16>,
 
     /// TLS certificate file for the ext_proc TLS server (SAN must cover 127.0.0.1).
     #[arg(long)]
@@ -349,11 +354,33 @@ async fn main() -> Result<()> {
     if let Some(ext_proc_tls_port) = cli.ext_proc_tls_port {
         match (cli.ext_proc_tls_cert.clone(), cli.ext_proc_tls_key.clone()) {
             (Some(cert), Some(key)) => {
-                let handle = tokio::spawn(ext_proc_server::start_tls(ext_proc_tls_port, cert, key));
+                let handle = tokio::spawn(ext_proc_server::start_tls(ext_proc_tls_port, cert, key, None));
                 handles.push(handle);
             }
             _ => error!(
                 "--ext-proc-tls-port set but --ext-proc-tls-cert/--ext-proc-tls-key missing; skipping TLS ext_proc"
+            ),
+        }
+    }
+
+    // Start Fake ext_proc mTLS server (if configured)
+    if let Some(ext_proc_mtls_port) = cli.ext_proc_mtls_port {
+        match (
+            cli.ext_proc_tls_cert.clone(),
+            cli.ext_proc_tls_key.clone(),
+            cli.client_ca_file.clone(),
+        ) {
+            (Some(cert), Some(key), Some(client_ca)) => {
+                let handle = tokio::spawn(ext_proc_server::start_tls(
+                    ext_proc_mtls_port,
+                    cert,
+                    key,
+                    Some(client_ca),
+                ));
+                handles.push(handle);
+            }
+            _ => error!(
+                "--ext-proc-mtls-port set but ext_proc TLS identity or --client-ca-file missing; skipping mTLS ext_proc"
             ),
         }
     }
@@ -1246,6 +1273,16 @@ async fn sse_handler(Query(query): Query<SseQuery>) -> impl IntoResponse {
 
 const AI_PROVIDER_KEY_A: &str = "ai-provider-test-key";
 const AI_PROVIDER_KEY_B: &str = "ai-provider-rotated-test-key";
+const AI_PROVIDER_EXPECTED_HOSTS: &[&str] = &[
+    "127.0.0.1:30001",
+    "127.0.0.1:30026",
+    "127.0.0.1:30051",
+    "127.0.0.1:30052",
+    "edgion-test-server.edgion-test.svc.cluster.local:30001",
+    "edgion-test-server.edgion-test.svc.cluster.local:30026",
+    "edgion-test-server.edgion-test.svc.cluster.local:30051",
+    "edgion-test-server.edgion-test.svc.cluster.local:30052",
+];
 
 #[derive(Debug, Default, serde::Deserialize)]
 struct AiProviderQuery {
@@ -1296,7 +1333,7 @@ fn ai_provider_observation(
         host_is_expected: headers
             .get(axum::http::header::HOST)
             .and_then(|value| value.to_str().ok())
-            .is_some_and(|host| host == "127.0.0.1:30001"),
+            .is_some_and(|host| AI_PROVIDER_EXPECTED_HOSTS.contains(&host)),
         path_has_prefix: path == "prefix/v1/chat/completions",
         query_is_preserved: query.fixture_query.as_deref() == Some("preserved"),
         model_is_canonical: model == Some("fixture-model"),
@@ -1755,8 +1792,20 @@ async fn ai_provider_handler(
                     ))
                     .unwrap();
             }
-            AiResiliencePrimaryMode::ProbeSuccess => {
-                let _ = tokio::time::timeout(Duration::from_secs(10), probe_release.notified()).await;
+            AiResiliencePrimaryMode::ProbeSuccess | AiResiliencePrimaryMode::ProbeFail => {
+                let gate_timeout = if matches!(mode, AiResiliencePrimaryMode::ProbeFail) {
+                    Duration::from_secs(120)
+                } else {
+                    Duration::from_secs(10)
+                };
+                let _ = tokio::time::timeout(gate_timeout, probe_release.notified()).await;
+                if matches!(mode, AiResiliencePrimaryMode::ProbeFail) {
+                    return Response::builder()
+                        .status(StatusCode::SERVICE_UNAVAILABLE)
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"error":{"message":"fixed gated retry failure"}}"#))
+                        .unwrap();
+                }
             }
             AiResiliencePrimaryMode::Healthy => {}
         }
@@ -1926,12 +1975,16 @@ async fn ai_resilience_mode_handler(
         "healthy" => AiResiliencePrimaryMode::Healthy,
         "fail" => AiResiliencePrimaryMode::Fail,
         "probe-success" => AiResiliencePrimaryMode::ProbeSuccess,
+        "probe-fail" => AiResiliencePrimaryMode::ProbeFail,
         _ => return axum::http::StatusCode::BAD_REQUEST,
     };
     let mut fixtures = AI_RESILIENCE_STATE.lock();
     let state = fixtures.entry(fixture_id).or_default();
     state.half_open_primary_mode = mode;
-    if matches!(mode, AiResiliencePrimaryMode::ProbeSuccess) {
+    if matches!(
+        mode,
+        AiResiliencePrimaryMode::ProbeSuccess | AiResiliencePrimaryMode::ProbeFail
+    ) {
         state.half_open_probe_release = std::sync::Arc::new(tokio::sync::Notify::new());
     }
     axum::http::StatusCode::NO_CONTENT
@@ -3025,6 +3078,7 @@ mod ext_proc_server {
                 match mode.as_deref() {
                     Some("wrong-order") => (Some(request_body_verdict_with(b"wrong-phase-body")), false),
                     Some("missing-body") => (Some(headers_verdict(true, "x-ext-proc-req")), true),
+                    Some("close-before-verdict") => (None, true),
                     Some("continue-and-replace") => (
                         Some(request_headers_verdict(
                             ResponseStatus::ContinueAndReplace,
@@ -3042,9 +3096,10 @@ mod ext_proc_server {
                     ),
                 }
             }
-            processing_request::Request::ResponseHeaders(_) if *request_phase_seen => {
-                (Some(headers_verdict(false, "x-ext-proc-resp")), false)
-            }
+            processing_request::Request::ResponseHeaders(_) if *request_phase_seen => match mode.as_deref() {
+                Some("close-on-response-headers") => (None, true),
+                _ => (Some(headers_verdict(false, "x-ext-proc-resp")), false),
+            },
             processing_request::Request::RequestBody(_) => {
                 let response = match mode.as_deref() {
                     Some("duplicate-header") | Some("wrong-order") => headers_verdict(true, "x-duplicate-phase"),
@@ -3079,6 +3134,10 @@ mod ext_proc_server {
                 let mut request_phase_seen = false;
                 while let Ok(Some(req)) = inbound.message().await {
                     let (response, terminal) = handle(req, &mut mode, &mut request_phase_seen);
+                    if mode.as_deref() == Some("long-idle") {
+                        mode = Some("long-idle-complete".to_string());
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    }
                     if let Some(resp) = response {
                         if tx.send(Ok(resp)).await.is_err() {
                             break;
@@ -3107,8 +3166,13 @@ mod ext_proc_server {
     /// hand-built rustls ext_proc connector exercises a real outbound TLS
     /// handshake (ALPN h2 is negotiated by tonic). Used by the ExtProc-over-TLS
     /// integration scenario.
-    pub async fn start_tls(port: u16, cert_path: String, key_path: String) -> Result<()> {
-        use tonic::transport::{Identity, ServerTlsConfig};
+    pub async fn start_tls(
+        port: u16,
+        cert_path: String,
+        key_path: String,
+        client_ca_path: Option<String>,
+    ) -> Result<()> {
+        use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 
         let addr = SocketAddr::from(([0, 0, 0, 0], port));
         let cert = tokio::fs::read(&cert_path)
@@ -3119,12 +3183,25 @@ mod ext_proc_server {
             .map_err(|e| anyhow::anyhow!("ext_proc TLS: failed to read key {}: {}", key_path, e))?;
         let identity = Identity::from_pem(cert, key);
 
+        let mut tls = ServerTlsConfig::new().identity(identity);
+        if let Some(client_ca_path) = client_ca_path.as_ref() {
+            let client_ca = tokio::fs::read(client_ca_path)
+                .await
+                .map_err(|e| anyhow::anyhow!("ext_proc mTLS: failed to read client CA {}: {}", client_ca_path, e))?;
+            tls = tls.client_ca_root(Certificate::from_pem(client_ca));
+        }
+
         info!(
-            "✓ ext_proc TLS server listening on https://{} (cert: {})",
-            addr, cert_path
+            "✓ ext_proc TLS server listening on https://{} (client auth: {})",
+            addr,
+            if client_ca_path.is_some() {
+                "required"
+            } else {
+                "disabled"
+            }
         );
         Server::builder()
-            .tls_config(ServerTlsConfig::new().identity(identity))?
+            .tls_config(tls)?
             .add_service(ExternalProcessorServer::new(FakeProcessor))
             .serve(addr)
             .await?;
@@ -4031,6 +4108,7 @@ mod tests {
         let encoded = serde_json::to_string(&observation).unwrap();
 
         assert!(observation.auth_is_provider_key);
+        assert!(observation.host_is_expected);
         assert!(observation.model_is_canonical);
         assert!(observation.include_usage);
         assert_eq!(observation.credential_generation, "a");
@@ -4048,6 +4126,16 @@ mod tests {
         assert_eq!(rotated.credential_generation, "b");
         assert!(!rotated_encoded.contains(AI_PROVIDER_KEY_A));
         assert!(!rotated_encoded.contains(AI_PROVIDER_KEY_B));
+
+        headers.insert(
+            axum::http::header::HOST,
+            "edgion-test-server.edgion-test.svc.cluster.local:30026"
+                .parse()
+                .unwrap(),
+        );
+        assert!(ai_provider_observation("prefix/v1/chat/completions", &query, &headers, body).host_is_expected);
+        headers.insert(axum::http::header::HOST, "unexpected.example.com".parse().unwrap());
+        assert!(!ai_provider_observation("prefix/v1/chat/completions", &query, &headers, body).host_is_expected);
     }
 
     #[test]

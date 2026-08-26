@@ -1,6 +1,7 @@
 // Scenario implementations. Each scenario lives in its own file.
 
 pub mod ai_backend_lifecycle;
+pub mod ai_backend_policy_integration;
 pub mod ai_backend_secret_rotation;
 pub mod ai_backend_weighted;
 pub mod basic_auth_dynamic;

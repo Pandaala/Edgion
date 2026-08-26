@@ -160,7 +160,9 @@ The actual responsibilities of `run_integration.sh` are:
 
 A few key facts:
 
-- `--full-test` additionally includes slow tests and requires Docker to be available
+- `--full-test` additionally includes slow tests and requires Docker to be available. For a
+  targeted `EdgionPlugins/ExtProc` run, the flag is forwarded to `test_client` and adds the
+  wall-clock long-idle stream case; the default targeted run remains fast.
 - `run_integration.sh` first checks `ulimit -n` and tries to raise it to `65535` if insufficient
 - `start_all_with_conf.sh` exports `EDGION_WORK_DIR` and `EDGION_GENERATED_SECRET_DIR`
 - The default full sweep runs its isolated standalone scenarios through a bounded parallel queue.
@@ -326,13 +328,14 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 ### Current scenario set
 
 > Source of truth is `edgion-tests/src/client/dynamic/registry.rs` (`all()`); run
-> `--list-dynamic-scenarios` for the validated live list. As of this writing it registers 25 scenarios. The
+> `--list-dynamic-scenarios` for the validated live list. As of this writing it registers 26 scenarios. The
 > table below highlights the common and protocol-lifecycle scenarios rather than duplicating the
 > complete registry.
 
 | Scenario id | conf directory (`conf_path`) | Verifies |
 |-------------|----------|---------|
 | `GatewayDynamic` | `Gateway/DynamicTest` | Gateway/HTTPRoute config changes (migrated case) |
+| `AiBackendPolicyIntegration` | `EdgionBackend/PolicyIntegration/DynamicTest` | Kubernetes-backed AI backend custom CA, SNI/SAN, mTLS, Secret rotation, processor status, multi-target traffic policy publication, hot reload, stable in-flight capture, and stream termination boundaries |
 | `DslDynamic` | `EdgionPlugins/DslDynamic/DynamicTest` | DSL plugin source switch v1→v2 |
 | `BasicAuthDynamic` | `EdgionPlugins/BasicAuth/DynamicTest` | `secretRefs` list shrinks; bob credentials removed → 401 |
 | `BasicAuthDynamicGrouped` | `EdgionPlugins/BasicAuth/DynamicTest` | Grouped BasicAuth variant (`updates_grouped/`) |

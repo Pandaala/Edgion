@@ -22,6 +22,7 @@ static CAPABILITY_REGISTRY: OnceLock<String> = OnceLock::new();
 const KNOWN_GATEWAY_CAPABILITIES: &[&str] = &["body-buffering"];
 const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "AiBackendLifecycle",
+    "AiBackendPolicyIntegration",
     "AiBackendSecretRotation",
     "AiBackendWeighted",
     "GatewayDynamic",
@@ -977,6 +978,10 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 
+    /// Include slow, wall-clock integration cases in suites that define them.
+    #[arg(long)]
+    full_test: bool,
+
     /// Test phase for dynamic tests (initial or update)
     #[arg(long)]
     phase: Option<String>,
@@ -1339,7 +1344,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
     use port_config::PortKind;
 
     let contract = match id {
-        "AiBackendLifecycle" | "AiBackendSecretRotation" | "AiBackendWeighted" => {
+        "AiBackendLifecycle" | "AiBackendPolicyIntegration" | "AiBackendSecretRotation" | "AiBackendWeighted" => {
             Some(("EdgionBackend/SingleProvider", PortKind::Http))
         }
         "BasicAuthDynamic"
@@ -1372,7 +1377,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
 }
 
 /// Register test suites matching the given suite name into the runner.
-fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, phase: Option<&str>) {
+fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, phase: Option<&str>, full_test: bool) {
     match suite {
         "EdgionBackend/AnthropicProvider" => {
             if !gateway {
@@ -2358,7 +2363,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 eprintln!("Error: EdgionPlugins/ExtProc tests require --gateway flag");
                 std::process::exit(1);
             }
-            runner.add_suite(Box::new(suites::ExtProcTestSuite));
+            runner.add_suite(Box::new(suites::ExtProcTestSuite::new(full_test)));
         }
         "EdgionPlugins/AiGuard" => {
             if !gateway {
@@ -3188,8 +3193,16 @@ async fn run_dynamic_scenario(cli: &Cli, sid: &str) -> Result<()> {
         test_ctx,
         conf_root,
         conf_path: scenario.conf_path.to_string(),
-        controller_url: format!("http://127.0.0.1:{}", cli.admin_port),
-        gateway_url: "http://127.0.0.1:12001".to_string(),
+        controller_url: std::env::var("EDGION_TEST_ADMIN_API_URL")
+            .ok()
+            .filter(|url| !url.trim().is_empty())
+            .map(|url| url.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| format!("http://127.0.0.1:{}", cli.admin_port)),
+        gateway_url: std::env::var("EDGION_TEST_GATEWAY_ADMIN_URL")
+            .ok()
+            .filter(|url| !url.trim().is_empty())
+            .map(|url| url.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| "http://127.0.0.1:12001".to_string()),
         project_root,
     };
 
@@ -3358,7 +3371,7 @@ async fn main() -> Result<()> {
         }));
     }
 
-    add_suites_for_suite(&mut runner, &suite, cli.gateway, cli.phase.as_deref());
+    add_suites_for_suite(&mut runner, &suite, cli.gateway, cli.phase.as_deref(), cli.full_test);
 
     let start_time = Instant::now();
     let results = runner.run().await;

@@ -511,3 +511,7 @@ spec:
     port: 31931
     targetPort: 31931
     protocol: TCP
+  - name: p31945
+    port: 31945
+    targetPort: 31945
+    protocol: TCP

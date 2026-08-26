@@ -1335,7 +1335,11 @@ run_one() {
 
   local attempt=1
   while (( attempt <= max_attempts )); do
-    if "${RUN_CLIENT_SCRIPT}" -r "${resource}" -i "${item}"; then
+    if [[ "${resource}" == "EdgionBackend" && "${item}" == "PolicyIntegration" ]]; then
+      if run_ai_backend_policy_integration; then
+        return 0
+      fi
+    elif "${RUN_CLIENT_SCRIPT}" -r "${resource}" -i "${item}"; then
       return 0
     fi
 
@@ -1351,7 +1355,18 @@ run_one() {
 
 is_host_side_suite() {
   local resource="$1" item="$2"
-  [[ "${resource}" == "Gateway" && "${item}" == "PortConflict" ]]
+  [[ "${resource}" == "Gateway" && "${item}" == "PortConflict" ]] \
+    || [[ "${resource}" == "EdgionBackend" && "${item}" == "PolicyIntegration" ]]
+}
+
+run_ai_backend_policy_integration() {
+  EDGION_TEST_GATEWAY_ADMIN_URL="http://edgion-gateway.edgion-system.svc.cluster.local:12001" \
+    EDGION_TEST_AI_PROVIDER_HTTP_BASE="http://edgion-test-server.edgion-test.svc.cluster.local:30001" \
+    EDGION_TEST_AI_PROVIDER_HTTPS_BASE="https://edgion-test-server.edgion-test.svc.cluster.local:30051" \
+    EDGION_TEST_AI_PROVIDER_MTLS_BASE="https://edgion-test-server.edgion-test.svc.cluster.local:30052" \
+    EDGION_TEST_AI_PROVIDER_SNI_BASE="https://edgion-test-server.edgion-test.svc.cluster.local:30026" \
+    EDGION_TEST_AI_GATEWAY_NAME="policy-integration-gateway" \
+    "${RUN_CLIENT_SCRIPT}" --dynamic-scenario AiBackendPolicyIntegration
 }
 
 run_all_selected_suites() {
@@ -1471,6 +1486,7 @@ run_all_selected_suites() {
     "Status/TLSListenerMode|Status|TLSListenerMode"
     "Status/TLSRoute|Status|TLSRoute"
     "LinkSys/Status|LinkSys|Status"
+    "EdgionBackend/PolicyIntegration/DynamicTest|EdgionBackend|PolicyIntegration"
   )
 
   local local_start_from="${START_FROM}"

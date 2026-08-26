@@ -401,8 +401,9 @@ start_test_server() {
 
     local https_backend_mtls_args=""
     if [ -f "$BACKEND_CERT" ] && [ -f "$BACKEND_KEY" ] && [ -f "$BACKEND_MTLS_CLIENT_CA" ]; then
-        https_backend_mtls_args="--https-backend-mtls-port 30052 --client-ca-file $BACKEND_MTLS_CLIENT_CA"
+        https_backend_mtls_args="--https-backend-mtls-port 30052 --ext-proc-mtls-port 30043 --client-ca-file $BACKEND_MTLS_CLIENT_CA"
         log_info " HTTPS mTLS afterport 30052"
+        log_info " ext_proc mTLS port 30043"
     else
         log_warning "Backend mTLS ，Skip HTTPS mTLS after"
     fi
