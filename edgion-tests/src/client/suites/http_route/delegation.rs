@@ -163,13 +163,8 @@ impl TestSuite for DelegationTestSuite {
 // ============================================================
 
 const DYN_HOST: &str = "delegation-dyn.example.com";
-const DYN_PORT: u16 = 31933;
-
 async fn dyn_status(ctx: &TestContext, path: &str) -> reqwest::Result<u16> {
-    // Hard-code the DynamicTest listener port (matches rate_limit/dynamic.rs):
-    // ctx.http_url() under --dynamic-scenario points at the test_server backend,
-    // which would bypass the gateway.
-    let url = format!("http://{}:{}{}", ctx.target_host, DYN_PORT, path);
+    let url = format!("{}{}", ctx.http_url(), path);
     ctx.http_client
         .get(&url)
         .header("Host", DYN_HOST)

@@ -135,7 +135,7 @@ sleep 3
 ### 5. Run the Full Automated Flow
 
 ```bash
-./edgion-tests/integration/scripts/integration/run_integration.sh -r Gateway --dynamic-test
+./edgion-tests/integration/scripts/integration/run_integration.sh -r Gateway
 ```
 
 ## Port Allocation

@@ -100,6 +100,26 @@ if [[ -z "${TEST_SERVER_ENDPOINT_IPS}" || "${TEST_SERVER_ENDPOINT_IPS}" == "null
 fi
 echo "Test server endpoints: ${TEST_SERVER_ENDPOINT_IPS:-<none>}"
 
+resolve_ready_service_endpoint_ips() {
+  local namespace="$1" service="$2" ips
+  ips="$(
+    kubectl get endpointslices -n "${namespace}" \
+      -l "kubernetes.io/service-name=${service}" -o json 2>/dev/null \
+      | jq -r '[.items[]?.endpoints[]? | select(.conditions.ready != false) | .addresses[]?] | unique | join(",")' 2>/dev/null || true
+  )"
+  if [[ -z "${ips}" || "${ips}" == "null" ]]; then
+    ips="$(
+      kubectl get endpoints -n "${namespace}" "${service}" -o json 2>/dev/null \
+        | jq -r '[.subsets[]?.addresses[]?.ip] | unique | join(",")' 2>/dev/null || true
+    )"
+  fi
+  echo "${ips}"
+}
+
+LB_RR_EPS_ENDPOINT_IPS="$(resolve_ready_service_endpoint_ips edgion-default lb-rr-service)"
+LB_RR_MULTI_ENDPOINT_IPS="$(resolve_ready_service_endpoint_ips edgion-default lb-rr-multi-service)"
+echo "RoundRobin endpoints: eps=${LB_RR_EPS_ENDPOINT_IPS:-<none>} multi=${LB_RR_MULTI_ENDPOINT_IPS:-<none>}"
+
 # --- Resolve Gateway Metrics Endpoints (once) ---
 GATEWAY_METRICS_ENDPOINTS="${EDGION_TEST_GATEWAY_METRICS_ENDPOINTS:-}"
 if [[ -z "${GATEWAY_METRICS_ENDPOINTS}" ]]; then
@@ -135,6 +155,8 @@ export EDGION_GATEWAY_ADMIN_TOKEN="${EDGION_GATEWAY_ADMIN_TOKEN:-}"
 export EDGION_TEST_K8S_MODE="true"
 export EDGION_TEST_DIRECT_ENDPOINT_IP="${DIRECT_ENDPOINT_IP}"
 export EDGION_TEST_BACKEND_ENDPOINT_IPS="${TEST_SERVER_ENDPOINT_IPS}"
+export EDGION_TEST_LB_RR_EPS_ENDPOINT_IPS="${LB_RR_EPS_ENDPOINT_IPS}"
+export EDGION_TEST_LB_RR_MULTI_ENDPOINT_IPS="${LB_RR_MULTI_ENDPOINT_IPS}"
 export EDGION_TEST_GATEWAY_METRICS_ENDPOINTS="${GATEWAY_METRICS_ENDPOINTS}"
 TEST_BIN="${TEST_CLIENT_BIN_PATH}"
 TARGET="${TARGET_HOST}"

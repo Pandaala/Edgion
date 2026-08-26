@@ -20,6 +20,33 @@ use std::time::Instant;
 static INIT: Once = Once::new();
 static CAPABILITY_REGISTRY: OnceLock<String> = OnceLock::new();
 const KNOWN_GATEWAY_CAPABILITIES: &[&str] = &["body-buffering"];
+const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
+    "AiBackendLifecycle",
+    "AiBackendSecretRotation",
+    "AiBackendWeighted",
+    "GatewayDynamic",
+    "DslDynamic",
+    "BodyDynamic",
+    "ConditionRefsDynamic",
+    "JsonSchemaValidationDynamic",
+    "FormJsonTransformDynamic",
+    "BasicAuthDynamic",
+    "BasicAuthDynamicGrouped",
+    "RateLimitDynamic",
+    "RequestAccessPolicyHmacDynamic",
+    "RouteDelegationDynamic",
+    "GrpcRouteDelegationDynamic",
+    "ObservedGenHighFreq",
+    "BtlspRefFlap",
+    "PmdRefFlap",
+    "SpBackendChange",
+    "SpWeighted",
+    "CanaryHotSwap",
+    "DnsResolutionFlap",
+    "TcpEspReload",
+    "GcParamsFlap",
+    "TlsLastKnownGood",
+];
 
 fn capability_entry_applies(kind: &str, entry_id: &str, id: &str) -> bool {
     entry_id == id || (kind == "suite" && id.strip_prefix(entry_id).is_some_and(|suffix| suffix.starts_with('/')))
@@ -74,15 +101,52 @@ fn validate_capability_registry(contents: &str) -> Result<()> {
 
 fn capability_registry() -> Result<&'static str> {
     if CAPABILITY_REGISTRY.get().is_none() {
-        let path = std::env::var_os("EDGION_CAPABILITY_REGISTRY")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("integration/capabilities.tsv"));
-        let contents =
-            std::fs::read_to_string(&path).map_err(|err| anyhow::anyhow!("read {}: {err}", path.display()))?;
+        let contents = match std::env::var_os("EDGION_CAPABILITY_REGISTRY") {
+            Some(path) => {
+                let path = PathBuf::from(path);
+                std::fs::read_to_string(&path).map_err(|err| anyhow::anyhow!("read {}: {err}", path.display()))?
+            }
+            None => include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/integration/capabilities.tsv")).to_string(),
+        };
         validate_capability_registry(&contents)?;
         let _ = CAPABILITY_REGISTRY.set(contents);
     }
     Ok(CAPABILITY_REGISTRY.get().expect("capability registry initialized"))
+}
+
+fn validate_dynamic_scenario_ids(ids: &[&str]) -> Result<()> {
+    if ids.is_empty() {
+        anyhow::bail!("dynamic scenario registry is empty");
+    }
+    if ids.iter().any(|id| id.trim().is_empty()) {
+        anyhow::bail!("dynamic scenario registry contains an empty id");
+    }
+    let actual: HashSet<&str> = ids.iter().copied().collect();
+    if actual.len() != ids.len() {
+        anyhow::bail!("dynamic scenario registry contains duplicate ids");
+    }
+    let expected: HashSet<&str> = EXPECTED_DYNAMIC_SCENARIO_IDS.iter().copied().collect();
+    if actual != expected {
+        let mut missing: Vec<_> = expected.difference(&actual).copied().collect();
+        let mut unexpected: Vec<_> = actual.difference(&expected).copied().collect();
+        missing.sort_unstable();
+        unexpected.sort_unstable();
+        anyhow::bail!(
+            "dynamic scenario registry differs from the expected manifest: missing={missing:?}, unexpected={unexpected:?}"
+        );
+    }
+    Ok(())
+}
+
+fn validated_dynamic_scenarios() -> Result<Vec<&'static dynamic::Scenario>> {
+    capability_registry()?;
+    let scenarios = dynamic::all();
+    let ids: Vec<_> = scenarios.iter().map(|scenario| scenario.id).collect();
+    validate_dynamic_scenario_ids(&ids)?;
+    for scenario in &scenarios {
+        dynamic_port_contract(scenario.id)?;
+    }
+    Ok(scenarios)
 }
 
 fn required_capability(kind: &str, id: &str) -> Result<Option<&'static str>> {
@@ -115,13 +179,127 @@ fn missing_capability(kind: &str, id: &str) -> Result<Option<&'static str>> {
 
 #[cfg(test)]
 mod capability_tests {
-    use super::{capability_entry_applies, resolve_suite, validate_capability_registry};
-    use edgion_tests::dynamic;
+    use super::{
+        capability_entry_applies, dynamic_port_contract, required_port_kind, resolve_suite, suite_to_port_key,
+        validate_capability_registry, validate_dynamic_scenario_ids, EXPECTED_DYNAMIC_SCENARIO_IDS,
+    };
+    use edgion_tests::{dynamic, port_config::PortConfig};
     use std::collections::BTreeSet;
 
     #[test]
     fn empty_registry_is_valid() {
         validate_capability_registry("# kind\tid\trequired-capability\n").unwrap();
+    }
+
+    #[test]
+    fn dynamic_registry_manifest_is_complete_unique_and_nonempty() {
+        let actual: Vec<_> = dynamic::all().iter().map(|scenario| scenario.id).collect();
+        validate_dynamic_scenario_ids(&actual).unwrap();
+        assert_eq!(actual.len(), EXPECTED_DYNAMIC_SCENARIO_IDS.len());
+
+        assert!(validate_dynamic_scenario_ids(&[]).is_err());
+        assert!(validate_dynamic_scenario_ids(&["AiBackendLifecycle", "AiBackendLifecycle"]).is_err());
+        assert!(validate_dynamic_scenario_ids(&[""]).is_err());
+    }
+
+    #[test]
+    fn shell_dynamic_enumeration_failure_is_never_a_successful_noop() {
+        let runner = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/integration/run_integration.sh"
+        ));
+        let function = runner
+            .split_once("run_dynamic_scenarios() {")
+            .and_then(|(_, rest)| rest.split_once("\n}\n"))
+            .map(|(body, _)| body)
+            .expect("runner must define run_dynamic_scenarios");
+
+        assert!(function.contains(r#"if ! ids=$("$test_client" --list-dynamic-scenarios); then"#));
+        assert!(
+            !function.contains("2>/dev/null"),
+            "enumeration stderr must remain visible"
+        );
+        assert!(
+            !function.contains("|| true"),
+            "enumeration failure must not be suppressed"
+        );
+        assert!(function.contains("Dynamic scenario enumeration returned an empty registry"));
+        assert_eq!(
+            runner.matches("run_dynamic_scenarios || test_failed=true").count(),
+            2,
+            "both dynamic-enumeration call sites must fail the run"
+        );
+    }
+
+    #[test]
+    fn integration_readmes_publish_only_supported_runner_commands_and_artifacts() {
+        let scripts_readme = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/integration/scripts/README.md"));
+        let gateway_readme = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/Gateway/README.md"
+        ));
+        let dynamic_readme = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/Gateway/DynamicTest/README.md"
+        ));
+        let dynamic_summary = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/Gateway/DynamicTest/TEST_SUMMARY.md"
+        ));
+        let prepare = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/utils/prepare.sh"
+        ));
+
+        for document in [scripts_readme, gateway_readme, dynamic_readme, dynamic_summary] {
+            for unsupported in ["--test ", "--skip ", "--dynamic-test"] {
+                assert!(
+                    !document.contains(unsupported),
+                    "unsupported runner option {unsupported}"
+                );
+            }
+        }
+        for supported in ["-r HTTPRoute", "-i Match", "--no-prepare", "--full-test", "--suites"] {
+            assert!(scripts_readme.contains(supported), "README must document {supported}");
+        }
+        let expected_artifacts: BTreeSet<_> = [
+            "edgion-controller",
+            "edgion-gateway",
+            "edgion-cli",
+            "test_server",
+            "test_client",
+            "test_client_direct",
+            "resource_diff",
+            "config_load_validator",
+            "cache_residue",
+            "credential_reservation_redis",
+        ]
+        .into_iter()
+        .collect();
+        let artifact_section = scripts_readme
+            .split_once("Built artifacts under `target/debug/`:")
+            .and_then(|(_, rest)| rest.split_once("\n\nOutput location:"))
+            .map(|(section, _)| section)
+            .expect("README must contain the prepared artifact section");
+        let documented_artifacts: BTreeSet<_> = artifact_section
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("- `"))
+            .filter_map(|line| line.split_once('`').map(|(artifact, _)| artifact))
+            .collect();
+        assert_eq!(documented_artifacts, expected_artifacts);
+
+        let mut prepared_artifacts: BTreeSet<_> = prepare
+            .lines()
+            .filter_map(|line| {
+                line.split_once("--bin ")
+                    .and_then(|(_, name)| name.split_whitespace().next())
+                    .map(|name| name.trim_end_matches(';'))
+            })
+            .collect();
+        if prepare.contains("stable_credential_test_bin=\"${target_root}/debug/credential_reservation_redis\"") {
+            prepared_artifacts.insert("credential_reservation_redis");
+        }
+        assert_eq!(documented_artifacts, prepared_artifacts);
     }
 
     #[test]
@@ -157,6 +335,93 @@ mod capability_tests {
     }
 
     #[test]
+    fn every_dynamic_scenario_has_a_valid_listener_contract() {
+        let config: PortConfig = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/ports.json"
+        )))
+        .expect("ports.json must parse");
+
+        for scenario in dynamic::all() {
+            if let Some((key, kind)) = dynamic_port_contract(scenario.id).expect("scenario contract must be declared") {
+                config
+                    .require_port(key, kind)
+                    .unwrap_or_else(|error| panic!("scenario `{}`: {error}", scenario.id));
+            }
+        }
+    }
+
+    #[test]
+    fn every_registered_data_plane_suite_has_a_primary_port() {
+        let config: PortConfig = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/ports.json"
+        )))
+        .expect("ports.json must parse");
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/client/test_client.rs"));
+        let arms = source
+            .split_once("\nfn add_suites_for_suite")
+            .expect("suite registration function must exist")
+            .1;
+        let arms = arms
+            .split_once("\n}\n")
+            .expect("suite registration function must end")
+            .0;
+        let suites: BTreeSet<_> = arms
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                line.strip_prefix('"')
+                    .and_then(|rest| rest.find('"').map(|end| &rest[..end]))
+                    .filter(|suite| suite.contains('/'))
+            })
+            .collect();
+        assert!(
+            suites.len() > 100,
+            "suite registration parser found only {} entries",
+            suites.len()
+        );
+
+        let failures: Vec<_> = suites
+            .into_iter()
+            .filter(|suite| *suite != "Services/acme")
+            .filter_map(|suite| {
+                let key = suite_to_port_key(suite);
+                required_port_kind(key).and_then(|kind| {
+                    config
+                        .require_port(key, kind)
+                        .err()
+                        .map(|error| format!("{suite} -> {key}: {error}"))
+                })
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "invalid suite listener mappings:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    #[test]
+    fn k8s_mounts_the_canonical_port_registry() {
+        let deployment = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/k8s/kubernetes/test/test-client/deployment.yaml"
+        ));
+        let deploy_script = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/k8s/scripts/common/deploy_integration.sh"
+        ));
+
+        assert!(!deployment.contains("ports.json: |"));
+        assert!(deployment.contains("name: test-ports"));
+        assert!(deployment.contains("mountPath: /usr/local/edgion/conf/ports.json"));
+        assert!(deploy_script.contains("edgion-tests/integration/conf/ports.json"));
+        assert!(deploy_script.contains("create configmap edgion-test-ports"));
+        assert!(deploy_script.contains("rollout restart deployment/edgion-test-client"));
+    }
+
+    #[test]
     fn body_suites_are_registered_in_resource_and_default_sweeps() {
         let runner = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -186,6 +451,157 @@ mod capability_tests {
                 "{suite} config must be included in the EdgionPlugins resource-wide load list"
             );
         }
+    }
+
+    #[test]
+    fn integration_report_covers_isolated_and_final_gates_before_finalization() {
+        let runner = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/integration/run_integration.sh"
+        ));
+        assert!(runner.contains(r#"report_test "Isolated_${name}" "PASS""#));
+        assert!(runner.contains(r#"report_test "Isolated_${name}" "FAIL""#));
+        assert!(runner.contains("Status: ${status}"));
+        for phase in [
+            r#"REPORT_PHASE="main tests""#,
+            r#"REPORT_PHASE="Controller and Gateway reload""#,
+            r#"REPORT_PHASE="final metrics validation""#,
+            r#"REPORT_PHASE="final unknown-field validation""#,
+            r#"REPORT_PHASE="final requeue-loop validation""#,
+            r#"REPORT_PHASE="final cache-residue validation""#,
+        ] {
+            assert!(runner.contains(phase), "runner must track phase {phase}");
+        }
+
+        let final_gate = runner
+            .rfind("Final Step: Cache Residue Detection")
+            .expect("runner must contain the final cache-residue gate");
+        let final_pass = runner
+            .rfind(r#"finalize_report "PASS""#)
+            .expect("runner must finalize a passing report");
+        let final_fail = runner
+            .rfind(r#"finalize_report "FAIL""#)
+            .expect("runner must finalize a failing report");
+        let success_log = runner
+            .rfind(r#"log_success "All tests passed!""#)
+            .expect("runner must emit its final success message");
+        assert!(final_pass > final_gate);
+        assert!(final_fail > final_gate);
+        assert!(final_pass > success_log);
+
+        let finalize_body = runner
+            .split_once("finalize_report() {")
+            .and_then(|(_, rest)| rest.split_once("\n}"))
+            .map(|(body, _)| body)
+            .expect("runner must define finalize_report");
+        let final_console_output = finalize_body
+            .rfind(r#"echo "Report saved to: ${REPORT_FILE}""#)
+            .expect("finalize_report must print the report path");
+        let finalized_flag = finalize_body
+            .rfind("REPORT_FINALIZED=true")
+            .expect("finalize_report must set its terminal flag");
+        assert!(finalized_flag > final_console_output);
+    }
+
+    #[test]
+    fn mandatory_final_validation_prerequisites_fail_closed() {
+        let runner = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/integration/run_integration.sh"
+        ));
+
+        assert!(runner.contains("/metrics could not be read"));
+        assert!(runner.contains("Unknown-config-fields check failed -- controller admin token unavailable"));
+        assert!(runner.contains("controller.log is missing or unreadable"));
+        assert!(runner.contains(r#"report_test "Final_RequeueDeadLoop" "FAIL""#));
+        assert!(runner.contains(r#"report_test "Final_CacheResidue" "FAIL""#));
+        assert!(runner.contains("invalid RESIDUE_MODE=${residue_mode}; expected fail or warn"));
+        assert!(!runner.contains(r#"report_test "Final_RequeueDeadLoop" "SKIP""#));
+        assert!(runner.contains(r#"report_test "Final_CacheResidue" "SKIP" "0" "explicitly disabled""#));
+    }
+
+    #[test]
+    fn shell_orchestrators_apply_owned_process_group_deadlines() {
+        let main_runner = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/integration/run_integration.sh"
+        ));
+        let aggregate_runner = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/integration/run_all_integration.sh"
+        ));
+        let deadline_runner = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/utils/run_with_deadline.py"
+        ));
+
+        assert!(main_runner.contains("ISOLATED_SCENARIO_TIMEOUT_SECONDS"));
+        assert!(main_runner.contains("ISOLATED_PHASE_TIMEOUT_SECONDS"));
+        assert!(main_runner.contains(r#"report_test "Isolated_${name}" "TIMEOUT""#));
+        assert!(main_runner.contains("Timed out: ${TIMED_OUT_TESTS}"));
+        assert!(aggregate_runner.contains("JOB_TIMEOUT_SECONDS"));
+        assert!(aggregate_runner.contains("RUN_TIMEOUT_SECONDS"));
+        assert!(aggregate_runner.contains(r#"RESULT_STATUS+=("TIMEOUT")"#));
+        assert!(aggregate_runner.contains("trap 'forward_termination TERM' TERM"));
+        assert!(aggregate_runner.contains("CURRENT_WATCHDOG_PID=$!"));
+        assert!(aggregate_runner.contains("BUILD_BLOCKED_STATUS"));
+        assert!(deadline_runner.contains("start_new_session=True"));
+        assert!(deadline_runner.contains("os.killpg"));
+        assert!(deadline_runner.contains("signal.SIGTERM"));
+        assert!(deadline_runner.contains("signal.SIGKILL"));
+    }
+
+    #[test]
+    fn execution_phase_uses_only_precompiled_test_artifacts() {
+        let main_runner = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/integration/run_integration.sh"
+        ));
+        let aggregate_runner = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/integration/run_all_integration.sh"
+        ));
+        let acme_runner = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/integration/run_acme_test.sh"
+        ));
+        let prepare = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/utils/prepare.sh"
+        ));
+
+        assert!(!main_runner.contains("cargo build"));
+        assert!(!main_runner.contains("cargo test"));
+        assert!(main_runner.contains("EDGION_CACHE_RESIDUE_BIN"));
+        assert!(main_runner.contains("EDGION_CREDENTIAL_RESERVATION_TEST_BIN"));
+        assert!(main_runner.contains("cache residue validator missing"));
+        assert!(main_runner.contains("credential reservation test missing"));
+        assert!(main_runner.contains(r#"run_test "CredentialReservationRedis" "${test_bin} --ignored --nocapture""#));
+        assert!(!main_runner.contains(r#"\"${test_bin}\" --ignored --nocapture"#));
+        let build_phase = main_runner
+            .find(r#"REPORT_PHASE="build""#)
+            .expect("main runner must have a build phase");
+        let external_start = main_runner
+            .find(r#"REPORT_PHASE="external dependency startup""#)
+            .expect("main runner must have an external dependency phase");
+        assert!(build_phase < external_start);
+        assert!(aggregate_runner.contains(r#"run_acme_test.sh --no-build"#));
+        assert!(aggregate_runner.contains(r#""$PREPARE_SCRIPT""#));
+        assert!(!aggregate_runner.contains("exec cargo build"));
+
+        let runtime = acme_runner
+            .split_once("# Start Pebble")
+            .map(|(_, runtime)| runtime)
+            .expect("ACME runner must have an explicit runtime boundary");
+        assert!(!runtime.contains("cargo build"));
+        assert!(!runtime.contains("cargo run"));
+        assert!(runtime.contains(r#""$TEST_CLIENT_BIN" -r Services -i acme"#));
+
+        assert!(prepare.contains("--bin cache_residue"));
+        assert!(prepare.contains("--test credential_reservation_redis"));
+        assert!(prepare.contains("--no-run"));
+        assert!(prepare.contains("stable_credential_test_bin"));
+        assert!(prepare.contains(r#"export CARGO_TARGET_DIR="${PROJECT_ROOT}/target""#));
     }
 
     #[test]
@@ -704,6 +1120,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
 /// Return the port-config key for the given suite name.
 fn suite_to_port_key(suite: &str) -> &str {
     match suite {
+        "all" => "HTTPRoute/Basic",
         "EdgionBackend/AnthropicProvider" => "EdgionBackend/AnthropicProvider",
         "EdgionBackend/CredentialExhaustion" => "EdgionBackend/CredentialExhaustion",
         "EdgionBackend/Resilience" => "EdgionBackend/Resilience",
@@ -771,6 +1188,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "GRPCRoute/Match" => "GRPCRoute/Match",
         "GRPCRoute/UnmatchedRoute" => "GRPCRoute/UnmatchedRoute",
         "GRPCRoute/RateLimit" => "GRPCRoute/RateLimit",
+        "GRPCRoute/TLS" => "EdgionTls/grpctls",
         "GRPCRoute/Backend/SessionPersistence" => "GRPCRoute/Backend/SessionPersistence",
         "GRPCRoute/Backend/SessionPersistenceWeighted" => "GRPCRoute/Backend/SessionPersistenceWeighted",
         // TCPRoute
@@ -865,6 +1283,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/DslDynamic" => "EdgionPlugins",
         "EdgionPlugins/DslGrpcError" => "GRPCRoute/Basic",
         "Gateway/AllowedRoutes/Selector" => "Gateway/AllowedRoutes/Selector",
+        "HTTPRoute/Protocol/HTTPS" => "EdgionTls/https",
         "Status/RefGrant/TCPRouteCrossNsSvc" => "Status/RefGrant/TCPRouteCrossNsSvc",
         "Status/RefGrant/TLSRouteCrossNsSvc" => "Status/RefGrant/TLSRouteCrossNsSvc",
         "Status/RefGrant/EdgionConfigData" => "Status/RefGrant/EdgionConfigData",
@@ -877,12 +1296,79 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionTls/grpctls" => "EdgionTls/grpctls",
         "EdgionTls/mTLS" => "EdgionTls/mTLS",
         "EdgionTls/cipher" => "EdgionTls/cipher",
+        "EdgionTls/mtls_failclose" => "EdgionTls/mtls_failclose",
         "EdgionTls/fallback_sni" => "EdgionTls/fallback_sni",
         "EdgionTls/port_only" => "EdgionTls/port_only",
         "EdgionTls/BothAbsentParentRef" => "EdgionTls/BothAbsentParentRef",
         "EdgionTls/wildcard_single_label" => "EdgionTls/wildcard_single_label",
         _ => suite,
     }
+}
+
+fn required_port_kind(port_key: &str) -> Option<port_config::PortKind> {
+    use port_config::PortKind;
+
+    if port_key.starts_with("Status/") || port_key == "Gateway/PortConflict" {
+        None
+    } else if port_key.starts_with("GRPCRoute/") {
+        Some(PortKind::Grpc)
+    } else if port_key.starts_with("TCPRoute/") {
+        Some(PortKind::Tcp)
+    } else if port_key.starts_with("TLSRoute/") {
+        Some(PortKind::Tls)
+    } else if port_key.starts_with("UDPRoute/") {
+        Some(PortKind::Udp)
+    } else if port_key == "EdgionTls/grpctls" {
+        Some(PortKind::GrpcTls)
+    } else if port_key.starts_with("EdgionTls/")
+        || matches!(
+            port_key,
+            "Gateway/TLS/GatewayTLS"
+                | "Gateway/TLS/MisdirectedRequest"
+                | "Gateway/TLS/NoHostnameListener"
+                | "Gateway/FrontendValidation"
+        )
+    {
+        Some(PortKind::Https)
+    } else {
+        Some(PortKind::Http)
+    }
+}
+
+fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::PortKind)>> {
+    use port_config::PortKind;
+
+    let contract = match id {
+        "AiBackendLifecycle" | "AiBackendSecretRotation" | "AiBackendWeighted" => {
+            Some(("EdgionBackend/SingleProvider", PortKind::Http))
+        }
+        "BasicAuthDynamic"
+        | "BasicAuthDynamicGrouped"
+        | "BodyDynamic"
+        | "CanaryHotSwap"
+        | "ConditionRefsDynamic"
+        | "DslDynamic"
+        | "FormJsonTransformDynamic"
+        | "JsonSchemaValidationDynamic"
+        | "PmdRefFlap"
+        | "RateLimitDynamic"
+        | "RequestAccessPolicyHmacDynamic" => Some(("EdgionPlugins", PortKind::Http)),
+        "GatewayDynamic" => Some(("Gateway/Dynamic", PortKind::Http)),
+        "RouteDelegationDynamic" => Some(("HTTPRoute/Delegation/DynamicTest", PortKind::Http)),
+        "GrpcRouteDelegationDynamic" => Some(("GRPCRoute/Delegation/DynamicTest", PortKind::Grpc)),
+        "ObservedGenHighFreq" => Some(("Status/ObservedGeneration/HighFrequency", PortKind::Http)),
+        "BtlspRefFlap" => Some(("Status/BackendTLSPolicy/RefFlap", PortKind::Http)),
+        "SpBackendChange" => Some(("HTTPRoute/Backend/SessionPersistenceBackendChange", PortKind::Http)),
+        "SpWeighted" => Some(("HTTPRoute/Backend/SessionPersistenceWeighted", PortKind::Http)),
+        "DnsResolutionFlap" => Some(("HTTPRoute/Backend/DnsResolutionFlap", PortKind::Http)),
+        "TcpEspReload" => Some(("TCPRoute/StreamPlugins/Dynamic", PortKind::Tcp)),
+        "TlsLastKnownGood" => Some(("EdgionTls/LastKnownGood", PortKind::Https)),
+        // This scenario only inspects control-plane status and intentionally has
+        // no data-plane listener.
+        "GcParamsFlap" => None,
+        _ => anyhow::bail!("dynamic scenario `{id}` has no listener contract"),
+    };
+    Ok(contract)
 }
 
 /// Register test suites matching the given suite name into the runner.
@@ -970,21 +1456,82 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 eprintln!("Error: HTTPRoute/Backend tests require --gateway flag");
                 std::process::exit(1);
             }
-            runner.add_suite(Box::new(suites::LBRoundRobinTestSuite));
-            runner.add_suite(Box::new(suites::LBConsistentHashTestSuite));
-            runner.add_suite(Box::new(suites::LBLeastConnTestSuite));
-            runner.add_suite(Box::new(suites::LBLeastConnRetryOnStatusTestSuite));
-            runner.add_suite(Box::new(suites::LBEwmaTestSuite));
-            runner.add_suite(Box::new(suites::LBEwmaRetryOnStatusTestSuite));
-            runner.add_suite(Box::new(suites::WeightedBackendTestSuite));
-            runner.add_suite(Box::new(suites::TimeoutTestSuite));
-            runner.add_suite(Box::new(suites::HealthCheckTestSuite));
-            runner.add_suite(Box::new(suites::GrpcHealthCheckTestSuite));
-            runner.add_suite(Box::new(suites::RetryOnStatusTestSuite));
-            runner.add_suite(Box::new(suites::PerTryTimeoutTestSuite));
-            runner.add_suite(Box::new(suites::CircuitBreakerTestSuite));
-            runner.add_suite(Box::new(suites::PanicThresholdTestSuite));
-            runner.add_suite(Box::new(suites::SessionPersistenceTestSuite));
+            use port_config::PortKind::Http;
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::LBRoundRobinTestSuite),
+                "HTTPRoute/Backend/LBRoundRobin",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::LBConsistentHashTestSuite),
+                "HTTPRoute/Backend/LBConsistentHash",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::LBLeastConnTestSuite),
+                "HTTPRoute/Backend/LBLeastConn",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::LBLeastConnRetryOnStatusTestSuite),
+                "HTTPRoute/Backend/LBLeastConnRetryOnStatus",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::LBEwmaTestSuite),
+                "HTTPRoute/Backend/LBEwma",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::LBEwmaRetryOnStatusTestSuite),
+                "HTTPRoute/Backend/LBEwmaRetryOnStatus",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::WeightedBackendTestSuite),
+                "HTTPRoute/Backend/WeightedBackend",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::TimeoutTestSuite),
+                "HTTPRoute/Backend/Timeout",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::HealthCheckTestSuite),
+                "HTTPRoute/Backend/HealthCheck",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::GrpcHealthCheckTestSuite),
+                "HTTPRoute/Backend/GrpcHealthCheck",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::RetryOnStatusTestSuite),
+                "HTTPRoute/Backend/RetryOnStatus",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::PerTryTimeoutTestSuite),
+                "HTTPRoute/Backend/PerTryTimeout",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::CircuitBreakerTestSuite),
+                "HTTPRoute/Backend/CircuitBreaker",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::PanicThresholdTestSuite),
+                "HTTPRoute/Backend/PanicThreshold",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::SessionPersistenceTestSuite),
+                "HTTPRoute/Backend/SessionPersistence",
+                Http,
+            ));
         }
         "HTTPRoute/Backend/LBRoundRobin" => {
             if !gateway {
@@ -1227,10 +1774,22 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::DanglingExtensionRefTestSuite));
         }
         "HTTPRoute/Protocol" => {
-            runner.add_suite(Box::new(suites::WebSocketTestSuite::new(gateway)));
-            runner.add_suite(Box::new(suites::H2cTestSuite));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::WebSocketTestSuite::new(gateway)),
+                "HTTPRoute/Protocol/WebSocket",
+                port_config::PortKind::Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::H2cTestSuite),
+                "HTTPRoute/Protocol/H2C",
+                port_config::PortKind::Http,
+            ));
             if gateway {
-                runner.add_suite(Box::new(suites::HttpsTestSuite));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::HttpsTestSuite),
+                    "EdgionTls/https",
+                    port_config::PortKind::Https,
+                ));
             }
         }
         "HTTPRoute/Protocol/WebSocket" => {
@@ -1280,9 +1839,17 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         }
         // GRPCRoute
         "GRPCRoute" => {
-            runner.add_suite(Box::new(suites::GrpcTestSuite));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::GrpcTestSuite),
+                "GRPCRoute/Basic",
+                port_config::PortKind::Grpc,
+            ));
             if gateway {
-                runner.add_suite(Box::new(suites::GrpcMatchTestSuite));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::GrpcMatchTestSuite),
+                    "GRPCRoute/Match",
+                    port_config::PortKind::Grpc,
+                ));
             }
         }
         "GRPCRoute/Basic" => {
@@ -1449,9 +2016,21 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 eprintln!("Error: Gateway tests require --gateway flag");
                 std::process::exit(1);
             }
-            runner.add_suite(Box::new(suites::SecurityTestSuite));
-            runner.add_suite(Box::new(suites::RealIpTestSuite));
-            runner.add_suite(Box::new(suites::PluginLogsTestSuite));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::SecurityTestSuite),
+                "Gateway/Security",
+                port_config::PortKind::Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::RealIpTestSuite),
+                "Gateway/RealIP",
+                port_config::PortKind::Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::PluginLogsTestSuite),
+                "EdgionPlugins",
+                port_config::PortKind::Http,
+            ));
         }
         "Gateway/Security" => {
             if !gateway {
@@ -2355,42 +2934,183 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::AcmeTestSuite));
         }
         "all" => {
-            runner.add_suite(Box::new(suites::HttpTestSuite));
-            runner.add_suite(Box::new(suites::GrpcTestSuite));
-            runner.add_suite(Box::new(suites::WebSocketTestSuite::new(gateway)));
-            runner.add_suite(Box::new(suites::H2cTestSuite));
-            runner.add_suite(Box::new(suites::TcpTestSuite));
-            runner.add_suite(Box::new(suites::UdpTestSuite));
+            use port_config::PortKind::{Grpc, Http, Https, Tcp, Udp};
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::HttpTestSuite),
+                "HTTPRoute/Basic",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::GrpcTestSuite),
+                "GRPCRoute/Basic",
+                Grpc,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::WebSocketTestSuite::new(gateway)),
+                "HTTPRoute/Protocol/WebSocket",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::H2cTestSuite),
+                "HTTPRoute/Protocol/H2C",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::TcpTestSuite),
+                "TCPRoute/Basic",
+                Tcp,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::UdpTestSuite),
+                "UDPRoute/Basic",
+                Udp,
+            ));
             if gateway {
-                runner.add_suite(Box::new(suites::SingleProviderTestSuite));
-                runner.add_suite(Box::new(suites::AnthropicProviderTestSuite));
-                runner.add_suite(Box::new(suites::ResilienceTestSuite));
-                runner.add_suite(Box::new(suites::CredentialExhaustionTestSuite));
-                runner.add_suite(Box::new(suites::TcpIdleTimeoutTestSuite));
-                runner.add_suite(Box::new(suites::TcpKeepaliveSmokeTestSuite));
-                runner.add_suite(Box::new(suites::HttpMatchTestSuite));
-                runner.add_suite(Box::new(suites::HttpsTestSuite));
-                runner.add_suite(Box::new(suites::GrpcMatchTestSuite));
-                runner.add_suite(Box::new(suites::RealIpTestSuite));
-                runner.add_suite(Box::new(suites::SecurityTestSuite));
-                runner.add_suite(Box::new(suites::HttpSecurityTestSuite));
-                runner.add_suite(Box::new(suites::HttpRedirectTestSuite));
-                runner.add_suite(Box::new(suites::PluginLogsTestSuite));
-                runner.add_suite(Box::new(suites::LBRoundRobinTestSuite));
-                runner.add_suite(Box::new(suites::LBConsistentHashTestSuite));
-                runner.add_suite(Box::new(suites::LBLeastConnTestSuite));
-                runner.add_suite(Box::new(suites::LBLeastConnRetryOnStatusTestSuite));
-                runner.add_suite(Box::new(suites::LBEwmaTestSuite));
-                runner.add_suite(Box::new(suites::LBEwmaRetryOnStatusTestSuite));
-                runner.add_suite(Box::new(suites::WeightedBackendTestSuite));
-                runner.add_suite(Box::new(suites::TimeoutTestSuite));
-                runner.add_suite(Box::new(suites::HealthCheckTestSuite));
-                runner.add_suite(Box::new(suites::GrpcHealthCheckTestSuite));
-                runner.add_suite(Box::new(suites::RetryOnStatusTestSuite));
-                runner.add_suite(Box::new(suites::PerTryTimeoutTestSuite));
-                runner.add_suite(Box::new(suites::CircuitBreakerTestSuite));
-                runner.add_suite(Box::new(suites::PanicThresholdTestSuite));
-                runner.add_suite(Box::new(suites::MtlsTestSuite));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::SingleProviderTestSuite),
+                    "EdgionBackend/SingleProvider",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::AnthropicProviderTestSuite),
+                    "EdgionBackend/AnthropicProvider",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::ResilienceTestSuite),
+                    "EdgionBackend/Resilience",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::CredentialExhaustionTestSuite),
+                    "EdgionBackend/CredentialExhaustion",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::TcpIdleTimeoutTestSuite),
+                    "TCPRoute/Basic",
+                    Tcp,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::TcpKeepaliveSmokeTestSuite),
+                    "TCPRoute/Basic",
+                    Tcp,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::HttpMatchTestSuite),
+                    "HTTPRoute/Match",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::HttpsTestSuite),
+                    "EdgionTls/https",
+                    Https,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::GrpcMatchTestSuite),
+                    "GRPCRoute/Match",
+                    Grpc,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::RealIpTestSuite),
+                    "Gateway/RealIP",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::SecurityTestSuite),
+                    "Gateway/Security",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::HttpSecurityTestSuite),
+                    "HTTPRoute/Filters/Security",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::HttpRedirectTestSuite),
+                    "HTTPRoute/Filters/Redirect",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::PluginLogsTestSuite),
+                    "EdgionPlugins",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::LBRoundRobinTestSuite),
+                    "HTTPRoute/Backend/LBRoundRobin",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::LBConsistentHashTestSuite),
+                    "HTTPRoute/Backend/LBConsistentHash",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::LBLeastConnTestSuite),
+                    "HTTPRoute/Backend/LBLeastConn",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::LBLeastConnRetryOnStatusTestSuite),
+                    "HTTPRoute/Backend/LBLeastConnRetryOnStatus",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::LBEwmaTestSuite),
+                    "HTTPRoute/Backend/LBEwma",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::LBEwmaRetryOnStatusTestSuite),
+                    "HTTPRoute/Backend/LBEwmaRetryOnStatus",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::WeightedBackendTestSuite),
+                    "HTTPRoute/Backend/WeightedBackend",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::TimeoutTestSuite),
+                    "HTTPRoute/Backend/Timeout",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::HealthCheckTestSuite),
+                    "HTTPRoute/Backend/HealthCheck",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::GrpcHealthCheckTestSuite),
+                    "HTTPRoute/Backend/GrpcHealthCheck",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::RetryOnStatusTestSuite),
+                    "HTTPRoute/Backend/RetryOnStatus",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::PerTryTimeoutTestSuite),
+                    "HTTPRoute/Backend/PerTryTimeout",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::CircuitBreakerTestSuite),
+                    "HTTPRoute/Backend/CircuitBreaker",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::PanicThresholdTestSuite),
+                    "HTTPRoute/Backend/PanicThreshold",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::MtlsTestSuite),
+                    "EdgionTls/mTLS",
+                    Https,
+                ));
             }
         }
         _ => {
@@ -2409,33 +3129,27 @@ async fn run_dynamic_scenario(cli: &Cli, sid: &str) -> Result<()> {
     let project_root = std::env::current_dir().context("Failed to get current directory")?;
     let conf_root = project_root.join("edgion-tests/integration/conf");
 
-    // In Gateway mode, pull the default HTTP port from ports.json; otherwise use the CLI defaults.
+    // Dynamic scenarios declare one exact primary listener contract. Individual
+    // phase suites may additionally resolve an HTTP port_key through TestRunner.
     let (http_port, grpc_port, tcp_port, udp_port, https_port, grpc_https_port, http_host, grpc_host) = if cli.gateway {
-        match port_config::PortConfig::load() {
-            Ok(cfg) => {
-                let p = cfg.get_ports("default");
-                (
-                    p.http.unwrap_or(cli.http_port),
-                    p.grpc.unwrap_or(cli.grpc_port),
-                    p.tcp.unwrap_or(cli.tcp_port),
-                    p.udp.unwrap_or(cli.udp_port),
-                    p.https.unwrap_or(cli.https_port),
-                    p.grpc_tls.unwrap_or(cli.grpc_https_port),
-                    Some("test.example.com".to_string()),
-                    Some("grpc.example.com".to_string()),
-                )
+        let cfg = port_config::PortConfig::load().map_err(anyhow::Error::msg)?;
+        let ports = match dynamic_port_contract(scenario.id)? {
+            Some((key, kind)) => {
+                cfg.require_port(key, kind).map_err(anyhow::Error::msg)?;
+                cfg.get_ports(key).map_err(anyhow::Error::msg)?.clone()
             }
-            Err(_) => (
-                cli.http_port,
-                cli.grpc_port,
-                cli.tcp_port,
-                cli.udp_port,
-                cli.https_port,
-                cli.grpc_https_port,
-                Some("test.example.com".to_string()),
-                Some("grpc.example.com".to_string()),
-            ),
-        }
+            None => port_config::SuitePorts::default(),
+        };
+        (
+            ports.http.unwrap_or(cli.http_port),
+            ports.grpc.unwrap_or(cli.grpc_port),
+            ports.tcp.or(ports.tls).unwrap_or(cli.tcp_port),
+            ports.udp.unwrap_or(cli.udp_port),
+            ports.https.unwrap_or(cli.https_port),
+            ports.grpc_tls.unwrap_or(cli.grpc_https_port),
+            Some("test.example.com".to_string()),
+            Some("grpc.example.com".to_string()),
+        )
     } else {
         (
             cli.http_port,
@@ -2502,7 +3216,7 @@ async fn main() -> Result<()> {
 
     // --list-dynamic-scenarios: print the id list and exit.
     if cli.list_dynamic_scenarios {
-        for s in dynamic::all() {
+        for s in validated_dynamic_scenarios()? {
             println!("{}", s.id);
         }
         return Ok(());
@@ -2551,57 +3265,39 @@ async fn main() -> Result<()> {
         http_host,
         grpc_host,
     ) = if cli.gateway {
-        // Gateway mode: prefer ports from ports.json, but allow CLI ports as fallback/override.
-        // This is important for K8s service mode where gateway often listens on 80/443 instead of 31xxx.
-        match port_config::PortConfig::load() {
-            Ok(config) => {
-                let ports = config.get_ports(port_key);
-                // Select http_host based on suite
-                let http_host = match suite.as_str() {
-                    "Gateway/TLS/GatewayTLS" => "gateway-tls.test.com",
-                    "Gateway/TLS/NoHostnameListener" => "no-hostname-gateway-tls.test.com",
-                    "Gateway/TLS/MisdirectedRequest" => "sni421-exact.test.com",
-                    "EdgionTls/port_only" => "port-only.example.com",
-                    "EdgionTls/BothAbsentParentRef" => "both-absent-tls.example.com",
-                    _ => "test.example.com",
-                };
-                let http_port = ports.http.unwrap_or(cli.http_port);
-                (
-                    http_port,
-                    ports.grpc.unwrap_or(cli.grpc_port),
-                    ports.tcp.unwrap_or(cli.tcp_port),
-                    ports.tcp_filtered.unwrap_or(cli.tcp_port + 1),
-                    ports.udp.unwrap_or(cli.udp_port),
-                    http_port,
-                    ports.https.unwrap_or(cli.https_port),
-                    ports.grpc_tls.unwrap_or(cli.grpc_https_port),
-                    Some(http_host.to_string()),
-                    Some("grpc.example.com".to_string()),
-                )
-            }
-            Err(e) => {
-                eprintln!("Warning: Failed to load ports.json: {}. Using CLI/default ports.", e);
-                let http_host = match suite.as_str() {
-                    "Gateway/TLS/GatewayTLS" => "gateway-tls.test.com",
-                    "Gateway/TLS/NoHostnameListener" => "no-hostname-gateway-tls.test.com",
-                    "Gateway/TLS/MisdirectedRequest" => "sni421-exact.test.com",
-                    "EdgionTls/port_only" => "port-only.example.com",
-                    "EdgionTls/BothAbsentParentRef" => "both-absent-tls.example.com",
-                    _ => "test.example.com",
-                };
-                (
-                    cli.http_port,
-                    cli.grpc_port,
-                    cli.tcp_port,
-                    cli.tcp_port + 1,
-                    cli.udp_port,
-                    cli.websocket_port,
-                    cli.https_port,
-                    cli.grpc_https_port,
-                    Some(http_host.to_string()),
-                    Some("grpc.example.com".to_string()),
-                )
-            }
+        // Gateway mode requires the exact local listener mapping. K8s test
+        // services expose the same declared listener ports, so they consume the
+        // same fail-closed registry.
+        {
+            let config = port_config::PortConfig::load().map_err(anyhow::Error::msg)?;
+            let ports = if let Some(kind) = required_port_kind(port_key) {
+                config.require_port(port_key, kind).map_err(anyhow::Error::msg)?;
+                config.get_ports(port_key).map_err(anyhow::Error::msg)?.clone()
+            } else {
+                port_config::SuitePorts::default()
+            };
+            // Select http_host based on suite
+            let http_host = match suite.as_str() {
+                "Gateway/TLS/GatewayTLS" => "gateway-tls.test.com",
+                "Gateway/TLS/NoHostnameListener" => "no-hostname-gateway-tls.test.com",
+                "Gateway/TLS/MisdirectedRequest" => "sni421-exact.test.com",
+                "EdgionTls/port_only" => "port-only.example.com",
+                "EdgionTls/BothAbsentParentRef" => "both-absent-tls.example.com",
+                _ => "test.example.com",
+            };
+            let http_port = ports.http.unwrap_or(cli.http_port);
+            (
+                http_port,
+                ports.grpc.unwrap_or(cli.grpc_port),
+                ports.tcp.or(ports.tls).unwrap_or(cli.tcp_port),
+                ports.tcp_filtered.unwrap_or(cli.tcp_port + 1),
+                ports.udp.unwrap_or(cli.udp_port),
+                http_port,
+                ports.https.unwrap_or(cli.https_port),
+                ports.grpc_tls.unwrap_or(cli.grpc_https_port),
+                Some(http_host.to_string()),
+                Some("grpc.example.com".to_string()),
+            )
         }
     } else {
         // Direct mode: use CLI provided ports
@@ -2654,8 +3350,12 @@ async fn main() -> Result<()> {
     let mut runner = TestRunner::new(context);
 
     // Enable per-suite port resolution from ports.json
-    if let Ok(port_config) = port_config::PortConfig::load() {
-        runner.set_port_resolver(Box::new(move |key: &str| port_config.get_ports(key).http));
+    if cli.gateway {
+        let port_config = port_config::PortConfig::load().map_err(anyhow::Error::msg)?;
+        runner.set_port_resolver(Box::new(move |key: &str, kind| {
+            port_config.require_port(key, kind)?;
+            port_config.get_ports(key).cloned()
+        }));
     }
 
     add_suites_for_suite(&mut runner, &suite, cli.gateway, cli.phase.as_deref());

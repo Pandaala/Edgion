@@ -51,6 +51,11 @@ data:
     access_log_sensitive:
       mode: off
 
+    metrics:
+      backend_requests:
+        labels:
+          backend: true
+
     ssl_log:
       enabled: true
       output:

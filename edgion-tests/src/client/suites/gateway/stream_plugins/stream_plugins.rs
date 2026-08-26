@@ -183,7 +183,10 @@ impl StreamPluginsTestSuite {
                     // This listener is specific to this suite, so its port lives in
                     // ports.json rather than on the shared TestContext.
                     let bare_port = match crate::port_config::PortConfig::load() {
-                        Ok(cfg) => cfg.get_ports("Gateway/StreamPlugins").tcp_bare,
+                        Ok(cfg) => cfg
+                            .get_ports("Gateway/StreamPlugins")
+                            .ok()
+                            .and_then(|ports| ports.tcp_bare),
                         Err(e) => {
                             return TestResult::failed(start.elapsed(), format!("Failed to load ports.json: {}", e));
                         }

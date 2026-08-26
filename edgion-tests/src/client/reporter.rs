@@ -52,6 +52,15 @@ impl ConsoleReporter {
                 println!("    {}", style(err).red());
             }
         }
+
+        for error in &suite.lifecycle_errors {
+            println!(
+                "  {} {} failed: {}",
+                style("✗").red(),
+                error.phase.as_str(),
+                style(&error.message).red()
+            );
+        }
     }
 
     fn print_summary(&self, results: &TestResults, total_duration: Duration) {
@@ -62,10 +71,23 @@ impl ConsoleReporter {
         println!("Total tests: {}", results.total_tests());
         println!("{}: {}", style("Passed").green(), results.total_passed());
         println!("{}: {}", style("Failed").red(), results.total_failed());
+        println!(
+            "{}: {}",
+            style("Infrastructure errors").red(),
+            results.run_errors.len()
+                + results
+                    .suite_results
+                    .iter()
+                    .map(|suite| suite.lifecycle_errors.len())
+                    .sum::<usize>()
+        );
         println!("Passed: {:.1}%", results.pass_rate());
         println!("Total time: {:.2}s", total_duration.as_secs_f64());
 
         if results.has_failures() {
+            for error in &results.run_errors {
+                println!("{}", style(error).red());
+            }
             println!("\n{}", style("⚠ Some tests failed").red().bold());
         } else {
             println!("\n{}", style("✓ All tests passed").green().bold());
@@ -101,6 +123,7 @@ impl JsonReporter {
             total_tests: results.total_tests(),
             passed: results.total_passed(),
             failed: results.total_failed(),
+            infrastructure_errors: results.run_errors.clone(),
             pass_rate: results.pass_rate(),
             suites,
         }
@@ -127,6 +150,14 @@ impl JsonReporter {
             name: suite.name.clone(),
             passed: suite.passed_count(),
             failed: suite.failed_count(),
+            lifecycle_errors: suite
+                .lifecycle_errors
+                .iter()
+                .map(|error| LifecycleErrorReport {
+                    phase: error.phase.as_str().to_string(),
+                    message: error.message.clone(),
+                })
+                .collect(),
             duration: suite.duration.as_secs_f64(),
             tests,
         }
@@ -140,6 +171,7 @@ struct JsonReport {
     total_tests: usize,
     passed: usize,
     failed: usize,
+    infrastructure_errors: Vec<String>,
     pass_rate: f64,
     suites: Vec<SuiteReport>,
 }
@@ -149,8 +181,15 @@ struct SuiteReport {
     name: String,
     passed: usize,
     failed: usize,
+    lifecycle_errors: Vec<LifecycleErrorReport>,
     duration: f64,
     tests: Vec<TestReport>,
+}
+
+#[derive(Serialize)]
+struct LifecycleErrorReport {
+    phase: String,
+    message: String,
 }
 
 #[derive(Serialize)]

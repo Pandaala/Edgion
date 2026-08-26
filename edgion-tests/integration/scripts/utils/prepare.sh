@@ -4,7 +4,7 @@
 # BuildallTest（debug ）
 # =============================================================================
 
-set -e
+set -eo pipefail
 
 # 
 RED='\033[0;31m'
@@ -68,6 +68,11 @@ main() {
         export LLVM_PROFILE_FILE="${PROJECT_ROOT}/target/llvm-cov-target/Edgion-%p-%10m.profraw"
         log_info "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
         log_info "LLVM_PROFILE_FILE=${LLVM_PROFILE_FILE}"
+    else
+        # Runtime scripts resolve artifacts from the project-local target tree.
+        # Ignore an inherited custom target dir so producer and consumers cannot
+        # silently disagree about the prepared artifact set.
+        export CARGO_TARGET_DIR="${PROJECT_ROOT}/target"
     fi
 
     # One Cargo invocation lets Cargo schedule the complete dependency graph
@@ -82,11 +87,53 @@ main() {
         -p edgion-tests --bin test_client \
         -p edgion-tests --bin test_client_direct \
         -p edgion-tests --bin resource_diff \
-        -p edgion-tests --bin config_load_validator; then
+        -p edgion-tests --bin config_load_validator \
+        -p edgion-tests --bin cache_residue; then
         log_error "Integration binary build failed"
         exit 1
     fi
     log_success "Integration binaries built successfully"
+
+    # Precompile the ignored real-Redis integration test and copy the hashed
+    # Cargo test artifact to a stable execution-phase path. Runtime scripts
+    # must never invoke Cargo after services or test scenarios have started.
+    log_section "Build ignored integration test executables"
+    local credential_test_bin
+    if ! credential_test_bin=$(cargo test \
+        -p edgion-tests \
+        --test credential_reservation_redis \
+        --no-run \
+        --message-format=json-render-diagnostics \
+        | python3 -c '
+import json
+import sys
+
+executables = []
+for line in sys.stdin:
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    target = event.get("target") or {}
+    executable = event.get("executable")
+    if event.get("reason") == "compiler-artifact" and target.get("name") == "credential_reservation_redis" and executable:
+        executables.append(executable)
+if not executables:
+    raise SystemExit(1)
+print(executables[-1])
+'); then
+        log_error "Credential reservation Redis test compilation failed"
+        exit 1
+    fi
+    if [ ! -x "$credential_test_bin" ]; then
+        log_error "Credential reservation Redis test executable is missing: ${credential_test_bin}"
+        exit 1
+    fi
+    local target_root="${CARGO_TARGET_DIR:-${PROJECT_ROOT}/target}"
+    local stable_credential_test_bin="${target_root}/debug/credential_reservation_redis"
+    cp -f "$credential_test_bin" "$stable_credential_test_bin"
+    chmod 755 "$stable_credential_test_bin"
+    log_success "Ignored integration test executable prepared: ${stable_credential_test_bin}"
 
     # NOTE: prepare.sh is build-only. conf_sync mTLS certificates are runtime
     # material and are generated per work directory by the script that creates

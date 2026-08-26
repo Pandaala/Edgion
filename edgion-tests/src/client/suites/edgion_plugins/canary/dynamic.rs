@@ -35,11 +35,7 @@ fn extract_server_port(body: &str) -> Option<u16> {
 async fn check_routes_to(ctx: TestContext, expected_port: u16) -> TestResult {
     let start = Instant::now();
     let client = &ctx.http_client;
-    // ctx.http_url() defaults to the test_server backend (30001) under dynamic-scenario
-    // mode (ports.json has no "default" suite entry) — bypasses the gateway entirely.
-    // Hardcode the edgion-plugins-gateway listener port, matching the static Canary
-    // suite and other dynamic suites (e.g. basic_auth/dynamic.rs).
-    let url = format!("http://{}:31180/canary/api", ctx.target_host);
+    let url = format!("{}/canary/api", ctx.http_url());
     let request = client.get(&url).header("host", CANARY_HOST);
     match request.send().await {
         Ok(response) => {
@@ -110,7 +106,7 @@ impl CanaryHotSwapFinalTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let url = format!("http://{}:31180/echo", ctx.target_host);
+                    let url = format!("{}/echo", ctx.http_url());
                     match ctx.http_client.get(&url).header("host", CANARY_HOST).send().await {
                         Ok(response) => {
                             let status = response.status().as_u16();

@@ -8,6 +8,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::port_config::{PortKind, SuitePorts};
+
 /// Test context - contains all configuration information needed for testing
 #[derive(Clone)]
 pub struct TestContext {
@@ -138,6 +140,33 @@ impl TestContext {
         ctx
     }
 
+    pub fn with_ports(&self, ports: &SuitePorts) -> Self {
+        let mut ctx = self.clone();
+        if let Some(port) = ports.http {
+            ctx.http_port = port;
+            ctx.websocket_port = port;
+        }
+        if let Some(port) = ports.https {
+            ctx.https_port = port;
+        }
+        if let Some(port) = ports.grpc {
+            ctx.grpc_port = port;
+        }
+        if let Some(port) = ports.grpc_tls {
+            ctx.grpc_https_port = port;
+        }
+        if let Some(port) = ports.tcp.or(ports.tls) {
+            ctx.tcp_port = port;
+        }
+        if let Some(port) = ports.tcp_filtered {
+            ctx.tcp_filtered_port = port;
+        }
+        if let Some(port) = ports.udp {
+            ctx.udp_port = port;
+        }
+        ctx
+    }
+
     pub fn http_url(&self) -> String {
         format!("http://{}:{}", self.target_host, self.http_port)
     }
@@ -190,7 +219,7 @@ impl TestContext {
 
     /// Create a metrics client for this context
     pub fn metrics_client(&self) -> crate::metrics_helper::MetricsClient {
-        crate::metrics_helper::MetricsClient::from_host_port(&self.target_host, self.admin_port)
+        crate::metrics_helper::MetricsClient::from_host_port(&self.target_host, 12090)
     }
 
     /// Create an access log client for this context (Gateway Admin API port 12001)
@@ -415,7 +444,29 @@ impl TestCase {
 pub struct SuiteResult {
     pub name: String,
     pub test_results: Vec<(String, TestResult)>,
+    pub lifecycle_errors: Vec<SuiteLifecycleError>,
     pub duration: Duration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuiteLifecyclePhase {
+    Setup,
+    Teardown,
+}
+
+impl SuiteLifecyclePhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Setup => "setup",
+            Self::Teardown => "teardown",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SuiteLifecycleError {
+    pub phase: SuiteLifecyclePhase,
+    pub message: String,
 }
 
 impl SuiteResult {
@@ -429,6 +480,10 @@ impl SuiteResult {
 
     pub fn total_count(&self) -> usize {
         self.test_results.len()
+    }
+
+    pub fn has_failures(&self) -> bool {
+        self.failed_count() > 0 || !self.lifecycle_errors.is_empty()
     }
 }
 
@@ -446,6 +501,10 @@ pub trait TestSuite: Send + Sync {
         None
     }
 
+    fn port_kind(&self) -> PortKind {
+        PortKind::Http
+    }
+
     async fn setup(&self) -> anyhow::Result<()> {
         Ok(())
     }
@@ -461,10 +520,13 @@ pub trait TestSuite: Send + Sync {
 
         // Setup
         if let Err(e) = self.setup().await {
-            eprintln!("Setup failed for {}: {}", self.name(), e);
             return SuiteResult {
                 name: self.name().to_string(),
                 test_results,
+                lifecycle_errors: vec![SuiteLifecycleError {
+                    phase: SuiteLifecyclePhase::Setup,
+                    message: e.to_string(),
+                }],
                 duration: start.elapsed(),
             };
         }
@@ -476,24 +538,74 @@ pub trait TestSuite: Send + Sync {
         }
 
         // Teardown
-        if let Err(e) = self.teardown().await {
-            eprintln!("Teardown failed for {}: {}", self.name(), e);
-        }
+        let lifecycle_errors = self
+            .teardown()
+            .await
+            .err()
+            .map(|error| SuiteLifecycleError {
+                phase: SuiteLifecyclePhase::Teardown,
+                message: error.to_string(),
+            })
+            .into_iter()
+            .collect();
 
         SuiteResult {
             name: self.name().to_string(),
             test_results,
+            lifecycle_errors,
             duration: start.elapsed(),
         }
     }
+}
+
+struct ListenerMappedSuite {
+    inner: Box<dyn TestSuite>,
+    key: &'static str,
+    kind: PortKind,
+}
+
+#[async_trait]
+impl TestSuite for ListenerMappedSuite {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn test_cases(&self) -> Vec<TestCase> {
+        self.inner.test_cases()
+    }
+
+    fn port_key(&self) -> Option<&str> {
+        Some(self.key)
+    }
+
+    fn port_kind(&self) -> PortKind {
+        self.kind
+    }
+
+    async fn setup(&self) -> anyhow::Result<()> {
+        self.inner.setup().await
+    }
+
+    async fn teardown(&self) -> anyhow::Result<()> {
+        self.inner.teardown().await
+    }
+}
+
+pub fn with_listener(suite: Box<dyn TestSuite>, key: &'static str, kind: PortKind) -> Box<dyn TestSuite> {
+    Box::new(ListenerMappedSuite {
+        inner: suite,
+        key,
+        kind,
+    })
 }
 
 /// Test runner
 pub struct TestRunner {
     context: TestContext,
     suites: Vec<Box<dyn TestSuite>>,
-    /// Resolves a port config key (e.g. "HTTPRoute/Backend/WeightedBackend") to an HTTP port.
-    port_resolver: Option<Box<dyn Fn(&str) -> Option<u16> + Send + Sync>>,
+    /// Resolves a suite listener contract to its complete port set.
+    port_resolver: Option<Box<dyn Fn(&str, PortKind) -> Result<SuitePorts, String> + Send + Sync>>,
+    allow_empty_selection: bool,
 }
 
 impl TestRunner {
@@ -502,6 +614,7 @@ impl TestRunner {
             context,
             suites: Vec::new(),
             port_resolver: None,
+            allow_empty_selection: false,
         }
     }
 
@@ -509,35 +622,52 @@ impl TestRunner {
         self.suites.push(suite);
     }
 
-    pub fn set_port_resolver(&mut self, resolver: Box<dyn Fn(&str) -> Option<u16> + Send + Sync>) {
+    pub fn set_port_resolver(
+        &mut self,
+        resolver: Box<dyn Fn(&str, PortKind) -> Result<SuitePorts, String> + Send + Sync>,
+    ) {
         self.port_resolver = Some(resolver);
+    }
+
+    /// Explicitly allow a run that executes no test cases.
+    pub fn allow_empty_selection(&mut self) {
+        self.allow_empty_selection = true;
     }
 
     pub async fn run(&self) -> TestResults {
         let mut suite_results = Vec::new();
+        let mut run_errors = Vec::new();
 
         for suite in &self.suites {
             let ctx = match (suite.port_key(), &self.port_resolver) {
-                (Some(key), Some(resolver)) => {
-                    if let Some(port) = resolver(key) {
-                        self.context.with_http_port(port)
-                    } else {
-                        self.context.clone()
+                (Some(key), Some(resolver)) => match resolver(key, suite.port_kind()) {
+                    Ok(ports) => self.context.with_ports(&ports),
+                    Err(error) => {
+                        run_errors.push(format!("suite `{}` port resolution failed: {error}", suite.name()));
+                        continue;
                     }
-                }
+                },
                 _ => self.context.clone(),
             };
             let result = suite.run(&ctx).await;
             suite_results.push(result);
         }
 
-        TestResults { suite_results }
+        if !self.allow_empty_selection && suite_results.iter().map(SuiteResult::total_count).sum::<usize>() == 0 {
+            run_errors.push("test selection executed zero test cases".to_string());
+        }
+
+        TestResults {
+            suite_results,
+            run_errors,
+        }
     }
 }
 
 /// Test result
 pub struct TestResults {
     pub suite_results: Vec<SuiteResult>,
+    pub run_errors: Vec<String>,
 }
 
 impl TestResults {
@@ -556,12 +686,240 @@ impl TestResults {
     pub fn pass_rate(&self) -> f64 {
         let total = self.total_tests();
         if total == 0 {
-            return 100.0;
+            return 0.0;
         }
         (self.total_passed() as f64 / total as f64) * 100.0
     }
 
     pub fn has_failures(&self) -> bool {
-        self.total_failed() > 0
+        !self.run_errors.is_empty() || self.suite_results.iter().any(SuiteResult::has_failures)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::bail;
+
+    struct LifecycleSuite {
+        setup_fails: bool,
+        teardown_fails: bool,
+    }
+
+    #[async_trait]
+    impl TestSuite for LifecycleSuite {
+        fn name(&self) -> &str {
+            "lifecycle"
+        }
+
+        fn test_cases(&self) -> Vec<TestCase> {
+            vec![TestCase::new("passes", "", |_| {
+                Box::pin(async { TestResult::passed(Duration::ZERO) })
+            })]
+        }
+
+        async fn setup(&self) -> anyhow::Result<()> {
+            if self.setup_fails {
+                bail!("setup sentinel");
+            }
+            Ok(())
+        }
+
+        async fn teardown(&self) -> anyhow::Result<()> {
+            if self.teardown_fails {
+                bail!("teardown sentinel");
+            }
+            Ok(())
+        }
+    }
+
+    fn context() -> TestContext {
+        TestContext::new(
+            "127.0.0.1".to_string(),
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            None,
+            None,
+            false,
+            false,
+            PathBuf::from("unused.log"),
+        )
+    }
+
+    #[tokio::test]
+    async fn setup_failure_fails_the_run() {
+        let mut runner = TestRunner::new(context());
+        runner.allow_empty_selection();
+        runner.add_suite(Box::new(LifecycleSuite {
+            setup_fails: true,
+            teardown_fails: false,
+        }));
+
+        let results = runner.run().await;
+
+        assert!(results.has_failures());
+        assert!(results.run_errors.is_empty());
+        assert_eq!(results.suite_results[0].lifecycle_errors.len(), 1);
+        assert_eq!(
+            results.suite_results[0].lifecycle_errors[0].phase,
+            SuiteLifecyclePhase::Setup
+        );
+    }
+
+    #[tokio::test]
+    async fn teardown_failure_fails_the_run_after_cases_execute() {
+        let mut runner = TestRunner::new(context());
+        runner.add_suite(Box::new(LifecycleSuite {
+            setup_fails: false,
+            teardown_fails: true,
+        }));
+
+        let results = runner.run().await;
+
+        assert_eq!(results.total_passed(), 1);
+        assert!(results.has_failures());
+        assert_eq!(
+            results.suite_results[0].lifecycle_errors[0].phase,
+            SuiteLifecyclePhase::Teardown
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_selection_fails_unless_explicitly_allowed() {
+        let runner = TestRunner::new(context());
+        let results = runner.run().await;
+        assert!(results.has_failures());
+        assert_eq!(results.pass_rate(), 0.0);
+
+        let mut runner = TestRunner::new(context());
+        runner.allow_empty_selection();
+        let results = runner.run().await;
+        assert!(!results.has_failures());
+        assert!(results.run_errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn port_resolution_error_skips_the_suite_and_fails_the_run() {
+        struct PortSuite;
+
+        #[async_trait]
+        impl TestSuite for PortSuite {
+            fn name(&self) -> &str {
+                "port suite"
+            }
+
+            fn test_cases(&self) -> Vec<TestCase> {
+                vec![TestCase::new("must not run", "", |_| {
+                    Box::pin(async { panic!("suite ran with an unresolved listener") })
+                })]
+            }
+
+            fn port_key(&self) -> Option<&str> {
+                Some("missing")
+            }
+        }
+
+        let mut runner = TestRunner::new(context());
+        runner.add_suite(Box::new(PortSuite));
+        runner.set_port_resolver(Box::new(|key, _| Err(format!("missing `{key}`"))));
+
+        let results = runner.run().await;
+
+        assert!(results.has_failures());
+        assert_eq!(results.total_tests(), 0);
+        assert!(results
+            .run_errors
+            .iter()
+            .any(|error| error.contains("port resolution failed")));
+    }
+
+    #[tokio::test]
+    async fn mapped_suite_updates_only_its_declared_protocol_port() {
+        struct GrpcPortSuite;
+
+        #[async_trait]
+        impl TestSuite for GrpcPortSuite {
+            fn name(&self) -> &str {
+                "gRPC port suite"
+            }
+
+            fn test_cases(&self) -> Vec<TestCase> {
+                vec![TestCase::new("uses mapped gRPC port", "", |ctx| {
+                    Box::pin(async move {
+                        if ctx.grpc_port == 4242 && ctx.http_port == 1 {
+                            TestResult::passed(Duration::ZERO)
+                        } else {
+                            TestResult::failed(
+                                Duration::ZERO,
+                                format!("unexpected HTTP/gRPC ports: {}/{}", ctx.http_port, ctx.grpc_port),
+                            )
+                        }
+                    })
+                })]
+            }
+        }
+
+        let mut runner = TestRunner::new(context());
+        runner.add_suite(with_listener(Box::new(GrpcPortSuite), "grpc", PortKind::Grpc));
+        runner.set_port_resolver(Box::new(|key, kind| {
+            assert_eq!(key, "grpc");
+            assert_eq!(kind, PortKind::Grpc);
+            Ok(SuitePorts {
+                grpc: Some(4242),
+                ..SuitePorts::default()
+            })
+        }));
+
+        let results = runner.run().await;
+        assert!(!results.has_failures());
+        assert_eq!(results.total_passed(), 1);
+    }
+
+    #[tokio::test]
+    async fn mapped_tcp_suite_receives_secondary_listener_ports() {
+        struct TcpPortSuite;
+
+        #[async_trait]
+        impl TestSuite for TcpPortSuite {
+            fn name(&self) -> &str {
+                "TCP port suite"
+            }
+
+            fn test_cases(&self) -> Vec<TestCase> {
+                vec![TestCase::new("uses both TCP ports", "", |ctx| {
+                    Box::pin(async move {
+                        if ctx.tcp_port == 4242 && ctx.tcp_filtered_port == 4243 {
+                            TestResult::passed(Duration::ZERO)
+                        } else {
+                            TestResult::failed(
+                                Duration::ZERO,
+                                format!("unexpected TCP ports: {}/{}", ctx.tcp_port, ctx.tcp_filtered_port),
+                            )
+                        }
+                    })
+                })]
+            }
+        }
+
+        let mut runner = TestRunner::new(context());
+        runner.add_suite(with_listener(Box::new(TcpPortSuite), "tcp", PortKind::Tcp));
+        runner.set_port_resolver(Box::new(|_, _| {
+            Ok(SuitePorts {
+                tcp: Some(4242),
+                tcp_filtered: Some(4243),
+                ..SuitePorts::default()
+            })
+        }));
+
+        let results = runner.run().await;
+        assert!(!results.has_failures());
+        assert_eq!(results.total_passed(), 1);
     }
 }

@@ -32,12 +32,17 @@ REQUIRED_NOFILE=65535
 
 # Report file path (will be set after WORK_DIR is determined)
 REPORT_FILE=""
+REPORT_STARTED_AT="$(date '+%Y-%m-%d %H:%M:%S')"
+REPORT_ENTRIES=()
+REPORT_FINALIZED=false
+REPORT_PHASE="argument parsing"
 
 # Test counters
 TOTAL_TESTS=0
 PASSED_TESTS=0
 FAILED_TESTS=0
 SKIPPED_TESTS=0
+TIMED_OUT_TESTS=0
 
 # LDAP integration dependency (OpenLDAP via Docker Compose)
 LDAP_COMPOSE_DIR=""
@@ -73,6 +78,10 @@ CONTROLLER_GRPC_PORT=12151
 # default bounded because each job may start its own Controller and Gateway.
 INTEGRATION_JOBS="${EDGION_INTEGRATION_JOBS:-4}"
 ISOLATED_SCENARIO_PIDS=()
+ISOLATED_SCENARIO_TIMEOUT_SECONDS="${EDGION_ISOLATED_SCENARIO_TIMEOUT_SECONDS:-900}"
+ISOLATED_PHASE_TIMEOUT_SECONDS="${EDGION_ISOLATED_PHASE_TIMEOUT_SECONDS:-1800}"
+DEADLINE_GRACE_SECONDS="${EDGION_DEADLINE_GRACE_SECONDS:-10}"
+DEADLINE_RUNNER="${UTILS_DIR}/run_with_deadline.py"
 
 # Gateway admin bearer token. The gateway admin API (incl. the /api/v1/testing/*
 # access-log endpoints) is auth-guarded, so test_client's AccessLogClient must
@@ -329,55 +338,109 @@ check_single_gateway_process() {
 # Report functions
 # =============================================================================
 init_report() {
-    REPORT_FILE="${WORK_DIR}/report.log"
-    echo "========================================" > "$REPORT_FILE"
-    echo "Edgion Integration Test Report" >> "$REPORT_FILE"
-    echo "Time: $(date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
-    echo "Work Dir: ${WORK_DIR}" >> "$REPORT_FILE"
-    echo "Full Test: ${FULL_TEST}" >> "$REPORT_FILE"
-    echo "========================================" >> "$REPORT_FILE"
-    echo "" >> "$REPORT_FILE"
+    local pending_report="$REPORT_FILE"
+    local final_report="${WORK_DIR}/report.log"
+    if [ -n "$pending_report" ] && [ "$pending_report" != "$final_report" ] && [ -f "$pending_report" ]; then
+        mv -f "$pending_report" "$final_report"
+    fi
+    REPORT_FILE="$final_report"
+    write_report "INCOMPLETE"
+}
+
+init_pending_report() {
+    local report_root="${PROJECT_ROOT}/tmp/integration_testing"
+    mkdir -p "$report_root"
+    REPORT_FILE="${report_root}/report-pending-$(date +%Y%m%d_%H%M%S)-$$.log"
+    write_report "INCOMPLETE" "$REPORT_FILE" "not-created"
 }
 
 report_test() {
     local name=$1
     local result=$2
     local duration=$3
+    local detail="${4:-}"
+    local entry
     
     # Arithmetic assignments always return success under `set -e`; standalone
     # increment commands couple control flow to the expression value.
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     if [ "$result" = "PASS" ]; then
         PASSED_TESTS=$((PASSED_TESTS + 1))
-        echo "[PASS] ${name} (${duration}s)" >> "$REPORT_FILE"
+        entry="[PASS] ${name} (${duration}s)"
     elif [ "$result" = "SKIP" ]; then
         SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
-        echo "[SKIP] ${name} (${duration}s)" >> "$REPORT_FILE"
+        entry="[SKIP] ${name} (${duration}s)"
+    elif [ "$result" = "TIMEOUT" ]; then
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        TIMED_OUT_TESTS=$((TIMED_OUT_TESTS + 1))
+        entry="[TIMEOUT] ${name} (${duration}s)"
     else
         FAILED_TESTS=$((FAILED_TESTS + 1))
-        echo "[FAIL] ${name} (${duration}s)" >> "$REPORT_FILE"
+        entry="[FAIL] ${name} (${duration}s)"
+    fi
+    if [ -n "$detail" ]; then
+        entry="${entry} - ${detail}"
+    fi
+    REPORT_ENTRIES+=("$entry")
+
+    # Keep an atomically refreshed incomplete report during the run. Entries
+    # recorded before the shared stack creates WORK_DIR remain buffered and are
+    # written by init_report once the canonical report path is known.
+    if [ -n "$REPORT_FILE" ]; then
+        write_report "INCOMPLETE"
     fi
 }
 
-finalize_report() {
-    echo "" >> "$REPORT_FILE"
-    echo "========================================" >> "$REPORT_FILE"
-    echo "Summary" >> "$REPORT_FILE"
-    echo "========================================" >> "$REPORT_FILE"
-    echo "Total:  ${TOTAL_TESTS}" >> "$REPORT_FILE"
-    echo "Passed: ${PASSED_TESTS}" >> "$REPORT_FILE"
-    echo "Failed: ${FAILED_TESTS}" >> "$REPORT_FILE"
-    echo "Skipped: ${SKIPPED_TESTS}" >> "$REPORT_FILE"
+write_report() {
+    local status=$1
+    local target_file="${2:-$REPORT_FILE}"
+    local report_work_dir="${3:-${WORK_DIR:-not-created}}"
+    local target_dir
+    target_dir=$(dirname "$target_file")
+    mkdir -p "$target_dir"
+    local tmp_file
+    tmp_file=$(mktemp "${target_file}.tmp.XXXXXX")
     local executed_tests=$((PASSED_TESTS + FAILED_TESTS))
-    if [ $executed_tests -gt 0 ]; then
-        local pass_rate=$((PASSED_TESTS * 100 / executed_tests))
-        echo "Pass Rate: ${pass_rate}%" >> "$REPORT_FILE"
-    fi
-    echo "========================================" >> "$REPORT_FILE"
-    
+    {
+        echo "========================================"
+        echo "Edgion Integration Test Report"
+        echo "Started: ${REPORT_STARTED_AT}"
+        echo "Updated: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "Status: ${status}"
+        echo "Work Dir: ${report_work_dir}"
+        echo "Full Test: ${FULL_TEST}"
+        echo "========================================"
+        echo ""
+        local entry
+        for entry in "${REPORT_ENTRIES[@]-}"; do
+            [ -n "$entry" ] && echo "$entry"
+        done
+        echo ""
+        echo "========================================"
+        echo "Summary"
+        echo "========================================"
+        echo "Total:  ${TOTAL_TESTS}"
+        echo "Passed: ${PASSED_TESTS}"
+        echo "Failed: ${FAILED_TESTS}"
+        echo "Timed out: ${TIMED_OUT_TESTS}"
+        echo "Skipped: ${SKIPPED_TESTS}"
+        if [ $executed_tests -gt 0 ]; then
+            local pass_rate=$((PASSED_TESTS * 100 / executed_tests))
+            echo "Pass Rate: ${pass_rate}%"
+        fi
+        echo "========================================"
+    } > "$tmp_file"
+    mv -f "$tmp_file" "$target_file"
+}
+
+finalize_report() {
+    local status=$1
+    write_report "$status"
+
     # Also print to console
     echo ""
     echo "Report saved to: ${REPORT_FILE}"
+    REPORT_FINALIZED=true
 }
 
 # =============================================================================
@@ -394,10 +457,13 @@ run_dynamic_scenarios() {
     fi
 
     local ids
-    ids=$("$test_client" --list-dynamic-scenarios 2>/dev/null || true)
+    if ! ids=$("$test_client" --list-dynamic-scenarios); then
+        log_error "Dynamic scenario enumeration failed: $test_client --list-dynamic-scenarios"
+        return 1
+    fi
     if [ -z "$ids" ]; then
-        log_info "No dynamic scenarios registered (--list-dynamic-scenarios returned empty)"
-        return 0
+        log_error "Dynamic scenario enumeration returned an empty registry"
+        return 1
     fi
 
     local scenario
@@ -413,6 +479,8 @@ run_dynamic_scenarios() {
 # Isolated standalone scenarios
 # =============================================================================
 run_isolated_scenarios() {
+    local phase_started_at
+    phase_started_at=$(date +%s)
     local names=(
         "controller_auth"
         "gateway_admin_auth"
@@ -430,7 +498,19 @@ run_isolated_scenarios() {
         "${SCRIPT_DIR}/test_unknown_config_fields.sh"
     )
 
-    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    local proxy_scenarios_skipped=false
+    local docker_probe_timeout=15
+    local probe_now probe_elapsed probe_remaining
+    probe_now=$(date +%s)
+    probe_elapsed=$((probe_now - phase_started_at))
+    probe_remaining=$((ISOLATED_PHASE_TIMEOUT_SECONDS - probe_elapsed))
+    if [ "$probe_remaining" -lt "$docker_probe_timeout" ]; then
+        docker_probe_timeout="$probe_remaining"
+    fi
+    if [ "$docker_probe_timeout" -gt 0 ] \
+        && command -v docker >/dev/null 2>&1 \
+        && python3 "$DEADLINE_RUNNER" --timeout-secs "$docker_probe_timeout" --grace-secs "$DEADLINE_GRACE_SECONDS" -- \
+            docker info >/dev/null 2>&1; then
         names+=("proxy_protocol_inbound" "proxy_protocol_chain")
         commands+=(
             "${SCRIPT_DIR}/test_proxy_protocol_inbound.sh"
@@ -438,6 +518,7 @@ run_isolated_scenarios() {
         )
     else
         log_warn "docker unavailable; skipping PROXY protocol suites"
+        proxy_scenarios_skipped=true
     fi
 
     local log_dir="${PROJECT_ROOT}/tmp/integration_testing/isolated_$(date +%Y%m%d_%H%M%S)_$$"
@@ -463,10 +544,17 @@ run_isolated_scenarios() {
         if wait "$pid"; then
             duration=$(( $(date +%s) - ${starts[$wait_index]} ))
             log_success "${name} passed (${duration}s)"
+            report_test "Isolated_${name}" "PASS" "$duration"
         else
             local rc=$?
             duration=$(( $(date +%s) - ${starts[$wait_index]} ))
-            log_error "${name} failed (rc=${rc}, ${duration}s): ${log_file}"
+            if [ "$rc" -eq 124 ]; then
+                log_error "${name} timed out (${duration}s): ${log_file}"
+                report_test "Isolated_${name}" "TIMEOUT" "$duration" "deadline exceeded; log=${log_file}"
+            else
+                log_error "${name} failed (rc=${rc}, ${duration}s): ${log_file}"
+                report_test "Isolated_${name}" "FAIL" "$duration" "rc=${rc}; log=${log_file}"
+            fi
             tail -20 "$log_file" 2>/dev/null || true
             failed=true
         fi
@@ -496,10 +584,32 @@ run_isolated_scenarios() {
             fi
         done
 
+        local now phase_elapsed phase_remaining scenario_timeout
+        now=$(date +%s)
+        phase_elapsed=$((now - phase_started_at))
+        phase_remaining=$((ISOLATED_PHASE_TIMEOUT_SECONDS - phase_elapsed))
+        if [ "$phase_remaining" -lt 1 ]; then
+            while [ "$index" -lt "${#names[@]}" ]; do
+                log_error "${names[$index]} not started: isolated phase deadline reached"
+                report_test "Isolated_${names[$index]}" "TIMEOUT" "0" "phase deadline reached before start"
+                failed=true
+                index=$((index + 1))
+            done
+            break
+        fi
+        if [ "$phase_remaining" -lt "$ISOLATED_SCENARIO_TIMEOUT_SECONDS" ]; then
+            scenario_timeout="$phase_remaining"
+        else
+            scenario_timeout="$ISOLATED_SCENARIO_TIMEOUT_SECONDS"
+        fi
+
         local name="${names[$index]}"
         local log_file="${log_dir}/${name}.log"
         log_info "Starting isolated scenario: ${name}"
-        "${commands[$index]}" > "$log_file" 2>&1 &
+        python3 "$DEADLINE_RUNNER" \
+            --timeout-secs "$scenario_timeout" \
+            --grace-secs "$DEADLINE_GRACE_SECONDS" \
+            -- "${commands[$index]}" > "$log_file" 2>&1 &
         pids+=("$!")
         ISOLATED_SCENARIO_PIDS+=("$!")
         logs+=("$log_file")
@@ -517,8 +627,15 @@ run_isolated_scenarios() {
 
     unset -f reap_finished_isolated_scenarios
     unset -f wait_for_isolated_scenario
+    if $proxy_scenarios_skipped; then
+        report_test "Isolated_proxy_protocol_inbound" "SKIP" "0" "docker unavailable"
+        report_test "Isolated_proxy_protocol_chain" "SKIP" "0" "docker unavailable"
+    fi
     if $failed; then
         log_error "One or more isolated scenarios failed"
+        local failure_report="${log_dir}/report.log"
+        write_report "INCOMPLETE" "$failure_report" "$log_dir"
+        log_info "Isolated failure report: ${failure_report}"
         return 1
     fi
     log_success "All isolated scenarios passed"
@@ -528,8 +645,19 @@ run_isolated_scenarios() {
 # Cleanup function
 # =============================================================================
 cleanup() {
+    local exit_code=$?
+    set +e
+
+    if [ "$REPORT_FINALIZED" != "true" ] && [ -n "$REPORT_FILE" ]; then
+        if [ "$exit_code" -ne 0 ]; then
+            report_test "Run_Aborted" "FAIL" "0" "phase=${REPORT_PHASE}; exit=${exit_code}"
+        fi
+        write_report "INCOMPLETE"
+        log_info "Incomplete report saved to: ${REPORT_FILE}"
+    fi
+
     local isolated_pid
-    for isolated_pid in "${ISOLATED_SCENARIO_PIDS[@]}"; do
+    for isolated_pid in "${ISOLATED_SCENARIO_PIDS[@]-}"; do
         if [ -n "$isolated_pid" ] && kill -0 "$isolated_pid" 2>/dev/null; then
             kill "$isolated_pid" 2>/dev/null || true
             wait "$isolated_pid" 2>/dev/null || true
@@ -563,6 +691,8 @@ cleanup() {
             log_info "Redis test service still running (keep-alive mode): ${REDIS_COMPOSE_FILE}"
         fi
     fi
+
+    return "$exit_code"
 }
 
 is_ldap_service_required() {
@@ -1012,15 +1142,19 @@ get_gateway_server_id() {
 # =============================================================================
 # Verify all `role="..."` label values in /metrics are in the expected whitelist.
 # Defends against cardinality explosion from typos / new roles introduced unintentionally.
-# Returns 0 on success, 1 on bad label found.
+# Returns 0 only when the endpoint was read and all labels are valid.
 # =============================================================================
 verify_metrics_labels() {
     local endpoint=$1 component=$2
-    local body
-    body=$(curl -sf -m 5 "$endpoint" 2>/dev/null)
-    if [ -z "$body" ]; then
-        log_warn "[$component] /metrics not reachable: $endpoint (skipping label check)"
-        return 0
+    local body curl_rc
+    if body=$(curl -sf -m 5 "$endpoint" 2>/dev/null); then
+        curl_rc=0
+    else
+        curl_rc=$?
+    fi
+    if [ $curl_rc -ne 0 ] || [ -z "$body" ]; then
+        log_error "[$component] /metrics could not be read: $endpoint (curl rc=${curl_rc})"
+        return 1
     fi
 
     # Extract all role="..." label values, dedup
@@ -1063,19 +1197,18 @@ verify_metrics_labels() {
 # suite. See `test_unknown_config_fields.sh` for the matching proof of
 # PRESENCE (a dedicated scenario that deliberately trips this check).
 #
-# Returns 0 when the endpoint is reachable and total == 0, or when the
-# endpoint could not be reached (infra noise, logged explicitly so the two
-# cases are never conflated -- see verify_metrics_labels above for the same
-# precedent). Returns 1 when total > 0, after printing every
+# Returns 0 only when the authenticated endpoint is reachable and total == 0.
+# Infrastructure and authentication errors fail closed, just like a non-zero
+# total, so a caller cannot mistake an unperformed validation for success. The
+# function prints every
 # "kind/namespace/name -> paths" line so the operator can act without
 # digging further.
 # =============================================================================
 verify_no_unknown_config_fields() {
     local controller_url="${1:-http://127.0.0.1:12101}"
-    ensure_ctrl_admin_token || true
-    if [ -z "$CTRL_ADMIN_TOKEN" ]; then
-        log_warn "Unknown-config-fields check skipped -- controller admin token unavailable (infra, not a finding)"
-        return 0
+    if ! ensure_ctrl_admin_token || [ -z "$CTRL_ADMIN_TOKEN" ]; then
+        log_error "Unknown-config-fields check failed -- controller admin token unavailable"
+        return 1
     fi
 
     # Separate "could not reach the controller at all" (infra noise -- skip) from
@@ -1085,12 +1218,16 @@ verify_no_unknown_config_fields() {
     # would have made this guard permanently, silently green after such a
     # regression -- defeating the only thing it exists to do.
     local response http_code body
-    response=$(curl -s -m 10 -w $'\n%{http_code}' -H "Authorization: Bearer ${CTRL_ADMIN_TOKEN}" \
-        "${controller_url}/api/v1/diagnostics/unknown-fields" 2>/dev/null)
-    local curl_rc=$?
+    local curl_rc
+    if response=$(curl -s -m 10 -w $'\n%{http_code}' -H "Authorization: Bearer ${CTRL_ADMIN_TOKEN}" \
+        "${controller_url}/api/v1/diagnostics/unknown-fields" 2>/dev/null); then
+        curl_rc=0
+    else
+        curl_rc=$?
+    fi
     if [ $curl_rc -ne 0 ]; then
-        log_warn "Unknown-config-fields check skipped -- diagnostics endpoint unreachable (curl rc=${curl_rc}): ${controller_url} (infra, not a finding)"
-        return 0
+        log_error "Unknown-config-fields check failed -- diagnostics endpoint unreachable (curl rc=${curl_rc}): ${controller_url}"
+        return 1
     fi
     http_code=$(echo "$response" | tail -1)
     body=$(echo "$response" | sed '$d')
@@ -1104,29 +1241,48 @@ verify_no_unknown_config_fields() {
         return 1
     fi
 
-    local report
-    report=$(echo "$body" | python3 -c '
+    local report parse_rc
+    if report=$(printf '%s' "$body" | python3 -c '
 import json, sys
 try:
     doc = json.load(sys.stdin)
 except Exception:
-    print("PARSE_ERROR")
-    sys.exit(0)
+    sys.exit(1)
 data = doc.get("data") if isinstance(doc, dict) else None
-if not isinstance(data, dict):
-    print("PARSE_ERROR")
-    sys.exit(0)
-total = data.get("total", 0)
+if not isinstance(doc, dict) or doc.get("success") is not True or not isinstance(data, dict):
+    sys.exit(1)
+total = data.get("total")
+truncated = data.get("truncated")
+items = data.get("items")
+if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+    sys.exit(1)
+if not isinstance(truncated, bool) or not isinstance(items, list):
+    sys.exit(1)
+if (truncated and total <= len(items)) or (not truncated and total != len(items)):
+    sys.exit(1)
 print(f"TOTAL={total}")
-for item in data.get("items", []):
-    kind = item.get("kind", "?")
-    ns = item.get("namespace", "")
-    name = item.get("name", "?")
-    paths = ", ".join(item.get("paths", []))
+for item in items:
+    if not isinstance(item, dict):
+        sys.exit(1)
+    kind = item.get("kind")
+    ns = item.get("namespace")
+    name = item.get("name")
+    paths = item.get("paths")
+    if not isinstance(kind, str) or not kind or not isinstance(ns, str):
+        sys.exit(1)
+    if not isinstance(name, str) or not name or not isinstance(paths, list) or not paths:
+        sys.exit(1)
+    if any(not isinstance(path, str) or not path for path in paths):
+        sys.exit(1)
+    paths = ", ".join(paths)
     print(f"{kind}/{ns}/{name} -> {paths}")
-' 2>/dev/null)
+' 2>/dev/null); then
+        parse_rc=0
+    else
+        parse_rc=$?
+    fi
 
-    if [ -z "$report" ] || [ "$report" = "PARSE_ERROR" ]; then
+    if [ $parse_rc -ne 0 ] || [ -z "$report" ]; then
         # A 200 response whose body is not the documented shape means the
         # endpoint's contract changed. Failing here is the point: silently
         # skipping would hide exactly the regression this guard must catch.
@@ -1137,6 +1293,13 @@ for item in data.get("items", []):
     local total_line total
     total_line=$(echo "$report" | head -1)
     total=${total_line#TOTAL=}
+
+    case "$total" in
+        ''|*[!0-9]*)
+            log_error "Diagnostics endpoint returned an invalid total: ${total:-empty}"
+            return 1
+            ;;
+    esac
 
     if [ "${total:-0}" -gt 0 ] 2>/dev/null; then
         log_error "Unknown config fields detected on ${total} resource(s):"
@@ -1188,6 +1351,8 @@ show_help() {
     echo "  --keep-alive           Keep services running after end (default will stop)"
     echo "  --full-test            Run all tests including slow tests (timeout, etc.)"
     echo "  --jobs <N>             Max parallel isolated scenarios (default: 4)"
+    echo "  --isolated-timeout-secs <N>       Per-isolated-scenario deadline (default: 900)"
+    echo "  --isolated-phase-timeout-secs <N> Whole isolated phase deadline (default: 1800)"
     echo "  --controller-grpc-port <port>  Override controller/gateway gRPC sync port (default: 12151)"
     echo "  --suites <list>        Specify test suites to load (comma separated)"
     echo "  --with-reload          Run tests twice with reload in between (verify server_id changes)"
@@ -1216,6 +1381,16 @@ G_ITEM=""
 # =============================================================================
 # Run all tests function (can be called multiple times)
 # =============================================================================
+run_credential_reservation_redis_test() {
+    local test_bin="${EDGION_CREDENTIAL_RESERVATION_TEST_BIN:-}"
+    if [ -z "$test_bin" ] || [ ! -x "$test_bin" ]; then
+        log_error "Credential reservation Redis test executable is unavailable: ${test_bin:-not configured}"
+        report_test "CredentialReservationRedis" "FAIL" "0" "precompiled executable unavailable"
+        return 1
+    fi
+    run_test "CredentialReservationRedis" "${test_bin} --ignored --nocapture"
+}
+
 run_all_tests() {
     local round_name="${1:-}"
     local test_failed=false
@@ -1236,12 +1411,12 @@ run_all_tests() {
                     run_test "EdgionBackend_AnthropicProvider" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i AnthropicProvider" || test_failed=true
                     run_test "EdgionBackend_Resilience" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i Resilience" || test_failed=true
                     run_test "EdgionBackend_CredentialExhaustion" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i CredentialExhaustion" || test_failed=true
-                    run_test "CredentialReservationRedis" "cargo test --manifest-path ${PROJECT_ROOT}/Cargo.toml -p edgion-tests --test credential_reservation_redis -- --ignored --nocapture" || test_failed=true
+                    run_credential_reservation_redis_test || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "EdgionBackend_${item_safe}" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i ${G_ITEM}" || test_failed=true
                     if [ "$G_ITEM" = "CredentialExhaustion" ]; then
-                        run_test "CredentialReservationRedis" "cargo test --manifest-path ${PROJECT_ROOT}/Cargo.toml -p edgion-tests --test credential_reservation_redis -- --ignored --nocapture" || test_failed=true
+                        run_credential_reservation_redis_test || test_failed=true
                     fi
                 fi
                 ;;
@@ -1501,7 +1676,7 @@ run_all_tests() {
         run_test "EdgionBackend_AnthropicProvider" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i AnthropicProvider" || test_failed=true
         run_test "EdgionBackend_Resilience" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i Resilience" || test_failed=true
         run_test "EdgionBackend_CredentialExhaustion" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionBackend -i CredentialExhaustion" || test_failed=true
-        run_test "CredentialReservationRedis" "cargo test --manifest-path ${PROJECT_ROOT}/Cargo.toml -p edgion-tests --test credential_reservation_redis -- --ignored --nocapture" || test_failed=true
+        run_credential_reservation_redis_test || test_failed=true
         
         # HTTPRoute Tests
         run_test "HTTPRoute_Basic" "${EDGION_TEST_CLIENT_BIN} -g http" || test_failed=true
@@ -1722,13 +1897,13 @@ run_all_tests() {
         fi
 
         # Dynamic scenarios (always run as part of full test cycle)
-        run_dynamic_scenarios
+        run_dynamic_scenarios || test_failed=true
     fi
 
     # A resource-wide Gateway sweep loads the dynamic fixtures. An exact
     # Gateway item only loads that item's fixtures and must remain isolated.
     if [ "$G_RESOURCE" = "Gateway" ] && [ -z "$G_ITEM" ]; then
-        run_dynamic_scenarios
+        run_dynamic_scenarios || test_failed=true
     fi
 
     if $test_failed; then
@@ -1781,6 +1956,16 @@ main() {
                 INTEGRATION_JOBS="$2"
                 shift 2
                 ;;
+            --isolated-timeout-secs)
+                if [ $# -lt 2 ]; then log_error "Missing argument for --isolated-timeout-secs"; exit 2; fi
+                ISOLATED_SCENARIO_TIMEOUT_SECONDS="$2"
+                shift 2
+                ;;
+            --isolated-phase-timeout-secs)
+                if [ $# -lt 2 ]; then log_error "Missing argument for --isolated-phase-timeout-secs"; exit 2; fi
+                ISOLATED_PHASE_TIMEOUT_SECONDS="$2"
+                shift 2
+                ;;
             --controller-grpc-port)
                 CONTROLLER_GRPC_PORT="$2"
                 shift 2
@@ -1819,7 +2004,33 @@ main() {
         log_error "--jobs must be at least 1"
         exit 2
     fi
+    local deadline_value deadline_label
+    for deadline_label in isolated-scenario isolated-phase deadline-grace; do
+        case "$deadline_label" in
+            isolated-scenario) deadline_value="$ISOLATED_SCENARIO_TIMEOUT_SECONDS" ;;
+            isolated-phase) deadline_value="$ISOLATED_PHASE_TIMEOUT_SECONDS" ;;
+            deadline-grace) deadline_value="$DEADLINE_GRACE_SECONDS" ;;
+        esac
+        case "$deadline_value" in
+            ''|*[!0-9]*)
+                log_error "${deadline_label} timeout must be a positive integer"
+                exit 2
+                ;;
+        esac
+        if [ "$deadline_value" -lt 1 ]; then
+            log_error "${deadline_label} timeout must be at least 1"
+            exit 2
+        fi
+    done
+    if [ ! -f "$DEADLINE_RUNNER" ]; then
+        log_error "Deadline runner not found: ${DEADLINE_RUNNER}"
+        exit 2
+    fi
     
+    # Create durable run evidence before any preflight or isolated scenario.
+    REPORT_PHASE="preflight initialization"
+    init_pending_report
+
     # Setup cleanup on exit
     trap cleanup EXIT
     
@@ -1907,6 +2118,8 @@ main() {
     # Fast mode guard: LDAP integration test is complex (Docker-required), full-test only.
     if ! $FULL_TEST && [ "$G_RESOURCE" = "EdgionPlugins" ] && [ "$G_ITEM" = "LdapAuth" ]; then
         log_info "EdgionPlugins/LdapAuth is a complex Docker-based test and requires --full-test"
+        report_test "Target_EdgionPlugins_LdapAuth" "SKIP" "0" "requires --full-test"
+        finalize_report "PASS"
         DO_CLEANUP=false
         exit 0
     fi
@@ -1914,6 +2127,8 @@ main() {
     # Fast mode guard: LDAP TLS integration test requires Docker, full-test only.
     if ! $FULL_TEST && [ "$G_RESOURCE" = "EdgionPlugins" ] && [ "$G_ITEM" = "LdapAuthTls" ]; then
         log_info "EdgionPlugins/LdapAuthTls is a complex Docker-based test and requires --full-test"
+        report_test "Target_EdgionPlugins_LdapAuthTls" "SKIP" "0" "requires --full-test"
+        finalize_report "PASS"
         DO_CLEANUP=false
         exit 0
     fi
@@ -1959,6 +2174,8 @@ main() {
     fi
     export EDGION_GATEWAY_BIN="${gateway_bin_dir}/edgion-gateway"
     export EDGION_TEST_CLIENT_BIN="${gateway_bin_dir}/test_client"
+    export EDGION_CACHE_RESIDUE_BIN="${gateway_bin_dir}/cache_residue"
+    export EDGION_CREDENTIAL_RESERVATION_TEST_BIN="${gateway_bin_dir}/credential_reservation_redis"
     export EDGION_CAPABILITY_REGISTRY="${PROJECT_ROOT}/edgion-tests/integration/capabilities.tsv"
     if [ -n "$G_RESOURCE" ] && [ -n "$G_ITEM" ]; then
         export EDGION_INTEGRATION_EXPLICIT_TARGET=1
@@ -1969,109 +2186,97 @@ main() {
     # =============================================================================
     # Pre-flight Check 0: Only English letter scripts allowed outside docs/ and tasks/
     # =============================================================================
+    REPORT_PHASE="English-only preflight"
     log_section "Pre-flight Check: English-Only Lint"
     if ! "${PROJECT_ROOT}/cicd/checks/check_english_only.sh"; then
         log_error "English-only check failed — translate offending text to English before running integration tests"
+        report_test "Preflight_EnglishOnly" "FAIL" "0"
         exit 1
     fi
     log_success "English-only check passed"
+    report_test "Preflight_EnglishOnly" "PASS" "0"
 
     # =============================================================================
     # Pre-flight Check 1: Agent-doc validation (links, frontmatter, indexes, ...)
     # =============================================================================
+    REPORT_PHASE="agent-doc preflight"
     log_section "Pre-flight Check: Agent-doc Validation"
     if ! python3 "${PROJECT_ROOT}/cicd/checks/validate_agent_docs.py"; then
         log_error "Agent-doc validation failed — fix doc consistency issues before running integration tests"
+        report_test "Preflight_AgentDocs" "FAIL" "0"
         exit 1
     fi
     log_success "Agent-doc validation passed"
+    report_test "Preflight_AgentDocs" "PASS" "0"
 
     # =============================================================================
     # Pre-flight Check 2: edgion-resources leaf purity (no crate::core:: edges)
     # =============================================================================
+    REPORT_PHASE="types-purity preflight"
     log_section "Pre-flight Check: Types Purity"
     if ! "${PROJECT_ROOT}/cicd/checks/check_types_purity.sh"; then
         log_error "Types-purity check failed — edgion-resources must stay a clean leaf (no crate::core:: edges)"
+        report_test "Preflight_TypesPurity" "FAIL" "0"
         exit 1
     fi
     log_success "Types-purity check passed"
+    report_test "Preflight_TypesPurity" "PASS" "0"
 
     # =============================================================================
     # Pre-flight Check 3: shared shell portability
     # =============================================================================
+    REPORT_PHASE="Bash portability preflight"
     log_section "Pre-flight Check: Bash Portability"
     if ! "${PROJECT_ROOT}/cicd/checks/check_bash_set_e_increment.sh"; then
         log_error "Bash portability check failed -- replace bare arithmetic increments with assignments"
+        report_test "Preflight_BashPortability" "FAIL" "0" "increment guard"
         exit 1
     fi
     if ! "${PROJECT_ROOT}/cicd/checks/tests/shell_compat_test.sh"; then
         log_error "Shared shell compatibility self-test failed"
+        report_test "Preflight_BashPortability" "FAIL" "0" "shell compatibility"
         exit 1
     fi
     log_success "Bash portability check passed"
+    report_test "Preflight_BashPortability" "PASS" "0"
 
-    if ! ensure_nofile_limit "$REQUIRED_NOFILE"; then
-        log_error "File descriptor limit check failed"
-        exit 1
-    fi
-
-    # The AI provider suites use only 127.0.0.1. Do not require the
-    # macOS-only aliases that belong exclusively to the LB endpoint suites.
-    if [ "$G_RESOURCE" = "EdgionBackend" ] && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "AnthropicProvider" ] || [ "$G_ITEM" = "Resilience" ] || [ "$G_ITEM" = "CredentialExhaustion" ]; }; then
-        log_info "Skipping LB loopback-alias check for EdgionBackend${G_ITEM:+/${G_ITEM}}"
-    elif ! ensure_loopback_aliases; then
-        log_error "Loopback alias check failed"
-        exit 1
-    fi
-
-    if ! check_docker_environment_ready; then
-        log_error "Docker environment check failed"
-        exit 1
-    fi
-
-    # Step 0: Start external dependencies when needed
-    if ! start_ldap_service_if_needed; then
-        log_error "Failed to start external LDAP dependency"
-        exit 1
-    fi
-
-    if ! start_ldap_tls_service_if_needed; then
-        log_error "Failed to start external LDAP TLS dependency"
-        exit 1
-    fi
-
-    if ! start_redis_service_if_needed; then
-        log_error "Failed to start external Redis dependency"
-        exit 1
-    fi
-
-    # Step 1: Build
+    # Complete the canonical build and validate every artifact before changing
+    # host networking or starting any external dependency or test process.
+    REPORT_PHASE="build"
     if $do_prepare; then
         log_section "Step 1: Build all components"
         if ! "${UTILS_DIR}/prepare.sh"; then
             log_error "Build failed"
+            report_test "Build" "FAIL" "0"
             exit 1
         fi
         log_success "Build completed"
+        report_test "Build" "PASS" "0"
     else
         log_info "Skip build step"
+        report_test "Build" "SKIP" "0" "--no-prepare"
     fi
 
+    REPORT_PHASE="binary capability validation"
     if [ ! -x "$EDGION_GATEWAY_BIN" ]; then
         log_error "Selected Gateway binary is missing: ${EDGION_GATEWAY_BIN}"
+        report_test "Preflight_BinaryCapabilities" "FAIL" "0" "Gateway binary missing"
         exit 1
     fi
     local gateway_capabilities
     if ! gateway_capabilities=$("$EDGION_GATEWAY_BIN" --print-build-capabilities); then
         log_error "Failed to read build capabilities from ${EDGION_GATEWAY_BIN}"
+        report_test "Preflight_BinaryCapabilities" "FAIL" "0" "Gateway capability query"
         exit 1
     fi
     if ! echo "$gateway_capabilities" | grep -q '^format=edgion-build-capabilities/v1$'; then
         log_error "Unsupported Gateway capability format"
+        report_test "Preflight_BinaryCapabilities" "FAIL" "0" "unsupported format"
         exit 1
     fi
     if ! echo "$gateway_capabilities" | grep -q '^body-buffering=enabled$'; then
         log_error "Gateway does not report body-buffering=enabled"
+        report_test "Preflight_BinaryCapabilities" "FAIL" "0" "body buffering disabled"
         exit 1
     fi
     export EDGION_TEST_GATEWAY_CAPABILITIES="$gateway_capabilities"
@@ -2079,12 +2284,78 @@ main() {
 
     if [ ! -x "$EDGION_TEST_CLIENT_BIN" ]; then
         log_error "Integration test client is missing: ${EDGION_TEST_CLIENT_BIN}"
+        report_test "Preflight_BinaryCapabilities" "FAIL" "0" "test client missing"
         exit 1
     fi
     if ! "$EDGION_TEST_CLIENT_BIN" --list-dynamic-scenarios > /dev/null; then
         log_error "Integration capability registry validation failed"
+        report_test "Preflight_BinaryCapabilities" "FAIL" "0" "scenario enumeration"
         exit 1
     fi
+    if [ "$SKIP_RESIDUE_CHECK" != "true" ] && [ ! -x "$EDGION_CACHE_RESIDUE_BIN" ]; then
+        log_error "Cache residue validator is missing: ${EDGION_CACHE_RESIDUE_BIN}"
+        report_test "Preflight_BinaryCapabilities" "FAIL" "0" "cache residue validator missing"
+        exit 1
+    fi
+    if { [ -z "$G_RESOURCE" ] \
+        || { [ "$G_RESOURCE" = "EdgionBackend" ] \
+            && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "CredentialExhaustion" ]; }; }; } \
+        && [ ! -x "$EDGION_CREDENTIAL_RESERVATION_TEST_BIN" ]; then
+        log_error "Credential reservation Redis test executable is missing: ${EDGION_CREDENTIAL_RESERVATION_TEST_BIN}"
+        report_test "Preflight_BinaryCapabilities" "FAIL" "0" "credential reservation test missing"
+        exit 1
+    fi
+    report_test "Preflight_BinaryCapabilities" "PASS" "0"
+
+    REPORT_PHASE="file-descriptor preflight"
+    if ! ensure_nofile_limit "$REQUIRED_NOFILE"; then
+        log_error "File descriptor limit check failed"
+        report_test "Preflight_FileDescriptorLimit" "FAIL" "0"
+        exit 1
+    fi
+    report_test "Preflight_FileDescriptorLimit" "PASS" "0"
+
+    # The AI provider suites use only 127.0.0.1. Do not require the
+    # macOS-only aliases that belong exclusively to the LB endpoint suites.
+    if [ "$G_RESOURCE" = "EdgionBackend" ] && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "AnthropicProvider" ] || [ "$G_ITEM" = "Resilience" ] || [ "$G_ITEM" = "CredentialExhaustion" ]; }; then
+        log_info "Skipping LB loopback-alias check for EdgionBackend${G_ITEM:+/${G_ITEM}}"
+        report_test "Preflight_LoopbackAliases" "SKIP" "0" "not required by selected suites"
+    elif ! ensure_loopback_aliases; then
+        log_error "Loopback alias check failed"
+        report_test "Preflight_LoopbackAliases" "FAIL" "0"
+        exit 1
+    else
+        report_test "Preflight_LoopbackAliases" "PASS" "0"
+    fi
+
+    REPORT_PHASE="Docker environment preflight"
+    if ! check_docker_environment_ready; then
+        log_error "Docker environment check failed"
+        report_test "Preflight_DockerEnvironment" "FAIL" "0"
+        exit 1
+    fi
+    report_test "Preflight_DockerEnvironment" "PASS" "0"
+
+    # Step 0: Start external dependencies when needed
+    REPORT_PHASE="external dependency startup"
+    if ! start_ldap_service_if_needed; then
+        log_error "Failed to start external LDAP dependency"
+        report_test "Preflight_ExternalDependencies" "FAIL" "0" "LDAP startup"
+        exit 1
+    fi
+
+    if ! start_ldap_tls_service_if_needed; then
+        log_error "Failed to start external LDAP TLS dependency"
+        report_test "Preflight_ExternalDependencies" "FAIL" "0" "LDAP TLS startup"
+        exit 1
+    fi
+
+    if ! start_redis_service_if_needed; then
+        log_error "Failed to start external Redis dependency"
+        report_test "Preflight_ExternalDependencies" "FAIL" "0" "Redis startup"
+        exit 1
+    fi
+    report_test "Preflight_ExternalDependencies" "PASS" "0"
 
     # conf_sync mTLS certificates are generated per work directory by the
     # script that creates it (start_all_with_conf.sh for the main stack; each
@@ -2100,6 +2371,7 @@ main() {
     #     without a Bearer header (auth active, not 503 fail-close) and 200 with the
     #     correct Bearer token.
     if [ -z "$G_RESOURCE" ]; then
+        REPORT_PHASE="isolated scenarios"
         if ! run_isolated_scenarios; then
             log_error "FAIL: isolated standalone scenarios"
             exit 1
@@ -2201,6 +2473,7 @@ main() {
     export EDGION_TEST_ADMIN_TOKEN="${EDGION_ADMIN_TOKEN}"
 
     # Step 2: Start services (including config load)
+    REPORT_PHASE="shared stack startup"
     if $do_start; then
         log_section "Step 2: Start all services and load config"
         export EDGION_TEST_CONTROLLER_GRPC_PORT="${CONTROLLER_GRPC_PORT}"
@@ -2239,6 +2512,7 @@ main() {
         
         if [ $exit_code -ne 0 ]; then
             log_error "Start failed (exit code: $exit_code)"
+            report_test "Preflight_SharedStack" "FAIL" "0" "startup rc=${exit_code}"
             exit 1
         fi
         
@@ -2250,6 +2524,7 @@ main() {
             WORK_DIR=$(cat "$current_file")
         else
             log_error "Work directory file not found: $current_file"
+            report_test "Preflight_SharedStack" "FAIL" "0" "work directory missing"
             exit 1
         fi
         
@@ -2259,8 +2534,10 @@ main() {
         
         log_success "All services started, config loaded"
         log_info "Work directory: ${WORK_DIR}"
+        report_test "Preflight_SharedStack" "PASS" "0"
     else
         log_info "Skip start step"
+        report_test "Preflight_SharedStack" "SKIP" "0" "--no-start"
         if [ -f "${PROJECT_ROOT}/tmp/integration_testing/.current" ]; then
             WORK_DIR=$(cat "${PROJECT_ROOT}/tmp/integration_testing/.current")
             export EDGION_TEST_ACCESS_LOG_PATH="${WORK_DIR}/logs/edgion_access.log"
@@ -2270,9 +2547,12 @@ main() {
     fi
 
     # Enforce shared-Gateway principle: exactly one edgion-gateway process.
+    REPORT_PHASE="shared Gateway process validation"
     if ! check_single_gateway_process; then
+        report_test "Preflight_SharedGateway" "FAIL" "0"
         exit 1
     fi
+    report_test "Preflight_SharedGateway" "PASS" "0"
 
     # =============================================================================
     # Fail-fast gate: no unknown config fields before any suite runs
@@ -2282,11 +2562,14 @@ main() {
     # from here is the dangerous outcome, not a safe one. Fail here, in
     # seconds, rather than after a 20-minute suite that passed for the wrong
     # reason. See verify_no_unknown_config_fields above.
+    REPORT_PHASE="initial unknown-field validation"
     log_section "Pre-flight Check: No Unknown Config Fields"
     if ! verify_no_unknown_config_fields "http://127.0.0.1:12101"; then
         log_error "Unknown config fields present after initial config load -- aborting before Round 1"
+        report_test "Preflight_UnknownConfigFields" "FAIL" "0"
         exit 1
     fi
+    report_test "Preflight_UnknownConfigFields" "PASS" "0"
 
     # Create test log directory
     TEST_LOG_DIR="${WORK_DIR}/test_logs"
@@ -2334,6 +2617,7 @@ main() {
     # =============================================================================
     if $with_reload; then
         # ========== Round 1: Initial tests ==========
+        REPORT_PHASE="main tests before reload"
         log_section "📋 Round 1: Initial tests (before reload)"
 
         local gateway_url="http://127.0.0.1:12001"
@@ -2353,11 +2637,12 @@ main() {
         fi
         
         # ========== Trigger reload ==========
+        REPORT_PHASE="Controller and Gateway reload"
         log_section "🔄 Triggering reload"
         
         if ! trigger_reload "$controller_url"; then
             log_error "Failed to trigger reload"
-            finalize_report
+            report_test "Reload_Trigger" "FAIL" "0"
             exit 1
         fi
         
@@ -2385,7 +2670,6 @@ main() {
             log_error "Before: ${controller_id_before}"
             log_error "After:  ${controller_id_after}"
             report_test "Reload_Controller_ServerID_Changed" "FAIL" "0"
-            finalize_report
             exit 1
         else
             log_success "Controller server_id changed successfully!"
@@ -2403,7 +2687,6 @@ main() {
             log_error "After:  ${gateway_id_after}"
             log_error "This means Gateway did not detect the reload and re-sync!"
             report_test "Reload_Gateway_ServerID_Changed" "FAIL" "0"
-            finalize_report
             exit 1
         else
             log_success "Gateway server_id changed successfully!"
@@ -2418,6 +2701,7 @@ main() {
             log_error "Controller: ${controller_id_after}"
             log_error "Gateway:    ${gateway_id_after}"
             report_test "Reload_ServerID_Match" "FAIL" "0"
+            test_failed=true
         else
             log_success "Gateway and Controller server_id match!"
             report_test "Reload_ServerID_Match" "PASS" "0"
@@ -2432,6 +2716,7 @@ main() {
         fi
         
         # ========== Round 2: Tests after reload ==========
+        REPORT_PHASE="main tests after reload"
         log_section "📋 Round 2: Tests after reload"
         
         # Run all tests (round 2)
@@ -2443,21 +2728,23 @@ main() {
         fi
     else
         # Normal test execution (without reload)
+        REPORT_PHASE="main tests"
         if ! run_all_tests; then
             test_failed=true
         fi
     fi
     
-    # Finalize report
-    finalize_report
-
     # =============================================================================
     # Final Step: Metrics Label Whitelist
     # =============================================================================
+    REPORT_PHASE="final metrics validation"
     log_section "Final Step: Metrics Label Whitelist"
     if ! verify_metrics_labels "http://127.0.0.1:12190/metrics" "controller"; then
         log_error "Metrics label validation FAILED"
+        report_test "Final_MetricsLabelWhitelist" "FAIL" "0"
         test_failed=true
+    else
+        report_test "Final_MetricsLabelWhitelist" "PASS" "0"
     fi
 
     # =============================================================================
@@ -2468,11 +2755,14 @@ main() {
     # a second pass sees those. The registry is cumulative within a run, so this
     # re-reports anything the pre-flight gate already found -- acceptable, and it
     # keeps the two call sites independent.
+    REPORT_PHASE="final unknown-field validation"
     log_section "Final Step: No Unknown Config Fields"
     if ! verify_no_unknown_config_fields "http://127.0.0.1:12101"; then
         log_error "Unknown config fields validation FAILED"
-        FAILED_TESTS=$((FAILED_TESTS + 1))
+        report_test "Final_UnknownConfigFields" "FAIL" "0"
         test_failed=true
+    else
+        report_test "Final_UnknownConfigFields" "PASS" "0"
     fi
 
     # =============================================================================
@@ -2481,60 +2771,76 @@ main() {
     # Scan controller logs for trigger-chain cycle/depth errors that indicate a
     # requeue dead loop was detected and suppressed. These should never appear in
     # a healthy integration run; any occurrence is a bug in handler requeue logic.
+    REPORT_PHASE="final requeue-loop validation"
     log_section "Final Step: Requeue Dead Loop Detection"
     local controller_log="${WORK_DIR}/logs/controller.log"
-    if [ -f "$controller_log" ]; then
-        local requeue_hits
-        requeue_hits=$(grep -c \
+    if [ -r "$controller_log" ]; then
+        local requeue_hits grep_rc
+        if requeue_hits=$(grep -c \
             -e "Trigger cycle limit reached, dropping requeue" \
             -e "Trigger chain depth limit reached, dropping requeue" \
-            "$controller_log" 2>/dev/null || true)
-        if [ "${requeue_hits:-0}" -gt 0 ]; then
+            "$controller_log" 2>/dev/null); then
+            grep_rc=0
+        else
+            grep_rc=$?
+        fi
+        if [ "$grep_rc" -gt 1 ]; then
+            log_error "Requeue dead loop check could not read controller log (grep rc=${grep_rc}): ${controller_log}"
+            report_test "Final_RequeueDeadLoop" "FAIL" "0" "controller.log read error rc=${grep_rc}"
+            test_failed=true
+        elif [ "${requeue_hits:-0}" -gt 0 ]; then
             log_error "Requeue dead loop detected: ${requeue_hits} occurrence(s) in controller.log"
             grep \
                 -e "Trigger cycle limit reached, dropping requeue" \
                 -e "Trigger chain depth limit reached, dropping requeue" \
                 "$controller_log" | head -20 || true
-            FAILED_TESTS=$((FAILED_TESTS + 1))
+            report_test "Final_RequeueDeadLoop" "FAIL" "0" "${requeue_hits} event(s)"
             test_failed=true
         else
             log_success "Requeue dead loop check passed (no dead loop events in controller log)"
+            report_test "Final_RequeueDeadLoop" "PASS" "0"
         fi
     else
-        log_warn "Requeue dead loop check skipped — controller.log not found at ${controller_log}"
+        log_error "Requeue dead loop check failed — controller.log is missing or unreadable: ${controller_log}"
+        report_test "Final_RequeueDeadLoop" "FAIL" "0" "controller.log unavailable"
+        test_failed=true
     fi
 
     # =============================================================================
     # Final Step: Cache Residue Detection (leak detection across all scenarios)
     # =============================================================================
+    REPORT_PHASE="final cache-residue validation"
     if [ "$SKIP_RESIDUE_CHECK" != "true" ]; then
         log_section "Final Step: Cache Residue Detection"
 
-        local residue_bin="${PROJECT_ROOT}/target/debug/cache_residue"
-        # Always (re)build so the validator matches the current source. It changes
-        # rarely, but a stale binary silently runs old logic or rejects new flags
-        # (e.g. --controller-token), surfacing as a confusing rc=2 infra error.
-        log_info "Building cache_residue (incremental)..."
-        if ! (cd "$PROJECT_ROOT" && cargo build -p edgion-tests --bin cache_residue); then
-            log_error "cache_residue build failed — skipping leak check"
-            # do not fail the run on build failure; fall through
-            residue_bin=""
+        local residue_bin="$EDGION_CACHE_RESIDUE_BIN"
+        local residue_infra_error=""
+        local residue_mode="${RESIDUE_MODE:-fail}"
+        case "$residue_mode" in
+            fail|warn)
+                ;;
+            *)
+                residue_infra_error="invalid RESIDUE_MODE=${residue_mode}; expected fail or warn"
+                ;;
+        esac
+        if [ ! -x "$residue_bin" ]; then
+            residue_infra_error="precompiled validator binary unavailable"
         fi
 
         # The validator authenticates to the controller's now-standard-auth
-        # diagnostic routes (wipe-all, store-stats), so obtain the admin token
-        # first. ensure_ctrl_admin_token is idempotent and also covers the default
-        # no-reload path, which otherwise never logs in. Without a token we cannot
-        # authenticate, so skip the check rather than fail on a bogus 401.
-        if [ -n "$residue_bin" ] && [ -x "$residue_bin" ]; then
+        # diagnostic routes (wipe-all, store-stats), so obtain the admin token.
+        # Missing authentication is an infrastructure failure, not a skip.
+        if [ -z "$residue_infra_error" ]; then
             if ! ensure_ctrl_admin_token || [ -z "$CTRL_ADMIN_TOKEN" ]; then
-                log_warn "Cache residue check skipped — controller admin token unavailable"
-                residue_bin=""
+                residue_infra_error="controller admin token unavailable"
             fi
         fi
 
-        # Re-check: the token step above may have cleared residue_bin (skip case).
-        if [ -n "$residue_bin" ] && [ -x "$residue_bin" ]; then
+        if [ -n "$residue_infra_error" ]; then
+            log_error "Cache residue check failed: ${residue_infra_error}"
+            report_test "Final_CacheResidue" "FAIL" "0" "$residue_infra_error"
+            test_failed=true
+        else
             # Always invoke validator with --mode fail so exit 1 unambiguously means
             # "residue detected". Shell-side RESIDUE_MODE then decides whether to
             # block the build (default: fail — opt out with RESIDUE_MODE=warn).
@@ -2544,7 +2850,6 @@ main() {
             # API also requires a bearer token; the residue validator reads it from
             # the EDGION_GATEWAY_ADMIN_TOKEN env var (exported by start_all_with_conf.sh
             # and inherited here), so gateway-side residue checks run as well.
-            local residue_mode="${RESIDUE_MODE:-fail}"
             # Disable errexit around the call so a non-zero exit (residue / infra
             # error) is captured into $rc and handled below instead of aborting.
             set +e
@@ -2559,27 +2864,33 @@ main() {
 
             if [ $rc -eq 0 ]; then
                 log_success "Cache residue check passed (no leaks)"
+                report_test "Final_CacheResidue" "PASS" "0"
             elif [ $rc -eq 1 ]; then
                 if [ "$residue_mode" = "fail" ]; then
                     log_error "Cache residue detected (RESIDUE_MODE=fail) — see report above"
-                    FAILED_TESTS=$((FAILED_TESTS + 1))
+                    report_test "Final_CacheResidue" "FAIL" "0" "residue detected"
                     test_failed=true
                 else
                     log_warn "Cache residue detected (RESIDUE_MODE=warn — not failing build); see report above"
+                    report_test "Final_CacheResidue" "SKIP" "0" "residue detected; RESIDUE_MODE=warn"
                 fi
             elif [ $rc -eq 2 ]; then
                 log_error "cache_residue infrastructure error (rc=2)"
-                FAILED_TESTS=$((FAILED_TESTS + 1))
+                report_test "Final_CacheResidue" "FAIL" "0" "infrastructure error rc=2"
                 test_failed=true
             else
                 log_error "cache_residue unexpected exit code: $rc"
-                FAILED_TESTS=$((FAILED_TESTS + 1))
+                report_test "Final_CacheResidue" "FAIL" "0" "unexpected rc=${rc}"
                 test_failed=true
             fi
         fi
+    else
+        report_test "Final_CacheResidue" "SKIP" "0" "explicitly disabled"
     fi
 
     if $test_failed; then
+        REPORT_PHASE="failure report finalization"
+        finalize_report "FAIL"
         log_error "Some tests failed"
         log_info "View detailed logs: ${TEST_LOG_DIR}"
         # Enumerate failures: each *.log under TEST_LOG_DIR, scan for "✗" lines
@@ -2632,8 +2943,12 @@ main() {
     fi
 
     # Completed
+    REPORT_PHASE="successful report finalization"
     log_section "Test completed"
     log_success "All tests passed!"
+    finalize_report "PASS"
 }
 
-main "$@"
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    main "$@"
+fi

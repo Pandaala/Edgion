@@ -8,10 +8,11 @@
 # Usage:
 #   ./run_acme_test.sh              # Run all ACME tests
 #   ./run_acme_test.sh dns01        # Run only DNS-01 test
+#   ./run_acme_test.sh --no-build   # Require an already prepared test_client
 #   ./run_acme_test.sh --no-cleanup # Keep Pebble running after tests
 # =============================================================================
 
-set -e
+set -eo pipefail
 
 # Colors
 RED='\033[0;31m'
@@ -23,8 +24,10 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 PEBBLE_DIR="${PROJECT_ROOT}/edgion-tests/integration/conf/Services/acme/pebble"
+PREPARE_SCRIPT="${SCRIPT_DIR}/../utils/prepare.sh"
 
 DO_CLEANUP=true
+DO_BUILD=true
 TEST_FILTER=""
 
 # Parse args
@@ -32,6 +35,9 @@ for arg in "$@"; do
     case $arg in
         --no-cleanup)
             DO_CLEANUP=false
+            ;;
+        --no-build)
+            DO_BUILD=false
             ;;
         *)
             TEST_FILTER="$arg"
@@ -43,6 +49,23 @@ log_info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
 log_error()   { echo -e "${RED}[✗]${NC} $1"; }
 log_warn()    { echo -e "${YELLOW}[!]${NC} $1"; }
+
+BIN_DIR="${PROJECT_ROOT}/target/debug"
+if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
+    BIN_DIR="${PROJECT_ROOT}/target/llvm-cov-target/debug"
+fi
+TEST_CLIENT_BIN="${EDGION_TEST_CLIENT_BIN:-${BIN_DIR}/test_client}"
+
+# Prepare before any runtime fixture starts. Aggregate runs pass --no-build and
+# consume the coherent artifact set produced by the same canonical script.
+if [ "$DO_BUILD" = true ]; then
+    log_info "Preparing integration artifacts..."
+    "$PREPARE_SCRIPT"
+fi
+if [ ! -x "$TEST_CLIENT_BIN" ]; then
+    log_error "Precompiled test_client is unavailable: ${TEST_CLIENT_BIN}"
+    exit 1
+fi
 
 # =============================================================================
 # Cleanup
@@ -107,26 +130,15 @@ else
 fi
 
 # =============================================================================
-# Build & Run tests via unified test framework
+# Run tests via unified test framework
 # =============================================================================
-cd "$PROJECT_ROOT"
-
-log_info "Building test client..."
-cargo build -p edgion-tests --bin test_client 2>&1 | tail -3
-if [ $? -ne 0 ]; then
-    log_error "Failed to build test_client"
-    exit 1
-fi
-
 log_info "Running ACME integration tests..."
 echo ""
 
-TEST_CMD="cargo run -p edgion-tests --bin test_client -- -r Services -i acme"
-
-echo "$ $TEST_CMD"
+echo "$ ${TEST_CLIENT_BIN} -r Services -i acme"
 echo ""
 
-if eval "$TEST_CMD"; then
+if "$TEST_CLIENT_BIN" -r Services -i acme; then
     echo ""
     log_success "All ACME integration tests passed!"
     EXIT_CODE=0

@@ -23,5 +23,5 @@ spec:
       tls:
         mode: Terminate
         certificateRefs:
-          - name: http-match-tls
+          - name: edge-tls
             namespace: edgion-test

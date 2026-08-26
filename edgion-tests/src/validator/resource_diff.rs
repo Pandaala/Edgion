@@ -57,6 +57,11 @@ struct Args {
     /// EDGION_GATEWAY_ADMIN_TOKEN env var (exported by the test harness).
     #[arg(long, env = "EDGION_GATEWAY_ADMIN_TOKEN")]
     gateway_token: Option<String>,
+
+    /// Bearer token for the controller admin API. Defaults from the
+    /// EDGION_ADMIN_TOKEN env var (exported by the test harness).
+    #[arg(long, env = "EDGION_ADMIN_TOKEN")]
+    controller_token: Option<String>,
 }
 
 /// Resource identifier (kind, name, namespace)
@@ -126,7 +131,6 @@ impl DiffResult {
 struct ListApiResponse {
     success: bool,
     data: Option<Vec<serde_json::Value>>,
-    #[allow(dead_code)]
     count: usize,
     error: Option<String>,
 }
@@ -160,33 +164,27 @@ struct AdminClient {
     controller_probe_url: String,
     gateway_url: String,
     gateway_probe_url: String,
+    controller_token: Option<String>,
     gateway_token: Option<String>,
     max_retries: u32,
 }
 
 impl AdminClient {
-    fn new(
-        controller_url: String,
-        controller_probe_url: String,
-        gateway_url: String,
-        gateway_probe_url: String,
-        gateway_token: Option<String>,
-        timeout: Duration,
-        max_retries: u32,
-    ) -> Self {
+    fn new(args: &Args) -> Self {
         let client = Client::builder()
-            .timeout(timeout)
+            .timeout(Duration::from_secs(args.timeout))
             .build()
             .expect("Failed to create HTTP client");
 
         Self {
             client,
-            controller_url,
-            controller_probe_url,
-            gateway_url,
-            gateway_probe_url,
-            gateway_token,
-            max_retries,
+            controller_url: args.controller_url.clone(),
+            controller_probe_url: args.controller_probe_url.clone(),
+            gateway_url: args.gateway_url.clone(),
+            gateway_probe_url: args.gateway_probe_url.clone(),
+            controller_token: args.controller_token.clone(),
+            gateway_token: args.gateway_token.clone(),
+            max_retries: args.max_retries,
         }
     }
 
@@ -195,22 +193,15 @@ impl AdminClient {
         let url = format!("{}{}", self.controller_url, endpoint);
 
         for attempt in 1..=self.max_retries {
-            match self.client.get(&url).send().await {
+            let mut rb = self.client.get(&url);
+            if let Some(token) = &self.controller_token {
+                rb = rb.bearer_auth(token);
+            }
+            match rb.send().await {
                 Ok(response) => {
                     if response.status().is_success() {
                         match response.json::<ListApiResponse>().await {
-                            Ok(api_resp) => {
-                                if api_resp.success {
-                                    let json_values = api_resp.data.unwrap_or_default();
-                                    let resources: Vec<Resource> = json_values
-                                        .into_iter()
-                                        .filter_map(|v| serde_json::from_value(v).ok())
-                                        .collect();
-                                    return Ok(resources);
-                                } else {
-                                    return Err(format!("API error: {}", api_resp.error.unwrap_or_default()));
-                                }
-                            }
+                            Ok(api_resp) => return deserialize_list_response(api_resp, "controller", endpoint),
                             Err(e) => return Err(format!("JSON parse error: {}", e)),
                         }
                     } else if attempt == self.max_retries {
@@ -242,18 +233,7 @@ impl AdminClient {
                 Ok(response) => {
                     if response.status().is_success() {
                         match response.json::<ListApiResponse>().await {
-                            Ok(gateway_resp) => {
-                                if gateway_resp.success {
-                                    let json_values = gateway_resp.data.unwrap_or_default();
-                                    let resources: Vec<Resource> = json_values
-                                        .into_iter()
-                                        .filter_map(|v| serde_json::from_value(v).ok())
-                                        .collect();
-                                    return Ok(resources);
-                                } else {
-                                    return Err(format!("API error: {}", gateway_resp.error.unwrap_or_default()));
-                                }
-                            }
+                            Ok(api_resp) => return deserialize_list_response(api_resp, "gateway", endpoint),
                             Err(e) => return Err(format!("JSON parse error: {}", e)),
                         }
                     } else if attempt == self.max_retries {
@@ -294,6 +274,38 @@ impl AdminClient {
         }
         rb.send().await.map(|r| r.status().is_success()).unwrap_or(false)
     }
+}
+
+fn deserialize_list_response(response: ListApiResponse, source: &str, endpoint: &str) -> Result<Vec<Resource>, String> {
+    if !response.success {
+        return Err(format!("API error: {}", response.error.unwrap_or_default()));
+    }
+    let json_values = response
+        .data
+        .ok_or_else(|| format!("Invalid API response from {source} {endpoint}: success response omitted data"))?;
+    if response.count != json_values.len() {
+        return Err(format!(
+            "Invalid API response from {source} {endpoint}: count {} does not match {} data items",
+            response.count,
+            json_values.len()
+        ));
+    }
+    deserialize_resources(json_values, source, endpoint)
+}
+
+fn deserialize_resources(
+    json_values: Vec<serde_json::Value>,
+    source: &str,
+    endpoint: &str,
+) -> Result<Vec<Resource>, String> {
+    json_values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            serde_json::from_value(value)
+                .map_err(|error| format!("Invalid resource at {source} {endpoint} item {index}: {error}"))
+        })
+        .collect()
 }
 
 /// Resource types to compare (namespaced resources that exist in both Controller and Gateway)
@@ -380,7 +392,7 @@ fn compute_resource_diff(kind: &str, controller: &[Resource], gateway: &[Resourc
 /// They are not synced to Gateway's config client, so we skip comparing them.
 ///
 /// Compare resources between controller and gateway
-async fn compare_resources(client: &AdminClient, skip_kinds: &[String]) -> DiffResult {
+async fn compare_resources(client: &AdminClient, skip_kinds: &[String]) -> Result<DiffResult, String> {
     let mut result = DiffResult::default();
 
     for (kind, controller_endpoint, gateway_endpoint) in RESOURCE_TYPES {
@@ -389,21 +401,15 @@ async fn compare_resources(client: &AdminClient, skip_kinds: &[String]) -> DiffR
             continue;
         }
 
-        let controller_resources = match client.fetch_from_controller(controller_endpoint).await {
-            Ok(res) => res,
-            Err(e) => {
-                eprintln!("{} Failed to fetch {} from controller: {}", "⚠".yellow(), kind, e);
-                continue;
-            }
-        };
+        let controller_resources = client
+            .fetch_from_controller(controller_endpoint)
+            .await
+            .map_err(|error| format!("Failed to fetch {kind} from controller: {error}"))?;
 
-        let gateway_resources = match client.fetch_from_gateway(gateway_endpoint).await {
-            Ok(res) => res,
-            Err(e) => {
-                eprintln!("{} Failed to fetch {} from gateway: {}", "⚠".yellow(), kind, e);
-                continue;
-            }
-        };
+        let gateway_resources = client
+            .fetch_from_gateway(gateway_endpoint)
+            .await
+            .map_err(|error| format!("Failed to fetch {kind} from gateway: {error}"))?;
 
         let diff = compute_resource_diff(kind, &controller_resources, &gateway_resources);
         if !diff.missing_in_gateway.is_empty() || !diff.extra_in_gateway.is_empty() {
@@ -411,7 +417,7 @@ async fn compare_resources(client: &AdminClient, skip_kinds: &[String]) -> DiffR
         }
     }
 
-    result
+    Ok(result)
 }
 
 /// For a list of `certificateRefs` JSON values, return the `ns/name` of each ref
@@ -435,17 +441,14 @@ fn collect_missing_cert_refs(
 }
 
 /// Validate Secret references in resources
-async fn validate_secret_references(client: &AdminClient) -> Vec<SecretIssue> {
+async fn validate_secret_references(client: &AdminClient) -> Result<Vec<SecretIssue>, String> {
     let mut issues = Vec::new();
 
     // Fetch all Secrets from controller
-    let secrets = match client.fetch_from_controller("/api/v1/namespaced/Secret").await {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("{} Failed to fetch Secrets from controller: {}", "⚠".yellow(), e);
-            return issues;
-        }
-    };
+    let secrets = client
+        .fetch_from_controller("/api/v1/namespaced/Secret")
+        .await
+        .map_err(|error| format!("Failed to fetch Secrets from controller: {error}"))?;
 
     let secret_ids: HashSet<(String, String)> = secrets
         .iter()
@@ -460,60 +463,65 @@ async fn validate_secret_references(client: &AdminClient) -> Vec<SecretIssue> {
         .collect();
 
     // Check EdgionTls certificate_refs
-    if let Ok(tls_resources) = client.fetch_from_controller("/api/v1/namespaced/EdgionTls").await {
-        for tls in tls_resources {
-            let mut missing = Vec::new();
+    let tls_resources = client
+        .fetch_from_controller("/api/v1/namespaced/EdgionTls")
+        .await
+        .map_err(|error| format!("Failed to fetch EdgionTls from controller: {error}"))?;
+    for tls in tls_resources {
+        let mut missing = Vec::new();
 
-            // Extract certificate_refs from spec
-            if let Some(spec) = tls.rest.get("spec") {
-                if let Some(cert_refs) = spec.get("certificateRefs").and_then(|v| v.as_array()) {
-                    let default_ns = tls.metadata.namespace.as_deref().unwrap_or("edgion-default");
-                    missing.extend(collect_missing_cert_refs(cert_refs, default_ns, &secret_ids));
-                }
+        // Extract certificate_refs from spec
+        if let Some(spec) = tls.rest.get("spec") {
+            if let Some(cert_refs) = spec.get("certificateRefs").and_then(|v| v.as_array()) {
+                let default_ns = tls.metadata.namespace.as_deref().unwrap_or("edgion-default");
+                missing.extend(collect_missing_cert_refs(cert_refs, default_ns, &secret_ids));
             }
+        }
 
-            if !missing.is_empty() {
-                issues.push(SecretIssue {
-                    resource: format!(
-                        "{}/{}",
-                        tls.metadata.namespace.unwrap_or_else(|| "edgion-default".to_string()),
-                        tls.metadata.name
-                    ),
-                    kind: "EdgionTls".to_string(),
-                    missing_secrets: missing,
-                });
-            }
+        if !missing.is_empty() {
+            issues.push(SecretIssue {
+                resource: format!(
+                    "{}/{}",
+                    tls.metadata.namespace.unwrap_or_else(|| "edgion-default".to_string()),
+                    tls.metadata.name
+                ),
+                kind: "EdgionTls".to_string(),
+                missing_secrets: missing,
+            });
         }
     }
 
     // Check Gateway TLS certificate_refs
-    if let Ok(gateways) = client.fetch_from_controller("/api/v1/cluster/Gateway").await {
-        for gw in gateways {
-            let mut missing = Vec::new();
+    let gateways = client
+        .fetch_from_controller("/api/v1/namespaced/Gateway")
+        .await
+        .map_err(|error| format!("Failed to fetch Gateways from controller: {error}"))?;
+    for gw in gateways {
+        let mut missing = Vec::new();
+        let gateway_namespace = gw.metadata.namespace.as_deref().unwrap_or("edgion-default");
 
-            if let Some(spec) = gw.rest.get("spec") {
-                if let Some(listeners) = spec.get("listeners").and_then(|v| v.as_array()) {
-                    for listener in listeners {
-                        if let Some(tls) = listener.get("tls") {
-                            if let Some(cert_refs) = tls.get("certificateRefs").and_then(|v| v.as_array()) {
-                                missing.extend(collect_missing_cert_refs(cert_refs, "edgion-default", &secret_ids));
-                            }
+        if let Some(spec) = gw.rest.get("spec") {
+            if let Some(listeners) = spec.get("listeners").and_then(|v| v.as_array()) {
+                for listener in listeners {
+                    if let Some(tls) = listener.get("tls") {
+                        if let Some(cert_refs) = tls.get("certificateRefs").and_then(|v| v.as_array()) {
+                            missing.extend(collect_missing_cert_refs(cert_refs, gateway_namespace, &secret_ids));
                         }
                     }
                 }
             }
+        }
 
-            if !missing.is_empty() {
-                issues.push(SecretIssue {
-                    resource: gw.metadata.name.clone(),
-                    kind: "Gateway".to_string(),
-                    missing_secrets: missing,
-                });
-            }
+        if !missing.is_empty() {
+            issues.push(SecretIssue {
+                resource: format!("{gateway_namespace}/{}", gw.metadata.name),
+                kind: "Gateway".to_string(),
+                missing_secrets: missing,
+            });
         }
     }
 
-    issues
+    Ok(issues)
 }
 
 /// Print text report
@@ -645,15 +653,7 @@ async fn main() {
     let args = Args::parse();
 
     // Create admin client
-    let client = AdminClient::new(
-        args.controller_url.clone(),
-        args.controller_probe_url.clone(),
-        args.gateway_url.clone(),
-        args.gateway_probe_url.clone(),
-        args.gateway_token.clone(),
-        Duration::from_secs(args.timeout),
-        args.max_retries,
-    );
+    let client = AdminClient::new(&args);
 
     // Check connectivity
     println!("Checking connectivity...");
@@ -683,11 +683,23 @@ async fn main() {
 
     // Compare resources
     println!("Comparing resources...");
-    let mut result = compare_resources(&client, &args.skip_kinds).await;
+    let mut result = match compare_resources(&client, &args.skip_kinds).await {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("{} Resource comparison failed: {}", "✗".red(), error);
+            process::exit(2);
+        }
+    };
 
     // Validate Secret references
     println!("Validating Secret references...");
-    result.secret_issues = validate_secret_references(&client).await;
+    result.secret_issues = match validate_secret_references(&client).await {
+        Ok(issues) => issues,
+        Err(error) => {
+            eprintln!("{} Secret reference validation failed: {}", "✗".red(), error);
+            process::exit(2);
+        }
+    };
 
     // Print report
     match args.output_format.as_str() {
@@ -706,6 +718,8 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     /// Build a `Resource` from a name and optional namespace (used by several tests below).
     fn res(name: &str, namespace: Option<&str>) -> Resource {
@@ -714,6 +728,22 @@ mod tests {
             None => serde_json::json!({"name": name}),
         };
         serde_json::from_value(serde_json::json!({"metadata": meta})).unwrap()
+    }
+
+    fn test_client(controller_url: String, controller_token: Option<String>) -> AdminClient {
+        AdminClient {
+            client: Client::builder()
+                .timeout(Duration::from_secs(1))
+                .build()
+                .expect("test HTTP client should build"),
+            controller_url,
+            controller_probe_url: "http://127.0.0.1:1".to_string(),
+            gateway_url: "http://127.0.0.1:1".to_string(),
+            gateway_probe_url: "http://127.0.0.1:1".to_string(),
+            controller_token,
+            gateway_token: None,
+            max_retries: 1,
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -890,6 +920,132 @@ mod tests {
     fn resource_missing_metadata_fails_to_deserialize() {
         let v = serde_json::json!({"spec": {"hostnames": ["example.com"]}});
         assert!(serde_json::from_value::<Resource>(v).is_err());
+    }
+
+    #[test]
+    fn resource_list_rejects_a_malformed_item_instead_of_dropping_it() {
+        let values = vec![
+            serde_json::json!({"metadata": {"name": "valid"}}),
+            serde_json::json!({"spec": {"hostnames": ["example.com"]}}),
+        ];
+
+        let error = deserialize_resources(values, "controller", "/api/v1/namespaced/HTTPRoute")
+            .expect_err("a malformed resource must fail the complete list read");
+
+        assert!(error.contains("controller /api/v1/namespaced/HTTPRoute item 1"));
+    }
+
+    #[test]
+    fn successful_list_response_requires_data_and_matching_count() {
+        let missing_data = ListApiResponse {
+            success: true,
+            data: None,
+            count: 0,
+            error: None,
+        };
+        let error = deserialize_list_response(missing_data, "controller", "/resources")
+            .expect_err("a success envelope without data must fail");
+        assert!(error.contains("success response omitted data"));
+
+        let wrong_count = ListApiResponse {
+            success: true,
+            data: Some(vec![serde_json::json!({"metadata": {"name": "one"}})]),
+            count: 0,
+            error: None,
+        };
+        let error =
+            deserialize_list_response(wrong_count, "gateway", "/resources").expect_err("a mismatched count must fail");
+        assert!(error.contains("count 0 does not match 1 data items"));
+    }
+
+    #[tokio::test]
+    async fn controller_fetch_sends_the_configured_bearer_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/namespaced/HTTPRoute"))
+            .and(header("authorization", "Bearer correct-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "success": true,
+                "data": [],
+                "count": 0,
+                "error": null
+            })))
+            .mount(&server)
+            .await;
+        let client = test_client(server.uri(), Some("correct-token".to_string()));
+
+        let resources = client
+            .fetch_from_controller("/api/v1/namespaced/HTTPRoute")
+            .await
+            .expect("the configured bearer token should authorize the request");
+
+        assert!(resources.is_empty());
+    }
+
+    #[tokio::test]
+    async fn controller_fetch_fails_when_the_bearer_token_is_wrong() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/namespaced/HTTPRoute"))
+            .and(header("authorization", "Bearer wrong-token"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let client = test_client(server.uri(), Some("wrong-token".to_string()));
+
+        let error = client
+            .fetch_from_controller("/api/v1/namespaced/HTTPRoute")
+            .await
+            .expect_err("an unauthorized resource read must fail");
+
+        assert!(error.contains("HTTP error: 401 Unauthorized"));
+    }
+
+    #[tokio::test]
+    async fn resource_comparison_propagates_controller_read_failures() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/namespaced/HTTPRoute"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let client = test_client(server.uri(), Some("wrong-token".to_string()));
+
+        let error = compare_resources(&client, &[])
+            .await
+            .expect_err("an incomplete comparison must fail");
+
+        assert!(error.contains("Failed to fetch HTTPRoute from controller"));
+        assert!(error.contains("HTTP error: 401 Unauthorized"));
+    }
+
+    #[tokio::test]
+    async fn secret_validation_lists_gateways_through_the_namespaced_api() {
+        let server = MockServer::start().await;
+        for endpoint in [
+            "/api/v1/namespaced/Secret",
+            "/api/v1/namespaced/EdgionTls",
+            "/api/v1/namespaced/Gateway",
+        ] {
+            Mock::given(method("GET"))
+                .and(path(endpoint))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "success": true,
+                    "data": [],
+                    "count": 0,
+                    "error": null
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let client = test_client(server.uri(), None);
+
+        let issues = validate_secret_references(&client)
+            .await
+            .expect("all required list reads should use valid endpoints");
+
+        assert!(issues.is_empty());
     }
 
     // -------------------------------------------------------------------------

@@ -19,10 +19,7 @@ fn basic(u: &str, p: &str) -> String {
 }
 
 async fn do_request(ctx: &TestContext, user: &str, pass: &str) -> reqwest::Result<u16> {
-    // Hard-code the EdgionPlugins listener port (matches dsl/dynamic.rs).
-    // ctx.http_url() defaults to the test_server backend (30001) under
-    // run_dynamic_scenario, which would bypass the gateway entirely.
-    let url = format!("http://{}:31180/health", ctx.target_host);
+    let url = format!("{}/health", ctx.http_url());
     ctx.http_client
         .get(&url)
         .header("host", HOST)
@@ -151,7 +148,7 @@ impl BasicAuthDynamicGroupedInitialTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let auth = format!("Basic {}", STANDARD.encode(b"alice:dynamic-partner-a-pass" as &[u8]));
-                    let url = format!("http://{}:31180/health", ctx.target_host);
+                    let url = format!("{}/health", ctx.http_url());
                     match ctx
                         .http_client
                         .get(&url)
@@ -177,7 +174,7 @@ impl BasicAuthDynamicGroupedInitialTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let auth = format!("Basic {}", STANDARD.encode(b"bob:dynamic-partner-b-pass" as &[u8]));
-                    let url = format!("http://{}:31180/health", ctx.target_host);
+                    let url = format!("{}/health", ctx.http_url());
                     match ctx
                         .http_client
                         .get(&url)
@@ -222,7 +219,7 @@ impl BasicAuthDynamicGroupedUpdateTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let auth = format!("Basic {}", STANDARD.encode(b"alice:dynamic-partner-a-pass" as &[u8]));
-                    let url = format!("http://{}:31180/health", ctx.target_host);
+                    let url = format!("{}/health", ctx.http_url());
                     match ctx
                         .http_client
                         .get(&url)
@@ -248,7 +245,7 @@ impl BasicAuthDynamicGroupedUpdateTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let auth = format!("Basic {}", STANDARD.encode(b"bob:dynamic-partner-b-pass" as &[u8]));
-                    let url = format!("http://{}:31180/health", ctx.target_host);
+                    let url = format!("{}/health", ctx.http_url());
                     match ctx
                         .http_client
                         .get(&url)

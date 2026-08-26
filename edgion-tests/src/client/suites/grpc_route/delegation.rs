@@ -327,14 +327,8 @@ impl TestSuite for GrpcDelegationTestSuite {
 // ============================================================
 
 const DYN_HOST: &str = "grpc-delegation-dyn.example.com";
-// Hard-code the DynamicTest listener port (matches http_route/delegation.rs's
-// dyn_status): ctx.grpc_port under --dynamic-scenario points at the "default"
-// port config (the test_server backend directly), which would bypass the
-// gateway entirely.
-const DYN_PORT: u16 = 31935;
-
 async fn dyn_say_hello_status(ctx: &TestContext) -> Result<tonic::Code, String> {
-    let endpoint = make_endpoint(ctx, DYN_HOST, DYN_PORT)?;
+    let endpoint = make_endpoint(ctx, DYN_HOST, ctx.grpc_port)?;
     let mut client = TestServiceClient::connect(endpoint)
         .await
         .map_err(|e| format!("Failed to connect: {e}"))?;
@@ -348,7 +342,7 @@ async fn dyn_say_hello_status(ctx: &TestContext) -> Result<tonic::Code, String> 
 }
 
 async fn dyn_stream_numbers_status(ctx: &TestContext) -> Result<tonic::Code, String> {
-    let endpoint = make_endpoint(ctx, DYN_HOST, DYN_PORT)?;
+    let endpoint = make_endpoint(ctx, DYN_HOST, ctx.grpc_port)?;
     let mut client = TestServiceClient::connect(endpoint)
         .await
         .map_err(|e| format!("Failed to connect: {e}"))?;

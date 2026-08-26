@@ -1048,12 +1048,14 @@ main() {
     cp "${PROJECT_ROOT}/config/edgion-gateway.yaml" "${CONFIG_DIR}/edgion-gateway.yaml"
     CONTROLLER_CONFIG="${CONFIG_DIR}/edgion-controller.yaml"
     GATEWAY_CONFIG="${CONFIG_DIR}/edgion-gateway.yaml"
+    if grep -Eq '^[[:space:]]*metrics:' "${GATEWAY_CONFIG}"; then
+        log_error "Integration metrics override requires a Gateway config without an existing metrics section"
+        exit 1
+    fi
+    printf '\nmetrics:\n  backend_requests:\n    labels:\n      backend: true\n' >> "${GATEWAY_CONFIG}"
+    log_info "Enabled backend identity metrics for integration assertions"
     if [ "${EDGION_TEST_ENABLE_GENAI_METRICS:-0}" = "1" ]; then
-        if grep -Eq '^[[:space:]]*metrics:' "${GATEWAY_CONFIG}"; then
-            log_error "Integration GenAI metric override requires a Gateway config without an existing metrics section"
-            exit 1
-        fi
-        printf '\nmetrics:\n  genai_tokens:\n    enabled: true\n' >> "${GATEWAY_CONFIG}"
+        printf '  genai_tokens:\n    enabled: true\n' >> "${GATEWAY_CONFIG}"
         log_info "Enabled GenAI token metrics in the integration workdir config"
     fi
     if [ "${EDGION_TEST_ENABLE_GEOIP:-0}" = "1" ]; then

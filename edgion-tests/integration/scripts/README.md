@@ -112,12 +112,20 @@ Runs full end-to-end integration tests through the Gateway.
 # Run all integration tests
 ./scripts/integration/run_integration.sh
 
-# Run a specific test
-./scripts/integration/run_integration.sh --test http-match
+# Run one resource family or one exact item
+./scripts/integration/run_integration.sh -r HTTPRoute
+./scripts/integration/run_integration.sh -r HTTPRoute -i Match
 
-# Skip selected tests
-./scripts/integration/run_integration.sh --skip "mtls,backend-tls"
+# Reuse already prepared binaries, include slow tests, or load explicit fixture suites
+./scripts/integration/run_integration.sh --no-prepare -r HTTPRoute -i Basic
+./scripts/integration/run_integration.sh --full-test
+./scripts/integration/run_integration.sh --suites base,HTTPRoute/Basic -r HTTPRoute -i Basic
 ```
+
+Run `./scripts/integration/run_integration.sh --help` for the complete current option list. There is
+no implicit exclusion flag: narrow coverage explicitly with `--resource` and `--item`. The canonical
+integration architecture and workflow are documented in
+[`skills/05-testing/01-integration-testing.md`](../../../skills/05-testing/01-integration-testing.md).
 
 Covered areas:
 - Basic protocols: `http`, `https`, `grpc`, `grpc-tls`, `websocket`, `tcp`, `udp`
@@ -169,13 +177,17 @@ Prebuilds all binaries required by the test environment in debug mode.
 ./scripts/utils/prepare.sh
 ```
 
-Built artifacts:
+Built artifacts under `target/debug/`:
 - `edgion-controller`: configuration controller
 - `edgion-gateway`: gateway service
 - `edgion-cli`: command-line tool
 - `test_server`: backend test server
 - `test_client`: integration test client
 - `test_client_direct`: direct test client
+- `resource_diff`: Controller/Gateway synchronization validator
+- `config_load_validator`: configuration-load validator
+- `cache_residue`: final cache-residue validator
+- `credential_reservation_redis`: stable copy of the precompiled ignored Redis integration test
 
 Output location:
 
@@ -184,9 +196,13 @@ target/debug/
 ├── edgion-controller
 ├── edgion-gateway
 ├── edgion-cli
-└── examples/
-    ├── test_server
-    └── test_client
+├── test_server
+├── test_client
+├── test_client_direct
+├── resource_diff
+├── config_load_validator
+├── cache_residue
+└── credential_reservation_redis
 ```
 
 ### `start_all.sh`

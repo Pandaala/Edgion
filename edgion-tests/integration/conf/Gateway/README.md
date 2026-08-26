@@ -165,7 +165,7 @@ These tests verify runtime updates for Gateway resources.
 
 **Ports:** `31250-31252`  
 **Entry point:** `./test_client -g -r Gateway -i Dynamic --phase initial|update`  
-**Full flow:** `./run_integration.sh -r Gateway --dynamic-test`
+**Full flow:** `./edgion-tests/integration/scripts/integration/run_integration.sh -r Gateway`
 
 See [DynamicTest/TEST_SUMMARY.md](DynamicTest/TEST_SUMMARY.md) for details.
 

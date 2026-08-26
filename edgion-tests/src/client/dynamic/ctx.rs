@@ -75,19 +75,26 @@ impl ScenarioCtx {
         let suite = (ps.factory)();
 
         let mut runner = TestRunner::new(self.test_ctx.clone());
-        if let Ok(port_config) = crate::port_config::PortConfig::load() {
-            runner.set_port_resolver(Box::new(move |key| port_config.get_ports(key).http));
+        if self.test_ctx.gateway {
+            let port_config = crate::port_config::PortConfig::load().map_err(anyhow::Error::msg)?;
+            runner.set_port_resolver(Box::new(move |key, kind| {
+                port_config.require_port(key, kind)?;
+                port_config.get_ports(key).cloned()
+            }));
         }
         runner.add_suite(suite);
         let results = runner.run().await;
         if !results.has_failures() {
             Ok(())
         } else {
-            let mut failed_names = Vec::new();
+            let mut failure_details = results.run_errors.clone();
             for sr in &results.suite_results {
+                for error in &sr.lifecycle_errors {
+                    failure_details.push(format!("{}::{} ({})", sr.name, error.phase.as_str(), error.message));
+                }
                 for (name, tr) in &sr.test_results {
                     if !tr.passed {
-                        failed_names.push(format!(
+                        failure_details.push(format!(
                             "{}::{} ({})",
                             sr.name,
                             name,
@@ -97,12 +104,12 @@ impl ScenarioCtx {
                 }
             }
             Err(anyhow::anyhow!(
-                "Scenario {} phase '{}' had {}/{} failing test(s): {:?}",
+                "Scenario {} phase '{}' failed ({}/{} test cases failed): {:?}",
                 scenario.id,
                 phase,
                 results.total_failed(),
                 results.total_tests(),
-                failed_names
+                failure_details
             ))
         }
     }

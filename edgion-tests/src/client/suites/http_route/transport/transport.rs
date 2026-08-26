@@ -463,9 +463,8 @@ static SHAPES: &[ShapeDef] = &[
 
 /// Guard against a silently shrinking matrix.
 ///
-/// Two facts make this necessary rather than decorative: the runner has no
-/// total-count guard, and `TestResults::pass_rate()` returns 100.0 for zero
-/// tests — so a suite that shrinks to nothing still exits 0.
+/// The runner rejects a completely empty selection, while this exact count also
+/// detects a non-empty matrix that silently loses only some combinations.
 const EXPECTED_TRANSPORT_CASES: usize = 72;
 
 // ===========================================================================

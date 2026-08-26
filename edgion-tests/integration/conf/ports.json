@@ -109,8 +109,14 @@
     "EdgionTls/grpctls": {
       "grpc_tls": 31200
     },
+    "EdgionTls/LastKnownGood": {
+      "https": 31201
+    },
     "EdgionTls/mTLS": {
       "https": 31110
+    },
+    "EdgionTls/mtls_failclose": {
+      "https": 31199
     },
     "EdgionTls/cipher": {
       "https": 31195,
@@ -157,6 +163,21 @@
     },
     "Gateway/AllowedRoutes/Selector": {
       "http": 31276
+    },
+    "Gateway/AllowedRoutes/All": {
+      "http": 31211
+    },
+    "Gateway/AllowedRoutes/Kinds": {
+      "http": 31213
+    },
+    "Gateway/AllowedRoutes/Same": {
+      "http": 31210
+    },
+    "Gateway/Combined": {
+      "http": 31230
+    },
+    "Gateway/ListenerHostname": {
+      "http": 31240
     },
     "TLSRoute/Basic": {
       "tls": 31280
