@@ -48,6 +48,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 jsonschema.workspace = true
+json-patch.workspace = true
 
 # Kubernetes conf_client and types
 kube.workspace = true
@@ -100,6 +101,7 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 http.workspace = true
 percent-encoding.workspace = true
+url.workspace = true
 
 # Test client dependencies
 reqwest.workspace = true

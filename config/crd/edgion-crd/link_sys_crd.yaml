@@ -22,7 +22,7 @@ spec:
                 type:
                   type: string
                   description: "System type"
-                  enum: ["redis", "etcd", "elasticsearch", "kafka", "webhook", "httpdns"]
+                  enum: ["redis", "etcd", "elasticsearch", "kafka", "webhook", "httpdns", "credentialSource"]
                 config:
                   type: object
                   description: "System-specific configuration"
@@ -278,6 +278,38 @@ spec:
                       observedGeneration:
                         type: integer
                         format: int64
+                observedGeneration:
+                  type: integer
+                  format: int64
+                credentialState:
+                  type: string
+                  enum: [Idle, Valid, Expired, Unavailable]
+                publishedGeneration:
+                  type: string
+                issuedAt:
+                  type: string
+                  format: date-time
+                validUntil:
+                  type: string
+                  format: date-time
+                lastSuccessfulRefreshTime:
+                  type: string
+                  format: date-time
+                nextRefreshTime:
+                  type: string
+                  format: date-time
+                desiredConsumerCount:
+                  type: integer
+                  format: int32
+                  minimum: 0
+                publishedConsumerCount:
+                  type: integer
+                  format: int32
+                  minimum: 0
+                conflictedConsumerCount:
+                  type: integer
+                  format: int32
+                  minimum: 0
       subresources:
         status: {}
       additionalPrinterColumns:

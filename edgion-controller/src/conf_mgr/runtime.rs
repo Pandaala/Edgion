@@ -6,6 +6,7 @@
 //! controller restart. All state is held as struct fields (compiler-tracked).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -16,6 +17,7 @@ use super::sync_runtime::resource_processor::{
     attached_route_tracker::AttachedRouteTracker,
     backend_tls_policy_ref::BackendTLSPolicyState,
     configmap_utils::ConfigMapStore,
+    credential_source_state::CredentialSourceRegistry,
     edgion_config_data_utils::{EdgionConfigDataRefManager, EdgionConfigDataStore},
     gateway_route_index::GatewayRouteIndex,
     listener_port_manager::ListenerPortManager,
@@ -83,6 +85,11 @@ pub struct ControllerRuntime {
     /// rule-level EdgionPlugins ExtensionRefs. Forward:
     /// `"ep_ns/ep_name" → Set<ResourceRef>`; reverse: owner → Set<key>.
     pub(crate) plugin_ref_mgr: BidirectionalRefManager<ResourceRef>,
+    /// Tracks EdgionPlugins consumers of each LinkSys credential source.
+    pub(crate) link_sys_ref_mgr: BidirectionalRefManager<ResourceRef>,
+    /// Non-secret desired source and publication bindings rebuilt by handlers.
+    pub(crate) credential_source_registry: CredentialSourceRegistry,
+    managed_credentials_supported: AtomicBool,
     /// Optional conf_writer injected by the ConfCenter implementation.
     /// Used by handlers to auto-create resources (e.g., EdgionConfigData for RegionRoute).
     /// None until the ConfCenter calls `set_conf_writer()`.
@@ -113,8 +120,19 @@ impl ControllerRuntime {
             edgion_config_data_refs: EdgionConfigDataRefManager::new(),
             stream_plugin_ref_mgr: BidirectionalRefManager::with_component("stream_plugin_ref_mgr"),
             plugin_ref_mgr: BidirectionalRefManager::with_component("plugin_ref_mgr"),
+            link_sys_ref_mgr: BidirectionalRefManager::with_component("link_sys_ref_mgr"),
+            credential_source_registry: CredentialSourceRegistry::new(),
+            managed_credentials_supported: AtomicBool::new(true),
             conf_writer: RwLock::new(None),
         }
+    }
+
+    pub fn set_managed_credentials_supported(&self, supported: bool) {
+        self.managed_credentials_supported.store(supported, Ordering::Release);
+    }
+
+    pub fn managed_credentials_supported(&self) -> bool {
+        self.managed_credentials_supported.load(Ordering::Acquire)
     }
 
     /// Inject a conf_writer so handlers can auto-create resources.
@@ -198,6 +216,12 @@ impl ControllerRuntime {
 
         self.plugin_ref_mgr.clear();
         tracing::info!(component = "controller_runtime", "Cleared PluginRefManager");
+
+        self.link_sys_ref_mgr.clear();
+        tracing::info!(component = "controller_runtime", "Cleared LinkSysRefManager");
+
+        self.credential_source_registry.clear();
+        tracing::info!(component = "controller_runtime", "Cleared CredentialSourceRegistry");
     }
 }
 

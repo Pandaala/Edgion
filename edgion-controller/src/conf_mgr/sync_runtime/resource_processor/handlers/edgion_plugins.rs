@@ -295,6 +295,10 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         );
 
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        ctx.runtime().link_sys_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime()
+            .credential_source_registry
+            .remove_consumer(&resource_ref.resource_key());
         // One cross-namespace index covers both Secret and EdgionConfigData
         // references. Clear it before any resolver starts rebuilding either
         // class; clearing later would erase Secret refs registered above the
@@ -395,13 +399,17 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             ep.metadata.name.clone().unwrap_or_default(),
         );
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        ctx.runtime().link_sys_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime()
+            .credential_source_registry
+            .forget_consumer(&resource_ref.resource_key());
         Self::clear_config_data_refs(ep, ctx);
         ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
         requeue_referencing_resources(ep, ctx).await;
 
         tracing::debug!(
             edgion_plugins = %resource_ref.key(),
-            "Cleared secret, EdgionConfigData, and cross-ns references on EdgionPlugins delete"
+            "Cleared secret, LinkSys, EdgionConfigData, and cross-ns references on EdgionPlugins delete"
         );
     }
 

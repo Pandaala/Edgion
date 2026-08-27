@@ -128,12 +128,14 @@ Multiple replicas requesting at the same time would cause challenge conflicts an
 start_leader_services():
 ├── start_acme_service(client)
 ├── start_conf_sync_rotation(client)
+├── start_credential_manager_service(client, runtime, leader)
 ├── start_dns_resolver_service(client)
 └── runtime.processor_registry.requeue_all()    // full-status reconciliation
 
 stop_leader_services():
 ├── stop_acme_service()
 ├── stop_conf_sync_rotation()
+├── stop_credential_manager_service()
 └── stop_dns_resolver_service()
 ```
 

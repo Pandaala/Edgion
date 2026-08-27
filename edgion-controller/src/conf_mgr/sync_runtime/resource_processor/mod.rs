@@ -17,6 +17,7 @@ pub mod backend_tls_policy_ref;
 pub mod configmap_utils;
 mod context;
 pub mod credential;
+pub mod credential_source_state;
 pub mod edgion_config_data_utils;
 pub mod gateway_route_index;
 mod handler;

@@ -19,7 +19,13 @@ use std::time::{Duration, SystemTime};
 /// that assumes a single form. For hot-path wire-/access-log timestamps use epoch
 /// millis instead. See `skills/03-coding/03-time-conventions.md`.
 pub fn now_rfc3339() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+    format_rfc3339(SystemTime::now())
+}
+
+/// Format an arbitrary wall-clock instant in the canonical Kubernetes-facing
+/// RFC3339 UTC seconds shape.
+pub fn format_rfc3339(time: SystemTime) -> String {
+    chrono::DateTime::<Utc>::from(time).to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
 /// Parse an HTTP `Retry-After` value as delta-seconds or an HTTP date relative
@@ -59,6 +65,20 @@ pub fn parse_rate_limit_reset(value: &str, now: SystemTime) -> Option<Duration> 
         .checked_add(Duration::from_secs(seconds))?
         .checked_add(Duration::from_nanos(u64::from(timestamp.timestamp_subsec_nanos())))?;
     Some(reset.duration_since(now).unwrap_or(Duration::ZERO))
+}
+
+/// Parse one strict RFC3339 absolute deadline relative to `now`.
+///
+/// Unlike [`parse_rate_limit_reset`], this accepts no duration or epoch-number
+/// alternatives. Past deadlines return `Duration::ZERO`; malformed or
+/// unrepresentable timestamps return `None`.
+pub fn parse_rfc3339_deadline(value: &str, now: SystemTime) -> Option<Duration> {
+    let timestamp = chrono::DateTime::parse_from_rfc3339(value.trim()).ok()?;
+    let seconds = u64::try_from(timestamp.timestamp()).ok()?;
+    let deadline = SystemTime::UNIX_EPOCH
+        .checked_add(Duration::from_secs(seconds))?
+        .checked_add(Duration::from_nanos(u64::from(timestamp.timestamp_subsec_nanos())))?;
+    Some(deadline.duration_since(now).unwrap_or(Duration::ZERO))
 }
 
 #[cfg(test)]
@@ -115,5 +135,20 @@ mod tests {
         assert_eq!(parse_rate_limit_reset("1699999999", now), Some(Duration::ZERO));
         assert_eq!(parse_rate_limit_reset("1.5s", now), None);
         assert_eq!(parse_rate_limit_reset("later", now), None);
+    }
+
+    #[test]
+    fn rfc3339_deadline_is_strict_and_maps_past_to_zero() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        assert_eq!(
+            parse_rfc3339_deadline("2023-11-14T22:13:50Z", now),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(
+            parse_rfc3339_deadline("2023-11-14T22:12:50Z", now),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(parse_rfc3339_deadline("30s", now), None);
+        assert_eq!(parse_rfc3339_deadline("1700000030", now), None);
     }
 }

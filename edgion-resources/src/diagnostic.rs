@@ -212,6 +212,11 @@ pub enum EdgionErrorCode {
     /// entry in the request-stage `stage_logs[].filters[]` array.
     PluginTerminateWithoutResponse,
 
+    /// A Controller-managed upstream credential reached its absolute validity
+    /// deadline before final attempt-local header materialization. The Gateway
+    /// fails closed even if an older immutable plugin generation is still live.
+    CredentialExpired,
+
     /// ForwardAuth plugin could not reach the configured auth service
     /// (connection refused, DNS failure, or timeout). Emitted when the
     /// plugin rejects the request (auth is always fail-closed).
@@ -396,6 +401,7 @@ impl EdgionErrorCode {
             Self::BackendTlsCaInvalid => "BackendTlsCaInvalid",
             Self::UpstreamAuthorityRejected => "UpstreamAuthorityRejected",
             Self::PluginTerminateWithoutResponse => "PluginTerminateWithoutResponse",
+            Self::CredentialExpired => "CredentialExpired",
             Self::ForwardAuthServiceUnreachable => "ForwardAuthServiceUnreachable",
             Self::RequestTimeoutExceeded => "RequestTimeoutExceeded",
             Self::BodyRefusedWebsocket => "BodyRefusedWebsocket",
@@ -556,6 +562,7 @@ mod tests {
                 EdgionErrorCode::PluginTerminateWithoutResponse,
                 "PluginTerminateWithoutResponse",
             ),
+            (EdgionErrorCode::CredentialExpired, "CredentialExpired"),
             (
                 EdgionErrorCode::ForwardAuthServiceUnreachable,
                 "ForwardAuthServiceUnreachable",

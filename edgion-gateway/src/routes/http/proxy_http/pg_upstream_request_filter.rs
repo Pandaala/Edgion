@@ -57,6 +57,17 @@ pub async fn upstream_request_filter(
         )
     })?;
 
+    if !ctx
+        .deferred_credential_mutations
+        .all_unexpired(std::time::Instant::now())
+    {
+        ctx.record_error(edgion_resources::EdgionErrorCode::CredentialExpired);
+        return Err(pingora_core::Error::explain(
+            pingora_core::ErrorType::InternalError,
+            "deferred credential expired before upstream dispatch",
+        ));
+    }
+
     ctx.deferred_credential_mutations.apply(upstream_request).map_err(|_| {
         pingora_core::Error::explain(
             pingora_core::ErrorType::InternalError,
@@ -121,6 +132,7 @@ mod deferred_credential_connection_tests {
         mutations.upsert(
             HeaderName::from_static("x-provider-token"),
             Arc::new(HeaderValue::from_static("private-token")),
+            None,
         );
         mutations
     }

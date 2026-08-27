@@ -434,6 +434,35 @@ impl EdgionPlugins {
             upstream_response
         );
 
+        // A dynamically acquired credential has one resolved value and one
+        // validity deadline for the whole resource. Allowing multiple active
+        // LinkSys-backed injectors would make that controller-owned state
+        // ambiguous, including when the entries sit in different stage arrays.
+        let mut link_sys_credential_injectors = 0usize;
+        macro_rules! count_link_sys_credential_injectors {
+            ($entries:expr) => {
+                if let Some(entries) = &$entries {
+                    link_sys_credential_injectors += entries
+                        .iter()
+                        .filter(|entry| entry.is_enabled() && entry.policy_action.is_none())
+                        .filter(|entry| {
+                            matches!(
+                                &entry.plugin,
+                                EdgionPlugin::CredentialInjector(config) if config.is_link_sys_ref()
+                            )
+                        })
+                        .count();
+                }
+            };
+        }
+        count_link_sys_credential_injectors!(self.spec.request_plugins);
+        count_link_sys_credential_injectors!(self.spec.upstream_response_filter_plugins);
+        count_link_sys_credential_injectors!(self.spec.upstream_response_body_filter_plugins);
+        count_link_sys_credential_injectors!(self.spec.upstream_response_plugins);
+        if link_sys_credential_injectors > 1 {
+            errors.push("EdgionPlugins may contain at most one enabled LinkSys-backed CredentialInjector".to_string());
+        }
+
         // Pass 2b: resource-level dye "set clobber" check. A failure rule's
         // response header must not equal (case-insensitively) any success
         // rule's response header across ANY entry in this resource — success
@@ -647,9 +676,10 @@ impl EdgionPlugins {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resources::common::SecretObjectReference;
     use crate::resources::edgion_plugins::plugin_configs::{
-        DslConfig, FormJsonDirection, FormJsonTransformConfig, JsonSchemaValidationConfig, WasmConfig, WasmRawConfig,
-        MAX_WASM_RAW_CONFIG_BYTES,
+        CredentialInjectionTarget, CredentialInjectorConfig, DslConfig, FormJsonDirection, FormJsonTransformConfig,
+        JsonSchemaValidationConfig, WasmConfig, WasmRawConfig, MAX_WASM_RAW_CONFIG_BYTES,
     };
     use crate::resources::edgion_plugins::{
         BodyReadFailureMode, BodyRequirement, EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseFilterEntry,
@@ -678,6 +708,47 @@ mod tests {
         let config: crate::resources::edgion_plugins::AiProxyConfig =
             serde_yaml::from_str("{}").expect("configuration parses");
         RequestFilterEntry::new(EdgionPlugin::AiProxy(config))
+    }
+
+    fn link_sys_credential_injector() -> EdgionPlugin {
+        EdgionPlugin::CredentialInjector(CredentialInjectorConfig {
+            credential_ref: SecretObjectReference {
+                group: Some("edgion.io".to_string()),
+                kind: Some("LinkSys".to_string()),
+                name: "oauth-source".to_string(),
+                namespace: None,
+            },
+            target: CredentialInjectionTarget::Bearer,
+            resolved_credential: None,
+        })
+    }
+
+    #[test]
+    fn multiple_active_link_sys_credential_injectors_across_stages_are_rejected() {
+        let mut plugins = with_request_plugins(vec![RequestFilterEntry::new(link_sys_credential_injector())]);
+        plugins.spec.upstream_response_filter_plugins =
+            Some(vec![UpstreamResponseFilterEntry::new(link_sys_credential_injector())]);
+
+        let errors = plugins.validate_plugins();
+        assert!(errors
+            .iter()
+            .any(|error| error == "EdgionPlugins may contain at most one enabled LinkSys-backed CredentialInjector"));
+    }
+
+    #[test]
+    fn inactive_link_sys_credential_injectors_do_not_count_toward_resource_limit() {
+        use crate::resources::plugin_policy::PluginPolicyAction;
+
+        let active = RequestFilterEntry::new(link_sys_credential_injector());
+        let disabled = RequestFilterEntry::with_enable(link_sys_credential_injector(), false);
+        let mut policy_stamped = RequestFilterEntry::new(link_sys_credential_injector());
+        policy_stamped.policy_action = Some(PluginPolicyAction::Bypass);
+        let plugins = with_request_plugins(vec![active, disabled, policy_stamped]);
+
+        assert!(!plugins
+            .validate_plugins()
+            .iter()
+            .any(|error| error.contains("at most one enabled LinkSys-backed")));
     }
 
     #[test]

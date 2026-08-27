@@ -5,6 +5,7 @@
 
 use crate::api::types::AdminState;
 use crate::api::ApiResponse;
+use crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::CredentialSourceRegistryStats;
 use crate::conf_mgr::sync_runtime::resource_processor::ref_manager::RefManagerStats;
 use crate::conf_mgr::CenterLifeCycle;
 use axum::{extract::State, response::Json};
@@ -35,6 +36,7 @@ pub struct ControllerStoreStats {
     pub conf_center_storage: BTreeMap<String, usize>,
     pub secret_store: usize,
     pub secret_ref_manager: SecretRefManagerStats,
+    pub credential_source_registry: CredentialSourceRegistryStats,
     pub event_store: EventStoreStats,
     pub watch_objects: WatchObjectsStats,
 }
@@ -56,6 +58,7 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
     let runtime = state.conf_mgr.runtime();
     let secret_store = runtime.secret_store.count();
     let secret_ref_manager = SecretRefManagerStats::from(runtime.secret_ref_manager.stats());
+    let credential_source_registry = runtime.credential_source_registry.stats();
 
     let next_resource_version = crate::conf_mgr::sync_runtime::resource_version::current_resource_version();
 
@@ -69,6 +72,7 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
         conf_center_storage,
         secret_store,
         secret_ref_manager,
+        credential_source_registry,
         event_store: EventStoreStats { next_resource_version },
         watch_objects: WatchObjectsStats { count: watch_count },
     }))
@@ -141,6 +145,7 @@ mod tests {
                 value_count: 0,
                 total_references: 0,
             },
+            credential_source_registry: CredentialSourceRegistryStats::default(),
             event_store: EventStoreStats {
                 next_resource_version: 1,
             },
@@ -150,6 +155,7 @@ mod tests {
         assert!(v.get("conf_center_storage").is_some());
         assert_eq!(v.get("secret_store").unwrap().as_u64(), Some(0));
         assert!(v.get("secret_ref_manager").is_some());
+        assert!(v.get("credential_source_registry").is_some());
         assert!(v.get("event_store").is_some());
     }
 }

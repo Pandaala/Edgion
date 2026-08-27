@@ -1028,8 +1028,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         name: http::HeaderName,
         value: Arc<http::HeaderValue>,
+        valid_until: Option<std::time::Instant>,
     ) -> PluginSessionResult<()> {
-        self.ctx.deferred_credential_mutations.upsert(name, value);
+        self.ctx.deferred_credential_mutations.upsert(name, value, valid_until);
         Ok(())
     }
 

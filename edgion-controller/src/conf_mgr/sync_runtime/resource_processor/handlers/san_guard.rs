@@ -269,6 +269,11 @@ pub fn check_link_sys_san(ls: &LinkSys) -> Vec<String> {
             .as_ref()
             .and_then(|conn| conn.tls.as_ref())
             .and_then(|t| t.outbound.validation.as_ref()),
+        SystemConfig::CredentialSource(c) => match &c.provider {
+            edgion_resources::resources::link_sys::credential_source::CredentialSourceProvider::OAuth2ClientCredentials(
+                oauth2,
+            ) => oauth2.tls.as_ref().and_then(|t| t.outbound.validation.as_ref()),
+        },
     };
     let provider = match &ls.spec.config {
         SystemConfig::Redis(_) => "Redis",
@@ -277,6 +282,7 @@ pub fn check_link_sys_san(ls: &LinkSys) -> Vec<String> {
         SystemConfig::Kafka(_) => "Kafka",
         SystemConfig::Webhook(_) => "Webhook",
         SystemConfig::HttpDns(_) => "HttpDns",
+        SystemConfig::CredentialSource(_) => "CredentialSource",
     };
     check_validation_block(validation_opt, provider, SAN_ENFORCED_LINK_SYS)
 }

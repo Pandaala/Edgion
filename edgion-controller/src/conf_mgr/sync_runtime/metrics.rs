@@ -42,7 +42,7 @@ pub mod names {
     /// to detect watcher stream ordering anomalies.
     pub const UNEXPECTED_APPLY_DURING_INIT_TOTAL: &str = "edgion_controller_unexpected_apply_during_init_total";
     /// Leader-job worker liveness (1 = running, 0 = stopped or dead;
-    /// label: leader_job = acme | conf_sync_rotation | dns_resolver).
+    /// label: leader_job = acme | conf_sync_rotation | credential_manager | dns_resolver).
     /// The label is deliberately NOT `job`: Prometheus reserves `job` as a
     /// target label and would rename an exported one to `exported_job`,
     /// breaking any alert written against the documented name.

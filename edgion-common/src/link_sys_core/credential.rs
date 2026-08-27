@@ -323,6 +323,11 @@ pub fn tls_ready(ls: &LinkSys) -> bool {
         SystemConfig::Kafka(k) => k.tls.as_ref(),
         SystemConfig::Webhook(w) => w.conn.tls.as_ref(),
         SystemConfig::HttpDns(h) => h.connection.as_ref().and_then(|c| c.tls.as_ref()),
+        SystemConfig::CredentialSource(source) => match &source.provider {
+            edgion_resources::resources::link_sys::credential_source::CredentialSourceProvider::OAuth2ClientCredentials(
+                oauth2,
+            ) => oauth2.tls.as_ref(),
+        },
     };
     tls_ready_inner(tls)
 }

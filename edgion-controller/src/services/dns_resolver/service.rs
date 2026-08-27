@@ -437,6 +437,14 @@ async fn effective_spec(
     )
 }
 
+/// Resolve the Controller-wide default through the same precedence and
+/// LinkSys lookup used by the ExternalName reconciliation service.
+pub(crate) async fn controller_default_resolver(client: &Client) -> ResolverSpec {
+    let config = dns_resolver_config();
+    let default_candidate = controller_default_candidate(&config);
+    effective_spec(client, &std::collections::BTreeMap::new(), &default_candidate).await
+}
+
 /// Fetch an httpdns LinkSys's resolver config from the apiserver. Returns `None`
 /// when the object is missing or is not an httpdns LinkSys (a dangling ref then
 /// fails safe to the system resolver in `resolve_effective_spec`).

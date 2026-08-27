@@ -20,6 +20,7 @@ APPLY_ALL_SCRIPT="$COMMON_SCRIPT_DIR/apply_all_conf_strict.sh"
 RUN_CLIENT_SCRIPT="$COMMON_SCRIPT_DIR/run_test_client.sh"
 RUN_CLIENT_BATCH_SCRIPT="$COMMON_SCRIPT_DIR/run_test_client_batch.sh"
 GENERATE_CERTS_SCRIPT="$COMMON_SCRIPT_DIR/generate_runtime_certs.sh"
+CREDENTIAL_SOURCE_OAUTH2_SCRIPT="$COMMON_SCRIPT_DIR/test_credential_source_oauth2.sh"
 LOCAL_IMAGE_PREPARE_SCRIPT="$ORBSTACK_SCRIPT_DIR/prepare_local_images.sh"
 GENERATED_DIR="${GENERATED_DIR:-$PROJECT_ROOT/edgion-tests/k8s/generated}"
 GENERATED_SECRET_DIR="${GENERATED_DIR}/secrets"
@@ -284,7 +285,7 @@ if [[ "${SKIP_PREPARE}" == "true" && "${PREPARE_ONLY}" == "true" ]]; then
   exit 1
 fi
 
-for required in "$VALIDATE_SCRIPT" "$DEPLOY_SCRIPT" "$APPLY_ALL_SCRIPT" "$RUN_CLIENT_SCRIPT" "$RUN_CLIENT_BATCH_SCRIPT" "$GENERATE_CERTS_SCRIPT"; do
+for required in "$VALIDATE_SCRIPT" "$DEPLOY_SCRIPT" "$APPLY_ALL_SCRIPT" "$RUN_CLIENT_SCRIPT" "$RUN_CLIENT_BATCH_SCRIPT" "$GENERATE_CERTS_SCRIPT" "$CREDENTIAL_SOURCE_OAUTH2_SCRIPT"; do
   if [[ ! -x "$required" ]]; then
     echo "required script not found or not executable: $required"
     exit 1
@@ -1335,7 +1336,11 @@ run_one() {
 
   local attempt=1
   while (( attempt <= max_attempts )); do
-    if [[ "${resource}" == "EdgionBackend" && "${item}" == "PolicyIntegration" ]]; then
+    if [[ "${resource}" == "LinkSys" && "${item}" == "CredentialSourceOAuth2" ]]; then
+      if CONF_ROOT="$CONF_ROOT" "$CREDENTIAL_SOURCE_OAUTH2_SCRIPT"; then
+        return 0
+      fi
+    elif [[ "${resource}" == "EdgionBackend" && "${item}" == "PolicyIntegration" ]]; then
       if run_ai_backend_policy_integration; then
         return 0
       fi
@@ -1356,7 +1361,8 @@ run_one() {
 is_host_side_suite() {
   local resource="$1" item="$2"
   [[ "${resource}" == "Gateway" && "${item}" == "PortConflict" ]] \
-    || [[ "${resource}" == "EdgionBackend" && "${item}" == "PolicyIntegration" ]]
+    || [[ "${resource}" == "EdgionBackend" && "${item}" == "PolicyIntegration" ]] \
+    || [[ "${resource}" == "LinkSys" && "${item}" == "CredentialSourceOAuth2" ]]
 }
 
 run_ai_backend_policy_integration() {
@@ -1486,6 +1492,7 @@ run_all_selected_suites() {
     "Status/TLSListenerMode|Status|TLSListenerMode"
     "Status/TLSRoute|Status|TLSRoute"
     "LinkSys/Status|LinkSys|Status"
+    "LinkSys/CredentialSourceOAuth2|LinkSys|CredentialSourceOAuth2"
     "EdgionBackend/PolicyIntegration/DynamicTest|EdgionBackend|PolicyIntegration"
   )
 

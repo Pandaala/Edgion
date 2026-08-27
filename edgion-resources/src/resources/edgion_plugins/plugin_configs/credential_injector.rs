@@ -53,6 +53,14 @@ pub struct CredentialInjectorConfig {
     pub resolved_credential: Option<ResolvedCredentialInjector>,
 }
 
+impl CredentialInjectorConfig {
+    /// Whether this injector is backed by a controller-managed LinkSys.
+    pub fn is_link_sys_ref(&self) -> bool {
+        self.credential_ref.group.as_deref() == Some("edgion.io")
+            && self.credential_ref.kind.as_deref() == Some("LinkSys")
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "type", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum CredentialInjectionTarget {
@@ -82,6 +90,11 @@ impl CredentialInjectionTarget {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResolvedCredentialInjector {
     pub value: String,
+
+    /// Absolute RFC3339 validity deadline for a dynamically acquired
+    /// credential. Static Secret credentials have no deadline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<String>,
 }
 
 impl fmt::Debug for ResolvedCredentialInjector {
@@ -98,15 +111,12 @@ impl PluginValidation for CredentialInjectorConfig {
         if self.credential_ref.name.is_empty() {
             return Some("credentialRef.name must not be empty".to_string());
         }
-        if let Some(group) = self.credential_ref.group.as_deref() {
-            if !is_core_api_group(group) {
-                return Some("credentialRef.group must identify the Kubernetes core API group".to_string());
-            }
-        }
-        if let Some(kind) = self.credential_ref.kind.as_deref() {
-            if kind != "Secret" {
-                return Some("credentialRef.kind must be Secret".to_string());
-            }
+        let group = self.credential_ref.group.as_deref().unwrap_or("");
+        let kind = self.credential_ref.kind.as_deref().unwrap_or("Secret");
+        let static_secret = is_core_api_group(group) && kind == "Secret";
+        let managed_link_sys = group == "edgion.io" && kind == "LinkSys";
+        if !static_secret && !managed_link_sys {
+            return Some("credentialRef group/kind must identify either core/Secret or edgion.io/LinkSys".to_string());
         }
 
         let CredentialInjectionTarget::Header { name, value_prefix } = &self.target else {
@@ -216,6 +226,7 @@ mod tests {
         let mut cfg = config(CredentialInjectionTarget::Bearer);
         cfg.resolved_credential = Some(ResolvedCredentialInjector {
             value: secret.to_string(),
+            valid_until: Some("2026-08-27T12:00:00Z".to_string()),
         });
 
         let debug = format!("{:?}", cfg.resolved_credential.as_ref().unwrap());
@@ -234,5 +245,36 @@ mod tests {
 
         let wire = serde_json::to_value(&cfg).unwrap();
         assert_eq!(wire["resolvedCredential"]["value"], secret);
+        assert_eq!(wire["resolvedCredential"]["validUntil"], "2026-08-27T12:00:00Z");
+    }
+
+    #[test]
+    fn accepts_only_secret_or_link_sys_reference_pairs() {
+        let mut cfg = config(CredentialInjectionTarget::Bearer);
+        assert!(cfg.validation_error().is_none());
+
+        cfg.credential_ref.group = Some("edgion.io".to_string());
+        cfg.credential_ref.kind = Some("LinkSys".to_string());
+        assert!(cfg.validation_error().is_none());
+        assert!(cfg.is_link_sys_ref());
+
+        for (group, kind) in [("edgion.io", "Secret"), ("", "LinkSys"), ("example.io", "Vault")] {
+            cfg.credential_ref.group = Some(group.to_string());
+            cfg.credential_ref.kind = Some(kind.to_string());
+            assert!(cfg.validation_error().is_some(), "{group}/{kind} must be rejected");
+            assert!(!cfg.is_link_sys_ref());
+        }
+    }
+
+    #[test]
+    fn static_resolved_credential_omits_valid_until_on_the_wire() {
+        let mut cfg = config(CredentialInjectionTarget::Bearer);
+        cfg.resolved_credential = Some(ResolvedCredentialInjector {
+            value: "static-value".to_string(),
+            valid_until: None,
+        });
+
+        let wire = serde_json::to_value(&cfg).unwrap();
+        assert!(wire["resolvedCredential"].get("validUntil").is_none());
     }
 }

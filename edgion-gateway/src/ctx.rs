@@ -1148,6 +1148,7 @@ impl PendingHeaderOp {
 pub(crate) struct DeferredCredentialMutation {
     name: http::HeaderName,
     value: Arc<http::HeaderValue>,
+    valid_until: Option<std::time::Instant>,
 }
 
 /// Request-scoped winning credential mutations, retained across upstream
@@ -1171,12 +1172,22 @@ impl fmt::Debug for DeferredCredentialMutations {
 }
 
 impl DeferredCredentialMutations {
-    pub(crate) fn upsert(&mut self, name: http::HeaderName, value: Arc<http::HeaderValue>) {
+    pub(crate) fn upsert(
+        &mut self,
+        name: http::HeaderName,
+        value: Arc<http::HeaderValue>,
+        valid_until: Option<std::time::Instant>,
+    ) {
         if let Some(existing) = self.entries.iter_mut().find(|entry| entry.name == name) {
             existing.value = value;
+            existing.valid_until = valid_until;
             return;
         }
-        self.entries.push(DeferredCredentialMutation { name, value });
+        self.entries.push(DeferredCredentialMutation {
+            name,
+            value,
+            valid_until,
+        });
     }
 
     pub(crate) fn remove(&mut self, name: &str) {
@@ -1188,6 +1199,12 @@ impl DeferredCredentialMutations {
         self.entries
             .iter()
             .any(|entry| entry.name.as_str().eq_ignore_ascii_case(name))
+    }
+
+    pub(crate) fn all_unexpired(&self, now: std::time::Instant) -> bool {
+        self.entries
+            .iter()
+            .all(|entry| entry.valid_until.is_none_or(|deadline| now < deadline))
     }
 
     pub(crate) fn apply(&self, request: &mut pingora_http::RequestHeader) -> Result<(), ()> {
@@ -1213,8 +1230,8 @@ mod deferred_credential_mutation_tests {
     #[test]
     fn later_value_replaces_same_target_and_removal_is_case_insensitive() {
         let mut mutations = DeferredCredentialMutations::default();
-        mutations.upsert(HeaderName::from_static("authorization"), value("Bearer first"));
-        mutations.upsert(HeaderName::from_static("authorization"), value("Bearer second"));
+        mutations.upsert(HeaderName::from_static("authorization"), value("Bearer first"), None);
+        mutations.upsert(HeaderName::from_static("authorization"), value("Bearer second"), None);
 
         let mut request = pingora_http::RequestHeader::build("GET", b"/", None).unwrap();
         mutations.apply(&mut request).unwrap();
@@ -1232,7 +1249,7 @@ mod deferred_credential_mutation_tests {
         let mut mutations = DeferredCredentialMutations::default();
         let mut value = HeaderValue::from_str(secret).unwrap();
         value.set_sensitive(true);
-        mutations.upsert(HeaderName::from_static("x-provider-token"), Arc::new(value));
+        mutations.upsert(HeaderName::from_static("x-provider-token"), Arc::new(value), None);
 
         for _ in 0..2 {
             let mut request = pingora_http::RequestHeader::build("GET", b"/", None).unwrap();
@@ -1249,6 +1266,25 @@ mod deferred_credential_mutation_tests {
         let debug = format!("{mutations:?}");
         assert!(debug.contains("x-provider-token"));
         assert!(!debug.contains(secret));
+    }
+
+    #[test]
+    fn preflight_rejects_any_expired_deferred_credential() {
+        let now = std::time::Instant::now();
+        let mut mutations = DeferredCredentialMutations::default();
+        mutations.upsert(
+            HeaderName::from_static("authorization"),
+            value("Bearer current"),
+            Some(now + std::time::Duration::from_secs(30)),
+        );
+        assert!(mutations.all_unexpired(now));
+
+        mutations.upsert(
+            HeaderName::from_static("x-provider-token"),
+            value("expired"),
+            Some(now - std::time::Duration::from_secs(1)),
+        );
+        assert!(!mutations.all_unexpired(now));
     }
 }
 

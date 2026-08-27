@@ -45,7 +45,7 @@ mod version_detection;
 pub use center::KubernetesCenter;
 pub use config::{HaMode, KubernetesConfig, LeaderElectionConfig, MetadataFilterConfig};
 pub use controller::{ControllerExitReason, KubernetesController};
-pub use leader_election::{LeaderElection, LeaderHandle};
+pub use leader_election::{LeaderElection, LeaderFence, LeaderHandle};
 pub use namespace::NamespaceWatchMode;
 pub use resource_controller::{RelinkReason, RelinkSignalSender, ResourceController};
 pub use storage::KubernetesStorage;

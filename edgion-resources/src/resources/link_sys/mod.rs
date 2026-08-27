@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 // Submodules
 pub mod common;
+pub mod credential_source;
 pub mod elasticsearch;
 pub mod etcd;
 pub mod httpdns;
@@ -18,6 +19,7 @@ pub mod webhook;
 
 // Re-export common types for convenient access
 pub use common::SecretObjectReference;
+pub use credential_source::{CredentialSourceConfig, CredentialSourceProvider};
 pub use elasticsearch::ElasticsearchClientConfig;
 pub use etcd::EtcdClientConfig;
 pub use httpdns::HttpDnsResolverConfig;
@@ -104,6 +106,9 @@ pub enum SystemConfig {
     Webhook(WebhookServiceConfig),
     /// HTTP DNS resolver configuration
     HttpDns(HttpDnsResolverConfig),
+    /// Controller-managed credential acquisition and rotation.
+    #[serde(rename = "credentialSource")]
+    CredentialSource(CredentialSourceConfig),
 }
 
 impl SystemConfig {
@@ -116,6 +121,7 @@ impl SystemConfig {
             SystemConfig::Kafka(_) => SystemType::Kafka,
             SystemConfig::Webhook(_) => SystemType::Webhook,
             SystemConfig::HttpDns(_) => SystemType::HttpDns,
+            SystemConfig::CredentialSource(_) => SystemType::CredentialSource,
         }
     }
 
@@ -146,6 +152,8 @@ pub enum SystemType {
     Kafka,
     Webhook,
     HttpDns,
+    #[serde(rename = "credentialSource")]
+    CredentialSource,
 }
 
 impl LinkSys {
@@ -204,6 +212,9 @@ impl LinkSys {
                     errors.push(format!("HTTP DNS configuration error: {}", err));
                 }
             }
+            SystemConfig::CredentialSource(config) => {
+                errors.extend(config.validation_errors());
+            }
         }
         errors
     }
@@ -230,6 +241,35 @@ pub struct LinkSysStatus {
     /// Standard conditions: Accepted, ResolvedRefs (Gateway API).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_generation: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_state: Option<CredentialSourceState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_generation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issued_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_successful_refresh_time: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_refresh_time: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desired_consumer_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_consumer_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflicted_consumer_count: Option<u32>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, JsonSchema, PartialEq, Eq)]
+pub enum CredentialSourceState {
+    Idle,
+    Valid,
+    Expired,
+    Unavailable,
 }
 
 #[cfg(test)]

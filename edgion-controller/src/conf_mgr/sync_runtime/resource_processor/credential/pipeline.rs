@@ -15,7 +15,7 @@
 //!   plugin resolvers that do their own data-shape extraction (EdgionPlugins).
 //! - [`resolve_secret`] — full pipeline; returns the validated `Secret`.
 //! - [`resolve_credential`] — full pipeline; returns the parsed `Material`.
-//! - [`resolve_credential_readonly`] — the same typed pipeline without reverse
+//! - [`resolve_secret_readonly`] — validated Secret lookup without reverse
 //!   dependency registration, for status derivation after parse.
 
 use k8s_openapi::api::core::v1::{ConfigMap, Secret};
@@ -363,6 +363,23 @@ pub async fn resolve_secret<R: SecretMaterialResolver>(
     }
 }
 
+/// Read-only form of [`resolve_secret`] for status derivation and internal
+/// managed-Secret validation after the parse path registered dependencies.
+pub(crate) fn resolve_secret_readonly<R: SecretMaterialResolver>(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    owner_group: &str,
+    owner_kind: &str,
+    secret_ref: &SecretObjectReference,
+    resolver: &R,
+) -> ResolveOutcome<Secret> {
+    match resolve_inner_with_registration(ctx, owner, owner_group, owner_kind, secret_ref, resolver, false) {
+        ResolveOutcome::Ok((secret, _)) => ResolveOutcome::Ok(secret),
+        ResolveOutcome::Pending(reason) => ResolveOutcome::Pending(reason),
+        ResolveOutcome::Invalid(error) => ResolveOutcome::Invalid(error),
+    }
+}
+
 /// Resolve a credential Secret and return the parsed `Material`.
 ///
 /// Kept for unit tests and any call site that needs the typed material
@@ -380,23 +397,6 @@ pub async fn resolve_credential<R: SecretMaterialResolver>(
         ResolveOutcome::Ok((_, material)) => ResolveOutcome::Ok(material),
         ResolveOutcome::Pending(r) => ResolveOutcome::Pending(r),
         ResolveOutcome::Invalid(e) => ResolveOutcome::Invalid(e),
-    }
-}
-
-/// Read-only typed credential resolution for status derivation after the
-/// mutating parse path has already registered the dependency.
-pub(crate) fn resolve_credential_readonly<R: SecretMaterialResolver>(
-    ctx: &HandlerContext,
-    owner: &ResourceRef,
-    owner_group: &str,
-    owner_kind: &str,
-    secret_ref: &SecretObjectReference,
-    resolver: &R,
-) -> ResolveOutcome<R::Material> {
-    match resolve_inner_with_registration(ctx, owner, owner_group, owner_kind, secret_ref, resolver, false) {
-        ResolveOutcome::Ok((_, material)) => ResolveOutcome::Ok(material),
-        ResolveOutcome::Pending(reason) => ResolveOutcome::Pending(reason),
-        ResolveOutcome::Invalid(error) => ResolveOutcome::Invalid(error),
     }
 }
 

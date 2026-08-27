@@ -162,7 +162,7 @@ Controller 在独立的指标监听器（`:12190`，与 Admin 端口 `:12101` �
 | `edgion_controller_unexpected_apply_during_init_total` | Counter | `kind` | 初始化期间收到的 Apply 事件（应保持为 0；非零表示 watcher 流排序异常） |
 | `edgion_controller_resource_abnormal` | Gauge | `kind`、`namespace`、`name`、`err`、`warn` | 至少有一个失败状态条件的每个资源的一个序列。`err` / `warn` 是触发条件的 JSON 数组；该严重级别无条件时为空字符串 |
 | `edgion_controller_unknown_config_fields` | Gauge | `kind` | 每个存在未知配置字段的资源类型一个序列，值为该类型受影响的资源数（仅告警，从不阻断）。详细资源名与路径仅通过诊断接口、状态和日志提供，不进入 Prometheus 标签。数据来自对 `spec.unknown_fields` 的实时扫描，因此与仅限 Kubernetes 模式的 `resource_abnormal` 不同，FileSystem/etcd 模式下同样会产生该指标 |
-| `edgion_controller_leader_job_alive` | Gauge | `leader_job`（`acme` \| `conf_sync_rotation` \| `dns_resolver`） | Leader-job worker 的存活状态：`1` = 正在运行，`0` = 已停止或死亡。标签刻意使用 `leader_job` 而非 `job`——Prometheus 把 `job` 保留作为 target 标签，在默认 `honor_labels: false` 下会把导出的 `job` 标签重命名为 `exported_job`，从而破坏按文档名称编写的告警 |
+| `edgion_controller_leader_job_alive` | Gauge | `leader_job`（`acme` \| `conf_sync_rotation` \| `credential_manager` \| `dns_resolver`） | Leader-job worker 的存活状态：`1` = 正在运行，`0` = 已停止或死亡。标签刻意使用 `leader_job` 而非 `job`——Prometheus 把 `job` 保留作为 target 标签，在默认 `honor_labels: false` 下会把导出的 `job` 标签重命名为 `exported_job`，从而破坏按文档名称编写的告警 |
 
 `edgion_controller_resource_abnormal` 快照定时重建，默认上限 1000 条，以控制基数。用于对卡在异常状态的资源告警，如 `edgion_controller_resource_abnormal{err!=""}`。
 

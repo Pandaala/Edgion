@@ -6,6 +6,7 @@
 //! request state while preserving ordered plugin override semantics.
 
 use std::sync::Arc;
+use std::time::{Instant, SystemTime};
 
 use async_trait::async_trait;
 use http::{HeaderName, HeaderValue};
@@ -21,11 +22,24 @@ pub struct CredentialInjector {
     name: &'static str,
     target: HeaderName,
     value: Arc<HeaderValue>,
+    valid_until: Option<Instant>,
 }
 
 impl CredentialInjector {
     pub fn create(config: &CredentialInjectorConfig) -> Option<Box<dyn RequestFilter>> {
         let resolved = config.resolved_credential.as_ref()?;
+        let valid_until = match resolved.valid_until.as_deref() {
+            None => None,
+            Some(raw) => {
+                let wall_now = SystemTime::now();
+                let monotonic_now = Instant::now();
+                let remaining = edgion_common::time::parse_rfc3339_deadline(raw, wall_now)?;
+                if remaining.is_zero() {
+                    return None;
+                }
+                Some(monotonic_now.checked_add(remaining)?)
+            }
+        };
         let (target, prefix) = match &config.target {
             CredentialInjectionTarget::Bearer => (HeaderName::from_static("authorization"), "Bearer "),
             CredentialInjectionTarget::Header { name, value_prefix } => {
@@ -51,6 +65,7 @@ impl CredentialInjector {
             name: "CredentialInjector",
             target,
             value,
+            valid_until,
         }))
     }
 
@@ -70,6 +85,9 @@ impl RequestFilter for CredentialInjector {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        if self.valid_until.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Self::reject(log, "credential expired");
+        }
         if session.is_remote_ip_header(self.target.as_str()) {
             return Self::reject(log, "credential target is reserved");
         }
@@ -89,7 +107,7 @@ impl RequestFilter for CredentialInjector {
             return Self::reject(log, "credential target removal failed");
         }
         if session
-            .defer_credential_header(self.target.clone(), Arc::clone(&self.value))
+            .defer_credential_header(self.target.clone(), Arc::clone(&self.value), self.valid_until)
             .is_err()
         {
             return Self::reject(log, "credential deferral failed");
@@ -117,6 +135,7 @@ mod tests {
             target,
             resolved_credential: credential.map(|value| ResolvedCredentialInjector {
                 value: value.to_string(),
+                valid_until: None,
             }),
         }
     }
@@ -130,6 +149,36 @@ mod tests {
 
         let exact = "x".repeat(CREDENTIAL_INJECTOR_FINAL_VALUE_MAX_LEN - "Bearer ".len());
         assert!(CredentialInjector::create(&config(CredentialInjectionTarget::Bearer, Some(&exact))).is_some());
+    }
+
+    #[test]
+    fn construction_rejects_invalid_or_expired_managed_deadlines() {
+        let mut invalid = config(CredentialInjectionTarget::Bearer, Some("secret"));
+        invalid.resolved_credential.as_mut().unwrap().valid_until = Some("not-a-timestamp".to_string());
+        assert!(CredentialInjector::create(&invalid).is_none());
+
+        let mut expired = config(CredentialInjectionTarget::Bearer, Some("secret"));
+        expired.resolved_credential.as_mut().unwrap().valid_until = Some("1970-01-01T00:00:01Z".to_string());
+        assert!(CredentialInjector::create(&expired).is_none());
+    }
+
+    #[tokio::test]
+    async fn expired_runtime_generation_fails_before_request_mutation() {
+        let plugin = CredentialInjector {
+            name: "CredentialInjector",
+            target: HeaderName::from_static("authorization"),
+            value: Arc::new(HeaderValue::from_static("Bearer secret")),
+            valid_until: Some(Instant::now() - std::time::Duration::from_secs(1)),
+        };
+        let mut session = crate::plugins::runtime::traits::session::MockPluginSession::new();
+        let mut log = PluginLog::new("CredentialInjector");
+        assert!(matches!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            }
+        ));
     }
 
     #[tokio::test]
@@ -150,13 +199,14 @@ mod tests {
             .returning(|_| Ok(()));
         session
             .expect_defer_credential_header()
-            .withf(|name, value| {
+            .withf(|name, value, valid_until| {
                 name == "authorization"
                     && value.as_bytes() == b"Bearer secret"
                     && value.is_sensitive()
                     && format!("{value:?}") == "Sensitive"
+                    && valid_until.is_none()
             })
-            .returning(|_, _| Ok(()));
+            .returning(|_, _, _| Ok(()));
 
         let mut log = PluginLog::new("CredentialInjector");
         assert!(matches!(
@@ -181,13 +231,14 @@ mod tests {
         session.expect_remove_request_header().returning(|_| Ok(()));
         session
             .expect_defer_credential_header()
-            .withf(|name, value| {
+            .withf(|name, value, valid_until| {
                 name == "x-provider-token"
                     && value.as_bytes() == b"Token secret"
                     && value.is_sensitive()
                     && format!("{value:?}") == "Sensitive"
+                    && valid_until.is_none()
             })
-            .returning(|_, _| Ok(()));
+            .returning(|_, _, _| Ok(()));
 
         let mut log = PluginLog::new("CredentialInjector");
         assert!(matches!(

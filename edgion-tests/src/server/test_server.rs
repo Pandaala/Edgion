@@ -10,6 +10,7 @@ use axum::{
     routing::get,
     Router,
 };
+use base64::Engine as _;
 use clap::Parser;
 use h2::server as h2s;
 use parking_lot::Mutex;
@@ -69,6 +70,11 @@ static DNS_RESOLVE_COUNTER: std::sync::LazyLock<Mutex<std::collections::HashMap<
 /// client samples this around a locally rejected request to prove the provider
 /// was not contacted; no request data is retained.
 static ANTHROPIC_REQUEST_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+const OAUTH2_ACTIVE_CLIENT_ID: &str = "oauth2-active-client";
+const OAUTH2_ACTIVE_CLIENT_SECRET: &str = "active-secret";
+const OAUTH2_PREVIOUS_CLIENT_ID: &str = "oauth2-previous-client";
+const OAUTH2_PREVIOUS_CLIENT_SECRET: &str = "previous-secret";
 
 /// Per-scenario, fixed-label state for AI resilience integration tests. Only
 /// an opaque fixture ID, bounded server-owned modes, and counters are kept.
@@ -546,6 +552,7 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/vhost-health", get(vhost_health_handler))
         .route("/multi-set-cookie", get(multi_set_cookie_handler))
         .route("/auth-header-probe", get(auth_header_probe_handler))
+        .route("/oauth2/token", axum::routing::post(oauth2_token_handler))
         .route(
             "/webhook/resolve",
             get(webhook_resolve_handler).post(webhook_resolve_handler),
@@ -889,6 +896,57 @@ async fn auth_header_probe_handler(req: AxumRequest<Body>) -> impl IntoResponse 
             "Authorization header was NOT received by upstream (removed by gateway)"
         }))
         .unwrap()
+}
+
+fn oauth2_fixture_client(authorization: Option<&str>, form: &[u8]) -> Option<&'static str> {
+    if form != b"grant_type=client_credentials&scope=inference.invoke" {
+        return None;
+    }
+    let encoded = authorization?.strip_prefix("Basic ")?;
+    let decoded = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
+    let decoded = std::str::from_utf8(&decoded).ok()?;
+    match decoded.split_once(':') {
+        Some((OAUTH2_ACTIVE_CLIENT_ID, OAUTH2_ACTIVE_CLIENT_SECRET)) => Some("active"),
+        Some((OAUTH2_PREVIOUS_CLIENT_ID, OAUTH2_PREVIOUS_CLIENT_SECRET)) => Some("previous"),
+        _ => None,
+    }
+}
+
+/// Deterministic OAuth2 Client Credentials issuer used by the Controller-side
+/// credential lifecycle integration test. The five-second generation changes
+/// independently of Kubernetes resources, allowing the test to prove that the
+/// Controller performs expiry-aware refresh instead of merely reacting to
+/// bootstrap Secret updates.
+async fn oauth2_token_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+    use axum::response::Json;
+    use serde_json::json;
+
+    let authorization = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned);
+    let Ok(form) = to_bytes(req.into_body(), 4 * 1024).await else {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_request"})));
+    };
+    let Some(client) = oauth2_fixture_client(authorization.as_deref(), &form) else {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "invalid_client"})));
+    };
+    let generation = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        / 5;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "access_token": format!("{client}-oauth2-token-{generation}"),
+            "token_type": "Bearer",
+            "expires_in": 60
+        })),
+    )
 }
 
 // ============================================================================
@@ -4066,6 +4124,22 @@ async fn start_https_backend_wildcard_server(port: u16, cert_path: String, key_p
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oauth2_fixture_accepts_only_expected_grant_scope_and_bootstrap_pairs() {
+        let active = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD
+                .encode(format!("{OAUTH2_ACTIVE_CLIENT_ID}:{OAUTH2_ACTIVE_CLIENT_SECRET}"))
+        );
+        let valid_form = b"grant_type=client_credentials&scope=inference.invoke";
+        assert_eq!(oauth2_fixture_client(Some(&active), valid_form), Some("active"));
+        assert_eq!(oauth2_fixture_client(Some("Basic aW52YWxpZA=="), valid_form), None);
+        assert_eq!(
+            oauth2_fixture_client(Some(&active), b"grant_type=client_credentials&scope=unexpected"),
+            None
+        );
+    }
 
     #[test]
     fn dns_query_defaults_to_loopback_when_no_ip() {

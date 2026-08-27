@@ -245,6 +245,7 @@ pub trait PluginSession: Send + Sync {
         &mut self,
         _name: http::HeaderName,
         _value: Arc<http::HeaderValue>,
+        _valid_until: Option<std::time::Instant>,
     ) -> PluginSessionResult<()> {
         Err(Box::new(std::io::Error::new(
             std::io::ErrorKind::Unsupported,

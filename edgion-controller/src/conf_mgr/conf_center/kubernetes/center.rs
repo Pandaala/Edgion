@@ -684,6 +684,7 @@ impl KubernetesCenter {
                 no_sync_kinds,
                 event_tx.clone(),
                 Some(client.clone()), // start ACME when ready
+                Some(leader_handle.clone()),
                 self.config.watch_namespaces.clone(),
                 watchers.cancel_token(),
             ),
@@ -793,6 +794,7 @@ impl KubernetesCenter {
         no_sync_kinds: Vec<String>,
         tx: mpsc::Sender<LifecycleEvent>,
         acme_client: Option<Client>,
+        leader_handle: Option<LeaderHandle>,
         watch_namespaces: Vec<String>,
         cancel: CancellationToken,
     ) {
@@ -851,8 +853,8 @@ impl KubernetesCenter {
             if cancel.is_cancelled() {
                 return;
             }
-            if let Some(client) = acme_client {
-                Self::start_leader_jobs(&client, &watch_namespaces);
+            if let (Some(client), Some(leader_handle)) = (acme_client, leader_handle) {
+                Self::start_leader_jobs(&client, &watch_namespaces, runtime, leader_handle);
             }
             let _ = tx.send(LifecycleEvent::CachesReady).await;
         } else {
@@ -984,7 +986,7 @@ impl KubernetesCenter {
                         );
 
                         if leader_handle.is_leader() && !leader_services_running {
-                            self.start_leader_services(client).await;
+                            self.start_leader_services(client, leader_handle).await;
                             leader_services_running = true;
                         }
                     }
@@ -995,7 +997,7 @@ impl KubernetesCenter {
                             "Leadership acquired"
                         );
                         if caches_ready && !leader_services_running {
-                            self.start_leader_services(client).await;
+                            self.start_leader_services(client, leader_handle).await;
                             leader_services_running = true;
                         }
                     }
@@ -1138,6 +1140,7 @@ impl KubernetesCenter {
                 no_sync_kinds,
                 event_tx.clone(),
                 None, // ACME starts via start_leader_services
+                None,
                 self.config.watch_namespaces.clone(),
                 watchers.cancel_token(),
             ),
@@ -1187,10 +1190,21 @@ impl KubernetesCenter {
     /// module-global `LEADER` flag (`conf_sync_ca/rotation.rs`) that gates the Admin
     /// API's manual-rotation endpoint (`decide_trigger` / `trigger_manual_rotation`). Do
     /// not reorder or conditionally skip it without accounting for that.
-    fn start_leader_jobs(client: &Client, watch_namespaces: &[String]) {
+    fn start_leader_jobs(
+        client: &Client,
+        watch_namespaces: &[String],
+        runtime: Arc<ControllerRuntime>,
+        leader_handle: LeaderHandle,
+    ) {
         crate::services::acme::start_acme_service(client.clone(), watch_namespaces.to_vec());
         crate::services::conf_sync_ca::rotation::start_conf_sync_rotation(client.clone());
         crate::services::dns_resolver::start_dns_resolver_service(client.clone(), watch_namespaces.to_vec());
+        crate::services::credential_manager::start_credential_manager_service(
+            client.clone(),
+            watch_namespaces.to_vec(),
+            runtime,
+            leader_handle,
+        );
     }
 
     /// Stop counterpart of [`Self::start_leader_jobs`]. All stops are no-op-if-absent.
@@ -1198,6 +1212,7 @@ impl KubernetesCenter {
         crate::services::acme::stop_acme_service();
         crate::services::conf_sync_ca::rotation::stop_conf_sync_rotation();
         crate::services::dns_resolver::stop_dns_resolver_service();
+        crate::services::credential_manager::stop_credential_manager_service();
     }
 
     /// Start leader-only services (ACME + status reconciliation)
@@ -1209,9 +1224,14 @@ impl KubernetesCenter {
     /// it previously dropped. Leader-only starts controllers only after winning,
     /// and `runtime.reset()` clears the registry on every exit, so every key is
     /// reconciled from scratch as leader anyway.
-    async fn start_leader_services(&self, client: &Client) {
+    async fn start_leader_services(&self, client: &Client, leader_handle: &LeaderHandle) {
         tracing::info!(component = "kubernetes_center", "Starting leader-only services");
-        Self::start_leader_jobs(client, &self.config.watch_namespaces);
+        Self::start_leader_jobs(
+            client,
+            &self.config.watch_namespaces,
+            self.runtime.clone(),
+            leader_handle.clone(),
+        );
         self.runtime.processor_registry.requeue_all().await;
     }
 
@@ -1398,7 +1418,8 @@ mod caches_ready_tests {
         let css = Arc::new(ConfigSyncServer::new());
         // No expected kinds → readiness poll passes immediately; the cancelled
         // token must stop the tail before CachesReady is sent.
-        KubernetesCenter::run_caches_ready(css, runtime, Vec::new(), Vec::new(), tx, None, Vec::new(), cancel).await;
+        KubernetesCenter::run_caches_ready(css, runtime, Vec::new(), Vec::new(), tx, None, None, Vec::new(), cancel)
+            .await;
         assert!(
             rx.try_recv().is_err(),
             "cancelled caches task must send neither CachesReady nor CachesTimeout"

@@ -702,6 +702,9 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
             }
             // DNS resolver, not a runtime link client — nothing to register in the link store.
             edgion_resources::resources::link_sys::SystemConfig::HttpDns(_) => {}
+            // Controller-only credential acquisition metadata. The Gateway receives
+            // only the resolved plugin credential and never contacts the issuer.
+            edgion_resources::resources::link_sys::SystemConfig::CredentialSource(_) => {}
         }
     }
 
@@ -793,6 +796,8 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
             }
             // DNS resolver, not a runtime link client — nothing to register in the link store.
             edgion_resources::resources::link_sys::SystemConfig::HttpDns(_) => {}
+            // Controller-only credential acquisition metadata.
+            edgion_resources::resources::link_sys::SystemConfig::CredentialSource(_) => {}
         }
     }
 

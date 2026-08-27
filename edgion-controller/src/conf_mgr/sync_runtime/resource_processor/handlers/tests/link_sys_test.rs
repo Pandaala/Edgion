@@ -114,6 +114,75 @@ fn make_es_link_sys_apikey(ns: &str, name: &str, secret_name: &str) -> LinkSys {
     }
 }
 
+fn make_credential_source(ns: &str, name: &str, secret_name: &str) -> LinkSys {
+    let spec: LinkSysSpec = serde_yaml::from_str(&format!(
+        "type: credentialSource\nconfig:\n  provider:\n    type: oauth2ClientCredentials\n    tokenEndpoint: https://issuer.example.com/token\n    clientAuthentication:\n      activeSecretRef:\n        name: {secret_name}\n"
+    ))
+    .expect("credentialSource spec");
+    LinkSys {
+        metadata: ObjectMeta {
+            name: Some(name.to_string()),
+            namespace: Some(ns.to_string()),
+            uid: Some("source-uid".to_string()),
+            generation: Some(4),
+            ..Default::default()
+        },
+        spec,
+        status: None,
+    }
+}
+
+#[tokio::test]
+async fn credential_source_registers_only_non_secret_desired_state() {
+    let (key, mut secret) = make_secret(
+        "ops",
+        "oauth-bootstrap",
+        &[("clientId", b"client"), ("clientSecret", b"secret")],
+    );
+    secret.metadata.uid = Some("bootstrap-uid".to_string());
+    secret.metadata.resource_version = Some("22".to_string());
+    let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+
+    let result = LinkSysHandler::new()
+        .parse(make_credential_source("ops", "provider", "oauth-bootstrap"), &ctx)
+        .await;
+    let ProcessResult::Continue(link_sys) = result else {
+        panic!("credentialSource must continue");
+    };
+    let desired = runtime
+        .credential_source_registry
+        .source("ops/provider")
+        .expect("desired source");
+    assert_eq!(desired.uid, "source-uid");
+    assert_eq!(desired.secret_inputs.len(), 1);
+    assert_eq!(desired.secret_inputs[0].resource_version.as_deref(), Some("22"));
+    let SystemConfig::CredentialSource(source) = link_sys.spec.config else {
+        panic!("credentialSource expected");
+    };
+    let CredentialSourceProvider::OAuth2ClientCredentials(provider) = source.provider;
+    assert!(provider.tls.is_none());
+}
+
+#[test]
+fn credential_source_reports_unsupported_non_kubernetes_center_reason() {
+    let (ctx, runtime) = make_ctx(HashMap::new());
+    runtime.set_managed_credentials_supported(false);
+    let handler = LinkSysHandler::new();
+    let mut link_sys = make_credential_source("ops", "provider", "oauth-bootstrap");
+    let errors = handler.preparse(&mut link_sys, &ctx);
+    assert!(!errors.is_empty());
+    handler.update_status(&mut link_sys, &ctx, &errors);
+    let accepted = link_sys
+        .status
+        .as_ref()
+        .unwrap()
+        .conditions
+        .iter()
+        .find(|condition| condition.type_ == condition_types::ACCEPTED)
+        .unwrap();
+    assert_eq!(accepted.reason, "UnsupportedConfigurationCenter");
+}
+
 #[tokio::test]
 async fn test_redis_auth_happy_path() {
     let (key, secret) = make_secret(

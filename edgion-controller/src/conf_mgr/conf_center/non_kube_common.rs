@@ -46,12 +46,14 @@ pub struct CenterBase {
 impl CenterBase {
     /// Create a new `CenterBase` with all handles initialised to `None`.
     pub fn new() -> Self {
+        let runtime = Arc::new(ControllerRuntime::new());
+        runtime.set_managed_credentials_supported(false);
         Self {
             config_sync_server: RwLock::new(None),
             shutdown_handle: Mutex::new(None),
             controller_handle: Mutex::new(None),
             reload_tx: Mutex::new(None),
-            runtime: Arc::new(ControllerRuntime::new()),
+            runtime,
         }
     }
 
