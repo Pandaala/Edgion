@@ -37,6 +37,7 @@ use crate::plugins::http::bandwidth_limit::BandwidthLimit;
 use crate::plugins::http::basic_auth::BasicAuth;
 use crate::plugins::http::canary::Canary;
 use crate::plugins::http::cors::Cors;
+use crate::plugins::http::credential_injector::CredentialInjector;
 use crate::plugins::http::csrf::Csrf;
 use crate::plugins::http::ctx_set::CtxSet;
 use crate::plugins::http::direct_endpoint::DirectEndpoint;
@@ -91,8 +92,8 @@ pub struct PluginRuntime {
     /// Position == index assigned via `ExtensionRefFilter::set_index`. Empty
     /// when this runtime is built via the backend-scope path
     /// (`from_httproute_filters_for_backend` / `from_grpcroute_filters_for_backend`),
-    /// because backend-scope ExtensionRefFilters keep `index = None` and use
-    /// the legacy direct-store-lookup path.
+    /// because backend-scope ExtensionRefFilters keep `index = None`; their
+    /// first store result is pinned in the logical request context instead.
     ext_ref_keys: Vec<(String, String)>,
     /// Pre-resolved Arc to the first enabled `EdgionPlugin::Cors` config in
     /// `request_plugins`. Built once at preparse so the global CORS preflight
@@ -1384,6 +1385,7 @@ impl PluginRuntime {
             EdgionPlugin::AiGuard(config) => CreateResult::Ok(AiGuard::create(config, entry_scope)),
             EdgionPlugin::Cors(config) => CreateResult::Ok(Some(Box::new(Cors::new(config)))),
             EdgionPlugin::Csrf(config) => CreateResult::Ok(Some(Box::new(Csrf::new(config)))),
+            EdgionPlugin::CredentialInjector(config) => CreateResult::Ok(CredentialInjector::create(config)),
             EdgionPlugin::IpRestriction(config) => CreateResult::Ok(Some(IpRestriction::create(config, namespace))),
             EdgionPlugin::RequestAccessPolicy(config) => {
                 CreateResult::Ok(Some(RequestAccessPolicy::create(config, namespace, body_requirement)))
@@ -1474,6 +1476,7 @@ impl PluginRuntime {
             | EdgionPlugin::AiProxy(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
+            | EdgionPlugin::CredentialInjector(_)
             | EdgionPlugin::IpRestriction(_)
             | EdgionPlugin::JwtAuth(_)
             | EdgionPlugin::JweDecrypt(_)
@@ -1534,6 +1537,7 @@ impl PluginRuntime {
             | EdgionPlugin::AiProxy(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
+            | EdgionPlugin::CredentialInjector(_)
             | EdgionPlugin::IpRestriction(_)
             | EdgionPlugin::JwtAuth(_)
             | EdgionPlugin::JweDecrypt(_)
@@ -1591,6 +1595,7 @@ impl PluginRuntime {
             | EdgionPlugin::AiProxy(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
+            | EdgionPlugin::CredentialInjector(_)
             | EdgionPlugin::IpRestriction(_)
             | EdgionPlugin::JwtAuth(_)
             | EdgionPlugin::JweDecrypt(_)
@@ -1640,6 +1645,7 @@ impl PluginRuntime {
             EdgionPlugin::AiProxy(_) => "AiProxy",
             EdgionPlugin::Cors(_) => "Cors",
             EdgionPlugin::Csrf(_) => "Csrf",
+            EdgionPlugin::CredentialInjector(_) => "CredentialInjector",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
             EdgionPlugin::RequestAccessPolicy(_) => "RequestAccessPolicy",
             EdgionPlugin::GeoIpLocation(_) => "GeoIpLocation",

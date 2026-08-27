@@ -1,6 +1,7 @@
 use super::EdgionHttpProxy;
+use crate::plugins::http::common::connection_listed_hop_by_hop;
 use crate::routes::grpc::format_grpc_timeout;
-use crate::EdgionHttpContext;
+use crate::{ctx::DeferredCredentialMutations, EdgionHttpContext};
 use pingora_http::RequestHeader;
 use pingora_proxy::Session;
 
@@ -49,6 +50,20 @@ pub async fn upstream_request_filter(
 
     sync_body_framing_headers(upstream_request, ctx)?;
 
+    validate_deferred_credential_connection(upstream_request, &ctx.deferred_credential_mutations).map_err(|_| {
+        pingora_core::Error::explain(
+            pingora_core::ErrorType::InternalError,
+            "deferred credential target conflicts with Connection header",
+        )
+    })?;
+
+    ctx.deferred_credential_mutations.apply(upstream_request).map_err(|_| {
+        pingora_core::Error::explain(
+            pingora_core::ErrorType::InternalError,
+            "failed to apply deferred credential header",
+        )
+    })?;
+
     // This is the final owned-header mutation. It intentionally runs after
     // gRPC deadline, authority, framing, and every request-plugin stage so a
     // configured RemoteIp header remains authoritative even when its name
@@ -71,6 +86,66 @@ pub async fn upstream_request_filter(
     ctx.request_info.in_request_body_stage = false;
 
     Ok(())
+}
+
+/// Recheck the final attempt-local header block after every request plugin.
+/// A later plugin may have changed `Connection` after an injector ran; invalid
+/// UTF-8 or a dynamically nominated credential target must fail closed before
+/// the credential is materialized.
+fn validate_deferred_credential_connection(
+    upstream_request: &RequestHeader,
+    mutations: &DeferredCredentialMutations,
+) -> Result<(), ()> {
+    for value in upstream_request.headers.get_all(http::header::CONNECTION) {
+        let value = value.to_str().map_err(|_| ())?;
+        if connection_listed_hop_by_hop(value)
+            .iter()
+            .any(|name| mutations.contains_target(name))
+        {
+            return Err(());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod deferred_credential_connection_tests {
+    use super::validate_deferred_credential_connection;
+    use crate::ctx::DeferredCredentialMutations;
+    use http::{HeaderName, HeaderValue};
+    use pingora_http::RequestHeader;
+    use std::sync::Arc;
+
+    fn mutations() -> DeferredCredentialMutations {
+        let mut mutations = DeferredCredentialMutations::default();
+        mutations.upsert(
+            HeaderName::from_static("x-provider-token"),
+            Arc::new(HeaderValue::from_static("private-token")),
+        );
+        mutations
+    }
+
+    #[test]
+    fn rejects_target_nominated_by_a_late_connection_mutation() {
+        let mut request = RequestHeader::build("GET", b"/", None).unwrap();
+        request
+            .insert_header("connection", "keep-alive, X-Provider-Token")
+            .unwrap();
+        assert!(validate_deferred_credential_connection(&request, &mutations()).is_err());
+    }
+
+    #[test]
+    fn accepts_unrelated_options_and_rejects_non_utf8_connection_values() {
+        let mut unrelated = RequestHeader::build("GET", b"/", None).unwrap();
+        unrelated.insert_header("connection", "keep-alive, X-Other").unwrap();
+        assert!(validate_deferred_credential_connection(&unrelated, &mutations()).is_ok());
+
+        let mut invalid = RequestHeader::build("GET", b"/", None).unwrap();
+        invalid
+            .insert_header("connection", HeaderValue::from_bytes(b"X-Other, \xff").unwrap())
+            .unwrap();
+        assert!(validate_deferred_credential_connection(&invalid, &mutations()).is_err());
+    }
 }
 
 /// Authoritatively publish the canonical downstream identity after every

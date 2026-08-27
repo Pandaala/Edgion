@@ -9,6 +9,7 @@ pub mod canary;
 pub mod common;
 mod conf_handler_impl;
 pub mod cors;
+pub mod credential_injector;
 pub mod csrf;
 pub mod ctx_set;
 pub mod direct_endpoint;
@@ -54,6 +55,7 @@ pub use basic_auth::BasicAuth;
 pub use canary::Canary;
 pub use conf_handler_impl::create_plugin_handler;
 pub use cors::Cors;
+pub use credential_injector::CredentialInjector;
 pub use csrf::Csrf;
 pub use ctx_set::CtxSet;
 pub use fault_injection::FaultInjection;
@@ -87,10 +89,10 @@ pub use webhook_key_get::WebhookKeyGet;
 
 // Re-export plugin configs from types
 pub use edgion_resources::resources::edgion_plugins::{
-    AiProxyConfig, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig,
-    CtxSetConfig, DslConfig, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, FaultInjectionConfig,
-    ForwardAuthConfig, HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig,
-    JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig,
-    ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig, RegionRouteConfig,
-    RequestRestrictionConfig, ResponseRewriteConfig,
+    AiProxyConfig, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig,
+    CredentialInjectorConfig, CsrfConfig, CtxSetConfig, DslConfig, DynamicExternalUpstreamConfig,
+    DynamicInternalUpstreamConfig, FaultInjectionConfig, ForwardAuthConfig, HeaderCertAuthConfig, HmacAuthConfig,
+    IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig,
+    MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig,
+    RegionRouteConfig, RequestRestrictionConfig, ResponseRewriteConfig,
 };

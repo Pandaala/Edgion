@@ -204,6 +204,7 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
                         | EdgionPlugin::UrlRewrite(_)
                         | EdgionPlugin::RequestMirror(_)
                         | EdgionPlugin::BasicAuth(_)
+                        | EdgionPlugin::CredentialInjector(_)
                         | EdgionPlugin::Cors(_)
                         | EdgionPlugin::Csrf(_)
                         | EdgionPlugin::IpRestriction(_)

@@ -10,6 +10,7 @@
 
 mod ai_guard;
 mod basic_auth;
+mod credential_injector;
 mod csrf;
 mod ext_proc;
 mod forward_auth;
@@ -25,6 +26,9 @@ mod wasm;
 
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use ai_guard::resolve as resolve_ai_guard;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use basic_auth::resolve as resolve_basic_auth;
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use credential_injector::{
+    resolve as resolve_credential_injector, status_errors as credential_injector_status_errors,
+};
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use csrf::resolve as resolve_csrf;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use ext_proc::resolve as resolve_ext_proc;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use forward_auth::resolve as resolve_forward_auth;

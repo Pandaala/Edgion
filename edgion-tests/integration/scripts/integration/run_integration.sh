@@ -1543,6 +1543,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_HmacAuth" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i HmacAuth" || test_failed=true
                     run_test "EdgionPlugins_HeaderCertAuth" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i HeaderCertAuth" || test_failed=true
                     run_test "EdgionPlugins_KeyAuth" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i KeyAuth" || test_failed=true
+                    run_test "EdgionPlugins_CredentialInjector" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i CredentialInjector" || test_failed=true
                     run_test "EdgionPlugins_BasicAuth" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i BasicAuth" || test_failed=true
                     if ! should_skip_test "EdgionPlugins_LdapAuth"; then
                         run_test "EdgionPlugins_LdapAuth" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i LdapAuth" || test_failed=true
@@ -1806,6 +1807,7 @@ run_all_tests() {
         run_test "EdgionPlugins_HmacAuth" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i HmacAuth" || test_failed=true
         run_test "EdgionPlugins_HeaderCertAuth" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i HeaderCertAuth" || test_failed=true
         run_test "EdgionPlugins_KeyAuth" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i KeyAuth" || test_failed=true
+        run_test "EdgionPlugins_CredentialInjector" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i CredentialInjector" || test_failed=true
         run_test "EdgionPlugins_BasicAuth" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i BasicAuth" || test_failed=true
         if ! should_skip_test "EdgionPlugins_LdapAuth"; then
             run_test "EdgionPlugins_LdapAuth" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i LdapAuth" || test_failed=true

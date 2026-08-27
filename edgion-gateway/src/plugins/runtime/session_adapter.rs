@@ -14,6 +14,7 @@ use super::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotR
 use super::traits::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult};
 use crate::ai::{AiAttemptPlan, AiRequestContext};
 use crate::link_sys::template::evaluate_template;
+use crate::plugins::http::get_global_plugin_store;
 use crate::request_body::BodyStorage;
 use crate::request_body::{BodyOperationError, BodyScanResult};
 use crate::runtime::server::{http_to_grpc_status, send_grpc_trailers_only_frame};
@@ -98,6 +99,74 @@ pub(crate) fn strip_request_dye_once_core(
             req_header.remove_header(&rule.name);
             handled.push(rule.name.clone());
         }
+    }
+}
+
+fn pinned_backend_ext_ref_core(
+    cache: &mut std::collections::HashMap<String, Option<Arc<crate::plugins::runtime::PluginRuntime>>>,
+    key: &str,
+    lookup: impl FnOnce() -> Option<Arc<crate::plugins::runtime::PluginRuntime>>,
+) -> Option<Arc<crate::plugins::runtime::PluginRuntime>> {
+    if let Some(runtime) = cache.get(key) {
+        return runtime.as_ref().map(Arc::clone);
+    }
+    let runtime = lookup();
+    cache.insert(key.to_string(), runtime.as_ref().map(Arc::clone));
+    runtime
+}
+
+#[cfg(test)]
+mod backend_ext_ref_pin_tests {
+    use super::pinned_backend_ext_ref_core;
+    use crate::plugins::http::{compile_plugins, PluginStore};
+    use crate::plugins::runtime::PluginRuntime;
+    use edgion_resources::resources::EdgionPlugins;
+    use std::collections::HashMap;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    #[test]
+    fn pins_present_and_missing_results() {
+        let mut cache = HashMap::new();
+        let runtime = Arc::new(PluginRuntime::new());
+        let first = pinned_backend_ext_ref_core(&mut cache, "ns/present", || Some(Arc::clone(&runtime))).unwrap();
+        let second =
+            pinned_backend_ext_ref_core(&mut cache, "ns/present", || panic!("present entry was reloaded")).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+
+        assert!(pinned_backend_ext_ref_core(&mut cache, "ns/missing", || None).is_none());
+        assert!(
+            pinned_backend_ext_ref_core(&mut cache, "ns/missing", || panic!("missing entry was reloaded")).is_none()
+        );
+    }
+
+    #[test]
+    fn pins_plugin_store_generation_across_hot_update() {
+        let store = PluginStore::new();
+        let key = "ns/credential-provider";
+        let generation_a = compile_plugins(&EdgionPlugins::new("credential-provider-a", Default::default()));
+        let mut initial = HashMap::new();
+        initial.insert(key.to_string(), Arc::clone(&generation_a));
+        store.update(initial, &HashSet::new());
+
+        let mut request_cache = HashMap::new();
+        let pinned_a = pinned_backend_ext_ref_core(&mut request_cache, key, || store.get_plugin_runtime(key)).unwrap();
+        assert!(Arc::ptr_eq(&pinned_a, &generation_a.plugin_runtime));
+
+        let generation_b = compile_plugins(&EdgionPlugins::new("credential-provider-b", Default::default()));
+        assert!(!Arc::ptr_eq(&generation_a.plugin_runtime, &generation_b.plugin_runtime));
+        let mut update = HashMap::new();
+        update.insert(key.to_string(), Arc::clone(&generation_b));
+        store.update(update, &HashSet::new());
+        assert!(Arc::ptr_eq(
+            &store.get_plugin_runtime(key).unwrap(),
+            &generation_b.plugin_runtime
+        ));
+
+        let retry_runtime =
+            pinned_backend_ext_ref_core(&mut request_cache, key, || store.get_plugin_runtime(key)).unwrap();
+        assert!(Arc::ptr_eq(&retry_runtime, &generation_a.plugin_runtime));
+        assert!(!Arc::ptr_eq(&retry_runtime, &generation_b.plugin_runtime));
     }
 }
 
@@ -930,6 +999,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .req_header_mut()
             .insert_header(name.to_string(), value.to_string())
             .map_err(|e| Box::new(e) as PluginSessionError)?;
+        self.ctx.deferred_credential_mutations.remove(name);
         Ok(())
     }
 
@@ -940,11 +1010,26 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .req_header_mut()
             .append_header(name.to_string(), value.to_string())
             .map_err(|e| Box::new(e) as PluginSessionError)?;
+        self.ctx.deferred_credential_mutations.remove(name);
         Ok(())
     }
 
     fn remove_request_header(&mut self, name: &str) -> PluginSessionResult<()> {
         self.inner.req_header_mut().remove_header(name);
+        self.ctx.deferred_credential_mutations.remove(name);
+        Ok(())
+    }
+
+    fn is_remote_ip_header(&self, name: &str) -> bool {
+        self.ctx.remote_ip_header.as_str().eq_ignore_ascii_case(name)
+    }
+
+    fn defer_credential_header(
+        &mut self,
+        name: http::HeaderName,
+        value: Arc<http::HeaderValue>,
+    ) -> PluginSessionResult<()> {
+        self.ctx.deferred_credential_mutations.upsert(name, value);
         Ok(())
     }
 
@@ -1475,6 +1560,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .get(index)?
             .as_ref()
             .map(std::sync::Arc::clone)
+    }
+
+    fn pinned_backend_ext_ref(&mut self, key: &str) -> Option<std::sync::Arc<crate::plugins::runtime::PluginRuntime>> {
+        pinned_backend_ext_ref_core(&mut self.ctx.resolved_backend_ext_refs, key, || {
+            get_global_plugin_store().get_plugin_runtime(key)
+        })
     }
 
     fn push_edgion_plugins_log(&mut self, log: EdgionPluginsLog) {

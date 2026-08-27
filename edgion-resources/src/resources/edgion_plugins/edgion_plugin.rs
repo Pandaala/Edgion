@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use super::dye::DyeOutcome;
 use super::plugin_configs::{
     AiGuardConfig, AiProxyConfig, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CanaryConfig,
-    CorsConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig,
-    DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig,
+    CorsConfig, CredentialInjectorConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, DirectEndpointConfig,
+    DslConfig, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig,
     FormJsonTransformConfig, ForwardAuthConfig, GeoIpLocationConfig, GuardrailConfig, HeaderCertAuthConfig,
     HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig,
     LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig,
@@ -48,6 +48,8 @@ pub enum EdgionPlugin {
     // ========== Custom Edgion plugins ==========
     /// Basic Authentication filter
     BasicAuth(BasicAuthConfig),
+    /// Inject a Controller-resolved credential into the primary upstream request.
+    CredentialInjector(CredentialInjectorConfig),
     /// Route OpenAI-compatible requests to an EdgionBackend AI capability.
     AiProxy(AiProxyConfig),
     /// CORS (Cross-Origin Resource Sharing) filter
@@ -232,6 +234,7 @@ impl EdgionPlugin {
             | UrlRewrite(_)
             | RequestMirror(_)
             | BasicAuth(_)
+            | CredentialInjector(_)
             | Cors(_)
             | Csrf(_)
             | IpRestriction(_)
@@ -296,6 +299,7 @@ impl EdgionPlugin {
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
             EdgionPlugin::BasicAuth(_) => "BasicAuth",
+            EdgionPlugin::CredentialInjector(_) => "CredentialInjector",
             EdgionPlugin::AiProxy(_) => "AiProxy",
             EdgionPlugin::Cors(_) => "Cors",
             EdgionPlugin::Csrf(_) => "Csrf",
@@ -373,6 +377,7 @@ impl EdgionPlugin {
             | EdgionPlugin::UrlRewrite(_)
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::CredentialInjector(_)
             | EdgionPlugin::AiProxy(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
@@ -430,6 +435,7 @@ impl EdgionPlugin {
             | EdgionPlugin::UrlRewrite(_)
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::CredentialInjector(_)
             | EdgionPlugin::AiProxy(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
@@ -513,6 +519,7 @@ impl EdgionPlugin {
             | EdgionPlugin::UrlRewrite(_)
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::CredentialInjector(_)
             | EdgionPlugin::AiProxy(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
@@ -579,6 +586,7 @@ impl EdgionPlugin {
             EdgionPlugin::Mock(c) => c.validation_error(),
             EdgionPlugin::Csrf(c) => c.validation_error(),
             EdgionPlugin::BasicAuth(c) => c.validation_error(),
+            EdgionPlugin::CredentialInjector(c) => c.validation_error(),
             EdgionPlugin::JweDecrypt(c) => c.validation_error(),
             EdgionPlugin::HmacAuth(c) => c.validation_error(),
             EdgionPlugin::HeaderCertAuth(c) => c.validation_error(),

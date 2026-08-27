@@ -9,6 +9,7 @@ pub mod body_dynamic;
 pub mod btlsp_ref_flap;
 pub mod canary_hot_swap;
 pub mod condition_refs_dynamic;
+pub mod credential_injector_dynamic;
 pub mod dns_resolution_flap;
 pub mod dsl_dynamic;
 pub mod edgion_config_data_ref_flap;

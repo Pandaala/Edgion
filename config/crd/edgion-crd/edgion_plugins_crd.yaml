@@ -321,6 +321,7 @@ spec:
                         description: "Plugin type"
                         enum:
                           - BasicAuth
+                          - CredentialInjector
                           - AiProxy
                           - Cors
                           - Csrf

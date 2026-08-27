@@ -233,6 +233,25 @@ pub trait PluginSession: Send + Sync {
     /// Remove a request header (e.g., hide credentials)
     fn remove_request_header(&mut self, name: &str) -> PluginSessionResult<()>;
 
+    /// Whether `name` is the configured trusted-proxy client identity header.
+    /// Credential injection must never overwrite this request security input.
+    fn is_remote_ip_header(&self, _name: &str) -> bool {
+        false
+    }
+
+    /// Register a prevalidated credential header for final attempt-local
+    /// upstream materialization. Adapters without request context fail closed.
+    fn defer_credential_header(
+        &mut self,
+        _name: http::HeaderName,
+        _value: Arc<http::HeaderValue>,
+    ) -> PluginSessionResult<()> {
+        Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "deferred credential headers are unavailable",
+        )))
+    }
+
     /// Replace the request query string (the part after `?`) while leaving the
     /// request path untouched. A non-empty `query` (no leading `?`) becomes the
     /// new query; an empty string removes the query entirely.
@@ -468,6 +487,12 @@ pub trait PluginSession: Send + Sync {
     /// `EdgionHttpContext` (e.g. some test mocks). Production path is
     /// `PingoraSessionAdapter`, which reads `ctx.resolved_route_ext_refs`.
     fn resolved_route_ext_ref(&self, _index: usize) -> Option<std::sync::Arc<crate::plugins::runtime::PluginRuntime>> {
+        None
+    }
+
+    /// Resolve a backend-scope ExtensionRef once per logical request. Both a
+    /// present runtime and a missing result are pinned across retries.
+    fn pinned_backend_ext_ref(&mut self, _key: &str) -> Option<std::sync::Arc<crate::plugins::runtime::PluginRuntime>> {
         None
     }
 

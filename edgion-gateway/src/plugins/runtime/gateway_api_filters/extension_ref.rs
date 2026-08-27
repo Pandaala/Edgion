@@ -8,7 +8,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
 
-use crate::plugins::http::get_global_plugin_store;
 use crate::plugins::runtime::log::EdgionPluginsLogToken;
 use crate::plugins::runtime::log::PluginLog;
 use crate::plugins::runtime::traits::{
@@ -52,9 +51,9 @@ pub struct ExtensionRefFilter {
     ext_ref: LocalObjectReference,
     /// Position in the rule's ExtensionRef list, assigned at route build time.
     /// `Some(idx)` -> look up resolved target via `session.resolved_route_ext_ref(idx)`.
-    /// `None` -> backend-level filter (no per-request resolve cache); fall back to
-    /// direct global store lookup. Set to `None` initially; rule-scope builder
-    /// patches to `Some` in a later task.
+    /// `None` -> backend-level filter, resolved through the request-scoped
+    /// pinned cache. Set to `None` initially; rule-scope builder patches to
+    /// `Some`.
     index: Option<usize>,
 }
 
@@ -99,7 +98,7 @@ impl ExtensionRefFilter {
         }
         match self.index {
             Some(idx) => session.resolved_route_ext_ref(idx),
-            None => get_global_plugin_store().get_plugin_runtime(&self.plugin_key()),
+            None => session.pinned_backend_ext_ref(&self.plugin_key()),
         }
     }
 
@@ -126,8 +125,8 @@ impl ExtensionRefFilter {
 
         let key = self.plugin_key();
 
-        // Resolve target: rule-scope reads pre-resolved Vec via index;
-        // backend-scope falls back to direct global store lookup.
+        // Resolve target: rule-scope reads the pre-resolved Vec via index;
+        // backend-scope resolves through the request-pinned cache.
         let plugin_runtime = match self.index {
             Some(idx) => match session.resolved_route_ext_ref(idx) {
                 Some(rt) => rt,
@@ -136,7 +135,7 @@ impl ExtensionRefFilter {
                     return Err(());
                 }
             },
-            None => match get_global_plugin_store().get_plugin_runtime(&key) {
+            None => match session.pinned_backend_ext_ref(&key) {
                 Some(rt) => rt,
                 None => {
                     log.push_err("extension ref not found");
@@ -510,17 +509,23 @@ mod tests {
     }
 
     #[test]
-    fn test_resolves_via_store_and_runs() {
+    fn backend_scope_uses_request_pinned_runtime_across_attempts() {
         use crate::plugins::runtime::log::EdgionPluginsLogToken;
 
         // Prepare store with plugin
         make_plugin("ns", "p1");
+        let runtime = get_global_plugin_store().get_plugin_runtime("ns/p1").unwrap();
 
         let mut session = MockPluginSession::new();
         session
+            .expect_pinned_backend_ext_ref()
+            .with(eq("ns/p1"))
+            .times(2)
+            .returning(move |_| Some(Arc::clone(&runtime)));
+        session
             .expect_start_edgion_plugins_log()
+            .times(2)
             .returning(|_| EdgionPluginsLogToken::new(0));
-        session.expect_push_to_edgion_plugins_log().return_const(());
 
         let filter = ExtensionRefFilter::new(
             "ns".to_string(),
@@ -532,8 +537,10 @@ mod tests {
             },
         );
         let mut log = PluginLog::new("test");
-        let result = filter.run_extension(PluginRunningStage::UpstreamResponseFilter, &mut session, &mut log);
-        assert_eq!(result, PluginRunningResult::GoodNext);
+        for _ in 0..2 {
+            let result = filter.run_extension(PluginRunningStage::UpstreamResponseFilter, &mut session, &mut log);
+            assert_eq!(result, PluginRunningResult::GoodNext);
+        }
         // Verify refer_to is set
         assert!(log.refer_to.is_some());
         assert_eq!(log.refer_to.as_ref().unwrap(), "p1");

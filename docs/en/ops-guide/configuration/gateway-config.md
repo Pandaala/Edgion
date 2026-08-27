@@ -272,6 +272,11 @@ When mTLS is enabled, the URI scheme of `gateway.server_addrs` is automatically 
 | `console` | `Boolean` | `true` | Also write logs to stdout |
 | `buffer_size` | `Integer` | `10000` | Async log buffer size |
 
+The Gateway always caps `pingora_core::protocols::http::v1::client` and
+`pingora_proxy::proxy_h1` at `error`, even if `RUST_LOG` or `log_level` requests a more verbose
+level. These upstream Pingora modules contain complete HTTP/1 request-header diagnostics and
+cannot be enabled below `error`; other targets retain normal module-level filtering.
+
 ### server
 
 | Parameter | Type | Default | Description |

@@ -29,6 +29,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "DslDynamic",
     "BodyDynamic",
     "ConditionRefsDynamic",
+    "CredentialInjectorDynamic",
     "JsonSchemaValidationDynamic",
     "FormJsonTransformDynamic",
     "BasicAuthDynamic",
@@ -1068,6 +1069,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "misdirected-request" | "misdirectedrequest" | "421" => "Gateway/TLS/MisdirectedRequest".to_string(),
             "frontend-validation" | "frontendvalidation" | "fv-mtls" => "Gateway/FrontendValidation".to_string(),
             "csrf" => "EdgionPlugins/Csrf".to_string(),
+            "credential-injector" | "credentialinjector" => "EdgionPlugins/CredentialInjector".to_string(),
             "plugin-logs" | "pluginlogs" => "EdgionPlugins/DebugAccessLog".to_string(),
             "plugin-condition" | "plugincondition" => "EdgionPlugins/PluginCondition".to_string(),
             "all-conditions" | "allconditions" => "EdgionPlugins/PluginCondition/AllConditions".to_string(),
@@ -1228,6 +1230,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/PluginCondition/AllConditions" => "EdgionPlugins",
         "EdgionPlugins/Cors" => "EdgionPlugins",
         "EdgionPlugins/Csrf" => "EdgionPlugins",
+        "EdgionPlugins/CredentialInjector" => "EdgionPlugins",
         "EdgionPlugins/CtxSet" => "EdgionPlugins",
         "EdgionPlugins/BasicAuth" => "EdgionPlugins",
         "EdgionPlugins/BasicAuthDynamic" => "EdgionPlugins",
@@ -1352,6 +1355,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "BodyDynamic"
         | "CanaryHotSwap"
         | "ConditionRefsDynamic"
+        | "CredentialInjectorDynamic"
         | "DslDynamic"
         | "FormJsonTransformDynamic"
         | "JsonSchemaValidationDynamic"
@@ -2199,6 +2203,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::KeyAuthTestSuite));
+        }
+        "EdgionPlugins/CredentialInjector" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/CredentialInjector tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::CredentialInjectorTestSuite));
         }
         "EdgionPlugins/HmacAuth" => {
             if !gateway {

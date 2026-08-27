@@ -10,11 +10,13 @@
 //! 6. Extract `Secret.data`.
 //! 7. Delegate to [`SecretMaterialResolver::parse`] for keys/decode checks.
 //!
-//! Three public entry points:
+//! Four entry points:
 //! - [`fetch_secret`] — steps 1–4 only; returns the raw `Secret`. Used by
 //!   plugin resolvers that do their own data-shape extraction (EdgionPlugins).
 //! - [`resolve_secret`] — full pipeline; returns the validated `Secret`.
 //! - [`resolve_credential`] — full pipeline; returns the parsed `Material`.
+//! - [`resolve_credential_readonly`] — the same typed pipeline without reverse
+//!   dependency registration, for status derivation after parse.
 
 use k8s_openapi::api::core::v1::{ConfigMap, Secret};
 
@@ -95,7 +97,7 @@ pub enum FetchOutcome<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Internal steps (shared by the three public entry points)
+// Internal steps (shared by the four entry points)
 // ---------------------------------------------------------------------------
 
 /// Fetch the Secret object: compute namespace, register dependency, check
@@ -108,8 +110,8 @@ pub enum FetchOutcome<T> {
 ///
 /// Callers that only need the raw Secret (e.g. EdgionPlugins plugin
 /// resolvers) use this directly; the typed pipeline entry points
-/// (`resolve_secret`, `resolve_credential`) layer type and key validation
-/// on top via `resolve_inner`.
+/// (`resolve_secret`, `resolve_credential`, `resolve_credential_readonly`)
+/// layer type and key validation on top via `resolve_inner`.
 pub fn fetch_secret(
     ctx: &HandlerContext,
     owner: &ResourceRef,
@@ -303,7 +305,19 @@ fn resolve_inner<R: SecretMaterialResolver>(
     secret_ref: &SecretObjectReference,
     resolver: &R,
 ) -> ResolveOutcome<(Secret, R::Material)> {
-    let secret = match fetch_secret(ctx, owner, owner_group, owner_kind, secret_ref) {
+    resolve_inner_with_registration(ctx, owner, owner_group, owner_kind, secret_ref, resolver, true)
+}
+
+fn resolve_inner_with_registration<R: SecretMaterialResolver>(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    owner_group: &str,
+    owner_kind: &str,
+    secret_ref: &SecretObjectReference,
+    resolver: &R,
+    register_dependency: bool,
+) -> ResolveOutcome<(Secret, R::Material)> {
+    let secret = match fetch_secret_inner(ctx, owner, owner_group, owner_kind, secret_ref, register_dependency) {
         FetchOutcome::Ok(s) => s,
         FetchOutcome::Pending(r) => return ResolveOutcome::Pending(r),
     };
@@ -366,6 +380,23 @@ pub async fn resolve_credential<R: SecretMaterialResolver>(
         ResolveOutcome::Ok((_, material)) => ResolveOutcome::Ok(material),
         ResolveOutcome::Pending(r) => ResolveOutcome::Pending(r),
         ResolveOutcome::Invalid(e) => ResolveOutcome::Invalid(e),
+    }
+}
+
+/// Read-only typed credential resolution for status derivation after the
+/// mutating parse path has already registered the dependency.
+pub(crate) fn resolve_credential_readonly<R: SecretMaterialResolver>(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    owner_group: &str,
+    owner_kind: &str,
+    secret_ref: &SecretObjectReference,
+    resolver: &R,
+) -> ResolveOutcome<R::Material> {
+    match resolve_inner_with_registration(ctx, owner, owner_group, owner_kind, secret_ref, resolver, false) {
+        ResolveOutcome::Ok((_, material)) => ResolveOutcome::Ok(material),
+        ResolveOutcome::Pending(reason) => ResolveOutcome::Pending(reason),
+        ResolveOutcome::Invalid(error) => ResolveOutcome::Invalid(error),
     }
 }
 

@@ -78,6 +78,11 @@ logging:
   console: true
   buffer_size: 10000
 
+The Gateway always caps `pingora_core::protocols::http::v1::client` and
+`pingora_proxy::proxy_h1` at `error`, including when `RUST_LOG` requests a more verbose level.
+Those upstream Pingora modules contain complete HTTP/1 request-header diagnostics, so their
+security floor is not operator-overridable. Other targets retain normal module-level filtering.
+
 server:
   threads: 0                               # 0 = CPU core count
   work_stealing: true                      # Tokio work-stealing

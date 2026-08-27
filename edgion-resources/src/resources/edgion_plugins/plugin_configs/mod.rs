@@ -6,6 +6,7 @@ mod bandwidth_limit;
 mod basic_auth;
 mod canary;
 mod cors;
+mod credential_injector;
 mod csrf;
 mod ctx_set;
 mod debug_access_log;
@@ -72,6 +73,10 @@ pub use bandwidth_limit::BandwidthLimitConfig;
 pub use basic_auth::{BasicAuthConfig, BasicAuthSecretGroup, ResolvedBasicAuthUser};
 pub use canary::CanaryConfig;
 pub use cors::CorsConfig;
+pub use credential_injector::{
+    CredentialInjectionTarget, CredentialInjectorConfig, ResolvedCredentialInjector,
+    CREDENTIAL_INJECTOR_FINAL_VALUE_MAX_LEN, CREDENTIAL_INJECTOR_VALUE_PREFIX_MAX_LEN,
+};
 pub use csrf::CsrfConfig;
 pub use ctx_set::{
     parse_secret_ref, secret_ref_var_names, template_has_secret_ref, validate_secret_ref_segments, CaseType,

@@ -12,6 +12,7 @@ mod body_plugins;
 mod canary;
 mod condition_refs_dynamic;
 mod cors;
+mod credential_injector;
 mod csrf;
 mod ctx_set;
 mod debug_access_log;
@@ -77,6 +78,10 @@ pub use condition_refs_dynamic::{
     ConditionRefsDynamicDeletedTestSuite, ConditionRefsDynamicInitialTestSuite, ConditionRefsDynamicUpdatedTestSuite,
 };
 pub use cors::CorsPluginTestSuite;
+pub use credential_injector::{
+    CredentialInjectorDynamicDeletedTestSuite, CredentialInjectorDynamicInitialTestSuite,
+    CredentialInjectorDynamicUpdatedTestSuite, CredentialInjectorTestSuite,
+};
 pub use csrf::CsrfTestSuite;
 pub use ctx_set::CtxSetTestSuite;
 pub use debug_access_log::PluginLogsTestSuite;

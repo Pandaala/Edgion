@@ -1140,6 +1140,118 @@ impl PendingHeaderOp {
     }
 }
 
+/// One immutable credential header selected by request-stage plugin order.
+///
+/// The value is held in a prevalidated `HeaderValue` and is deliberately not
+/// exposed through `Debug`, access-log state, or `ctx_map`.
+#[derive(Clone)]
+pub(crate) struct DeferredCredentialMutation {
+    name: http::HeaderName,
+    value: Arc<http::HeaderValue>,
+}
+
+/// Request-scoped winning credential mutations, retained across upstream
+/// retries and applied only to each attempt-local upstream request header.
+#[derive(Clone, Default)]
+pub(crate) struct DeferredCredentialMutations {
+    entries: Vec<DeferredCredentialMutation>,
+}
+
+impl fmt::Debug for DeferredCredentialMutations {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DeferredCredentialMutations")
+            .field(
+                "targets",
+                &self.entries.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>(),
+            )
+            .field("count", &self.entries.len())
+            .finish()
+    }
+}
+
+impl DeferredCredentialMutations {
+    pub(crate) fn upsert(&mut self, name: http::HeaderName, value: Arc<http::HeaderValue>) {
+        if let Some(existing) = self.entries.iter_mut().find(|entry| entry.name == name) {
+            existing.value = value;
+            return;
+        }
+        self.entries.push(DeferredCredentialMutation { name, value });
+    }
+
+    pub(crate) fn remove(&mut self, name: &str) {
+        self.entries
+            .retain(|entry| !entry.name.as_str().eq_ignore_ascii_case(name));
+    }
+
+    pub(crate) fn contains_target(&self, name: &str) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.name.as_str().eq_ignore_ascii_case(name))
+    }
+
+    pub(crate) fn apply(&self, request: &mut pingora_http::RequestHeader) -> Result<(), ()> {
+        for entry in &self.entries {
+            request
+                .insert_header(entry.name.clone(), entry.value.as_ref().clone())
+                .map_err(|_| ())?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod deferred_credential_mutation_tests {
+    use super::DeferredCredentialMutations;
+    use http::{HeaderName, HeaderValue};
+    use std::sync::Arc;
+
+    fn value(raw: &'static str) -> Arc<HeaderValue> {
+        Arc::new(HeaderValue::from_static(raw))
+    }
+
+    #[test]
+    fn later_value_replaces_same_target_and_removal_is_case_insensitive() {
+        let mut mutations = DeferredCredentialMutations::default();
+        mutations.upsert(HeaderName::from_static("authorization"), value("Bearer first"));
+        mutations.upsert(HeaderName::from_static("authorization"), value("Bearer second"));
+
+        let mut request = pingora_http::RequestHeader::build("GET", b"/", None).unwrap();
+        mutations.apply(&mut request).unwrap();
+        assert_eq!(request.headers.get("authorization").unwrap(), "Bearer second");
+
+        mutations.remove("Authorization");
+        let mut request = pingora_http::RequestHeader::build("GET", b"/", None).unwrap();
+        mutations.apply(&mut request).unwrap();
+        assert!(request.headers.get("authorization").is_none());
+    }
+
+    #[test]
+    fn applying_to_each_attempt_is_non_destructive_and_debug_is_redacted() {
+        let secret = "private-upstream-token";
+        let mut mutations = DeferredCredentialMutations::default();
+        let mut value = HeaderValue::from_str(secret).unwrap();
+        value.set_sensitive(true);
+        mutations.upsert(HeaderName::from_static("x-provider-token"), Arc::new(value));
+
+        for _ in 0..2 {
+            let mut request = pingora_http::RequestHeader::build("GET", b"/", None).unwrap();
+            mutations.apply(&mut request).unwrap();
+            let value = request.headers.get("x-provider-token").unwrap();
+            assert_eq!(value, secret);
+            assert!(value.is_sensitive());
+            assert_eq!(format!("{value:?}"), "Sensitive");
+            let request_debug = format!("{request:?}");
+            assert!(request_debug.contains("Sensitive"));
+            assert!(!request_debug.contains(secret));
+        }
+
+        let debug = format!("{mutations:?}");
+        assert!(debug.contains("x-provider-token"));
+        assert!(!debug.contains(secret));
+    }
+}
+
 /// Which upper bound won the read/write-timeout fold in
 /// `configure_peer_timeouts` for the current upstream attempt.
 /// Consumed by `error_while_proxy` to decide whether a timeout is a
@@ -1416,6 +1528,10 @@ pub struct EdgionHttpContext {
     /// would silently degrade to `Set` at drain time.
     pub pending_response_header_ops: Vec<PendingHeaderOp>,
 
+    /// Credential headers selected by request-stage declaration order. Values
+    /// are materialized only onto attempt-local upstream headers.
+    pub(crate) deferred_credential_mutations: DeferredCredentialMutations,
+
     // --- Dye tracing, mirroring, and optional route state ---
     /// Dye plan of the plugin entry currently being invoked (installed by the
     /// stage loops before each invocation, overwritten per invocation).
@@ -1535,6 +1651,11 @@ pub struct EdgionHttpContext {
     /// Populated by `pg_request_filter`, read by `ExtensionRefFilter::prepare_execution`
     /// via `PluginSession::resolved_route_ext_ref(index)`.
     pub resolved_route_ext_refs: Option<Arc<Vec<Option<Arc<PluginRuntime>>>>>,
+
+    /// First-observed backend-scope ExtensionRef runtime per `namespace/name`.
+    /// `None` values are cached too, so a dangling ref cannot become available
+    /// halfway through one logical request after a PluginStore update.
+    pub(crate) resolved_backend_ext_refs: HashMap<String, Option<Arc<PluginRuntime>>>,
 
     // --- Lazily allocated AI exchange state ---
     /// Lazily allocated AI-only request, attempt, response, and accounting
@@ -1805,6 +1926,7 @@ impl EdgionHttpContext {
             jump: None,
             uri_finalized: false,
             pending_response_header_ops: Vec::new(),
+            deferred_credential_mutations: DeferredCredentialMutations::default(),
             current_dye_plan: None,
             dye_handled_request_names: Vec::new(),
             mirror_state: None,
@@ -1820,6 +1942,7 @@ impl EdgionHttpContext {
             resolved_global_plugins: None,
             resolved_gateway_plugins: None,
             resolved_route_ext_refs: None,
+            resolved_backend_ext_refs: HashMap::new(),
             ai_state: None,
             active_response_processor_slot: None,
             response_terminal_state: ResponseTerminalState::Open,

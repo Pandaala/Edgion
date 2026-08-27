@@ -198,6 +198,7 @@ impl EdgionPluginsHandler {
                 | EdgionPlugin::UrlRewrite(_)
                 | EdgionPlugin::RequestMirror(_)
                 | EdgionPlugin::BasicAuth(_)
+                | EdgionPlugin::CredentialInjector(_)
                 | EdgionPlugin::Cors(_)
                 | EdgionPlugin::Csrf(_)
                 | EdgionPlugin::JwtAuth(_)
@@ -294,8 +295,14 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         );
 
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        // One cross-namespace index covers both Secret and EdgionConfigData
+        // references. Clear it before any resolver starts rebuilding either
+        // class; clearing later would erase Secret refs registered above the
+        // EdgionConfigData pass and prevent ReferenceGrant revalidation.
+        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
 
         cred::resolve_basic_auth(&mut ep, &resource_ref, ctx);
+        cred::resolve_credential_injector(&mut ep, &resource_ref, ctx).await;
         cred::resolve_jwt(&mut ep, &resource_ref, ctx);
         cred::resolve_jwe(&mut ep, &resource_ref, ctx);
         cred::resolve_header_cert_auth(&mut ep, &resource_ref, ctx);
@@ -353,7 +360,6 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         // When a ReferenceGrant in a target namespace changes, the CrossNsRevalidationListener
         // requeues this EP so ref_denied markers and status are recomputed.
         let cross_mgr = &ctx.runtime().cross_ns_ref_mgr;
-        cross_mgr.clear_resource_refs(&resource_ref);
         for key in Self::get_region_route_override_keys(&ep)
             .into_iter()
             .chain(Self::get_ip_list_ref_keys(&ep))
@@ -419,7 +425,13 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             )
         };
 
+        let resource_ref = ResourceRef::new(
+            ResourceKind::EdgionPlugins,
+            ep.metadata.namespace.clone(),
+            ep.metadata.name.clone().unwrap_or_default(),
+        );
         let mut resolved_errors = Self::resolve_secret_refs(ep, ctx);
+        resolved_errors.extend(cred::credential_injector_status_errors(ep, &resource_ref, ctx));
         resolved_errors.extend(resolve_secret_match_refs(ep, ctx));
         resolved_errors.extend(resolve_guardrail_request_secret_refs(ep, ctx));
         resolved_errors.extend(resolve_wasm_refs(ep, ctx));
@@ -1095,10 +1107,10 @@ mod tests {
     };
     use edgion_resources::resources::edgion_plugins::plugin_configs::KeyAuthSecretGroup;
     use edgion_resources::resources::edgion_plugins::{
-        BasicAuthConfig, BasicAuthSecretGroup, CertSourceMode, EdgionPlugin, EdgionPlugins, EdgionPluginsSpec,
-        HeaderCertAuthConfig, HmacAuthConfig, HmacAuthSecretGroup, JweDecryptConfig, JwtAlgorithm, JwtAuthConfig,
-        JwtIssuerGroup, KeyAuthConfig, KeyMetadata, OpenidConnectConfig, RegionRouteConfig, RequestFilterEntry,
-        ResolvedJwtCredential, ResolvedJwtIssuerGroup,
+        BasicAuthConfig, BasicAuthSecretGroup, CertSourceMode, CredentialInjectionTarget, CredentialInjectorConfig,
+        EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, HeaderCertAuthConfig, HmacAuthConfig, HmacAuthSecretGroup,
+        JweDecryptConfig, JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup, KeyAuthConfig, KeyMetadata, OpenidConnectConfig,
+        RegionRouteConfig, RequestFilterEntry, ResolvedJwtCredential, ResolvedJwtIssuerGroup,
     };
     use edgion_resources::resources::gateway::SecretObjectReference;
     use k8s_openapi::api::core::v1::Secret;
@@ -1126,6 +1138,49 @@ mod tests {
             data: Some(data),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn credential_injector_cross_namespace_grant_dependency_survives_parse() {
+        let secret = build_secret("shared", "provider-token", "bearerToken", "shared-token");
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::from([("shared/provider-token".to_string(), secret)]));
+        let mut ep = EdgionPlugins::new("injector", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("tenant".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::CredentialInjector(
+            CredentialInjectorConfig {
+                credential_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "provider-token".to_string(),
+                    namespace: Some("shared".to_string()),
+                },
+                target: CredentialInjectionTarget::Bearer,
+                resolved_credential: None,
+            },
+        ))]);
+
+        let mut parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        EdgionPluginsHandler.update_status(&mut parsed, &ctx, &[]);
+
+        let owner = ResourceRef::new(
+            edgion_resources::ResourceKind::EdgionPlugins,
+            Some("tenant".to_string()),
+            "injector".to_string(),
+        );
+        assert!(runtime.cross_ns_ref_mgr.get_refs("shared").contains(&owner));
+        let resolved = parsed
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(resolved.status, "False");
+        assert_eq!(resolved.reason, "RefNotPermitted");
     }
 
     fn injected_key_auth_config(secret_groups: Option<Vec<KeyAuthSecretGroup>>) -> KeyAuthConfig {
@@ -2993,6 +3048,7 @@ profiles:
                 | EdgionPlugin::UrlRewrite(_)
                 | EdgionPlugin::RequestMirror(_)
                 | EdgionPlugin::BasicAuth(_)
+                | EdgionPlugin::CredentialInjector(_)
                 | EdgionPlugin::Cors(_)
                 | EdgionPlugin::Csrf(_)
                 | EdgionPlugin::JwtAuth(_)

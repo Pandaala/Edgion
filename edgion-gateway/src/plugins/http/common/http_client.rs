@@ -145,7 +145,7 @@ pub const HOP_BY_HOP_HEADERS: &[&str] = &[
     "proxy-authenticate",
     "proxy-authorization",
     "te",
-    "trailers",
+    "trailer",
     "transfer-encoding",
     "upgrade",
 ];
@@ -209,7 +209,8 @@ mod tests {
         assert!(is_hop_by_hop("transfer-encoding"));
         assert!(is_hop_by_hop("upgrade"));
         assert!(is_hop_by_hop("te"));
-        assert!(is_hop_by_hop("trailers"));
+        assert!(is_hop_by_hop("trailer"));
+        assert!(!is_hop_by_hop("trailers"));
         assert!(is_hop_by_hop("proxy-authenticate"));
         assert!(is_hop_by_hop("proxy-authorization"));
 
