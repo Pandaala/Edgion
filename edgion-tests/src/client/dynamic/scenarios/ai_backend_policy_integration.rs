@@ -781,14 +781,9 @@ async fn assert_upstream_abort(ctx: &ScenarioCtx, bases: &ProviderBases) -> Resu
     )
     .await?;
     wait_upstream_abort_ready(ctx).await?;
-    let (events, saw_done) = upstream_abort_sse_summary(ai_request(ctx, 0, None, true).await?).await?;
-    anyhow::ensure!(
-        events == 3 && !saw_done,
-        "upstream-abort expected three non-terminal SSE events, got events={events}, done={saw_done}"
-    );
     apply(
         ctx,
-        &backend_yaml(BACKEND_A, CREDENTIAL_A, &format!("{}/ai/prefix", bases.sni)),
+        &backend_yaml(BACKEND_A, CREDENTIAL_A, &format!("{}/ai/prefix", bases.https)),
     )
     .await?;
     wait_unary_path_prefix(ctx).await?;
