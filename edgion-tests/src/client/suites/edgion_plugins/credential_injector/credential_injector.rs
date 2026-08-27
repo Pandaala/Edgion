@@ -13,11 +13,14 @@ const MISSING_HOST: &str = "credential-injector-missing.example.com";
 const MIRROR_HOST: &str = "credential-injector-mirror.example.com";
 const DYNAMIC_HOST: &str = "credential-injector-dynamic.example.com";
 
-fn echoed_header<'a>(body: &'a str, expected_name: &str) -> Option<&'a str> {
-    body.lines().find_map(|line| {
-        let (name, value) = line.trim().split_once(':')?;
-        name.eq_ignore_ascii_case(expected_name).then_some(value.trim())
-    })
+fn echoed_header(body: &str, expected_name: &str) -> Option<String> {
+    let response: Value = serde_json::from_str(body).ok()?;
+    let expected_name = expected_name.to_ascii_lowercase();
+    response
+        .get("headers")?
+        .get(&expected_name)?
+        .as_str()
+        .map(ToOwned::to_owned)
 }
 
 async fn assert_upstream_header(
@@ -379,8 +382,8 @@ mod tests {
 
     #[test]
     fn parses_echoed_headers_case_insensitively() {
-        let body = "Headers:\n  Authorization: Bearer value\n  X-Other: ok\n";
-        assert_eq!(echoed_header(body, "authorization"), Some("Bearer value"));
+        let body = r#"{"headers":{"authorization":"Bearer value","x-other":"ok"}}"#;
+        assert_eq!(echoed_header(body, "authorization").as_deref(), Some("Bearer value"));
         assert_eq!(echoed_header(body, "missing"), None);
     }
 }

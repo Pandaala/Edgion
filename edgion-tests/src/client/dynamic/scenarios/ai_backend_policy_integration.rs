@@ -532,6 +532,71 @@ async fn assert_normal_eos(ctx: &ScenarioCtx) -> Result<()> {
     Ok(())
 }
 
+async fn wait_unary_path_prefix(ctx: &ScenarioCtx) -> Result<Value> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let last = match ai_request(ctx, 0, None, false).await {
+            Ok(response) if response.status().is_success() => match response.json::<Value>().await {
+                Ok(body) if body.pointer("/mock/path_has_prefix") == Some(&Value::Bool(true)) => {
+                    return Ok(body);
+                }
+                Ok(body) => format!("unexpected response body: {body}"),
+                Err(error) => format!("response JSON failed: {error:#}"),
+            },
+            Ok(response) => format!("response status was {}", response.status()),
+            Err(error) => format!("request failed: {error:#}"),
+        };
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for AI policy prefix endpoint; last observation: {last}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn upstream_abort_sse_summary(response: reqwest::Response) -> Result<(usize, bool)> {
+    anyhow::ensure!(
+        response.status().is_success(),
+        "upstream-abort request returned {}",
+        response.status()
+    );
+    let mut stream = response.bytes_stream();
+    let mut pending = Vec::new();
+    let mut events = 0usize;
+    let mut saw_done = false;
+    while let Some(chunk) = stream.next().await {
+        let Ok(chunk) = chunk else {
+            break;
+        };
+        pending.extend_from_slice(&chunk);
+        while let Some(end) = pending.windows(2).position(|window| window == b"\n\n") {
+            let frame = pending.drain(..end + 2).collect::<Vec<_>>();
+            if frame.starts_with(b"data:") {
+                events += 1;
+                saw_done |= frame.windows(6).any(|window| window == b"[DONE]");
+            }
+        }
+    }
+    Ok((events, saw_done))
+}
+
+async fn wait_upstream_abort_ready(ctx: &ScenarioCtx) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let last = match ai_request(ctx, 0, None, true).await {
+            Ok(response) => match upstream_abort_sse_summary(response).await {
+                Ok((3, false)) => return Ok(()),
+                Ok((events, saw_done)) => format!("events={events}, done={saw_done}"),
+                Err(error) => format!("request failed: {error:#}"),
+            },
+            Err(error) => format!("request failed: {error:#}"),
+        };
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for the upstream-abort endpoint; last observation: {last}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 async fn assert_request_stable_capture(ctx: &ScenarioCtx, bases: &ProviderBases) -> Result<()> {
     apply(
         ctx,
@@ -715,23 +780,18 @@ async fn assert_upstream_abort(ctx: &ScenarioCtx, bases: &ProviderBases) -> Resu
         ),
     )
     .await?;
-    let response = ai_request(ctx, 0, None, true).await?;
+    wait_upstream_abort_ready(ctx).await?;
+    let (events, saw_done) = upstream_abort_sse_summary(ai_request(ctx, 0, None, true).await?).await?;
     anyhow::ensure!(
-        response.status().is_success(),
-        "upstream-abort request returned {}",
-        response.status()
-    );
-    let result = response.bytes().await;
-    anyhow::ensure!(
-        result.is_err(),
-        "upstream-abort response unexpectedly reached clean EOS"
+        events == 3 && !saw_done,
+        "upstream-abort expected three non-terminal SSE events, got events={events}, done={saw_done}"
     );
     apply(
         ctx,
         &backend_yaml(BACKEND_A, CREDENTIAL_A, &format!("{}/ai/prefix", bases.sni)),
     )
     .await?;
-    wait_unary(ctx, true).await?;
+    wait_unary_path_prefix(ctx).await?;
     Ok(())
 }
 
