@@ -16,6 +16,7 @@ NC='\033[0m' # No Color
 # projectdirectory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+FULL_TEST=false
 
 # =============================================================================
 # log
@@ -44,6 +45,24 @@ log_section() {
 # =============================================================================
 main() {
     local start_time=$(date +%s)
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --full-test)
+                FULL_TEST=true
+                shift
+                ;;
+            -h|--help)
+                echo "Usage: $0 [--full-test]"
+                return 0
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                echo "Usage: $0 [--full-test]" >&2
+                return 2
+                ;;
+        esac
+    done
     
     echo ""
     echo -e "${BLUE}Edgion TestPrepare - Build${NC}"
@@ -134,6 +153,53 @@ print(executables[-1])
     cp -f "$credential_test_bin" "$stable_credential_test_bin"
     chmod 755 "$stable_credential_test_bin"
     log_success "Ignored integration test executable prepared: ${stable_credential_test_bin}"
+
+    if $FULL_TEST; then
+        log_section "Build external ExtProc fixture"
+        local fixture_dir="${PROJECT_ROOT}/edgion-tests/integration/fixtures/ext_proc_external"
+        local fixture_bin="${target_root}/debug/ext_proc_external_processor"
+        if [ ! -f "${fixture_dir}/go.mod" ] || [ ! -f "${fixture_dir}/go.sum" ]; then
+            log_error "External ExtProc fixture module is incomplete: ${fixture_dir}"
+            exit 1
+        fi
+        if ! command -v go >/dev/null 2>&1; then
+            log_error "Go 1.24 or newer is required for --full-test ExtProc coverage"
+            exit 1
+        fi
+
+        local go_version
+        if ! go_version=$(GOTOOLCHAIN=local go env GOVERSION 2>/dev/null); then
+            log_error "Unable to inspect the local Go toolchain (automatic toolchain downloads are disabled)"
+            exit 1
+        fi
+        local go_major go_minor
+        go_major=$(printf '%s\n' "$go_version" | sed -n 's/^go\([0-9][0-9]*\)\.\([0-9][0-9]*\).*$/\1/p')
+        go_minor=$(printf '%s\n' "$go_version" | sed -n 's/^go\([0-9][0-9]*\)\.\([0-9][0-9]*\).*$/\2/p')
+        if [ -z "$go_major" ] || [ -z "$go_minor" ] \
+            || [ "$go_major" -lt 1 ] \
+            || { [ "$go_major" -eq 1 ] && [ "$go_minor" -lt 24 ]; }; then
+            log_error "Go 1.24 or newer is required; local toolchain reports ${go_version:-unknown}"
+            exit 1
+        fi
+
+        if ! (cd "$fixture_dir" && GOTOOLCHAIN=local go mod verify); then
+            log_error "External ExtProc fixture module verification failed"
+            exit 1
+        fi
+        if ! (cd "$fixture_dir" && GOTOOLCHAIN=local go test -mod=readonly ./...); then
+            log_error "External ExtProc fixture tests failed"
+            exit 1
+        fi
+        if ! (cd "$fixture_dir" && GOTOOLCHAIN=local go build -mod=readonly -trimpath -o "$fixture_bin" .); then
+            log_error "External ExtProc fixture build failed"
+            exit 1
+        fi
+        if [ ! -x "$fixture_bin" ]; then
+            log_error "External ExtProc fixture binary is missing: ${fixture_bin}"
+            exit 1
+        fi
+        log_success "External ExtProc fixture prepared: ${fixture_bin}"
+    fi
 
     # NOTE: prepare.sh is build-only. conf_sync mTLS certificates are runtime
     # material and are generated per work directory by the script that creates

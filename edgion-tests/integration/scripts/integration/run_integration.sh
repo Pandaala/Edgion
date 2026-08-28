@@ -73,6 +73,15 @@ REDIS_CONTAINER_NAME="edgion-test-redis"
 
 CONTROLLER_GRPC_PORT=12151
 
+EXT_PROC_EXTERNAL_GRPC_PORT=30044
+EXT_PROC_EXTERNAL_ADMIN_PORT=30045
+EXT_PROC_EXTERNAL_TLS_PORT=30046
+EXT_PROC_EXTERNAL_MTLS_PORT=30047
+EXT_PROC_EXTERNAL_ADMIN_URL="http://127.0.0.1:${EXT_PROC_EXTERNAL_ADMIN_PORT}"
+EXT_PROC_EXTERNAL_FIXTURE_NAME="edgion-ext-proc-external"
+EXT_PROC_EXTERNAL_PROTOCOL_VERSION="v1"
+EXT_PROC_EXTERNAL_GO_CONTROL_PLANE_VERSION="v1.37.0"
+
 # Standalone scenarios use isolated ports and work directories, so they can run
 # concurrently without touching the shared Controller/Gateway topology. Keep the
 # default bounded because each job may start its own Controller and Gateway.
@@ -125,6 +134,135 @@ log_section() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${BLUE}$1${NC}"
     echo -e "${BLUE}========================================${NC}"
+}
+
+is_external_ext_proc_required() {
+    local selected_suites="$1"
+    if ! $FULL_TEST; then
+        return 1
+    fi
+
+    # Resource selection controls which tests execute even when --suites
+    # overrides config loading, so an EdgionPlugins sweep/exact target always
+    # needs the fixture.
+    if [ "$G_RESOURCE" = "EdgionPlugins" ]; then
+        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "ExtProc" ]; then
+            return 0
+        fi
+    fi
+
+    # An untargeted run without an explicit suite list is the default sweep.
+    if [ -z "$G_RESOURCE" ] && [ -z "$selected_suites" ]; then
+        return 0
+    fi
+
+    case ",${selected_suites}," in
+        *,EdgionPlugins/ExtProc,*) return 0 ;;
+    esac
+    return 1
+}
+
+external_ext_proc_binary_path() {
+    if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
+        printf '%s\n' "${PROJECT_ROOT}/target/llvm-cov-target/debug/ext_proc_external_processor"
+    else
+        printf '%s\n' "${PROJECT_ROOT}/target/debug/ext_proc_external_processor"
+    fi
+}
+
+validate_external_ext_proc_artifact() {
+    local fixture_bin="$1"
+    case "$fixture_bin" in
+        /*) ;;
+        *)
+            log_error "External ExtProc fixture path must be absolute: ${fixture_bin}"
+            return 1
+            ;;
+    esac
+    if [ ! -x "$fixture_bin" ]; then
+        log_error "External ExtProc fixture is missing or not executable: ${fixture_bin}"
+        log_error "Run prepare.sh --full-test before using --no-prepare"
+        return 1
+    fi
+}
+
+validate_external_ext_proc_readiness() {
+    local response
+    if ! response=$(curl --max-time 2 -fsS "${EXT_PROC_EXTERNAL_ADMIN_URL}/readyz" 2>/dev/null); then
+        log_error "External ExtProc fixture readiness endpoint is unavailable: ${EXT_PROC_EXTERNAL_ADMIN_URL}/readyz"
+        return 1
+    fi
+    if ! printf '%s' "$response" | python3 -c '
+import json
+import sys
+
+expected = {
+    "status": "ready",
+    "fixture": "edgion-ext-proc-external",
+    "protocol_version": "v1",
+    "go_control_plane_envoy": "v1.37.0",
+    "fixture_stream_capacity": 96,
+    "tls_capable": True,
+    "mtls_capable": True,
+    "tls_ready": True,
+    "mtls_ready": True,
+}
+try:
+    value = json.load(sys.stdin)
+except (json.JSONDecodeError, UnicodeDecodeError):
+    raise SystemExit(1)
+if not isinstance(value, dict):
+    raise SystemExit(1)
+for key, expected_value in expected.items():
+    if value.get(key) != expected_value:
+        raise SystemExit(1)
+'; then
+        log_error "External ExtProc fixture returned an unexpected readiness identity"
+        return 1
+    fi
+}
+
+validate_reused_external_ext_proc() {
+    local current_file="${PROJECT_ROOT}/tmp/integration_testing/.current"
+    if [ ! -f "$current_file" ]; then
+        log_error "Cannot reuse external ExtProc fixture: work-directory marker is missing"
+        return 1
+    fi
+    local reused_work_dir
+    reused_work_dir=$(cat "$current_file")
+    case "$reused_work_dir" in
+        "${PROJECT_ROOT}/tmp/integration_testing/"*) ;;
+        *)
+            log_error "Refusing unexpected integration work directory: ${reused_work_dir}"
+            return 1
+            ;;
+    esac
+    if [ ! -f "${reused_work_dir}/config/ext_proc_external.yaml" ]; then
+        log_error "Existing work directory has no loaded external ExtProc configuration evidence"
+        return 1
+    fi
+    local material_dir="${reused_work_dir}/ext-proc-external-tls"
+    local required_material
+    for required_material in \
+        server-ca.crt \
+        client-ca.crt \
+        server-a.crt \
+        server-a.key \
+        server-b.crt \
+        server-b.key \
+        client-a.crt \
+        client-a.key \
+        client-b.crt \
+        client-b.key \
+        ext-proc-external-server-ca.yaml \
+        ext-proc-external-client-initial.yaml \
+        ext-proc-external-client-updated.yaml; do
+        if [ ! -f "${material_dir}/${required_material}" ]; then
+            log_error "Existing work directory is missing external ExtProc TLS material: ${required_material}"
+            return 1
+        fi
+    done
+    validate_external_ext_proc_readiness
 }
 
 # =============================================================================
@@ -2135,6 +2273,37 @@ main() {
         fi
     fi
 
+    local external_ext_proc_required=false
+    local external_ext_proc_bin=""
+    if is_external_ext_proc_required "$suites"; then
+        external_ext_proc_required=true
+        external_ext_proc_bin=$(external_ext_proc_binary_path)
+        export EDGION_EXT_PROC_EXTERNAL_REQUIRED=1
+        export EDGION_EXT_PROC_EXTERNAL_ADMIN_URL="$EXT_PROC_EXTERNAL_ADMIN_URL"
+
+        # --no-prepare is strictly build-free. Validate its required artifact
+        # before Docker, Redis, LDAP, or any Edgion service can be started.
+        if ! $do_prepare && $do_start; then
+            if ! validate_external_ext_proc_artifact "$external_ext_proc_bin"; then
+                report_test "Preflight_ExternalExtProcArtifact" "FAIL" "0"
+                exit 1
+            fi
+        fi
+
+        # --no-start owns no process lifecycle. Reuse only a previously loaded
+        # work directory whose live endpoint proves the exact pinned identity.
+        if ! $do_start; then
+            if ! validate_reused_external_ext_proc; then
+                report_test "Preflight_ExternalExtProcReuse" "FAIL" "0"
+                exit 1
+            fi
+        fi
+    else
+        unset EDGION_EXT_PROC_EXTERNAL_REQUIRED
+        unset EDGION_EXT_PROC_EXTERNAL_ADMIN_URL
+        unset EDGION_EXT_PROC_EXTERNAL_TLS_MATERIAL_DIR
+    fi
+
     # Fast mode guard: LDAP integration test is complex (Docker-required), full-test only.
     if ! $FULL_TEST && [ "$G_RESOURCE" = "EdgionPlugins" ] && [ "$G_ITEM" = "LdapAuth" ]; then
         log_info "EdgionPlugins/LdapAuth is a complex Docker-based test and requires --full-test"
@@ -2265,7 +2434,11 @@ main() {
     REPORT_PHASE="build"
     if $do_prepare; then
         log_section "Step 1: Build all components"
-        if ! "${UTILS_DIR}/prepare.sh"; then
+        local prepare_args=("${UTILS_DIR}/prepare.sh")
+        if $external_ext_proc_required; then
+            prepare_args+=("--full-test")
+        fi
+        if ! "${prepare_args[@]}"; then
             log_error "Build failed"
             report_test "Build" "FAIL" "0"
             exit 1
@@ -2275,6 +2448,14 @@ main() {
     else
         log_info "Skip build step"
         report_test "Build" "SKIP" "0" "--no-prepare"
+    fi
+
+    if $external_ext_proc_required && $do_start; then
+        if ! validate_external_ext_proc_artifact "$external_ext_proc_bin"; then
+            report_test "Preflight_ExternalExtProcArtifact" "FAIL" "0"
+            exit 1
+        fi
+        report_test "Preflight_ExternalExtProcArtifact" "PASS" "0"
     fi
 
     REPORT_PHASE="binary capability validation"
@@ -2514,18 +2695,30 @@ main() {
             unset EDGION_TEST_ENABLE_GEOIP
         fi
 
-        # Build start command
-        local start_cmd="${UTILS_DIR}/start_all_with_conf.sh"
+        # Build start command without shell re-parsing, preserving every path
+        # and suite list as one argument.
+        local start_args=("${UTILS_DIR}/start_all_with_conf.sh")
         if [ -n "$suites" ]; then
-            start_cmd="$start_cmd --suites $suites"
+            start_args+=("--suites" "$suites")
         fi
-        start_cmd="$start_cmd --controller-grpc-port ${CONTROLLER_GRPC_PORT}"
+        start_args+=("--controller-grpc-port" "$CONTROLLER_GRPC_PORT")
+        if $external_ext_proc_required; then
+            start_args+=(
+                "--ext-proc-external-bin" "$external_ext_proc_bin"
+                "--ext-proc-external-grpc-port" "$EXT_PROC_EXTERNAL_GRPC_PORT"
+                "--ext-proc-external-admin-port" "$EXT_PROC_EXTERNAL_ADMIN_PORT"
+                "--ext-proc-external-tls-port" "$EXT_PROC_EXTERNAL_TLS_PORT"
+                "--ext-proc-external-mtls-port" "$EXT_PROC_EXTERNAL_MTLS_PORT"
+                "--ext-proc-external-config-template" \
+                    "${PROJECT_ROOT}/edgion-tests/integration/fixtures/ext_proc_external/config.yaml.tmpl"
+            )
+        fi
         
         # Execute start script
         # NOTE: Must separate 'local' from command substitution, because
         # 'local' always returns 0 and masks the real exit code of $().
         local output exit_code
-        output=$($start_cmd 2>&1) && exit_code=0 || exit_code=$?
+        output=$("${start_args[@]}" 2>&1) && exit_code=0 || exit_code=$?
         
         # Show output
         echo "$output"
@@ -2551,6 +2744,9 @@ main() {
         # Set environment variables
         export EDGION_TEST_ACCESS_LOG_PATH="${WORK_DIR}/logs/edgion_access.log"
         export EDGION_WORK_DIR="${WORK_DIR}"
+        if $external_ext_proc_required; then
+            export EDGION_EXT_PROC_EXTERNAL_TLS_MATERIAL_DIR="${WORK_DIR}/ext-proc-external-tls"
+        fi
         
         log_success "All services started, config loaded"
         log_info "Work directory: ${WORK_DIR}"
@@ -2562,6 +2758,9 @@ main() {
             WORK_DIR=$(cat "${PROJECT_ROOT}/tmp/integration_testing/.current")
             export EDGION_TEST_ACCESS_LOG_PATH="${WORK_DIR}/logs/edgion_access.log"
             export EDGION_WORK_DIR="${WORK_DIR}"
+            if $external_ext_proc_required; then
+                export EDGION_EXT_PROC_EXTERNAL_TLS_MATERIAL_DIR="${WORK_DIR}/ext-proc-external-tls"
+            fi
             log_info "Using existing work directory: ${WORK_DIR}"
         fi
     fi

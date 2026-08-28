@@ -161,8 +161,11 @@ The actual responsibilities of `run_integration.sh` are:
 A few key facts:
 
 - `--full-test` additionally includes slow tests and requires Docker to be available. For a
-  targeted `EdgionPlugins/ExtProc` run, the flag is forwarded to `test_client` and adds the
-  wall-clock long-idle stream case; the default targeted run remains fast.
+  targeted `EdgionPlugins/ExtProc` run, it builds and starts the pinned independent Go processor,
+  renders its full-only resources into the work directory, and forwards the flag to `test_client`.
+  The added cases cover official Envoy v3 protobuf interoperability, header and body mutation,
+  `ImmediateResponse`, clean terminal half-close, and a wall-clock long-idle stream. The default
+  targeted run remains Go-free and fast.
 - `run_integration.sh` first checks `ulimit -n` and tries to raise it to `65535` if insufficient
 - `start_all_with_conf.sh` exports `EDGION_WORK_DIR` and `EDGION_GENERATED_SECRET_DIR`
 - The default full sweep runs its isolated standalone scenarios through a bounded parallel queue.

@@ -1,6 +1,6 @@
 # ExtProc Compatibility and Coverage Matrix
 
-Reviewed: 2026-08-26
+Reviewed: 2026-08-28
 
 This matrix records what Edgion currently proves about its HTTP ExtProc
 implementation. It is an evidence index, not a claim of complete Envoy
@@ -61,12 +61,13 @@ a separately built external processor. A planned row is not test evidence.
 | mTLS client identity | Supported | [`test_mtls_request_and_response_headers`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) proves a real TLS+h2 exchange in which the processor requires the runtime-generated `ext-proc-client` identity. The fixture is [`09_EdgionPlugins_ext-proc-mtls.yaml`](09_EdgionPlugins_ext-proc-mtls.yaml). This proves Edgion's own wire path, not third-party processor interoperability. | Fast |
 | HTTP/1 and HTTP/2 downstream/upstream combinations for request `STREAMED` cancellation and early upstream response | Supported | The 72-case transport suite defines all four H1/H2 combinations with ExtProc `STREAMED` and exercises `streamed_upstream_early_response` plus `streamed_client_disconnect_mid_upload` in [`transport.rs`](../../../../../edgion-tests/src/client/suites/http_route/transport/transport.rs). | Fast |
 | Abandonment cancels an incomplete request-side `Process` stream without fabricating EOS | Supported | [`streamed.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/streamed.rs) checks `abandoned_event_cancels_without_sending_clean_eos`; the H1/H2 transport evidence and design decision are recorded in [`abandoned-request-body-terminal-event.md`](../../../../../skills/04-review/h2-grpc/abandoned-request-body-terminal-event.md). | Fast |
-| One final half-close and exactly-once attached cleanup | Supported | Final-phase half-close and post-half-close rejection are checked by [`client.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/client.rs). Attached-log finalization is idempotence-tested in [`pg_logging.rs`](../../../../../edgion-gateway/src/routes/http/proxy_http/pg_logging.rs), and response processor cleanup/cancellation is tested in [`pg_upstream_response_body_filter.rs`](../../../../../edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_body_filter.rs). | Fast |
-| Bounded concurrent processor streams and release on every terminal path | Supported | [`client.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/client.rs) checks the session limit and RAII release. [`response_streamed.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/response_streamed.rs) and [`pg_upstream_response_body_filter.rs`](../../../../../edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_body_filter.rs) check release during response terminal arbitration. | Fast unit evidence; stress is Full planned. |
-| Effective TLS hot-snapshot identity | Supported | [`client.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/client.rs) checks that inherited TLS changes produce a distinct target runtime and that equivalent authorities share one runtime. | Fast unit evidence; repeated live certificate rotation is Full planned. |
-| Long-idle processor stream | Supported | [`test_long_idle_stream_survives`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) holds the request-header verdict for three wall-clock seconds and verifies that the attached stream completes normally. The case is added only when `test_client --full-test` is selected. It does not claim transport-level keepalive probe coverage. | Full |
-| Retry/discard interaction after ExtProc body handling | Not implemented as conformance coverage | The streamed request becomes non-retryable by design, but no dedicated ExtProc retry/discard transport scenario establishes the complete interaction. | Full planned |
-| Repeated random chunking, slow processor, high concurrency, and abort Cartesian products | Not implemented as conformance coverage | Existing unit and fast transport cases establish bounded individual contracts, not stress or repeated scheduling evidence. | Full planned |
+| One final half-close and exactly-once attached cleanup | Supported | Final-phase half-close and post-half-close rejection are checked by [`client.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/client.rs). The independent fixture records a clean `io.EOF` from the Edgion client in [`test_external_headers_and_terminal_half_close`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs). Attached-log finalization is idempotence-tested in [`pg_logging.rs`](../../../../../edgion-gateway/src/routes/http/proxy_http/pg_logging.rs), and response processor cleanup/cancellation is tested in [`pg_upstream_response_body_filter.rs`](../../../../../edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_body_filter.rs). | Fast unit + Full interoperability |
+| Bounded concurrent processor streams and release on every terminal path | Supported | [`client.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/client.rs) checks the session limit and RAII release. [`response_streamed.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/response_streamed.rs) and [`pg_upstream_response_body_filter.rs`](../../../../../edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_body_filter.rs) check release during response terminal arbitration. The independent [`external_concurrency_saturation_and_release`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) case holds 64 sessions, proves request 65 never reaches a fixture whose advertised capacity is 96, releases one exact holder, admits a replacement, joins every holder, and completes a final probe. | Fast unit + Full stress |
+| Effective TLS hot-snapshot identity | Supported | [`client.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/client.rs) checks that inherited TLS changes produce a distinct target runtime and that equivalent authorities share one runtime. The independent full cases rotate the server leaf A -> B -> A and the mTLS client Secret A -> B -> A without restarting Gateway, then assert fingerprints attached to the exact accepted connection carrying each `Process` stream. The mTLS case polls real streams after each Secret apply, so admission success alone is not counted as conf_sync convergence. | Fast unit + Full live rotation |
+| Long-idle processor stream | Supported | [`test_external_long_idle_stream_survives`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) holds the independent processor's request-header verdict for three wall-clock seconds and verifies that the stream completes with a clean client half-close. The case is added only when `test_client --full-test` is selected. It does not claim transport-level keepalive probe coverage. | Full |
+| Retry/discard interaction after ExtProc body handling | Supported | [`external_buffered_status_retry_discards_intermediate`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) proves one processed `BUFFERED` body is replayed across upstream 503 -> 200 while the processor observes exactly one response-header message with status 200. [`external_streamed_status_retry_is_suppressed`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) proves a non-replayable `STREAMED` request stops after the first 503. Both cases assert backend attempt history, access-log attempts, exact processor phases, header-message counts, and status observations. | Full |
+| Repeated seeded chunking, slow-processor backpressure, and high concurrency | Supported | [`external_seeded_chunk_boundaries`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) reconstructs hashes and exactly-once EOS for five pinned xorshift64* plans without claiming HTTP boundary preservation. [`external_request_body_backpressure`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) holds the first body verdict and proves an already-polled concrete producer send remains pending. The 64+1 case supplies independent saturation/release evidence. | Full |
+| Expanded abort/cancellation Cartesian products beyond the existing H1/H2 suite | Not implemented as conformance coverage | The fast 72-case transport suite covers representative H1/H2 cancellation and early-response shapes. A broader plaintext/TLS/mTLS cross-product is not claimed. | Full planned |
 
 ## Processor interoperability
 
@@ -87,15 +88,20 @@ matrix. Useful upstream references are:
 
 Edgion preserves the selected Envoy package name, field numbers, and wire types
 in [`ext_proc.proto`](../../../../../edgion-common/src/ext_proc/proto/ext_proc.proto).
-That is structural wire-compatibility evidence only. Interoperability with a
-named external processor or SDK has not yet been demonstrated and must not be
-claimed as complete.
+The full-test fixture in [`ext_proc_external`](../../../fixtures/ext_proc_external/README.md)
+independently implements `envoy.service.ext_proc.v3.ExternalProcessor` using the
+official `github.com/envoyproxy/go-control-plane/envoy` v1.37.0 generated types.
+The full suite proves header, `BUFFERED`, and bidirectional `STREAMED` decoding
+and mutation, `ImmediateResponse`, phase/EOS observations, normal half-close,
+a three-second idle exchange, seeded chunk reconstruction, propagated
+backpressure, 64+1 session saturation/release, retry/discard semantics, and
+connection-bound TLS/mTLS A/B rotation. This is named wire-interoperability
+evidence for that pinned SDK version, not a claim of complete Envoy behavior
+coverage or compatibility with every processor implementation.
 
-A future `--full-test` suite should build or pin an independently generated
-processor, preferably from Envoy's official `go-control-plane` protobufs,
-before adding a named interoperability claim. Community processors require an
-explicit version pin and supply-chain review; they must not become a default
-fast-test dependency implicitly.
+The Go module, transitive graph, upstream commit, and Apache-2.0 notice are
+pinned beside the fixture. It is built only for qualifying `--full-test` runs;
+the normal fast path remains independent of Go.
 
 ## Test-tier policy
 
@@ -108,15 +114,20 @@ The default/fast path should retain deterministic, local cases:
 - local TLS verification, `verify: false`, and mTLS smoke tests;
 - unit-level caps, concurrency ownership, cleanup, and TLS snapshot identity.
 
-The following belong only in cases selected by the integration runner's
-`--full-test` gate:
+The following are implemented only in cases selected by the integration
+runner's `--full-test` gate:
 
 - a separately built named processor interoperability run;
-- real long-idle and keepalive waits beyond the existing three-second idle smoke test;
-- repeated mTLS certificate rotation;
-- high concurrency and slow-processor pressure;
-- repeated randomized chunk boundaries;
+- the three-second long-idle exchange;
+- seeded chunk reconstruction and slow-processor backpressure;
+- 64+1 target-session saturation and release;
+- retry/discard interaction;
+- live TLS server and mTLS client certificate rotation.
+
+The remaining planned Full-only work is:
+
+- transport-level keepalive waits beyond the existing idle exchange;
 - expanded H1/H2 x TLS/mTLS x cancel/abort/retry combinations.
 
-Until those cases exist and pass, this document labels them `Full planned` and
-does not count them as acceptance evidence.
+These remaining items stay `Full planned` and are not acceptance evidence for
+this task.

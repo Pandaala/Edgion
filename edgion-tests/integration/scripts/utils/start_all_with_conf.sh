@@ -81,6 +81,15 @@ GATEWAY_PROBE_PORT="${GATEWAY_PROBE_PORT:-12000}"
 # LoadTestsuite（default，Loadall）
 SUITES=""
 CAPABILITY_REGISTRY="${PROJECT_ROOT}/edgion-tests/integration/capabilities.tsv"
+EXT_PROC_EXTERNAL_BIN=""
+EXT_PROC_EXTERNAL_GRPC_PORT=""
+EXT_PROC_EXTERNAL_ADMIN_PORT=""
+EXT_PROC_EXTERNAL_TLS_PORT=""
+EXT_PROC_EXTERNAL_MTLS_PORT=""
+EXT_PROC_EXTERNAL_CONFIG_TEMPLATE=""
+EXT_PROC_EXTERNAL_TLS_MATERIAL_DIR="${WORK_DIR}/ext-proc-external-tls"
+EXT_PROC_EXTERNAL_PID=""
+EXT_PROC_EXTERNAL_STARTUP_OWNED=false
 
 gateway_has_capability() {
     local capability="$1"
@@ -169,6 +178,12 @@ show_help() {
     echo "OPTIONS:"
     echo "  --suites <list>    specifyLoadTestsuite（comma separated）"
     echo "  --controller-grpc-port <port>  override controller/gateway gRPC sync port"
+    echo "  --ext-proc-external-bin <path>  absolute external ExtProc fixture binary"
+    echo "  --ext-proc-external-grpc-port <port>  fixture loopback gRPC port"
+    echo "  --ext-proc-external-admin-port <port> fixture loopback admin port"
+    echo "  --ext-proc-external-tls-port <port> fixture loopback TLS gRPC port"
+    echo "  --ext-proc-external-mtls-port <port> fixture loopback mTLS gRPC port"
+    echo "  --ext-proc-external-config-template <path> absolute full-only YAML template"
     echo "                     default：Loadall (http,grpc,tcp,udp,http-match,...)"
     echo "  -h, --help         Showhelp"
     echo ""
@@ -361,6 +376,184 @@ check_port_conflict() {
     fi
 
     return 0
+}
+
+validate_port() {
+    local port="$1"
+    local label="$2"
+    case "$port" in
+        ''|*[!0-9]*)
+            log_error "${label} must be an integer in 1..65535"
+            return 1
+            ;;
+    esac
+    if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+        log_error "${label} must be an integer in 1..65535"
+        return 1
+    fi
+}
+
+stop_external_ext_proc_pid() {
+    local pid="$1"
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+    kill -TERM "$pid" 2>/dev/null || true
+    local waited=0
+    while [ "$waited" -lt 5 ] && kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -KILL "$pid" 2>/dev/null || true
+    fi
+    wait "$pid" 2>/dev/null || true
+}
+
+cleanup_external_ext_proc_on_exit() {
+    if $EXT_PROC_EXTERNAL_STARTUP_OWNED && [ -n "$EXT_PROC_EXTERNAL_PID" ]; then
+        log_warning "Startup failed; stopping external ExtProc fixture PID ${EXT_PROC_EXTERNAL_PID}"
+        stop_external_ext_proc_pid "$EXT_PROC_EXTERNAL_PID"
+    fi
+}
+
+external_ext_proc_ready() {
+    local response
+    if ! response=$(curl --max-time 2 -fsS \
+        "http://127.0.0.1:${EXT_PROC_EXTERNAL_ADMIN_PORT}/readyz" 2>/dev/null); then
+        return 1
+    fi
+    printf '%s' "$response" | python3 -c '
+import json
+import sys
+
+expected = {
+    "status": "ready",
+    "fixture": "edgion-ext-proc-external",
+    "protocol_version": "v1",
+    "go_control_plane_envoy": "v1.37.0",
+    "fixture_stream_capacity": 96,
+    "tls_capable": True,
+    "mtls_capable": True,
+    "tls_ready": True,
+    "mtls_ready": True,
+}
+try:
+    value = json.load(sys.stdin)
+except (json.JSONDecodeError, UnicodeDecodeError):
+    raise SystemExit(1)
+if not isinstance(value, dict):
+    raise SystemExit(1)
+for key, expected_value in expected.items():
+    if value.get(key) != expected_value:
+        raise SystemExit(1)
+'
+}
+
+start_external_ext_proc() {
+    [ -z "$EXT_PROC_EXTERNAL_BIN" ] && return 0
+
+    log_section "Start external ExtProc fixture"
+    if ! check_port_conflict "$EXT_PROC_EXTERNAL_GRPC_PORT" "external ExtProc gRPC" \
+        || ! check_port_conflict "$EXT_PROC_EXTERNAL_ADMIN_PORT" "external ExtProc admin" \
+        || ! check_port_conflict "$EXT_PROC_EXTERNAL_TLS_PORT" "external ExtProc TLS gRPC" \
+        || ! check_port_conflict "$EXT_PROC_EXTERNAL_MTLS_PORT" "external ExtProc mTLS gRPC"; then
+        return 1
+    fi
+
+    "$EXT_PROC_EXTERNAL_BIN" \
+        --grpc-listen "127.0.0.1:${EXT_PROC_EXTERNAL_GRPC_PORT}" \
+        --admin-listen "127.0.0.1:${EXT_PROC_EXTERNAL_ADMIN_PORT}" \
+        --tls-listen "127.0.0.1:${EXT_PROC_EXTERNAL_TLS_PORT}" \
+        --mtls-listen "127.0.0.1:${EXT_PROC_EXTERNAL_MTLS_PORT}" \
+        --tls-material-dir "$EXT_PROC_EXTERNAL_TLS_MATERIAL_DIR" \
+        > "${LOG_DIR}/ext_proc_external_processor.log" 2>&1 &
+    EXT_PROC_EXTERNAL_PID=$!
+    printf '%s\n' "$EXT_PROC_EXTERNAL_PID" > "${PID_DIR}/ext_proc_external_processor.pid"
+    printf '%s\n' "$EXT_PROC_EXTERNAL_BIN" > "${WORK_DIR}/ext-proc-external-bin"
+    EXT_PROC_EXTERNAL_STARTUP_OWNED=true
+    trap cleanup_external_ext_proc_on_exit EXIT
+
+    local elapsed=0
+    while [ "$elapsed" -lt 30 ]; do
+        if ! kill -0 "$EXT_PROC_EXTERNAL_PID" 2>/dev/null; then
+            log_error "External ExtProc fixture exited during startup"
+            tail -20 "${LOG_DIR}/ext_proc_external_processor.log" 2>/dev/null || true
+            return 1
+        fi
+        if external_ext_proc_ready; then
+            log_success "External ExtProc fixture ready (PID: ${EXT_PROC_EXTERNAL_PID})"
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    log_error "External ExtProc fixture readiness timed out after 30s"
+    tail -20 "${LOG_DIR}/ext_proc_external_processor.log" 2>/dev/null || true
+    return 1
+}
+
+render_and_load_external_ext_proc_config() {
+    [ -z "$EXT_PROC_EXTERNAL_BIN" ] && return 0
+
+    log_section "Load external ExtProc config"
+    local rendered="${CONFIG_DIR}/ext_proc_external.yaml"
+    local target="127.0.0.1:${EXT_PROC_EXTERNAL_GRPC_PORT}"
+    local tls_target="127.0.0.1:${EXT_PROC_EXTERNAL_TLS_PORT}"
+    local mtls_target="127.0.0.1:${EXT_PROC_EXTERNAL_MTLS_PORT}"
+    local token="__EXTERNAL_EXT_PROC_TARGET__"
+    local tls_token="__EXTERNAL_EXT_PROC_TLS_TARGET__"
+    local mtls_token="__EXTERNAL_EXT_PROC_MTLS_TARGET__"
+    local required_token
+    for required_token in "$token" "$tls_token" "$mtls_token"; do
+        if ! grep -Fq "$required_token" "$EXT_PROC_EXTERNAL_CONFIG_TEMPLATE"; then
+            log_error "External ExtProc config template does not contain ${required_token}"
+            return 1
+        fi
+    done
+    if ! EXT_PROC_EXTERNAL_RENDER_TARGET="$target" \
+        EXT_PROC_EXTERNAL_RENDER_TLS_TARGET="$tls_target" \
+        EXT_PROC_EXTERNAL_RENDER_MTLS_TARGET="$mtls_target" \
+        awk -v token="$token" -v tls_token="$tls_token" -v mtls_token="$mtls_token" '
+        {
+            line = $0
+            while ((position = index(line, token)) != 0) {
+                line = substr(line, 1, position - 1) ENVIRON["EXT_PROC_EXTERNAL_RENDER_TARGET"] substr(line, position + length(token))
+            }
+            while ((position = index(line, tls_token)) != 0) {
+                line = substr(line, 1, position - 1) ENVIRON["EXT_PROC_EXTERNAL_RENDER_TLS_TARGET"] substr(line, position + length(tls_token))
+            }
+            while ((position = index(line, mtls_token)) != 0) {
+                line = substr(line, 1, position - 1) ENVIRON["EXT_PROC_EXTERNAL_RENDER_MTLS_TARGET"] substr(line, position + length(mtls_token))
+            }
+            print line
+        }
+    ' "$EXT_PROC_EXTERNAL_CONFIG_TEMPLATE" > "$rendered"; then
+        log_error "Failed to render external ExtProc config"
+        return 1
+    fi
+    if grep -Eq '__EXTERNAL_EXT_PROC_[A-Z_]*TARGET__' "$rendered"; then
+        log_error "External ExtProc config still contains an unresolved target placeholder"
+        return 1
+    fi
+    local server_ca_manifest="${EXT_PROC_EXTERNAL_TLS_MATERIAL_DIR}/ext-proc-external-server-ca.yaml"
+    local initial_client_manifest="${EXT_PROC_EXTERNAL_TLS_MATERIAL_DIR}/ext-proc-external-client-initial.yaml"
+    if [ ! -f "$server_ca_manifest" ] || [ ! -f "$initial_client_manifest" ]; then
+        log_error "External ExtProc TLS Secret manifests are missing"
+        return 1
+    fi
+    if ! "${BIN_DIR}/edgion-cli" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" \
+        apply -f "$server_ca_manifest" -f "$initial_client_manifest" > /dev/null; then
+        log_error "External ExtProc TLS Secret load failed"
+        return 1
+    fi
+    if ! "${BIN_DIR}/edgion-cli" --server "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" \
+        apply -f "$rendered"; then
+        log_error "External ExtProc config load failed"
+        return 1
+    fi
+    log_success "External ExtProc config loaded: ${rendered}"
 }
 
 # =============================================================================
@@ -936,6 +1129,13 @@ save_info() {
     echo "$WORK_DIR" > "${PROJECT_ROOT}/tmp/integration_testing/.current"
     printf '%s\n' "$GATEWAY_BIN" > "${WORK_DIR}/gateway-bin"
     printf '%s\n' "$EDGION_TEST_GATEWAY_CAPABILITIES" > "${WORK_DIR}/gateway-capabilities"
+
+    local external_service_info=""
+    local external_log_info=""
+    if [ -n "$EXT_PROC_EXTERNAL_PID" ]; then
+        external_service_info="  - ext_proc_external: PID ${EXT_PROC_EXTERNAL_PID}, http://127.0.0.1:${EXT_PROC_EXTERNAL_ADMIN_PORT}"
+        external_log_info="  - ${LOG_DIR}/ext_proc_external_processor.log"
+    fi
     
     # info
     cat > "${WORK_DIR}/info.txt" << EOF
@@ -949,12 +1149,14 @@ Services:
   - test_server:       PID $(cat ${PID_DIR}/test_server.pid), http://127.0.0.1:${TEST_SERVER_HTTP_PORT}
   - edgion-controller: PID $(cat ${PID_DIR}/controller.pid), http://127.0.0.1:${CONTROLLER_ADMIN_PORT}
   - edgion-gateway:    PID $(cat ${PID_DIR}/gateway.pid), http://127.0.0.1:${GATEWAY_HTTP_PORT}
+${external_service_info}
 
 Logs:
   - ${LOG_DIR}/test_server.log
   - ${LOG_DIR}/controller.log
   - ${LOG_DIR}/gateway.log
   - ${LOG_DIR}/edgion_access.log
+${external_log_info}
 
 Generated Secrets:
   - ${GENERATED_SECRET_DIR}
@@ -978,6 +1180,30 @@ main() {
             CONTROLLER_GRPC_PORT="$2"
             shift 2
             ;;
+        --ext-proc-external-bin)
+            EXT_PROC_EXTERNAL_BIN="$2"
+            shift 2
+            ;;
+        --ext-proc-external-grpc-port)
+            EXT_PROC_EXTERNAL_GRPC_PORT="$2"
+            shift 2
+            ;;
+        --ext-proc-external-admin-port)
+            EXT_PROC_EXTERNAL_ADMIN_PORT="$2"
+            shift 2
+            ;;
+        --ext-proc-external-tls-port)
+            EXT_PROC_EXTERNAL_TLS_PORT="$2"
+            shift 2
+            ;;
+        --ext-proc-external-mtls-port)
+            EXT_PROC_EXTERNAL_MTLS_PORT="$2"
+            shift 2
+            ;;
+        --ext-proc-external-config-template)
+            EXT_PROC_EXTERNAL_CONFIG_TEMPLATE="$2"
+            shift 2
+            ;;
         -h|--help)
             show_help
             exit 0
@@ -989,6 +1215,51 @@ main() {
                 ;;
         esac
     done
+
+    local external_arg_count=0
+    [ -n "$EXT_PROC_EXTERNAL_BIN" ] && external_arg_count=$((external_arg_count + 1))
+    [ -n "$EXT_PROC_EXTERNAL_GRPC_PORT" ] && external_arg_count=$((external_arg_count + 1))
+    [ -n "$EXT_PROC_EXTERNAL_ADMIN_PORT" ] && external_arg_count=$((external_arg_count + 1))
+    [ -n "$EXT_PROC_EXTERNAL_TLS_PORT" ] && external_arg_count=$((external_arg_count + 1))
+    [ -n "$EXT_PROC_EXTERNAL_MTLS_PORT" ] && external_arg_count=$((external_arg_count + 1))
+    [ -n "$EXT_PROC_EXTERNAL_CONFIG_TEMPLATE" ] && external_arg_count=$((external_arg_count + 1))
+    if [ "$external_arg_count" -ne 0 ] && [ "$external_arg_count" -ne 6 ]; then
+        log_error "All external ExtProc fixture arguments must be supplied together"
+        exit 2
+    fi
+    if [ "$external_arg_count" -eq 6 ]; then
+        case "$EXT_PROC_EXTERNAL_BIN" in
+            /*) ;;
+            *) log_error "External ExtProc fixture binary path must be absolute"; exit 2 ;;
+        esac
+        if [ "$EXT_PROC_EXTERNAL_BIN" != "${BIN_DIR}/ext_proc_external_processor" ]; then
+            log_error "External ExtProc fixture binary must use the managed integration artifact path"
+            exit 2
+        fi
+        case "$EXT_PROC_EXTERNAL_CONFIG_TEMPLATE" in
+            /*) ;;
+            *) log_error "External ExtProc config template path must be absolute"; exit 2 ;;
+        esac
+        if [ ! -x "$EXT_PROC_EXTERNAL_BIN" ]; then
+            log_error "External ExtProc fixture binary is missing or not executable: ${EXT_PROC_EXTERNAL_BIN}"
+            exit 1
+        fi
+        if [ ! -f "$EXT_PROC_EXTERNAL_CONFIG_TEMPLATE" ]; then
+            log_error "External ExtProc config template is missing: ${EXT_PROC_EXTERNAL_CONFIG_TEMPLATE}"
+            exit 1
+        fi
+        validate_port "$EXT_PROC_EXTERNAL_GRPC_PORT" "External ExtProc gRPC port" || exit 2
+        validate_port "$EXT_PROC_EXTERNAL_ADMIN_PORT" "External ExtProc admin port" || exit 2
+        validate_port "$EXT_PROC_EXTERNAL_TLS_PORT" "External ExtProc TLS gRPC port" || exit 2
+        validate_port "$EXT_PROC_EXTERNAL_MTLS_PORT" "External ExtProc mTLS gRPC port" || exit 2
+        local external_unique_ports
+        external_unique_ports=$(printf '%s\n' "$EXT_PROC_EXTERNAL_GRPC_PORT" "$EXT_PROC_EXTERNAL_ADMIN_PORT" \
+            "$EXT_PROC_EXTERNAL_TLS_PORT" "$EXT_PROC_EXTERNAL_MTLS_PORT" | sort -u | wc -l | tr -d ' ')
+        if [ "$external_unique_ports" -ne 4 ]; then
+            log_error "External ExtProc fixture ports must all be different"
+            exit 2
+        fi
+    fi
     
     echo ""
     echo -e "${BLUE}========================================${NC}"
@@ -1021,6 +1292,8 @@ main() {
     log_section "Workdirectory"
     mkdir -p "$LOG_DIR" "$PID_DIR" "$CONFIG_DIR" "$GENERATED_SECRET_DIR"
     log_success "Workdirectorycompleted: $WORK_DIR"
+
+    start_external_ext_proc
     
     # :  CRD schemas 
     if [ -d "${PROJECT_ROOT}/config/crd" ]; then
@@ -1117,6 +1390,10 @@ main() {
     # : LoadTestconfig（ API）
     load_configs
 
+    # Full-only generated config is intentionally outside the recursive suite
+    # loader. Apply it after ordinary resources and before generated Secrets.
+    render_and_load_external_ext_proc_config
+
     # : Load generated Secret config（ API, override templates in conf/）
     load_generated_secrets
     
@@ -1128,6 +1405,11 @@ main() {
     
     # info
     save_info
+
+    # The published work directory now owns cleanup. Do not let this startup
+    # shell's EXIT trap terminate a successfully handed-off fixture.
+    EXT_PROC_EXTERNAL_STARTUP_OWNED=false
+    trap - EXIT
     
     # completed
     log_section "Startcompleted"

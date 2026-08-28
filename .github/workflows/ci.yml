@@ -133,10 +133,40 @@ jobs:
       - name: Run tests
         run: cargo test --locked --all
 
+  ext_proc_fixture:
+    name: ExtProc Go Fixture
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: edgion-tests/integration/fixtures/ext_proc_external
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Go toolchain
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.9"
+          cache-dependency-path: edgion-tests/integration/fixtures/ext_proc_external/go.sum
+
+      - name: Verify pinned module graph
+        env:
+          GOTOOLCHAIN: local
+        run: go mod verify
+
+      - name: Run fixture tests
+        env:
+          GOTOOLCHAIN: local
+        run: go test -mod=readonly ./...
+
+      - name: Verify read-only fixture build
+        env:
+          GOTOOLCHAIN: local
+        run: go build -mod=readonly ./...
+
   # Summary job for branch protection
   ci-success:
     name: CI Success
-    needs: [check, gateway-build, fmt, agent-docs, clippy, test]
+    needs: [check, gateway-build, fmt, agent-docs, clippy, test, ext_proc_fixture]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -147,7 +177,8 @@ jobs:
              [[ "${{ needs.fmt.result }}" != "success" ]] || \
              [[ "${{ needs.agent-docs.result }}" != "success" ]] || \
              [[ "${{ needs.clippy.result }}" != "success" ]] || \
-             [[ "${{ needs.test.result }}" != "success" ]]; then
+             [[ "${{ needs.test.result }}" != "success" ]] || \
+             [[ "${{ needs.ext_proc_fixture.result }}" != "success" ]]; then
             echo "One or more jobs failed"
             exit 1
           fi

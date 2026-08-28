@@ -256,8 +256,12 @@ if $DO_PREPARE; then
         echo "Whole-run deadline reached before build" > "${WORK_DIR}/build.log"
         build_rc=124
     else
+        PREPARE_ARGS=("$PREPARE_SCRIPT")
+        if $FULL_TEST && job_selected main; then
+            PREPARE_ARGS+=("--full-test")
+        fi
         python3 "$DEADLINE_RUNNER" --timeout-secs "$build_timeout" --grace-secs "$DEADLINE_GRACE_SECONDS" -- \
-            "$PREPARE_SCRIPT" \
+            "${PREPARE_ARGS[@]}" \
             > "${WORK_DIR}/build.log" 2>&1 &
         CURRENT_WATCHDOG_PID=$!
         set +e
