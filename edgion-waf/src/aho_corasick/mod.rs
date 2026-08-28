@@ -27,6 +27,37 @@ pub use match_types::{
 pub use replace::{StreamReplaceError, DEFAULT_MAX_REPLACEMENT_BYTES};
 pub use stream::{StreamFindIter, StreamState, DEFAULT_STREAM_BUFFER_BYTES, MAX_STREAM_BUFFER_BYTES};
 
+/// Search-local counters for evaluating optional candidate acceleration.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SearchDiagnostics {
+    candidate_attempts: u16,
+    candidate_scanned_bytes: usize,
+    skipped_bytes: usize,
+    prefilter_disabled: bool,
+}
+
+impl SearchDiagnostics {
+    /// Return the number of candidate searches, saturated at `u16::MAX`.
+    pub const fn candidate_attempts(self) -> u16 {
+        self.candidate_attempts
+    }
+
+    /// Return bytes examined by candidate searches.
+    pub const fn candidate_scanned_bytes(self) -> usize {
+        self.candidate_scanned_bytes
+    }
+
+    /// Return bytes skipped before exact automaton scanning resumed.
+    pub const fn skipped_bytes(self) -> usize {
+        self.skipped_bytes
+    }
+
+    /// Return whether dense candidates disabled acceleration for this search.
+    pub const fn prefilter_disabled(self) -> bool {
+        self.prefilter_disabled
+    }
+}
+
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 /// Default maximum number of patterns in one automaton.
@@ -488,7 +519,11 @@ impl AhoCorasick {
             state = self.backend.next_state(state, byte);
             let end = index + 1;
             for pattern_id in self.backend.outputs(state) {
-                let matched = Match::from_validated(pattern_id, end - self.backend.pattern_length(pattern_id), end);
+                let matched_start = end - self.backend.pattern_length(pattern_id);
+                if best.is_some_and(|current| matched_start > current.start()) {
+                    break;
+                }
+                let matched = Match::from_validated(pattern_id, matched_start, end);
                 best = select_leftmost(self.match_kind, best, matched);
             }
             if leftmost_lookahead_complete(best, end, self.max_pattern_len()) {
@@ -546,16 +581,35 @@ impl AhoCorasick {
         self.scan_pattern_set_input(SearchInput::new(haystack), matches)
     }
 
+    /// Fill a reusable bitset and return search-local acceleration diagnostics.
+    pub fn scan_pattern_set_with_diagnostics(
+        &self,
+        haystack: &[u8],
+        matches: &mut PatternSet,
+    ) -> Result<SearchDiagnostics, MatchError> {
+        self.scan_pattern_set_input_with_diagnostics(SearchInput::new(haystack), matches)
+    }
+
     /// Fill a reusable bitset with patterns occurring in one validated input.
     pub fn scan_pattern_set_input(&self, input: SearchInput<'_>, matches: &mut PatternSet) -> Result<(), MatchError> {
+        self.scan_pattern_set_input_with_diagnostics(input, matches).map(|_| ())
+    }
+
+    /// Fill a reusable bitset for one input and return acceleration diagnostics.
+    pub fn scan_pattern_set_input_with_diagnostics(
+        &self,
+        input: SearchInput<'_>,
+        matches: &mut PatternSet,
+    ) -> Result<SearchDiagnostics, MatchError> {
         self.validate_input(input)?;
         matches.validate_shape(self.pattern_count())?;
         matches.clear();
+        let mut prefilter_state = SearchState::default();
         let Some(min_pattern_len) = self.min_pattern_len() else {
-            return Ok(());
+            return Ok(prefilter_state.diagnostics());
         };
         if input.end() - input.start() < min_pattern_len {
-            return Ok(());
+            return Ok(prefilter_state.diagnostics());
         }
         let mut state = 0_usize;
         for pattern_id in self.backend.outputs(state) {
@@ -567,7 +621,6 @@ impl AhoCorasick {
         } else {
             input.end()
         };
-        let mut prefilter_state = SearchState::default();
         while index < end {
             if state == 0 && !input.anchor_mode().is_anchored() && !self.acceleration.is_none() {
                 let candidate = self.acceleration.find_candidate(
@@ -577,12 +630,12 @@ impl AhoCorasick {
                     &mut prefilter_state,
                 );
                 index = match candidate {
-                    Candidate::None => return Ok(()),
+                    Candidate::None => return Ok(prefilter_state.diagnostics()),
                     Candidate::Possible { start, .. } => start,
                     Candidate::Exact { matched, .. } => matched.start(),
                 };
                 if index >= end {
-                    return Ok(());
+                    return Ok(prefilter_state.diagnostics());
                 }
             }
             let byte = fold_ascii(input.haystack()[index], self.ascii_case_insensitive);
@@ -595,7 +648,7 @@ impl AhoCorasick {
             }
             index += 1;
         }
-        Ok(())
+        Ok(prefilter_state.diagnostics())
     }
 }
 
@@ -732,7 +785,7 @@ fn fold_ascii(byte: u8, ascii_case_insensitive: bool) -> u8 {
 
 fn next_generation() -> Result<u64, BuildError> {
     NEXT_GENERATION
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| current.checked_add(1))
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| current.checked_add(1))
         .map_err(|_| BuildError::SizeOverflow {
             component: "matcher generation",
         })
@@ -1564,6 +1617,28 @@ mod tests {
 
         let empty = builder.build([b"abc".as_slice(), b"".as_slice()]).unwrap();
         assert_eq!(empty.acceleration_kind(), AccelerationKind::None);
+    }
+
+    #[test]
+    fn pattern_set_diagnostics_report_skips_and_adaptive_disablement() {
+        let patterns = [b"alpha".as_slice(), b"beta".as_slice()];
+        let matcher = AhoCorasick::new(patterns).unwrap();
+        let mut matches = matcher.create_pattern_set();
+
+        let sparse = matcher
+            .scan_pattern_set_with_diagnostics(&vec![b'z'; 256], &mut matches)
+            .unwrap();
+        assert_eq!(sparse.candidate_attempts(), 1);
+        assert_eq!(sparse.candidate_scanned_bytes(), 256);
+        assert_eq!(sparse.skipped_bytes(), 0);
+        assert!(!sparse.prefilter_disabled());
+
+        let dense = matcher
+            .scan_pattern_set_with_diagnostics(&b"az".repeat(128), &mut matches)
+            .unwrap();
+        assert!(dense.candidate_attempts() >= 32);
+        assert!(dense.candidate_scanned_bytes() >= usize::from(dense.candidate_attempts()));
+        assert!(dense.prefilter_disabled());
     }
 
     #[test]

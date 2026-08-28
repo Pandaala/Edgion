@@ -1,0 +1,7 @@
+# Local matcher research, differential oracles, fuzzing, and benchmark evidence.
+# None of these tools or generated results participates in the production crate.
+/benchmarks/
+/fuzz/
+/oracles/
+/examples/coraza_pm_fixtures.rs
+/examples/crs_aho_corasick_corpus.rs

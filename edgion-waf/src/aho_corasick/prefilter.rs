@@ -18,6 +18,15 @@ pub(super) struct SearchState {
 }
 
 impl SearchState {
+    pub(super) const fn diagnostics(self) -> super::SearchDiagnostics {
+        super::SearchDiagnostics {
+            candidate_attempts: self.attempts,
+            candidate_scanned_bytes: self.scanned_bytes,
+            skipped_bytes: self.skipped_bytes,
+            prefilter_disabled: self.disabled,
+        }
+    }
+
     fn record_candidate(&mut self, at: usize, candidate: usize, scanned: usize) {
         self.attempts = self.attempts.saturating_add(1);
         self.scanned_bytes = self.scanned_bytes.saturating_add(scanned);
@@ -140,14 +149,11 @@ impl Acceleration {
 
 impl StartBytes {
     fn find(&self, haystack: &[u8], at: usize, ascii_case_insensitive: bool) -> Candidate {
-        for (relative, source_byte) in haystack[at..].iter().copied().enumerate() {
-            let byte = fold_ascii(source_byte, ascii_case_insensitive);
-            if self.bytes.contains(&byte) {
-                return Candidate::Possible {
-                    start: at + relative,
-                    scanned: relative + 1,
-                };
-            }
+        if let Some(relative) = find_any_byte(&haystack[at..], &self.bytes, ascii_case_insensitive) {
+            return Candidate::Possible {
+                start: at + relative,
+                scanned: relative + 1,
+            };
         }
         Candidate::None
     }
@@ -155,18 +161,70 @@ impl StartBytes {
 
 impl RareBytes {
     fn find(&self, haystack: &[u8], at: usize, ascii_case_insensitive: bool) -> Candidate {
-        for (relative, source_byte) in haystack[at..].iter().copied().enumerate() {
-            let byte = fold_ascii(source_byte, ascii_case_insensitive);
-            if self.needs.iter().any(|need| need.byte == byte) {
-                let position = at + relative;
-                return Candidate::Possible {
-                    start: position.saturating_sub(usize::from(self.max_offset)).max(at),
-                    scanned: relative + 1,
-                };
-            }
+        let mut selected = [0_u8; MAX_FILTER_BYTES];
+        for (target, need) in selected.iter_mut().zip(&self.needs) {
+            *target = need.byte;
+        }
+        if let Some(relative) = find_any_byte(&haystack[at..], &selected[..self.needs.len()], ascii_case_insensitive) {
+            let position = at + relative;
+            return Candidate::Possible {
+                start: position.saturating_sub(usize::from(self.max_offset)).max(at),
+                scanned: relative + 1,
+            };
         }
         Candidate::None
     }
+}
+
+fn find_any_byte(haystack: &[u8], needles: &[u8], ascii_case_insensitive: bool) -> Option<usize> {
+    if ascii_case_insensitive {
+        return haystack
+            .iter()
+            .copied()
+            .position(|byte| needles.contains(&byte.to_ascii_lowercase()));
+    }
+    if haystack.first().is_some_and(|byte| needles.contains(byte)) {
+        return Some(0);
+    }
+    let prefix_len = haystack.len().min(size_of::<u64>());
+    if let Some(relative) = haystack[1.min(prefix_len)..prefix_len]
+        .iter()
+        .copied()
+        .position(|byte| needles.contains(&byte))
+    {
+        return Some(relative + 1);
+    }
+    let remainder = &haystack[prefix_len..];
+    let mut chunks = remainder.chunks_exact(size_of::<u64>());
+    for (chunk_index, chunk) in chunks.by_ref().enumerate() {
+        let word = u64::from_ne_bytes(chunk.try_into().expect("chunks_exact fixes the word length"));
+        let possible = needles
+            .iter()
+            .copied()
+            .any(|needle| has_zero_byte(word ^ (u64::from(needle) * U64_ONES)));
+        if possible {
+            let relative = chunk
+                .iter()
+                .copied()
+                .position(|byte| needles.contains(&byte))
+                .expect("the word mask reported a matching byte");
+            return Some(prefix_len + chunk_index * size_of::<u64>() + relative);
+        }
+    }
+    let remainder_start = haystack.len() - chunks.remainder().len();
+    chunks
+        .remainder()
+        .iter()
+        .copied()
+        .position(|byte| needles.contains(&byte))
+        .map(|relative| remainder_start + relative)
+}
+
+const U64_ONES: u64 = u64::MAX / 0xFF;
+const U64_HIGHS: u64 = U64_ONES * 0x80;
+
+const fn has_zero_byte(word: u64) -> bool {
+    word.wrapping_sub(U64_ONES) & !word & U64_HIGHS != 0
 }
 
 impl Packed {
@@ -484,6 +542,19 @@ mod tests {
             acceleration.find_candidate(b"zzzbeta", 0, false, &mut state),
             Candidate::Possible { start: 3, scanned: 4 }
         );
+    }
+
+    #[test]
+    fn safe_word_scan_preserves_first_byte_and_tail_boundaries() {
+        for length in 0..=32 {
+            for match_at in 0..length {
+                let mut haystack = vec![b'z'; length];
+                haystack[match_at] = b'b';
+                assert_eq!(find_any_byte(&haystack, b"abc", false), Some(match_at));
+            }
+            assert_eq!(find_any_byte(&vec![b'z'; length], b"abc", false), None);
+        }
+        assert_eq!(find_any_byte(b"zzAzz", b"a", true), Some(2));
     }
 
     #[test]
