@@ -1936,6 +1936,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "edgion-waf"
+version = "0.1.0"
+dependencies = [
+ "regex-automata",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "edgion-wasm"
 version = "0.1.0"
 dependencies = [

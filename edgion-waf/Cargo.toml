@@ -1,0 +1,13 @@
+[package]
+name = "edgion-waf"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+regex-automata.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

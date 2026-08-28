@@ -67,6 +67,7 @@ not share those binary-feature defaults.
 ## Code directory organization
 
 ```
+edgion-waf/                      # Native WAF parsing, semantics, and matching (leaf crate)
 edgion-wasm/                     # Proxy-Wasm compatibility/profile analysis (leaf crate)
 edgion-dsl/                      # DSL parser, compiler, and static validator (leaf crate)
 edgion-resources/                # Shared resource/config schemas and validation helpers
@@ -77,14 +78,15 @@ edgion-cli/                      # CLI binary and library
 edgion-tests/                    # Integration test assets, scripts, and validators
 ```
 
-**Design principles**: `edgion-wasm` is an external-dependencies-only leaf
+**Design principles**: `edgion-waf` is a runtime-independent leaf that owns the
+native WAF engine without linking another WAF implementation. `edgion-wasm` is an external-dependencies-only leaf
 consumed by the Gateway before Wasmtime compilation and by the CLI for local
 Wasm inspection. `edgion-dsl` is a leaf and
 `edgion-resources` depends on it for real DSL compilation and static validation;
 `edgion-common` holds backend-agnostic shared infrastructure; controller,
 gateway, and CLI code stay in their owning crates. The in-repo dependency graph
 remains a DAG (`dsl → resources → common → {controller, gateway, cli}`, plus
-the independent `wasm → {gateway, cli}` edges); the Gateway also uses `edgion-dsl`
+the independent `waf` leaf and `wasm → {gateway, cli}` edges); the Gateway also uses `edgion-dsl`
 directly for VM/runtime integration.
 
 ## EdgionHttpContext — per-request state container
