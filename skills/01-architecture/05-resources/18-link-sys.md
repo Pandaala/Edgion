@@ -18,6 +18,11 @@ Webhook key resolution, DNS resolution, CredentialInjector, and related features
 | Purpose | Path |
 |------|------|
 | Controller Handler | `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs` |
+| Credential-source desired state and consumer registry | `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential_source_state.rs` |
+| CredentialInjector LinkSys/Secret resolver | `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/credential_injector.rs` |
+| Credential manager worker and publication lifecycle | `edgion-controller/src/services/credential_manager/service.rs` |
+| Controller-only generated-credential memory store | `edgion-controller/src/services/credential_manager/memory.rs` |
+| Kubernetes / FS-etcd worker startup | `edgion-controller/src/conf_mgr/conf_center/{kubernetes/center,non_kube_common}.rs` |
 | Credential pipeline (Controller) | `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential/` |
 | Resource type definitions | `edgion-resources/src/resources/link_sys/` |
 | Shared SecretObjectReference / SecretSlot / TLS types | `edgion-resources/src/resources/common/{secret_object_ref,secret_slot,tls}.rs` |
@@ -62,6 +67,10 @@ The LinkSys CRD and the log-output / rotation configuration (used by link_sys ru
   `all-serve` + persist-off is `Accepted=False` / `UnsupportedHaMode`. The Gateway
   `LinkSysStore` is a no-op for this variant. The active token still rides EdgionPlugins
   `resolvedCredential`.
+- Persist-on outside Kubernetes is `Accepted=False` /
+  `UnsupportedConfigurationCenter`. Persist-off is allowed on FS/etcd and uses
+  the kube-less credential manager worker; that worker acquires credentials but
+  performs no generated-Secret IO.
 
 ### parse — credential resolution
 
@@ -97,7 +106,7 @@ advisory condition:
 
 | Condition | True | False reasons |
 |-----------|------|----------------|
-| `Accepted` | spec is valid + `validate_config()` passes | `Invalid` (validation error list) |
+| `Accepted` | spec is valid + `validate_config()` passes | `Invalid` (validation error list); `UnsupportedConfigurationCenter` (persist-on outside Kubernetes); `UnsupportedHaMode` (persist-off without a single publisher) |
 | `ResolvedRefs` | All secretRef / tls.secretRef are `Ok` | `SecretNotFound` / `RefNotPermitted` / `InvalidSecretType` / `MissingKeys` / `DecodeError` |
 
 `UnknownConfigFields=True/UnknownFieldsDetected` is added when the operator-authored document
@@ -111,6 +120,30 @@ per-kind Controller metric.
 `SecretNotFound` / `RefNotPermitted` are **Pending** semantics (await self-heal); the rest are `Invalid` semantics (await human fix). The Controller automatically requeues based on change events from `SecretRefManager` / `ReferenceGrantStore`; the Handler does not need to retry manually.
 
 `kubectl get linksys` output has five columns: `Type` / `Endpoints` / `Accepted` / `ResolvedRefs` / `Age` (see CRD `additionalPrinterColumns`).
+
+### Credential manager lifecycle
+
+The serial LinkSys and EdgionPlugins workqueue handlers only validate, register
+desired sources/consumers, resolve snapshots, and enqueue dependency reprocessing.
+They never call the issuer and never wait for credential acquisition or Secret
+publication. The separately started CredentialManager worker owns issuer calls,
+rotation timers, bounded concurrency, memory publication, and Kubernetes Secret
+IO.
+
+Publication and teardown invariants:
+
+- `true` to `false` publishes or reacquires a live memory entry before deleting
+  owned generated Secrets. Fenced delete failures remain in `state.publications`
+  and are retried.
+- `false` to `true` retains the memory slot until
+  `published_consumer_count == desired_consumer_count`.
+- Removing an EdgionPlugins consumer removes its desired publication. Removing
+  the last consumer also clears the source memory slot.
+- Leadership loss, runtime reset, source delete or type change, source UID
+  replacement, last-consumer removal, and wipe-all clear memory.
+- Source identity and publication fences are rechecked before a memory write or
+  Secret mutation. A stale reconcile result cannot publish into a replacement
+  source generation.
 
 ## Gateway-side processing
 

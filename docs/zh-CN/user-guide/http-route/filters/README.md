@@ -14,6 +14,7 @@
   - [BasicAuth](./edgion-plugins/basic-auth.md)
   - [CORS](./edgion-plugins/cors.md)
   - [CSRF](./edgion-plugins/csrf.md)
+  - [CredentialInjector](./edgion-plugins/credential-injector.md)
   - [CtxSet](./edgion-plugins/ctx-setter.md)
   - [DirectEndpoint](./edgion-plugins/direct-endpoint.md)
   - [DSL](./edgion-plugins/dsl/README.md)

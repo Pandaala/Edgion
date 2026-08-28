@@ -14,6 +14,7 @@ Edgion 提供的 HTTP Route 级别插件，通过 `EdgionPlugins` CRD 配置。
 | [conditions.md](conditions.md) | 插件 `run`/`skip` 条件（`keyExist`、`keyMatch`、`timeRange`、`probability`） |
 | [cors.md](cors.md) | 跨域资源共享（CORS） |
 | [csrf.md](csrf.md) | CSRF 防护 |
+| [credential-injector.md](credential-injector.md) | 从 Secret 或 LinkSys 注入上游 Bearer 凭据或自定义 Header |
 | [ctx-setter.md](ctx-setter.md) | 上下文变量提取 |
 | [webhook-key-get.md](webhook-key-get.md) | 将 LinkSys webhook 的值解析进请求上下文 |
 | [direct-endpoint.md](direct-endpoint.md) | 直连指定 Endpoint |

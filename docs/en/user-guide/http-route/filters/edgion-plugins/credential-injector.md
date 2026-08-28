@@ -1,10 +1,11 @@
 # CredentialInjector
 
-> **Edgion extension**
+> **🔌 Edgion extension**
 >
-> `CredentialInjector` reads an upstream bearer credential from a Kubernetes
-> Secret or a Controller-managed `credentialSource` LinkSys and injects it
-> only into the primary upstream request.
+> `CredentialInjector` is an `EdgionPlugins` request filter that reads an
+> upstream bearer credential from a Kubernetes Secret or a Controller-managed
+> `credentialSource` LinkSys and injects it only into the primary upstream
+> request; it is not part of standard Gateway API.
 
 ## Quick start
 
@@ -77,12 +78,21 @@ static Secret must be type `Opaque` (or have an empty type), contain
 deleted, or oversized credentials set `ResolvedRefs=False`; matching traffic
 fails closed instead of reaching the upstream without authentication.
 
+`target.name` and `target.valuePrefix` do not evaluate templates or DSL
+expressions. Use plugin conditions to decide whether the injector runs, and use
+ProxyRewrite or DSL for dynamic non-secret headers. Credential values never
+enter the general template or expression context.
+
 ## Controller-managed OAuth2
 
 `credentialRef` may point at a `LinkSys` of `type: credentialSource` instead of
 a static Secret. The Controller acquires the OAuth2 client-credentials token
 and embeds the **active** value on this plugin as `resolvedCredential` (Admin
 `/configclient` redacts it). The Gateway never contacts the issuer.
+
+One `EdgionPlugins` resource may contain at most one enabled LinkSys-backed
+`CredentialInjector`. Static Secret-backed injector entries do not count toward
+this limit.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -103,7 +113,8 @@ spec:
 
 Omitting `publication`, or setting `publication.persist: true`, writes a
 generated Kubernetes Secret named after the consuming `EdgionPlugins` object.
-This persist-on path is Kubernetes-only.
+This persist-on path is Kubernetes-only. On FS or etcd, the LinkSys is rejected
+with `Accepted=False` and reason `UnsupportedConfigurationCenter`.
 
 ### In-memory publication
 
@@ -116,6 +127,8 @@ Controller-local memory map instead of a Secret:
   `UnsupportedHaMode`); the Controller does not call the issuer
 - `publication.memoryMaxKeys` defaults to `10000` (range `1..=10000`); OAuth2
   uses at most two map entries (active + previous)
+- `memoryMaxKeys` is validated even when `persist: true`; values above `10000`
+  cannot be used to preconfigure a later mode switch
 - the map is Controller-only: it is never a LinkSys spec, status, conf_sync, or
   Admin field. The Gateway still receives the active token through this
   plugin's `resolvedCredential`
@@ -139,6 +152,30 @@ spec:
       persist: false
       # memoryMaxKeys: 10000   # default; range 1..=10000
 ```
+
+## Credential lifecycle
+
+Changing publication mode preserves credential material until replacement
+publication completes:
+
+- `true` to `false`: the Controller first places a live token in memory, then
+  deletes generated Secrets that still match the expected owner and generation;
+  failed deletions remain eligible for retry
+- `false` to `true`: the Controller publishes a Secret for every current
+  consumer and keeps the memory token until all current publications are
+  consistent
+
+Deleting an `EdgionPlugins` resource unregisters that consumer. Its managed
+Secret is removed when other consumers remain; when the last consumer is gone,
+the Controller also clears the LinkSys memory slot. Kubernetes owner references
+provide a garbage-collection fallback for managed Secrets.
+
+In-memory publication is intentionally ephemeral. Leadership loss, Controller
+runtime reset or restart, LinkSys deletion or type change, LinkSys UID
+replacement, and removal of the last consumer clear the slot. The Controller
+reacquires the token when the source becomes active again. A Gateway may keep
+using a generation already embedded in its PluginRuntime until `validUntil`; a
+request fails closed when the Gateway has no unexpired resolved credential.
 
 ## Ordering and isolation
 

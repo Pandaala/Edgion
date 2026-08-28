@@ -2062,7 +2062,7 @@ main() {
                 # and EndpointSlice live under GRPCRoute/Basic. Both halves
                 # must be present or the suite either cannot connect or falls
                 # through to an unrelated GRPCRoute.
-                base_suites="${base_suites},GRPCRoute/Basic"
+                base_suites="${base_suites},GRPCRoute/Basic,LinkSys/Redis"
                 suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/DebugAccessLog,EdgionPlugins/Csrf,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RateLimitRedis,EdgionPlugins/RealIp,EdgionPlugins/RequestMirror,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/RequestAccessPolicy,EdgionPlugins/Canary,EdgionPlugins/IpRestriction,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/ExtProc,EdgionPlugins/AiGuard,EdgionPlugins/Guardrail,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/EdgionConfigDataStatus,EdgionPlugins/ResolvedRefs,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Cors,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/DslBody,EdgionPlugins/BodyPlugins,EdgionPlugins/JsonSchemaValidation,EdgionPlugins/AllEndpointStatus,EdgionPlugins/Wasm,EdgionPlugins/TraceContext,EdgionPlugins/AccessLogExtern,EdgionPlugins/MatchedRouteMeta,EdgionPlugins/IpRestrictionRefs,EdgionPlugins/PluginValidationStatus,EdgionPlugins/GlobalPluginsSnapshot,EdgionPlugins/EdgionConfigDataManaged,EdgionPlugins/PathNormalization/PreserveParam,EdgionPlugins/GeoRestriction"
                 if $FULL_TEST; then
                     suites="${suites},EdgionPlugins/LdapAuth,EdgionPlugins/LdapAuthTls"
@@ -2074,7 +2074,13 @@ main() {
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/LdapAuthTls" ] && ! $FULL_TEST; then
                     log_info "LdapAuthTls suite requires --full-test, config load will be skipped"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/DslGrpcError" ]; then
-                    suites="${base_suites},GRPCRoute/Basic,EdgionPlugins/Dsl"
+                    suites="${base_suites},GRPCRoute/Basic,LinkSys/Redis,EdgionPlugins/Dsl"
+                elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/Dsl" ]; then
+                    suites="${base_suites},LinkSys/Redis,EdgionPlugins/Dsl"
+                elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/RateLimitRedis" ]; then
+                    # The scenario exercises real Redis counters, so a targeted
+                    # run needs both the Redis process and its LinkSys + Secret.
+                    suites="${base_suites},LinkSys/Redis,EdgionPlugins/RateLimitRedis"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/AiGuard" ]; then
                     suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/AiGuard"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/Guardrail" ]; then

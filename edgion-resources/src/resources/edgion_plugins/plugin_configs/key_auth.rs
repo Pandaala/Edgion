@@ -184,7 +184,13 @@ impl KeyAuthConfig {
                     }
                 }
                 // Unsupported sources for API key extraction
-                KeyGet::RemoteIp | KeyGet::Path | KeyGet::Method | KeyGet::RemoteIpAndPath | KeyGet::RequestPath => {
+                KeyGet::RemoteIp
+                | KeyGet::DirectPeerIp
+                | KeyGet::Host
+                | KeyGet::Path
+                | KeyGet::Method
+                | KeyGet::RemoteIpAndPath
+                | KeyGet::RequestPath => {
                     return Err(format!(
                         "key_sources[{}]: unsupported source type '{}' for API key extraction. Use header, query, cookie, or ctx",
                         i,
@@ -375,6 +381,20 @@ realm: "Production API"
         let error = config.validate().unwrap_err();
         assert!(error.contains("unsupported source type"));
         assert!(error.contains("requestPath"));
+    }
+
+    #[test]
+    fn test_validate_unsupported_request_identity_key_sources() {
+        for source in [KeyGet::DirectPeerIp, KeyGet::Host] {
+            let expected_type = source.source_type();
+            let config = KeyAuthConfig {
+                key_sources: vec![source],
+                ..Default::default()
+            };
+            let error = config.validate().unwrap_err();
+            assert!(error.contains("unsupported source type"));
+            assert!(error.contains(expected_type));
+        }
     }
 
     #[test]

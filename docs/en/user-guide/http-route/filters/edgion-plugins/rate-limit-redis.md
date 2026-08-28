@@ -143,6 +143,8 @@ Identical to the [RateLimit plugin](rate-limit.md). Supported key types:
 | type | Requires `name` | Description |
 |------|-----------------|-------------|
 | `remoteIp` | No | Resolved client IP address |
+| `directPeerIp` | No | Physical transport peer IP before PROXY, RealIp, or forwarded-header processing |
+| `host` | No | Entry-time request authority, normalized by stripping an unambiguous port and trailing dot and converting ASCII letters to lowercase |
 | `header` | Yes | Value of a specific request header |
 | `cookie` | Yes | Value of a specific cookie |
 | `query` | Yes | Value of a specific query parameter |
@@ -150,15 +152,25 @@ Identical to the [RateLimit plugin](rate-limit.md). Supported key types:
 | `method` | No | HTTP method |
 | `ctx` | Yes | Context variable set by another plugin |
 | `remoteIpAndPath` | No | Combined resolved client IP and path |
+| `requestPath` | No | Entry-time raw request path before plugin rewrites |
 
 Example of combining multiple keys:
 
 ```yaml
 key:
-  - type: remoteIp
+  - type: directPeerIp
+  - type: host
   - type: header
     name: "X-API-Key"
 ```
+
+Use `directPeerIp` when the policy means the physical peer that connected to Edgion. Use
+`remoteIp` only when the deployment intentionally treats trusted PROXY protocol or RealIp/XFF
+processing as the client identity boundary. The two values are deliberately distinct.
+
+`host` uses the same frozen, canonical authority snapshot used for route selection. It covers an
+absolute-form URI authority, HTTP/1 Host, and HTTP/2 `:authority`; a plugin that later rewrites Host
+does not move the request into a different rate-limit bucket.
 
 The resulting Redis key looks like `{keyPrefix}{pluginScope}:{algorithm}:{policyIndex}:{rateLimitKey}`, e.g. `edgion:rl:default/api-limiter/#0:sw:0:11:192.168.1.1_9:apikey123` — with multiple keys configured, each part of the rate limiting key carries its `<byte-length>:` prefix so that two different value tuples can never share a bucket. A single configured key is used verbatim (`edgion:rl:default/api-limiter/#0:sw:0:192.168.1.1`).
 
@@ -167,6 +179,19 @@ The resulting Redis key looks like `{keyPrefix}{pluginScope}:{algorithm}:{policy
 Multiple routes referencing the **same** EdgionPlugins resource share one limiter — that is how a rate limit is shared across routes, and it matches the in-memory `RateLimit`, whose counter is likewise shared per resource. Two *different* resources can no longer share a bucket by construction: to share a quota across routes, point them at one resource rather than duplicating the configuration.
 
 Omitting `key` applies the default `[{type: remoteIp}]`. An explicitly empty `key: []` means "one global bucket": every request composes to the same empty key and is still rate limited — it is not treated as a key extraction failure, so `onKeyMiss` / `defaultKey` do not apply to it.
+
+For a composite key, a missing component is encoded as a `-` slot as long as at least one other
+component resolves. `onKeyMiss` applies only when every configured source is missing. If a header
+or cookie must be present, enforce that requirement with a deny-capable plugin such as
+[RequestRestriction](request-restriction.md) or
+[RequestAccessPolicy](request-access-policy.md) before RateLimitRedis. A RateLimitRedis run
+condition only selects traffic to count; when it does not match, the limiter is skipped and the
+request continues. `onKeyMiss: Deny` alone does not require every component.
+
+Do not use secrets such as complete Authorization credentials as descriptors: generated Redis keys
+are operationally inspectable. `maxKeyLen` bounds bytes in each Redis key, not the number of
+distinct keys. Prefer stable, bounded-cardinality identifiers and size Redis for the number of
+active buckets a client-controlled descriptor can create.
 
 ---
 
@@ -343,6 +368,75 @@ spec:
           remaining: "X-Premium-Remaining"
           retryIn: "X-Retry-After"
 ```
+
+### 4. Conditional Global Policy with a Composite Bucket
+
+The plugin entry can select requests with shared conditions and then count them with a separate
+composite descriptor. This example limits each physical peer + normalized host + tenant header for
+only `/v1/expensive` requests. A missing tenant header is counted in the composite `-` bucket; if
+the header is mandatory, reject it separately before this limiter.
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: expensive-api-limit
+  namespace: production
+spec:
+  requestPlugins:
+    - type: RateLimitRedis
+      alias: expensive-api
+      conditions:
+        run:
+          allOf:
+            - type: keyMatch
+              key:
+                type: host
+              values: ["api.example.com"]
+            - type: keyMatch
+              key:
+                type: path
+              regex: ["^/v1/expensive(?:/|$)"]
+      config:
+        redisRef: "production/shared-redis"
+        key:
+          - type: directPeerIp
+          - type: host
+          - type: header
+            name: X-Tenant-ID
+        onKeyMiss: Deny
+        onRedisFailure: Deny
+        policies:
+          - rate: 30
+            interval: 1m
+            algorithm: SlidingWindow
+---
+apiVersion: edgion.io/v1
+kind: EdgionGatewayConfig
+metadata:
+  name: production-gateway
+spec:
+  globalPluginsRef:
+    - name: expensive-api-limit
+      namespace: production
+```
+
+`globalPluginsRef` runs before route-level plugins for every request handled under that Gateway
+configuration; the entry's `conditions.run` narrows which requests consume quota.
+
+Do not use a client-controlled `keyExist` run condition to enforce a required field: a false run
+condition skips the limiter and allows processing to continue. Required-field rejection belongs in
+a preceding deny-capable policy.
+
+For one quota shared by every selected request, replace the composite list with an explicitly empty
+list:
+
+```yaml
+key: []
+```
+
+The empty descriptor is still namespaced by the owning plugin resource and entry alias, so unrelated
+plugin entries do not accidentally share the bucket.
 
 ---
 

@@ -78,6 +78,66 @@ fn utf8_header_values(headers: &http::HeaderMap, name: &str) -> Option<Vec<Strin
         .collect()
 }
 
+/// Resolve request identity keys from the immutable entry-time request snapshot.
+///
+/// Callers must pass only the variants handled here. Keeping this independent
+/// from `Session` makes the trust-boundary distinction unit-testable.
+fn request_identity_key_core(ctx: &EdgionHttpContext, key: &KeyGet) -> Option<String> {
+    let value = match key {
+        KeyGet::DirectPeerIp => ctx.request_info.direct_peer_ip.as_str(),
+        KeyGet::Host => ctx.request_info.hostname.as_str(),
+        _ => unreachable!("request_identity_key_core called with a non-identity key"),
+    };
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+#[cfg(test)]
+mod request_identity_key_tests {
+    use super::request_identity_key_core;
+    use crate::ctx::NormalizedHostname;
+    use crate::EdgionHttpContext;
+    use edgion_resources::common::KeyGet;
+
+    #[test]
+    fn direct_peer_ip_is_distinct_from_resolved_remote_ip() {
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.direct_peer_ip = "192.0.2.10".to_string();
+        ctx.request_info.remote_ip = "198.51.100.20".to_string();
+
+        assert_eq!(
+            request_identity_key_core(&ctx, &KeyGet::DirectPeerIp).as_deref(),
+            Some("192.0.2.10")
+        );
+        assert_ne!(
+            request_identity_key_core(&ctx, &KeyGet::DirectPeerIp).as_deref(),
+            Some(ctx.request_info.remote_ip.as_str())
+        );
+    }
+
+    #[test]
+    fn host_uses_the_frozen_normalized_hostname() {
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.hostname = NormalizedHostname::new(" API.Example.COM.:8443 ");
+
+        assert_eq!(
+            request_identity_key_core(&ctx, &KeyGet::Host).as_deref(),
+            Some("api.example.com")
+        );
+    }
+
+    #[test]
+    fn empty_request_identity_values_are_missing() {
+        let ctx = EdgionHttpContext::default();
+
+        assert!(request_identity_key_core(&ctx, &KeyGet::DirectPeerIp).is_none());
+        assert!(request_identity_key_core(&ctx, &KeyGet::Host).is_none());
+    }
+}
+
 /// Pure core of the once-per-name request-direction anti-spoof strip.
 ///
 /// For each request-direction rule in `plan`, removes the client-supplied
@@ -1597,6 +1657,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                     Some(ip.to_string())
                 }
             }
+            KeyGet::DirectPeerIp | KeyGet::Host => request_identity_key_core(self.ctx, key),
             KeyGet::Header { name } => self.header_value(name),
             KeyGet::Cookie { name } => self.get_cookie(name),
             KeyGet::Query { name } => self.get_query_param(name),

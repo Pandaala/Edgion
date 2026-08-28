@@ -78,7 +78,7 @@ description: Feature and configuration schema reference for all Kubernetes resou
 |----------|-------------|
 | [16-service-backends.md](16-service-backends.md) | Service discovery |
 | [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) | Direct-backend policy for Service or EdgionBackend; target kind controls valid sections |
-| [18-link-sys.md](18-link-sys.md) | Redis/Etcd/ES/Webhook/Kafka/HttpDns connector configuration |
+| [18-link-sys.md](18-link-sys.md) | Redis/Etcd/ES/Webhook/Kafka/HttpDns connector and Controller-managed credential-source configuration |
 ### AI Gateway
 
 | Resource | Description |

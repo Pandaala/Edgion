@@ -401,6 +401,7 @@ assert_json_success "RateLimitRedis main plugin synced" "$RESP"
 RATE_KEY_MAIN="rlr-main-$(date +%s%N)"
 for i in 1 2 3; do
     gateway_http_request "/test/rate-limit-redis/allow/echo?req=${i}" \
+        -H "X-Rate-Apply: yes" \
         -H "X-Rate-Key: ${RATE_KEY_MAIN}"
     assert_eq "RateLimitRedis allow request ${i} status" "200" "$HTTP_STATUS"
     assert_eq "RateLimitRedis allow request ${i} limit header" "3" "$(get_resp_header "X-RateLimit-Limit")"
@@ -408,6 +409,7 @@ for i in 1 2 3; do
 done
 
 gateway_http_request "/test/rate-limit-redis/allow/echo?req=4" \
+    -H "X-Rate-Apply: yes" \
     -H "X-Rate-Key: ${RATE_KEY_MAIN}"
 assert_eq "RateLimitRedis over-limit request returns 429" "429" "$HTTP_STATUS"
 assert_contains "RateLimitRedis over-limit body message" "$HTTP_BODY" "Redis rate limit exceeded"
@@ -420,18 +422,21 @@ RATE_KEY_A="rlr-a-$(date +%s%N)"
 RATE_KEY_B="rlr-b-$(date +%s%N)"
 for i in 1 2 3; do
     gateway_http_request "/test/rate-limit-redis/allow/isolation-a?req=${i}" \
+        -H "X-Rate-Apply: yes" \
         -H "X-Rate-Key: ${RATE_KEY_A}"
     assert_eq "RateLimitRedis key A request ${i} status" "200" "$HTTP_STATUS"
 done
 gateway_http_request "/test/rate-limit-redis/allow/isolation-a?req=4" \
+    -H "X-Rate-Apply: yes" \
     -H "X-Rate-Key: ${RATE_KEY_A}"
 assert_eq "RateLimitRedis key A request 4 blocked" "429" "$HTTP_STATUS"
 gateway_http_request "/test/rate-limit-redis/allow/isolation-b?req=1" \
+    -H "X-Rate-Apply: yes" \
     -H "X-Rate-Key: ${RATE_KEY_B}"
 assert_eq "RateLimitRedis key B still allowed after key A exhausted" "200" "$HTTP_STATUS"
 
-gateway_http_request "/test/rate-limit-redis/allow/no-key"
-assert_eq "RateLimitRedis missing key allow policy" "200" "$HTTP_STATUS"
+gateway_http_request "/test/rate-limit-redis/allow/condition-bypass"
+assert_eq "RateLimitRedis false run condition bypasses limiter" "200" "$HTTP_STATUS"
 
 gateway_http_request "/test/rate-limit-redis/missing-deny/no-key"
 assert_eq "RateLimitRedis missing key deny policy" "429" "$HTTP_STATUS"

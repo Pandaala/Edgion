@@ -84,9 +84,20 @@ The rate limiting key determines which dimension to rate limit on. Supported key
 | Type | Description | Requires name |
 |------|-------------|--------------|
 | `remoteIp` | Rate limit by resolved client IP | No |
+| `directPeerIp` | Rate limit by physical transport peer IP before PROXY/RealIp/XFF processing | No |
+| `host` | Rate limit by the frozen normalized request authority | No |
 | `header` | Rate limit by request header value | Yes |
+| `cookie` | Rate limit by request cookie value | Yes |
+| `query` | Rate limit by decoded query parameter value | Yes |
 | `path` | Rate limit by request path | No |
+| `requestPath` | Rate limit by entry-time raw request path | No |
+| `method` | Rate limit by HTTP method | No |
+| `ctx` | Rate limit by a context variable | Yes |
 | `remoteIpAndPath` | Rate limit by resolved IP + Path combination | No |
+
+`directPeerIp` is the physical connection peer. `remoteIp` may instead reflect a deliberately
+trusted PROXY or RealIp/XFF boundary. `host` uses the entry-time canonical authority used for
+routing, including HTTP/2 `:authority`, and is not changed by later Host rewrites.
 
 **Empty key list**: omitting `key` applies the default `[{type: remoteIp}]`. An explicitly empty `key: []` means "one global bucket" — every request composes to the same empty key and is still rate limited. It is **not** treated as a key extraction failure, so `onKeyMiss` / `defaultKey` do not apply to it.
 

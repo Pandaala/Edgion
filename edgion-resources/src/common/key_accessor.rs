@@ -71,6 +71,14 @@ pub enum KeyGet {
     #[default]
     RemoteIp,
 
+    /// Physical downstream transport peer IP before PROXY/XFF rewriting.
+    /// No additional parameters needed.
+    DirectPeerIp,
+
+    /// Normalized request hostname (lowercased, port-stripped, trailing FQDN dot removed).
+    /// No additional parameters needed.
+    Host,
+
     /// HTTP request header value
     /// Requires `name` to specify which header to read.
     Header {
@@ -122,6 +130,8 @@ impl KeyGet {
     pub fn as_log_str(&self) -> String {
         match self {
             KeyGet::RemoteIp => "remote-ip".to_string(),
+            KeyGet::DirectPeerIp => "direct-peer-ip".to_string(),
+            KeyGet::Host => "host".to_string(),
             KeyGet::Header { name } => format!("hdr:{}", name),
             KeyGet::Cookie { name } => format!("cookie:{}", name),
             KeyGet::Query { name } => format!("query:{}", name),
@@ -137,6 +147,8 @@ impl KeyGet {
     pub fn source_type(&self) -> &'static str {
         match self {
             KeyGet::RemoteIp => "remoteIp",
+            KeyGet::DirectPeerIp => "directPeerIp",
+            KeyGet::Host => "host",
             KeyGet::Header { .. } => "header",
             KeyGet::Cookie { .. } => "cookie",
             KeyGet::Query { .. } => "query",
@@ -249,6 +261,8 @@ mod tests {
     #[test]
     fn test_key_get_as_log_str() {
         assert_eq!(KeyGet::RemoteIp.as_log_str(), "remote-ip");
+        assert_eq!(KeyGet::DirectPeerIp.as_log_str(), "direct-peer-ip");
+        assert_eq!(KeyGet::Host.as_log_str(), "host");
         assert_eq!(
             KeyGet::Header {
                 name: "X-Api-Key".to_string()
@@ -269,6 +283,8 @@ mod tests {
     #[test]
     fn test_key_get_source_type() {
         assert_eq!(KeyGet::RemoteIp.source_type(), "remoteIp");
+        assert_eq!(KeyGet::DirectPeerIp.source_type(), "directPeerIp");
+        assert_eq!(KeyGet::Host.source_type(), "host");
         assert_eq!(
             KeyGet::Header {
                 name: "X-Test".to_string()
@@ -368,6 +384,20 @@ mod tests {
 
         let deserialized: KeyGet = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, key);
+    }
+
+    #[test]
+    fn test_key_get_serde_request_identity_sources() {
+        for (key, expected) in [
+            (KeyGet::DirectPeerIp, r#"{"type":"directPeerIp"}"#),
+            (KeyGet::Host, r#"{"type":"host"}"#),
+        ] {
+            let json = serde_json::to_string(&key).unwrap();
+            assert_eq!(json, expected);
+
+            let deserialized: KeyGet = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized, key);
+        }
     }
 
     #[test]

@@ -297,8 +297,8 @@ fn key_get_type_enum_matches_crd_both_directions() {
     let (d1, d2) = compare_key_get_types(&rust, &crd);
     assert_eq!(
         rust.len(),
-        9,
-        "expected nine KeyGet type consts, got {}: {rust:?}",
+        11,
+        "expected eleven KeyGet type consts, got {}: {rust:?}",
         rust.len()
     );
     assert!(
