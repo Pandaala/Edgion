@@ -5,8 +5,8 @@ use crate::conf_mgr::sync_runtime::resource_processor::credential::{
     resolve_secret, BearerResolver, InvalidCredentialError, ResolveOutcome,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::{
-    DesiredCredentialConsumer, BINDING_REVISION_ANNOTATION, CONSUMER_UID_ANNOTATION, MANAGED_BY_LABEL,
-    MANAGED_BY_VALUE, SOURCE_GENERATION_ANNOTATION, SOURCE_UID_ANNOTATION, VALID_UNTIL_ANNOTATION,
+    DesiredCredentialConsumer, DesiredCredentialSource, BINDING_REVISION_ANNOTATION, CONSUMER_UID_ANNOTATION,
+    MANAGED_BY_LABEL, MANAGED_BY_VALUE, SOURCE_GENERATION_ANNOTATION, SOURCE_UID_ANNOTATION, VALID_UNTIL_ANNOTATION,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResolvedRefsError, ResourceRef};
 use edgion_resources::credentials::SecretMaterialResolver;
@@ -17,7 +17,9 @@ use edgion_resources::resources::edgion_plugins::plugin_configs::{
 };
 use edgion_resources::resources::edgion_plugins::{EdgionPlugin, PluginValidation};
 use k8s_openapi::api::core::v1::Secret;
-use std::time::SystemTime;
+use k8s_openapi::ByteString;
+use std::collections::BTreeMap;
+use std::time::{Instant, SystemTime};
 
 const OWNER_GROUP: &str = "edgion.io";
 const OWNER_KIND: &str = "EdgionPlugins";
@@ -105,15 +107,12 @@ fn validate_managed_secret<'a>(
     Ok(valid_until)
 }
 
-fn link_sys_source<'a>(
+fn link_sys_source(
     config: &edgion_resources::resources::edgion_plugins::CredentialInjectorConfig,
     resource_ref: &ResourceRef,
-    ctx: &'a HandlerContext,
+    ctx: &HandlerContext,
     register_cross_namespace: bool,
-) -> Result<
-    crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::DesiredCredentialSource,
-    ResolvedRefsError,
-> {
+) -> Result<DesiredCredentialSource, ResolvedRefsError> {
     let owner_ns = resource_ref.namespace.as_deref().unwrap_or("default");
     let source_ns = config.credential_ref.effective_namespace(owner_ns);
     if source_ns != owner_ns {
@@ -162,10 +161,12 @@ async fn resolve_link_sys(
     ctx.runtime()
         .link_sys_ref_mgr
         .add_ref(source_key.clone(), resource_ref.clone());
-    ctx.secret_ref_manager()
-        .add_ref(format!("{owner_ns}/{}", resource_ref.name), resource_ref.clone());
 
     let source = link_sys_source(config, resource_ref, ctx, true)?;
+    if source.persist {
+        ctx.secret_ref_manager()
+            .add_ref(format!("{owner_ns}/{}", resource_ref.name), resource_ref.clone());
+    }
     let consumer = DesiredCredentialConsumer {
         resource: resource_ref.clone(),
         uid: consumer_uid.to_string(),
@@ -187,6 +188,10 @@ async fn resolve_link_sys(
     };
     let binding_revision = consumer.binding_revision();
     ctx.runtime().credential_source_registry.replace_consumer(consumer);
+
+    if !source.persist {
+        return resolve_from_memory(config, resource_ref, ctx, &source);
+    }
 
     let output_ref = SecretObjectReference {
         group: None,
@@ -248,6 +253,53 @@ async fn resolve_link_sys(
         .credential_source_registry
         .clear_consumer_reconcile(&resource_ref.resource_key());
     Ok(())
+}
+
+fn resolve_from_memory(
+    config: &mut edgion_resources::resources::edgion_plugins::CredentialInjectorConfig,
+    resource_ref: &ResourceRef,
+    ctx: &HandlerContext,
+    source: &DesiredCredentialSource,
+) -> Result<(), ResolvedRefsError> {
+    match memory_material(ctx, source, config.target.value_prefix().len()) {
+        Ok((value, valid_until)) => {
+            config.resolved_credential = Some(ResolvedCredentialInjector {
+                value,
+                valid_until: Some(valid_until),
+            });
+            ctx.runtime()
+                .credential_source_registry
+                .clear_consumer_reconcile(&resource_ref.resource_key());
+            Ok(())
+        }
+        Err(error) => {
+            request_publication_reconcile(ctx, resource_ref);
+            Err(error)
+        }
+    }
+}
+
+fn memory_material(
+    ctx: &HandlerContext,
+    source: &DesiredCredentialSource,
+    prefix_len: usize,
+) -> Result<(String, String), ResolvedRefsError> {
+    let Some(entry) = ctx.runtime().credential_memory.active(&source.identity_key()) else {
+        return Err(ResolvedRefsError::MissingKeys {
+            keys: vec!["bearerToken"],
+        });
+    };
+    if entry.valid_until_mono <= Instant::now() {
+        return Err(managed_secret_error("memory credential is expired"));
+    }
+    let data = BTreeMap::from([("bearerToken".to_string(), ByteString(entry.value.to_vec()))]);
+    let material = BearerResolver.parse(&data).map_err(map_resolve_error)?;
+    if !final_value_fits(prefix_len, material.token.len()) {
+        return Err(managed_secret_error(
+            "final injected header value exceeds the configured hard limit",
+        ));
+    }
+    Ok((material.token, entry.valid_until.clone()))
 }
 
 fn request_publication_reconcile(ctx: &HandlerContext, resource_ref: &ResourceRef) {
@@ -469,6 +521,12 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn status_er
                     continue;
                 }
             };
+            if !source.persist {
+                if let Err(error) = memory_material(ctx, &source, config.target.value_prefix().len()) {
+                    errors.push(error);
+                }
+                continue;
+            }
             let binding_revision = DesiredCredentialConsumer {
                 resource: resource_ref.clone(),
                 uid: consumer_uid.to_string(),
@@ -870,5 +928,258 @@ mod tests {
                 ResolvedRefsError::DecodeError { key: "bearerToken", .. }
             ));
         }
+    }
+
+    fn credential_source_config() -> edgion_resources::resources::link_sys::CredentialSourceConfig {
+        serde_yaml::from_str(
+            r#"
+provider:
+  type: oauth2ClientCredentials
+  tokenEndpoint: https://auth.example.com/oauth2/token
+  clientAuthentication:
+    activeSecretRef:
+      name: oauth-client
+"#,
+        )
+        .expect("valid credentialSource config")
+    }
+
+    fn link_sys_desired_source(persist: bool) -> DesiredCredentialSource {
+        DesiredCredentialSource {
+            resource: ResourceRef::new(
+                ResourceKind::LinkSys,
+                Some("default".to_string()),
+                "source".to_string(),
+            ),
+            uid: "source-uid".to_string(),
+            generation: 7,
+            persist,
+            memory_max_keys: 10_000,
+            config: crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::ControllerCredentialSourceConfig::new(
+                credential_source_config(),
+            ),
+            secret_inputs: Vec::new(),
+        }
+    }
+
+    fn link_sys_plugin() -> EdgionPlugins {
+        let mut ep = EdgionPlugins::new("injector", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.metadata.uid = Some("consumer-uid".to_string());
+        ep.metadata.generation = Some(3);
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::CredentialInjector(
+            CredentialInjectorConfig {
+                credential_ref: SecretObjectReference {
+                    group: Some("edgion.io".to_string()),
+                    kind: Some("LinkSys".to_string()),
+                    name: "source".to_string(),
+                    namespace: None,
+                },
+                target: CredentialInjectionTarget::Bearer,
+                resolved_credential: None,
+            },
+        ))]);
+        ep
+    }
+
+    fn insert_memory_token_until(
+        runtime: &ControllerRuntime,
+        source: &DesiredCredentialSource,
+        token: &[u8],
+        valid_until_mono: std::time::Instant,
+    ) {
+        runtime
+            .credential_memory
+            .insert_oauth_publication(
+                &source.identity_key(),
+                crate::services::credential_manager::memory::GeneratedSecretEntry {
+                    key: "pub-1".to_string(),
+                    value: zeroize::Zeroizing::new(token.to_vec()),
+                    issued_at: "2026-08-27T00:00:00Z".to_string(),
+                    valid_until: "2099-08-27T12:00:00Z".to_string(),
+                    valid_until_mono,
+                },
+                source.memory_max_keys,
+            )
+            .expect("memory insert");
+    }
+
+    fn insert_memory_token(runtime: &ControllerRuntime, source: &DesiredCredentialSource, token: &[u8]) {
+        insert_memory_token_until(
+            runtime,
+            source,
+            token,
+            std::time::Instant::now() + std::time::Duration::from_secs(3_600),
+        );
+    }
+
+    fn same_name_secret_deps(context: &HandlerContext, owner: &ResourceRef) -> Vec<String> {
+        context
+            .secret_ref_manager()
+            .get_dependencies(&owner.key())
+            .into_iter()
+            .filter(|key| key == &format!("{}/{}", owner.namespace.as_deref().unwrap_or("default"), owner.name))
+            .collect()
+    }
+
+    fn resolved_until(ep: &EdgionPlugins) -> Option<&str> {
+        let entry = ep.spec.request_plugins.as_ref()?.first()?;
+        let EdgionPlugin::CredentialInjector(config) = &entry.plugin else {
+            return None;
+        };
+        config
+            .resolved_credential
+            .as_ref()
+            .and_then(|resolved| resolved.valid_until.as_deref())
+    }
+
+    #[tokio::test]
+    async fn persist_off_memory_hit_embeds_token_without_same_name_secret_dep() {
+        let (context, runtime) = make_context(HashMap::new());
+        let source = link_sys_desired_source(false);
+        runtime.credential_source_registry.replace_source(source.clone());
+        insert_memory_token(&runtime, &source, b"access-token");
+        let owner = ResourceRef::new(
+            ResourceKind::EdgionPlugins,
+            Some("default".to_string()),
+            "injector".to_string(),
+        );
+        let mut ep = link_sys_plugin();
+
+        resolve(&mut ep, &owner, &context).await;
+
+        assert_eq!(resolved_value(&ep), Some("access-token"));
+        assert_eq!(resolved_until(&ep), Some("2099-08-27T12:00:00Z"));
+        assert!(
+            same_name_secret_deps(&context, &owner).is_empty(),
+            "persist-off must not register {{owner_ns}}/{{plugin_name}} as a generated-secret dep"
+        );
+        assert!(
+            runtime
+                .credential_source_registry
+                .consumer(&owner.resource_key())
+                .is_some(),
+            "memory-mode resolve must still register DesiredCredentialConsumer"
+        );
+        assert!(
+            !runtime.link_sys_ref_mgr.get_refs("default/source").is_empty(),
+            "memory-mode resolve must still register link_sys_ref_mgr"
+        );
+    }
+
+    #[tokio::test]
+    async fn persist_off_memory_miss_leaves_unresolved_but_registers_consumer() {
+        let (context, runtime) = make_context(HashMap::new());
+        runtime
+            .credential_source_registry
+            .replace_source(link_sys_desired_source(false));
+        let owner = ResourceRef::new(
+            ResourceKind::EdgionPlugins,
+            Some("default".to_string()),
+            "injector".to_string(),
+        );
+        let mut ep = link_sys_plugin();
+
+        resolve(&mut ep, &owner, &context).await;
+
+        assert_eq!(resolved_value(&ep), None);
+        assert!(
+            runtime
+                .credential_source_registry
+                .consumer(&owner.resource_key())
+                .is_some(),
+            "a memory miss must still register DesiredCredentialConsumer"
+        );
+        assert!(
+            same_name_secret_deps(&context, &owner).is_empty(),
+            "persist-off miss must not register the same-name Secret dependency"
+        );
+    }
+
+    #[tokio::test]
+    async fn persist_off_expired_memory_stays_unresolved_and_requests_reconcile() {
+        let (context, runtime) = make_context(HashMap::new());
+        let source = link_sys_desired_source(false);
+        runtime.credential_source_registry.replace_source(source.clone());
+        insert_memory_token_until(
+            &runtime,
+            &source,
+            b"expired-token",
+            std::time::Instant::now() - std::time::Duration::from_secs(1),
+        );
+        let owner = ResourceRef::new(
+            ResourceKind::EdgionPlugins,
+            Some("default".to_string()),
+            "injector".to_string(),
+        );
+        let mut ep = link_sys_plugin();
+
+        resolve(&mut ep, &owner, &context).await;
+
+        assert_eq!(resolved_value(&ep), None);
+        assert!(
+            !status_errors(&ep, &owner, &context).is_empty(),
+            "an expired memory credential must surface as unresolved"
+        );
+        assert!(
+            runtime
+                .credential_source_registry
+                .reconcile_epoch_for_source(&source.logical_key())
+                > 0,
+            "an expired memory credential must request reacquisition"
+        );
+    }
+
+    #[tokio::test]
+    async fn persist_on_link_sys_still_requires_managed_secret() {
+        let source = link_sys_desired_source(true);
+        let (context, runtime) = make_context(HashMap::new());
+        runtime.credential_source_registry.replace_source(source.clone());
+        insert_memory_token(&runtime, &source, b"memory-only-token");
+        let owner = ResourceRef::new(
+            ResourceKind::EdgionPlugins,
+            Some("default".to_string()),
+            "injector".to_string(),
+        );
+        let mut ep = link_sys_plugin();
+
+        resolve(&mut ep, &owner, &context).await;
+
+        assert_eq!(
+            resolved_value(&ep),
+            None,
+            "persist-on must not embed from controller memory"
+        );
+        assert_eq!(
+            same_name_secret_deps(&context, &owner),
+            vec!["default/injector"],
+            "persist-on must still depend on the managed same-name Secret"
+        );
+
+        let consumer = DesiredCredentialConsumer {
+            resource: owner.clone(),
+            uid: "consumer-uid".to_string(),
+            generation: 3,
+            source_key: "default/source".to_string(),
+            source_uid: "source-uid".to_string(),
+            source_generation: 7,
+            target_secret_namespace: "default".to_string(),
+            target_secret_name: "injector".to_string(),
+            authorization_revision: "same-namespace".to_string(),
+        };
+        let mut secret = managed_secret("injector", b"secret-token");
+        secret
+            .metadata
+            .annotations
+            .as_mut()
+            .expect("annotations")
+            .insert(BINDING_REVISION_ANNOTATION.to_string(), consumer.binding_revision());
+        runtime
+            .secret_store
+            .replace_all(HashMap::from([("default/injector".to_string(), secret)]));
+        let mut ep = link_sys_plugin();
+        resolve(&mut ep, &owner, &context).await;
+        assert_eq!(resolved_value(&ep), Some("secret-token"));
+        assert_eq!(resolved_until(&ep), Some("2099-08-27T12:00:00Z"));
     }
 }

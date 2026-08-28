@@ -80,6 +80,7 @@ spec:
 | `ResponseRewrite` | Response rewrite (status code/headers/body) |
 | `RealIp` | Real IP extraction |
 | `CtxSet` | Set context variables |
+| `CredentialInjector` | Inject an upstream bearer or custom header from a Secret or a `credentialSource` LinkSys (`credentialRef.group: edgion.io`, `kind: LinkSys`). Default publication writes a generated Secret; `publication.persist: false` keeps generations in Controller memory (no generated Secret; see [18-link-sys.md](18-link-sys.md)). |
 | `WebhookKeyGet` | Resolve webhook vars into request context (once per request). Addressable in EdgionGatewayConfig `validation.plugin_policy` allow/deny lists. |
 | `ExtProc` | Envoy-compatible external processing. One `requestPlugins` entry owns one request-scoped Process stream across request headers/body and final response headers/body. Request bodies support `BUFFERED`/`STREAMED`; response bodies support bounded transport-window `STREAMED` only (no full-response aggregation and no semantic SSE-window claim). |
 | `Guardrail` | One bounded HTTP Pass/Replace/Reject decision per canonical semantic AI SSE window. The request-stage owner installs an internal semantic response processor after AI translation/usage and before ordinary writable processors. Pass is byte-identical; policy Reject is never failed open. See `docs/en/user-guide/http-route/filters/edgion-plugins/guardrail.md`. |
@@ -200,6 +201,7 @@ The following plugin types read Secret data from `ControllerRuntime.secret_store
 | `Wasm` | `source.fetch`: artifact-repo Authorization header value, fetch TLS CA / client certs |
 | `Wasm` | `source.oci.pullSecretRef`: `kubernetes.io/dockerconfigjson` registry credentials, resolved into `resolved_pull_secret` (redacted in admin output); unresolved ⇒ plugin load failure |
 | `Guardrail` | `${secretRef:namespace/name:key}` values used by restricted request path/custom-header templates, plus outbound TLS CA/client credentials |
+| `CredentialInjector` | Static Secret: `bearerToken`. `credentialSource` LinkSys: active token from a generated Secret (`persist: true`) or `ControllerRuntime.credential_memory` (`persist: false`); never from a LinkSys conf_sync field |
 
 Secret changes automatically trigger reprocessing of EdgionPlugins via SecretRefManager.
 

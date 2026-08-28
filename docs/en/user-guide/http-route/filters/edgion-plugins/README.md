@@ -14,7 +14,7 @@ HTTP Route-level plugins provided by Edgion, configured via the `EdgionPlugins` 
 | [conditions.md](conditions.md) | Plugin `run`/`skip` conditions (`keyExist`, `keyMatch`, `timeRange`, `probability`) |
 | [cors.md](cors.md) | Cross-origin resource sharing (CORS) |
 | [csrf.md](csrf.md) | CSRF protection |
-| [credential-injector.md](credential-injector.md) | Secret-backed upstream bearer or custom-header credential injection |
+| [credential-injector.md](credential-injector.md) | Secret- or LinkSys-backed upstream bearer or custom-header credential injection |
 | [ctx-setter.md](ctx-setter.md) | Context variable extraction |
 | [webhook-key-get.md](webhook-key-get.md) | Resolve a LinkSys webhook value into request context |
 | [direct-endpoint.md](direct-endpoint.md) | Direct connection to a specific endpoint |

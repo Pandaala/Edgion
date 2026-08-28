@@ -37,6 +37,10 @@ pub struct ControllerStoreStats {
     pub secret_store: usize,
     pub secret_ref_manager: SecretRefManagerStats,
     pub credential_source_registry: CredentialSourceRegistryStats,
+    /// LinkSys identities with an in-memory generated-secret slot. Counts only.
+    pub credential_memory_sources: usize,
+    /// Sum of generated-secret entries across those slots. Counts only.
+    pub credential_memory_keys: usize,
     pub event_store: EventStoreStats,
     pub watch_objects: WatchObjectsStats,
 }
@@ -59,6 +63,8 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
     let secret_store = runtime.secret_store.count();
     let secret_ref_manager = SecretRefManagerStats::from(runtime.secret_ref_manager.stats());
     let credential_source_registry = runtime.credential_source_registry.stats();
+    let credential_memory_sources = runtime.credential_memory.source_count();
+    let credential_memory_keys = runtime.credential_memory.key_count();
 
     let next_resource_version = crate::conf_mgr::sync_runtime::resource_version::current_resource_version();
 
@@ -73,6 +79,8 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
         secret_store,
         secret_ref_manager,
         credential_source_registry,
+        credential_memory_sources,
+        credential_memory_keys,
         event_store: EventStoreStats { next_resource_version },
         watch_objects: WatchObjectsStats { count: watch_count },
     }))
@@ -146,6 +154,8 @@ mod tests {
                 total_references: 0,
             },
             credential_source_registry: CredentialSourceRegistryStats::default(),
+            credential_memory_sources: 0,
+            credential_memory_keys: 0,
             event_store: EventStoreStats {
                 next_resource_version: 1,
             },
@@ -156,6 +166,59 @@ mod tests {
         assert_eq!(v.get("secret_store").unwrap().as_u64(), Some(0));
         assert!(v.get("secret_ref_manager").is_some());
         assert!(v.get("credential_source_registry").is_some());
+        assert_eq!(v.get("credential_memory_sources").unwrap().as_u64(), Some(0));
+        assert_eq!(v.get("credential_memory_keys").unwrap().as_u64(), Some(0));
         assert!(v.get("event_store").is_some());
+        let dump = v.to_string();
+        assert!(!dump.contains("entries"));
+        assert!(!dump.contains("generated"));
+    }
+
+    fn memory_entry(key: &str, token: &[u8]) -> crate::services::credential_manager::memory::GeneratedSecretEntry {
+        crate::services::credential_manager::memory::GeneratedSecretEntry {
+            key: key.to_string(),
+            value: zeroize::Zeroizing::new(token.to_vec()),
+            issued_at: "2026-08-27T00:00:00Z".to_string(),
+            valid_until: "2026-08-27T01:00:00Z".to_string(),
+            valid_until_mono: std::time::Instant::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_credential_memory_store_stats_reports_zero() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = make_test_state(tmp.path()).await;
+
+        let Json(resp) = store_stats(State(state)).await;
+        let stats = resp.data.expect("ok body");
+        assert_eq!(stats.credential_memory_sources, 0);
+        assert_eq!(stats.credential_memory_keys, 0);
+    }
+
+    #[tokio::test]
+    async fn store_stats_counts_one_credential_memory_insert_then_reset_returns_zero() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = make_test_state(tmp.path()).await;
+        let runtime = state.conf_mgr.runtime();
+        runtime
+            .credential_memory
+            .insert_oauth_publication("ops/src/uid", memory_entry("pub-1", b"token-bytes"), 10_000)
+            .expect("insert");
+
+        let Json(after_insert) = store_stats(State(state.clone())).await;
+        let stats = after_insert.data.expect("ok body");
+        assert_eq!(stats.credential_memory_sources, 1);
+        assert_eq!(stats.credential_memory_keys, 1);
+        let dump = serde_json::to_string(&stats).expect("serialize stats");
+        assert!(
+            !dump.contains("ops/src/uid") && !dump.contains("pub-1") && !dump.contains("token-bytes"),
+            "store-stats must expose counts only, never source identities, secret keys, or values: {dump}"
+        );
+
+        runtime.reset();
+        let Json(after_reset) = store_stats(State(state)).await;
+        let stats = after_reset.data.expect("ok body");
+        assert_eq!(stats.credential_memory_sources, 0);
+        assert_eq!(stats.credential_memory_keys, 0);
     }
 }

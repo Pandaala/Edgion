@@ -3,7 +3,8 @@
 > **Edgion extension**
 >
 > `CredentialInjector` reads an upstream bearer credential from a Kubernetes
-> Secret and injects it only into the primary upstream request.
+> Secret or a Controller-managed `credentialSource` LinkSys and injects it
+> only into the primary upstream request.
 
 ## Quick start
 
@@ -62,19 +63,82 @@ requestPlugins:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `credentialRef.name` | String | none | Required Secret name. |
-| `credentialRef.namespace` | String | plugin namespace | Secret namespace. A cross-namespace reference requires a matching `ReferenceGrant`. |
-| `credentialRef.group` | String | core API group | If set, must identify the Kubernetes core API group. |
-| `credentialRef.kind` | String | `Secret` | If set, must be `Secret`. |
+| `credentialRef.name` | String | none | Required Secret or LinkSys name. |
+| `credentialRef.namespace` | String | plugin namespace | Referenced object namespace. A cross-namespace reference requires a matching `ReferenceGrant`. |
+| `credentialRef.group` | String | core API group | Omit, empty, or the Kubernetes core group to select a Secret. `edgion.io` selects a `LinkSys` credential source. |
+| `credentialRef.kind` | String | `Secret` | `Secret` (core group) or `LinkSys` (group `edgion.io`). |
 | `target.type` | `Bearer` or `Header` | `Bearer` | Selects the upstream header shape. |
 | `target.name` | String | none | Required only for `Header`. Header names used for routing, framing, forwarding, cookies, or hop-by-hop behavior are rejected. |
 | `target.valuePrefix` | String | empty | Static prefix for `Header`, limited to 256 bytes. |
 
-The complete injected value, including its prefix, is limited to 16 KiB. The
-Secret must be type `Opaque` (or have an empty type), contain `bearerToken`, and
-hold a valid UTF-8 bearer token. Missing, denied, malformed, deleted, or
-oversized credentials set `ResolvedRefs=False`; matching traffic fails closed
-instead of reaching the upstream without authentication.
+The complete injected value, including its prefix, is limited to 16 KiB. A
+static Secret must be type `Opaque` (or have an empty type), contain
+`bearerToken`, and hold a valid UTF-8 bearer token. Missing, denied, malformed,
+deleted, or oversized credentials set `ResolvedRefs=False`; matching traffic
+fails closed instead of reaching the upstream without authentication.
+
+## Controller-managed OAuth2
+
+`credentialRef` may point at a `LinkSys` of `type: credentialSource` instead of
+a static Secret. The Controller acquires the OAuth2 client-credentials token
+and embeds the **active** value on this plugin as `resolvedCredential` (Admin
+`/configclient` redacts it). The Gateway never contacts the issuer.
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: provider-credential
+spec:
+  requestPlugins:
+    - type: CredentialInjector
+      config:
+        credentialRef:
+          group: edgion.io
+          kind: LinkSys
+          name: provider-oauth
+```
+
+### Secret publication (default)
+
+Omitting `publication`, or setting `publication.persist: true`, writes a
+generated Kubernetes Secret named after the consuming `EdgionPlugins` object.
+This persist-on path is Kubernetes-only.
+
+### In-memory publication
+
+Set `publication.persist: false` on the LinkSys to keep generated tokens in a
+Controller-local memory map instead of a Secret:
+
+- no generated Secret is created or adopted
+- allowed on a single-publisher Controller (leader-only Kubernetes, or FS/etcd)
+- Kubernetes `ha_mode: all-serve` is rejected (`Accepted=False`, reason
+  `UnsupportedHaMode`); the Controller does not call the issuer
+- `publication.memoryMaxKeys` defaults to `10000` (range `1..=10000`); OAuth2
+  uses at most two map entries (active + previous)
+- the map is Controller-only: it is never a LinkSys spec, status, conf_sync, or
+  Admin field. The Gateway still receives the active token through this
+  plugin's `resolvedCredential`
+
+```yaml
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: provider-oauth
+spec:
+  type: credentialSource
+  config:
+    provider:
+      type: oauth2ClientCredentials
+      tokenEndpoint: https://issuer.example.com/oauth2/token
+      clientAuthentication:
+        method: clientSecretBasic
+        activeSecretRef:
+          name: oauth-client
+    publication:
+      persist: false
+      # memoryMaxKeys: 10000   # default; range 1..=10000
+```
 
 ## Ordering and isolation
 

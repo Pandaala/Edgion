@@ -7,7 +7,7 @@ description: Full LinkSys CRD schema: Redis/Etcd/Elasticsearch/Webhook/Kafka con
 
 > API: `edgion.io/v1` | Scope: Namespaced | ShortName: `lsys`
 
-LinkSys is the unified external-system connector resource. The top-level `spec.type` distinguishes the backend, and `spec.config` carries the detailed configuration for that backend. All credentials go through `secretRef` referencing K8s `Secret`; **inlining** sensitive fields such as username, password, token, or `clientKey` in the CRD is **not allowed** (they are hard-rejected at deserialization by `deny_unknown_fields`).
+LinkSys is the unified external-system connector resource. The top-level `spec.type` distinguishes the backend, and `spec.config` carries the detailed configuration for that backend. All credentials go through `secretRef` referencing K8s `Secret`; **inlining** sensitive fields such as username, password, token, or `clientKey` in the CRD is **not allowed** (they are hard-rejected at deserialization by `deny_unknown_fields`). `type: credentialSource` is Controller-managed token acquisition: bootstrap client secrets still use `secretRef`, but generated access tokens are published either as a managed Secret (`publication.persist: true`) or a Controller-only memory map (`persist: false`).
 
 ## Top-level Schema
 
@@ -18,7 +18,7 @@ metadata:
   name: my-redis
   namespace: default
 spec:
-  type: redis                 # redis | etcd | elasticsearch | webhook | kafka | httpdns
+  type: redis                 # redis | etcd | elasticsearch | webhook | kafka | httpdns | credentialSource
   config:                     # Backend-type-specific configuration (expanded by type below)
     ...
 ```
@@ -384,6 +384,51 @@ Key fields:
 - `connection` — lean `{ tls, timeoutMs }` (no `target`); outbound TLS + request timeout for the fetch.
 - `fallback` — `system` | `dns` (server list) | `none`, applied on fetch/parse failure.
 
+### `type: credentialSource`
+
+Controller-managed credential acquisition (currently OAuth2 client credentials).
+The Gateway treats this variant as metadata-only and never contacts the issuer.
+Consumers reference it from `CredentialInjector` via
+`credentialRef: { group: edgion.io, kind: LinkSys, name: <source> }`.
+
+```yaml
+spec:
+  type: credentialSource
+  config:
+    provider:
+      type: oauth2ClientCredentials
+      tokenEndpoint: https://issuer.example.com/oauth2/token
+      clientAuthentication:
+        method: clientSecretBasic
+        activeSecretRef:
+          name: oauth-client            # Opaque Secret with clientId + clientSecret
+        # previousSecretRef:            # optional fallback bootstrap
+        #   name: oauth-client-previous
+      scopes: ["inference.invoke"]
+      tls:
+        enabled: true
+    rotation:
+      interval: 15m                     # default 15m
+      requestTimeout: 10s
+    egress:
+      blockPrivate: true                # default true
+    publication:
+      persist: true                     # default true (generated Kubernetes Secret)
+      memoryMaxKeys: 10000              # default 10000; range 1..=10000
+```
+
+**`publication`:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `persist` | boolean | `true` | `true` writes a generated Secret named after the consuming `EdgionPlugins` (Kubernetes-only). `false` keeps generations in a Controller-local memory map: no generated Secret, allowed on leader-only Kubernetes and FS/etcd. Kubernetes `ha_mode: all-serve` + `persist: false` is `Accepted=False` with reason `UnsupportedHaMode`. |
+| `memoryMaxKeys` | integer | `10000` | Cap on that per-LinkSys map, range `1..=10000`. OAuth2 uses at most two entries (active + previous). |
+
+The key map is **Controller-only**. It is never a LinkSys spec field, never on
+LinkSys conf_sync, never on LinkSys status, and never on Admin LinkSys
+`/configclient`. The active token is still copied onto the consuming
+EdgionPlugins `resolvedCredential` (Admin redacts that value).
+
 ## Status Schema
 
 ```yaml
@@ -398,6 +443,7 @@ status:
     - type: UnknownConfigFields   # Present only when an unrecognized typed config key was submitted
       status: "True"
       reason: UnknownFieldsDetected
+  credentialState: Valid          # credentialSource only: Idle | Valid | Expired | Unavailable
 ```
 
 **`Accepted`**:
@@ -414,7 +460,7 @@ status:
 
 **`UnknownConfigFields`**:
 - Present as `True/UnknownFieldsDetected` when a typed Redis, Etcd, Elasticsearch, Kafka, Webhook,
-  or HttpDns configuration contains an unrecognized key.
+  HttpDns, or credentialSource configuration contains an unrecognized key.
 - Advisory only: it does not change `Accepted` or `ResolvedRefs` and never blocks synchronization.
 - Removed after the resource is reapplied without unknown keys.
 - Declared maps and arbitrary-JSON values are intentionally open below their boundary; an unknown
@@ -422,11 +468,16 @@ status:
 
 `kubectl get linksys` directly displays the `Accepted` / `ResolvedRefs` columns.
 
+**`credentialState`** (credentialSource only, camelCase): `Idle` (no consumer),
+`Valid` (an active generation is published), `Expired`, or `Unavailable`. It
+does not carry the token.
+
 ## Runtime Behavior
 
 - **Controller side**: parse `secretRef` → register an owner→secret dependency in `SecretRefManager` (Secret update/delete cascades requeue this resource) → embed the entire `Secret` into `spec.config.<auth>.secret` / `spec.config.tls.certs.secret` → sync to the Gateway via conf_sync gRPC. The `Secret` itself is a `no_sync_kind` and is not synced separately.
 - **Gateway side**: after `LinkSysStore` receives the spec, it uses the resolvers in `edgion-resources/src/credentials` to recompute `Material` from the embedded `Secret.data` and hands it to the Redis / Etcd / ES / Webhook client to build the connection. Of the four credential states (`NotRequired` / `Pending` / `Invalid` / `Resolved`), only the former or `Resolved` allows building a client; the rest fail-fast and **do not** degrade to anonymous connections.
 - **Hot reload**: when a Secret pointed to by secretRef changes → the Controller recomputes → pushes the new spec via conf_sync → the Gateway rebuilds the corresponding provider client and the old connections drain gracefully.
+- **`credentialSource`**: the Controller credential manager acquires and rotates the token. Persist-on writes a generated Secret; persist-off stores the map on `ControllerRuntime.credential_memory`. LinkSys conf_sync never carries that map. The Gateway `LinkSysStore` is a no-op for this variant; injection uses EdgionPlugins `resolvedCredential`.
 
 ## Cross-references and Dependencies
 
@@ -435,6 +486,6 @@ status:
 | LinkSys → Secret | `Secret` | `secretRef` / `tls.certs.secretRef` + `SecretRefManager` | All auth / mTLS credentials |
 | LinkSys → ReferenceGrant | `ReferenceGrant` | Authorization for cross-namespace `secretRef` | Centralize credentials in a `credentials` namespace |
 | AccessLog → LinkSys | `LinkSys` (type=elasticsearch/redis/webhook) | Reference by `namespace/name` in configuration | Log output to ES / Redis |
-| EdgionPlugins → LinkSys | `LinkSys` (type=redis/webhook) | Reference by `namespace/name` in plugin configuration | Distributed rate limiting, Webhook key resolution |
+| EdgionPlugins → LinkSys | `LinkSys` (type=redis/webhook/credentialSource) | Reference by `namespace/name` in plugin configuration | Distributed rate limiting, Webhook key resolution, CredentialInjector |
 
 For the internal implementation and Handler flow, see [01-architecture/05-resources/18-link-sys.md](../../01-architecture/05-resources/18-link-sys.md).

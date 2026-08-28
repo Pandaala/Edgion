@@ -38,6 +38,8 @@ pub struct DesiredCredentialSource {
     pub resource: ResourceRef,
     pub uid: String,
     pub generation: i64,
+    pub persist: bool,
+    pub memory_max_keys: u32,
     pub config: ControllerCredentialSourceConfig,
     pub secret_inputs: Vec<CredentialSecretInput>,
 }

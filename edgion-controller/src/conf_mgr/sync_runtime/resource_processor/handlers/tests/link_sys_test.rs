@@ -184,6 +184,182 @@ fn credential_source_reports_unsupported_non_kubernetes_center_reason() {
 }
 
 #[tokio::test]
+async fn persist_off_is_rejected_when_not_single_publisher() {
+    let (key, mut secret) = make_secret(
+        "ops",
+        "bootstrap",
+        &[("clientId", b"client"), ("clientSecret", b"secret")],
+    );
+    secret.metadata.uid = Some("bootstrap-uid".to_string());
+    secret.metadata.resource_version = Some("22".to_string());
+    let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+    runtime.set_single_publisher(false);
+    let handler = LinkSysHandler::new();
+    let mut link_sys = make_credential_source("ops", "src", "bootstrap");
+    if let SystemConfig::CredentialSource(source) = &mut link_sys.spec.config {
+        source.publication.persist = false;
+    }
+    let errors = handler.preparse(&mut link_sys, &ctx);
+    assert!(!errors.is_empty());
+    handler.update_status(&mut link_sys, &ctx, &errors);
+    let accepted = link_sys
+        .status
+        .as_ref()
+        .unwrap()
+        .conditions
+        .iter()
+        .find(|condition| condition.type_ == condition_types::ACCEPTED)
+        .unwrap();
+    assert_eq!(accepted.status, "False");
+    assert_eq!(accepted.reason, "UnsupportedHaMode");
+
+    let result = handler.parse(link_sys, &ctx).await;
+    let ProcessResult::Continue(_) = result else {
+        panic!("credentialSource must continue");
+    };
+    assert!(
+        runtime.credential_source_registry.source("ops/src").is_none(),
+        "persist=false under all-serve must not register a desired source"
+    );
+}
+
+#[tokio::test]
+async fn invalid_publication_cap_never_registers_a_credential_source() {
+    for (persist, memory_max_keys) in [(false, 0), (false, 10_001), (true, 0)] {
+        let (key, mut secret) = make_secret(
+            "ops",
+            "bootstrap",
+            &[("clientId", b"client"), ("clientSecret", b"secret")],
+        );
+        secret.metadata.uid = Some("bootstrap-uid".to_string());
+        secret.metadata.resource_version = Some("22".to_string());
+        let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+        let handler = LinkSysHandler::new();
+        let mut link_sys = make_credential_source("ops", "src", "bootstrap");
+        let SystemConfig::CredentialSource(source) = &mut link_sys.spec.config else {
+            panic!("credentialSource expected");
+        };
+        source.publication.persist = persist;
+        source.publication.memory_max_keys = memory_max_keys;
+
+        let errors = handler.preparse(&mut link_sys, &ctx);
+        assert!(
+            errors.iter().any(|error| error.contains("memoryMaxKeys")),
+            "invalid cap must fail admission: {errors:?}"
+        );
+        let result = handler.parse(link_sys, &ctx).await;
+        let ProcessResult::Continue(_) = result else {
+            panic!("lenient admission must continue");
+        };
+        assert!(
+            runtime.credential_source_registry.source("ops/src").is_none(),
+            "Accepted=False source must not register: persist={persist}, memoryMaxKeys={memory_max_keys}"
+        );
+    }
+}
+
+#[test]
+fn persist_off_is_allowed_on_non_kubernetes_single_publisher() {
+    let (ctx, runtime) = make_ctx(HashMap::new());
+    runtime.set_managed_credentials_supported(false);
+    runtime.set_single_publisher(true);
+    let handler = LinkSysHandler::new();
+    let mut link_sys = make_credential_source("ops", "src", "bootstrap");
+    if let SystemConfig::CredentialSource(source) = &mut link_sys.spec.config {
+        source.publication.persist = false;
+    }
+    let errors = handler.preparse(&mut link_sys, &ctx);
+    assert!(
+        !errors
+            .iter()
+            .any(|error| error.contains("UnsupportedConfigurationCenter")),
+        "persist=false on a non-k8s single publisher must not be mapped as UnsupportedConfigurationCenter: {errors:?}"
+    );
+    assert!(
+        !errors.iter().any(|error| {
+            error.contains("credentialSource.publication.persist=false is unsupported when ha_mode is all-serve")
+        }),
+        "persist-off all-serve error must be absent: {errors:?}"
+    );
+    assert!(
+        !errors.iter().any(|error| {
+            error.contains("credentialSource.publication.persist=true requires the Kubernetes configuration center")
+        }),
+        "persist-on Kubernetes-only error must be absent: {errors:?}"
+    );
+    handler.update_status(&mut link_sys, &ctx, &errors);
+    let accepted = link_sys
+        .status
+        .as_ref()
+        .unwrap()
+        .conditions
+        .iter()
+        .find(|condition| condition.type_ == condition_types::ACCEPTED)
+        .unwrap();
+    assert_ne!(accepted.reason, "UnsupportedConfigurationCenter");
+}
+
+fn json_has_key(value: &serde_json::Value, key: &str) -> bool {
+    match value {
+        serde_json::Value::Object(map) => map.contains_key(key) || map.values().any(|v| json_has_key(v, key)),
+        serde_json::Value::Array(items) => items.iter().any(|v| json_has_key(v, key)),
+        _ => false,
+    }
+}
+
+#[tokio::test]
+async fn persist_off_link_sys_conf_sync_projection_has_no_generated_map() {
+    const TOKEN: &str = "ephemeral-generated-secret-must-not-serialize-xx";
+    let (key, mut secret) = make_secret(
+        "ops",
+        "oauth-bootstrap",
+        &[("clientId", b"client"), ("clientSecret", b"secret")],
+    );
+    secret.metadata.uid = Some("bootstrap-uid".to_string());
+    secret.metadata.resource_version = Some("22".to_string());
+    let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+
+    runtime
+        .credential_memory
+        .insert_oauth_publication(
+            "ops/provider/source-uid",
+            crate::services::credential_manager::memory::GeneratedSecretEntry {
+                key: "pub-1".to_string(),
+                value: zeroize::Zeroizing::new(TOKEN.as_bytes().to_vec()),
+                issued_at: "2026-08-27T00:00:00Z".to_string(),
+                valid_until: "2099-08-27T12:00:00Z".to_string(),
+                valid_until_mono: std::time::Instant::now() + std::time::Duration::from_secs(3_600),
+            },
+            10_000,
+        )
+        .expect("memory insert");
+
+    let handler = LinkSysHandler::new();
+    let mut link_sys = make_credential_source("ops", "provider", "oauth-bootstrap");
+    if let SystemConfig::CredentialSource(source) = &mut link_sys.spec.config {
+        source.publication.persist = false;
+    }
+    let result = handler.parse(link_sys, &ctx).await;
+    let ProcessResult::Continue(mut ls) = result else {
+        panic!("credentialSource must continue");
+    };
+    handler.update_status(&mut ls, &ctx, &[]);
+
+    let value = serde_json::to_value(&ls).expect("LinkSys must serialize");
+    let config = value.pointer("/spec/config").expect("spec.config");
+    assert!(
+        !json_has_key(config, "entries") && !json_has_key(config, "generated") && !json_has_key(config, "value"),
+        "spec.config must not carry a generated secret map: {config}"
+    );
+
+    let status = value.get("status").unwrap_or(&serde_json::Value::Null);
+    assert!(
+        !status.to_string().contains(TOKEN),
+        "status must not contain the memory token"
+    );
+}
+
+#[tokio::test]
 async fn test_redis_auth_happy_path() {
     let (key, secret) = make_secret(
         "default",

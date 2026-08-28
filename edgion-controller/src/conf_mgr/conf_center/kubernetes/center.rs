@@ -260,13 +260,16 @@ impl KubernetesCenter {
 
         let writer = KubernetesStorage::new(config.watch_namespaces.clone()).await?;
 
+        let runtime = Arc::new(ControllerRuntime::new());
+        runtime.set_single_publisher(config.ha_mode() != HaMode::AllServe);
+
         Ok(Self {
             config,
             writer,
             config_sync_server: RwLock::new(None),
             shutdown_handle: Mutex::new(None),
             reload_tx: Mutex::new(None),
-            runtime: Arc::new(ControllerRuntime::new()),
+            runtime,
             leader_flag: Arc::new(watch::channel(false).0),
         })
     }
@@ -1354,13 +1357,16 @@ mod leadership_signal_tests {
     /// Build a `KubernetesCenter` without touching a cluster. Only the
     /// leadership signal is exercised, which never talks to the apiserver.
     fn unconnected_center() -> KubernetesCenter {
+        let config = KubernetesConfig::new("edgion");
+        let runtime = Arc::new(ControllerRuntime::new());
+        runtime.set_single_publisher(config.ha_mode() != HaMode::AllServe);
         KubernetesCenter {
-            config: KubernetesConfig::new("edgion"),
+            config,
             writer: KubernetesStorage::new_unconnected_for_test(),
             config_sync_server: RwLock::new(None),
             shutdown_handle: Mutex::new(None),
             reload_tx: Mutex::new(None),
-            runtime: Arc::new(ControllerRuntime::new()),
+            runtime,
             leader_flag: Arc::new(watch::channel(false).0),
         }
     }

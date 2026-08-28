@@ -48,6 +48,7 @@ impl CenterBase {
     pub fn new() -> Self {
         let runtime = Arc::new(ControllerRuntime::new());
         runtime.set_managed_credentials_supported(false);
+        // single_publisher stays true (ControllerRuntime::new default): persist=false is allowed on FS/etcd.
         Self {
             config_sync_server: RwLock::new(None),
             shutdown_handle: Mutex::new(None),
@@ -262,6 +263,10 @@ impl CenterBase {
                 "ConfigSyncServer is ready, gRPC services can process requests"
             );
 
+            // Persist-off acquisition on FS/etcd: always-leader (this iteration is
+            // already gated). Kubernetes starts its own kube-backed worker instead.
+            crate::services::credential_manager::start_memory_credential_manager_service(self.runtime.clone());
+
             // 8. Wait for shutdown, reload, or controller error.
             let mut global_shutdown = shutdown_handle.signal();
             let mut error_rx = error_rx;
@@ -283,6 +288,7 @@ impl CenterBase {
 
             // 9. Stop the controller for this iteration.
             iteration_shutdown.shutdown();
+            crate::services::credential_manager::stop_credential_manager_service();
 
             // 10. Cleanup.
             // Drop the published CSS before clearing its caches. Clearing wakes

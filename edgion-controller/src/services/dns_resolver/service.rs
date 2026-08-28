@@ -445,6 +445,17 @@ pub(crate) async fn controller_default_resolver(client: &Client) -> ResolverSpec
     effective_spec(client, &std::collections::BTreeMap::new(), &default_candidate).await
 }
 
+/// Kube-less fallback for persist-off acquisition on FS/etcd.
+///
+/// Reuses the Controller default candidate. An `HttpDnsRef` cannot be fetched
+/// from the apiserver here, so `resolve_effective_spec` fails safe to the
+/// system resolver (same dangling-ref behavior as a missing LinkSys).
+pub(crate) fn controller_default_resolver_without_kube() -> ResolverSpec {
+    let config = dns_resolver_config();
+    let default_candidate = controller_default_candidate(&config);
+    resolve_effective_spec(&[default_candidate], |_| None)
+}
+
 /// Fetch an httpdns LinkSys's resolver config from the apiserver. Returns `None`
 /// when the object is missing or is not an httpdns LinkSys (a dangling ref then
 /// fails safe to the system resolver in `resolve_effective_spec`).
@@ -608,6 +619,14 @@ mod tests {
                 "/api/v1/namespaces/team-a/services",
                 "/api/v1/namespaces/team-b/services"
             ]
+        );
+    }
+
+    #[test]
+    fn kube_less_default_resolver_falls_back_to_system_without_inline_servers() {
+        assert!(
+            matches!(controller_default_resolver_without_kube(), ResolverSpec::System),
+            "without kube, a missing/httpdns default candidate must fail safe to the system resolver"
         );
     }
 

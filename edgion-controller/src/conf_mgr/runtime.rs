@@ -32,6 +32,7 @@ use super::sync_runtime::resource_processor::{
     service_ref::{new_service_ref_manager, ServiceRefManager},
     BidirectionalRefManager, ResourceRef,
 };
+use crate::services::credential_manager::memory::CredentialMemoryStore;
 
 /// Aggregated runtime state for the Controller.
 ///
@@ -89,7 +90,12 @@ pub struct ControllerRuntime {
     pub(crate) link_sys_ref_mgr: BidirectionalRefManager<ResourceRef>,
     /// Non-secret desired source and publication bindings rebuilt by handlers.
     pub(crate) credential_source_registry: CredentialSourceRegistry,
+    /// Per-LinkSys in-memory generated credentials. Never attached to LinkSys.
+    pub(crate) credential_memory: CredentialMemoryStore,
     managed_credentials_supported: AtomicBool,
+    /// True when this replica is the sole credential publisher (leader-only or
+    /// a non-Kubernetes single-process center). False under Kubernetes all-serve.
+    single_publisher: AtomicBool,
     /// Optional conf_writer injected by the ConfCenter implementation.
     /// Used by handlers to auto-create resources (e.g., EdgionConfigData for RegionRoute).
     /// None until the ConfCenter calls `set_conf_writer()`.
@@ -122,7 +128,9 @@ impl ControllerRuntime {
             plugin_ref_mgr: BidirectionalRefManager::with_component("plugin_ref_mgr"),
             link_sys_ref_mgr: BidirectionalRefManager::with_component("link_sys_ref_mgr"),
             credential_source_registry: CredentialSourceRegistry::new(),
+            credential_memory: CredentialMemoryStore::new(),
             managed_credentials_supported: AtomicBool::new(true),
+            single_publisher: AtomicBool::new(true),
             conf_writer: RwLock::new(None),
         }
     }
@@ -133,6 +141,14 @@ impl ControllerRuntime {
 
     pub fn managed_credentials_supported(&self) -> bool {
         self.managed_credentials_supported.load(Ordering::Acquire)
+    }
+
+    pub fn set_single_publisher(&self, single_publisher: bool) {
+        self.single_publisher.store(single_publisher, Ordering::Release);
+    }
+
+    pub fn single_publisher(&self) -> bool {
+        self.single_publisher.load(Ordering::Acquire)
     }
 
     /// Inject a conf_writer so handlers can auto-create resources.
@@ -222,6 +238,9 @@ impl ControllerRuntime {
 
         self.credential_source_registry.clear();
         tracing::info!(component = "controller_runtime", "Cleared CredentialSourceRegistry");
+
+        self.credential_memory.clear();
+        tracing::info!(component = "controller_runtime", "Cleared CredentialMemoryStore");
     }
 }
 

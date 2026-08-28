@@ -9,8 +9,9 @@ description: LinkSys resource — external system connector definition, multiple
 > **Credential resolution layer**: see the "Secret → Material resolution layer" section in [10-secret.md](10-secret.md)
 > **External contract / YAML schema**: see [../../02-features/03-resources/18-link-sys.md](../../02-features/03-resources/18-link-sys.md)
 
-LinkSys defines Redis, Etcd, Elasticsearch, Webhook, Kafka, and HttpDns configuration. It is used
-by access logging, rate limiting, Webhook key resolution, DNS resolution, and related features.
+LinkSys defines Redis, Etcd, Elasticsearch, Webhook, Kafka, HttpDns, and
+credentialSource configuration. It is used by access logging, rate limiting,
+Webhook key resolution, DNS resolution, CredentialInjector, and related features.
 
 ## Source code locations
 
@@ -40,7 +41,7 @@ The LinkSys CRD and the log-output / rotation configuration (used by link_sys ru
 
 `LinkSysSpec` is a tagged enum with `#[serde(tag = "type", content = "config")]`:
 - The top level has only two fields: `spec.type` and `spec.config`
-- `config` is selected by `type`: Redis, Etcd, Elasticsearch, Webhook, Kafka, or HttpDns
+- `config` is selected by `type`: Redis, Etcd, Elasticsearch, Webhook, Kafka, HttpDns, or CredentialSource
 - The legacy nested `spec.config.type` / `spec.config.config` form is no longer accepted
 
 `SecretObjectReference` (`edgion-resources/src/resources/common/secret_object_ref.rs`), `SecretSlot` (`edgion-resources/src/resources/common/secret_slot.rs`), and `TlsConfig` / `TlsCerts` (`edgion-resources/src/resources/common/tls.rs`) have been extracted from each provider module into a shared common module to avoid multiple near-duplicate copies. `SecretObjectReference` carries `group / kind / name / namespace` (the first two are optional, defaulting to `core/Secret`), reserving room for non-Secret credential sources (Vault / ExternalSecret) in the future. `SecretSlot` is the `{ secret_ref: SecretObjectReference, secret: Option<Secret> }` slot, embedded into each `*Auth` via `#[serde(flatten)]`, with no change in YAML form. The LinkSys subcrates keep stable paths via `pub use`.
@@ -55,6 +56,12 @@ The LinkSys CRD and the log-output / rotation configuration (used by link_sys ru
   - Webhook (redesigned): a Service target (`target.name`/`target.port`) missing `name`/`port` or with an unsupported `kind`, OR a `url` target that is not origin-only, is set together with any Service field (mutually exclusive), or combines `http://` with `tls.enabled: true`; `request` template parse error; a field name in both `origin` and `custom`, duplicate names within a block, or a `headers.origin: [{name: Cookie}]` / non-empty `cookies` conflict; `statusOnError` out of range; `maxResponseBytes` over the cap → error. See [03-controller-gateway-link/webhook.md](../03-controller-gateway-link/webhook.md).
 - Kafka has a live Gateway runtime client/store. HttpDns is consumed by the DNS resolver path and
   intentionally has no generic LinkSys runtime-client store.
+- `credentialSource` is Controller-only acquisition metadata. Persist-on writes a generated
+  Secret; `publication.persist: false` stores a capped map on
+  `ControllerRuntime.credential_memory` (never on the LinkSys object). Kubernetes
+  `all-serve` + persist-off is `Accepted=False` / `UnsupportedHaMode`. The Gateway
+  `LinkSysStore` is a no-op for this variant. The active token still rides EdgionPlugins
+  `resolvedCredential`.
 
 ### parse — credential resolution
 
@@ -96,7 +103,7 @@ advisory condition:
 `UnknownConfigFields=True/UnknownFieldsDetected` is added when the operator-authored document
 contains a key that the generated typed LinkSys schema does not recognize. It is removed after a
 clean reapply and never changes `Accepted`, `ResolvedRefs`, credential resolution, or conf_sync.
-The detector covers all six provider variants. Declared map values and arbitrary-JSON values remain
+The detector covers all seven provider variants. Declared map values and arbitrary-JSON values remain
 open boundaries, while unknown siblings are still reported. The same findings are available through
 the Admin write warning, read-only validate endpoint, fleet diagnostics endpoint, and the bounded
 per-kind Controller metric.
@@ -113,6 +120,9 @@ per-kind Controller metric.
 - LinkSys created → build the provider client
 - LinkSys updated → consult `config_mapping` to decide whether the client must be rebuilt (Redis params changed, endpoints changed, auth changed, tls changed → rebuild; observability changed → only update hot fields)
 - LinkSys deleted → gracefully close connections / return them to the pool
+- `type: credentialSource` is a no-op in `LinkSysStore` (no runtime client). The
+  Gateway never contacts the issuer; the active token arrives on EdgionPlugins
+  `resolvedCredential`.
 
 ### Credential second-stage resolution: `CredentialState`
 
@@ -147,7 +157,7 @@ Constraints:
 | LinkSys → Secret | `Secret` | `SecretRefManager` (auth + tls) | Secret change/delete → cascade requeue this LinkSys |
 | LinkSys → ReferenceGrant | `ReferenceGrant` | `ReferenceGrantStore` | Cross-ns secretRef authorization; Grant change → cascade requeue |
 | LinkSys ← AccessLog | AccessLog config | reference by `namespace/name` | ES / Redis / Webhook as log backends |
-| LinkSys ← EdgionPlugins | plugin config | reference by `namespace/name` | Redis distributed rate limiting, Webhook Key resolution |
+| LinkSys ← EdgionPlugins | plugin config | reference by `namespace/name` | Redis distributed rate limiting, Webhook Key resolution, CredentialInjector (`credentialSource`) |
 
 The full internal-dependency and requeue cascade graph is in [19-resource-dependency.md](19-resource-dependency.md).
 

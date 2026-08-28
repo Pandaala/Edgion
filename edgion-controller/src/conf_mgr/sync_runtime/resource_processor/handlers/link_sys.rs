@@ -25,7 +25,9 @@ use edgion_resources::credentials::{ResolveError, SecretMaterialResolver};
 use edgion_resources::prelude_resources::LinkSys;
 use edgion_resources::resources::common::SecretObjectReference;
 use edgion_resources::resources::link_sys::webhook::{ResolvedSecrets, WebhookServiceConfig};
-use edgion_resources::resources::link_sys::{CredentialSourceProvider, LinkSysStatus, SystemConfig};
+use edgion_resources::resources::link_sys::{
+    CredentialSourceConfig, CredentialSourceProvider, LinkSysStatus, SystemConfig,
+};
 
 use super::auth_spec::{AuthSpec, TlsSpec};
 use super::san_guard;
@@ -162,6 +164,43 @@ fn needs_operator_secret_edit(err: &ResolvedRefsError) -> bool {
     )
 }
 
+fn credential_source_publication_admission_errors(
+    source: &CredentialSourceConfig,
+    ctx: &HandlerContext,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if source.publication.persist && !ctx.runtime().managed_credentials_supported() {
+        errors.push("credentialSource.publication.persist=true requires the Kubernetes configuration center".into());
+    }
+    if !source.publication.persist && !ctx.runtime().single_publisher() {
+        errors.push("credentialSource.publication.persist=false is unsupported when ha_mode is all-serve".into());
+    }
+    errors
+}
+
+fn link_sys_admission_errors(ls: &LinkSys, ctx: &HandlerContext) -> Vec<String> {
+    let mut errors = ls.validate_config();
+    if let SystemConfig::CredentialSource(source) = &ls.spec.config {
+        errors.extend(credential_source_publication_admission_errors(source, ctx));
+        let CredentialSourceProvider::OAuth2ClientCredentials(provider) = &source.provider;
+        if let Some(previous) = &provider.client_authentication.previous_secret_ref {
+            let namespace = ls.metadata.namespace.as_deref().unwrap_or("default");
+            let active = &provider.client_authentication.active_secret_ref;
+            if active.name == previous.name
+                && active.effective_namespace(namespace) == previous.effective_namespace(namespace)
+            {
+                errors.push(
+                    "credentialSource activeSecretRef and previousSecretRef resolve to the same Secret".to_string(),
+                );
+            }
+        }
+    }
+    // Phase 1 guard: reject outbound TLS subjectAltNames/hostname on LinkSys
+    // providers where SAN pinning enforcement is not yet implemented.
+    errors.extend(san_guard::check_link_sys_san(ls));
+    errors
+}
+
 #[async_trait::async_trait]
 impl ProcessorHandler<LinkSys> for LinkSysHandler {
     fn preparse(&self, ls: &mut LinkSys, ctx: &HandlerContext) -> Vec<String> {
@@ -177,33 +216,14 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
                 "LinkSys document has keys the typed schema does not recognize; they are ignored and config still syncs"
             );
         }
-        let mut errors = ls.validate_config();
-        if matches!(&ls.spec.config, SystemConfig::CredentialSource(_))
-            && !ctx.runtime().managed_credentials_supported()
-        {
-            errors.push("credentialSource is supported only by the Kubernetes configuration center".to_string());
-        }
-        if let SystemConfig::CredentialSource(source) = &ls.spec.config {
-            let CredentialSourceProvider::OAuth2ClientCredentials(provider) = &source.provider;
-            if let Some(previous) = &provider.client_authentication.previous_secret_ref {
-                let namespace = ls.metadata.namespace.as_deref().unwrap_or("default");
-                let active = &provider.client_authentication.active_secret_ref;
-                if active.name == previous.name
-                    && active.effective_namespace(namespace) == previous.effective_namespace(namespace)
-                {
-                    errors.push(
-                        "credentialSource activeSecretRef and previousSecretRef resolve to the same Secret".to_string(),
-                    );
-                }
-            }
-        }
-        // Phase 1 guard: reject outbound TLS subjectAltNames/hostname on LinkSys
-        // providers where SAN pinning enforcement is not yet implemented.
-        errors.extend(san_guard::check_link_sys_san(ls));
-        errors
+        link_sys_admission_errors(ls, ctx)
     }
 
     async fn parse(&self, mut ls: LinkSys, ctx: &HandlerContext) -> ProcessResult<LinkSys> {
+        // Processor lenient admission continues into parse after preparse
+        // errors. Recompute the same pure gate before mutating resolved fields
+        // so an Accepted=False credential source can never reach the manager.
+        let credential_source_admitted = link_sys_admission_errors(&ls, ctx).is_empty();
         let owner = ResourceRef::new(
             ResourceKind::LinkSys,
             ls.metadata.namespace.clone(),
@@ -226,15 +246,19 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
         } = resolution;
         if errors.is_empty() {
             if let (Some(config), Some(uid)) = (manager_config, ls.metadata.uid.clone()) {
-                ctx.runtime()
-                    .credential_source_registry
-                    .replace_source(DesiredCredentialSource {
-                        resource: owner.clone(),
-                        uid,
-                        generation: ls.metadata.generation.unwrap_or_default(),
-                        config: ControllerCredentialSourceConfig::new(config),
-                        secret_inputs: credential_inputs,
-                    });
+                if credential_source_admitted {
+                    ctx.runtime()
+                        .credential_source_registry
+                        .replace_source(DesiredCredentialSource {
+                            resource: owner.clone(),
+                            uid,
+                            generation: ls.metadata.generation.unwrap_or_default(),
+                            persist: config.publication.persist,
+                            memory_max_keys: config.publication.memory_max_keys,
+                            config: ControllerCredentialSourceConfig::new(config),
+                            secret_inputs: credential_inputs,
+                        });
+                }
             }
         }
         if ctx
@@ -356,12 +380,18 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
         if validation_errors.is_empty() {
             update_condition(&mut status.conditions, accepted_condition(generation));
         } else {
-            let reason = if matches!(&ls.spec.config, SystemConfig::CredentialSource(_))
-                && !ctx.runtime().managed_credentials_supported()
-            {
-                "UnsupportedConfigurationCenter"
-            } else {
-                "Invalid"
+            let reason = match &ls.spec.config {
+                SystemConfig::CredentialSource(source)
+                    if source.publication.persist && !ctx.runtime().managed_credentials_supported() =>
+                {
+                    "UnsupportedConfigurationCenter"
+                }
+                SystemConfig::CredentialSource(source)
+                    if !source.publication.persist && !ctx.runtime().single_publisher() =>
+                {
+                    "UnsupportedHaMode"
+                }
+                _ => "Invalid",
             };
             update_condition(
                 &mut status.conditions,
