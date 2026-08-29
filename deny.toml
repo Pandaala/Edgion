@@ -15,15 +15,6 @@
 [advisories]
 yanked = "deny"
 ignore = [
-    # hickory-proto O(n^2) name-compression CPU exhaustion during message
-    # ENCODING. Fix requires hickory-resolver 0.24 -> 0.26, a real API
-    # migration of edgion-common's DNS module (types and cargo features were
-    # renamed) — the resolver backs the egress/SSRF layer, so migrate it
-    # deliberately with tests, not as a lockfile bump. Exposure meanwhile is
-    # low: we encode single-name queries, never attacker-shaped multi-name
-    # messages. RE-EVALUATE: dedicated follow-up task to move to 0.26.
-    { id = "RUSTSEC-2026-0119", reason = "fix needs the 0.26 migration; encoding-side DoS with single-name queries only" },
-
     # protobuf 2.x decode-recursion crash. Pinned by pingora-core ->
     # prometheus 0.13 (requires protobuf 2.x); the fixed 3.7+ is a major we
     # cannot select. Exposure: the prometheus crate only ENCODES our metrics
