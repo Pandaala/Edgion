@@ -212,7 +212,7 @@ impl Backend {
 
     pub(super) fn dense_state_count(&self) -> usize {
         match self {
-            Self::Sparse(_) => 0,
+            Self::Sparse(nfa) => nfa.dense_state_count(),
             Self::Contiguous(nfa) => nfa.dense_state_count(),
             Self::Dfa(_) => 0,
         }

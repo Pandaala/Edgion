@@ -1048,6 +1048,7 @@ mod tests {
             build_contiguous_with_options(&pattern_refs, MatchKind::Standard, false, 2, BuildLimits::default())
                 .unwrap();
 
+        assert_eq!(sparse.backend.dense_state_count(), 1);
         assert_eq!(contiguous.backend.dense_state_count(), 1);
         assert_eq!(
             match_tuples(contiguous.try_find_overlapping_iter(&haystack).unwrap()),
