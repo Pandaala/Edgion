@@ -7,12 +7,16 @@
 //! cold-path consumer; uses the same hickory-resolver backend as the standard
 //! resolver so no second DNS library enters the workspace.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
-use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
-use hickory_resolver::error::ResolveErrorKind;
-use hickory_resolver::TokioAsyncResolver;
+use hickory_resolver::config::ResolverOpts;
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
+use hickory_resolver::net::{DnsError, NetError};
+use hickory_resolver::proto::rr::{RData, Record};
+use hickory_resolver::TokioResolver;
+
+use super::hickory;
 
 /// Outcome of one propagation check for a single TXT record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +53,7 @@ pub async fn check_txt_propagation(fqdn: &str, expected: &str, budget: Duration)
 }
 
 async fn check_txt_propagation_inner(fqdn: &str, expected: &str) -> TxtCheckOutcome {
-    let Ok(recursive) = TokioAsyncResolver::tokio_from_system_conf() else {
+    let Ok(recursive) = TokioResolver::builder_tokio().and_then(|builder| builder.build()) else {
         return TxtCheckOutcome::Unreachable;
     };
     let ips = discover_authoritative_ips(&recursive, fqdn).await;
@@ -66,11 +70,11 @@ async fn check_txt_propagation_inner(fqdn: &str, expected: &str) -> TxtCheckOutc
 /// Find the zone apex for `fqdn` (first ascending name with an SOA record),
 /// then resolve the zone's NS host names to IPs. Discovery runs on the
 /// recursive resolver; an empty result means "could not discover".
-async fn discover_authoritative_ips(recursive: &TokioAsyncResolver, fqdn: &str) -> Vec<IpAddr> {
+async fn discover_authoritative_ips(recursive: &TokioResolver, fqdn: &str) -> Vec<IpAddr> {
     let mut zone = None;
     for candidate in zone_candidates(fqdn) {
         if let Ok(soa) = recursive.soa_lookup(absolute(&candidate)).await {
-            if soa.iter().next().is_some() {
+            if has_soa_answer(soa.answers()) {
                 zone = Some(candidate);
                 break;
             }
@@ -83,9 +87,11 @@ async fn discover_authoritative_ips(recursive: &TokioAsyncResolver, fqdn: &str) 
         return Vec::new();
     };
     let mut ips: Vec<IpAddr> = Vec::new();
-    for ns_name in ns.iter() {
-        if let Ok(addrs) = recursive.lookup_ip(ns_name.0.to_utf8()).await {
-            ips.extend(addrs.iter());
+    for record in ns.answers() {
+        if let RData::NS(ns_name) = &record.data {
+            if let Ok(addrs) = recursive.lookup_ip(ns_name.0.to_utf8()).await {
+                ips.extend(addrs.iter());
+            }
         }
     }
     ips.sort_unstable();
@@ -93,10 +99,16 @@ async fn discover_authoritative_ips(recursive: &TokioAsyncResolver, fqdn: &str) 
     ips
 }
 
+/// Return whether the answer section contains an SOA record. Hickory 0.26
+/// preserves intermediate records, so a CNAME-only answer is not sufficient
+/// evidence that the candidate is a zone apex.
+fn has_soa_answer(answers: &[Record]) -> bool {
+    answers.iter().any(|record| matches!(&record.data, RData::SOA(_)))
+}
+
 /// Query one authoritative nameserver directly for the TXT record.
 async fn observe_ns(ip: IpAddr, fqdn: &str, expected: &str) -> NsObservation {
-    let group = NameServerConfigGroup::from_ips_clear(&[ip], 53, true);
-    let config = ResolverConfig::from_parts(None, vec![], group);
+    let config = hickory::resolver_config(&[SocketAddr::new(ip, 53)]);
     // Tighter than the 5s x 2-attempt default so a few hanging nameservers
     // (e.g. unreachable AAAA endpoints on a dual-stack NS set) cannot eat the
     // whole per-round budget and mask answers already obtained from healthy
@@ -104,10 +116,20 @@ async fn observe_ns(ip: IpAddr, fqdn: &str, expected: &str) -> NsObservation {
     let mut opts = ResolverOpts::default();
     opts.timeout = Duration::from_secs(3);
     opts.attempts = 1;
-    let resolver = TokioAsyncResolver::tokio(config, opts);
+    let Ok(resolver) = TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
+        .with_options(opts)
+        .build()
+    else {
+        return NsObservation::Unreachable;
+    };
     match resolver.txt_lookup(absolute(fqdn)).await {
         Ok(lookup) => {
-            let has = lookup.iter().any(|txt| txt_record_matches(txt.txt_data(), expected));
+            let has = lookup.answers().iter().any(|record| {
+                matches!(
+                    &record.data,
+                    RData::TXT(txt) if txt_record_matches(&txt.txt_data, expected)
+                )
+            });
             if has {
                 NsObservation::HasValue
             } else {
@@ -118,21 +140,20 @@ async fn observe_ns(ip: IpAddr, fqdn: &str, expected: &str) -> NsObservation {
     }
 }
 
-/// Classify a failed TXT lookup. hickory 0.24 folds every non-success
-/// response code (ServFail, Refused, NotAuth, ...) into
-/// `NoRecordsFound { response_code, .. }`, so only NXDOMAIN and NODATA
-/// (NoError) are a definitive "record absent"; any other rcode means the
+/// Classify a failed TXT lookup. Only NXDOMAIN and NODATA (NoError) are a
+/// definitive "record absent"; any other response code means the
 /// server could not answer (lame delegation, DNSSEC breakage, a middlebox
 /// answering REFUSED) and must count as unreachable, never as a definitive
 /// miss — otherwise a REFUSED-answering restricted network would fail closed
 /// instead of degrading to the optimistic legacy path.
-fn classify_lookup_error(e: &hickory_resolver::error::ResolveError) -> NsObservation {
+fn classify_lookup_error(e: &NetError) -> NsObservation {
     use hickory_resolver::proto::op::ResponseCode;
-    match e.kind() {
-        ResolveErrorKind::NoRecordsFound {
-            response_code: ResponseCode::NXDomain | ResponseCode::NoError,
-            ..
-        } => NsObservation::LacksValue,
+    match e {
+        NetError::Dns(DnsError::NoRecordsFound(no_records))
+            if matches!(no_records.response_code, ResponseCode::NXDomain | ResponseCode::NoError) =>
+        {
+            NsObservation::LacksValue
+        }
         _ => NsObservation::Unreachable,
     }
 }
@@ -185,6 +206,18 @@ fn absolute(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hickory_resolver::net::NoRecords;
+    use hickory_resolver::proto::op::{Query, ResponseCode};
+    use hickory_resolver::proto::rr::rdata::{CNAME, SOA};
+    use hickory_resolver::proto::rr::{Name, RecordType};
+
+    fn lookup_error(response_code: ResponseCode) -> NetError {
+        let query = Query::query(
+            Name::from_ascii("_acme-challenge.example.com.").unwrap(),
+            RecordType::TXT,
+        );
+        DnsError::NoRecordsFound(NoRecords::new(query, response_code)).into()
+    }
 
     #[test]
     fn zone_candidates_walk_up_keeping_two_labels() {
@@ -225,6 +258,26 @@ mod tests {
     }
 
     #[test]
+    fn soa_detection_ignores_intermediate_cname_answers() {
+        let owner = Name::from_ascii("alias.example.com.").unwrap();
+        let target = Name::from_ascii("example.com.").unwrap();
+        let cname = Record::from_rdata(owner, 60, RData::CNAME(CNAME(target.clone())));
+        assert!(!has_soa_answer(&[cname]));
+
+        let soa = SOA::new(
+            Name::from_ascii("ns.example.com.").unwrap(),
+            Name::from_ascii("hostmaster.example.com.").unwrap(),
+            1,
+            3600,
+            600,
+            86400,
+            60,
+        );
+        let soa = Record::from_rdata(target, 60, RData::SOA(soa));
+        assert!(has_soa_answer(&[soa]));
+    }
+
+    #[test]
     fn aggregate_miss_beats_hit_and_unreachable_is_last_resort() {
         use NsObservation::*;
         assert_eq!(aggregate_observations(&[HasValue, HasValue]), TxtCheckOutcome::Found);
@@ -242,5 +295,25 @@ mod tests {
             TxtCheckOutcome::Unreachable
         );
         assert_eq!(aggregate_observations(&[]), TxtCheckOutcome::Unreachable);
+    }
+
+    #[test]
+    fn classifies_only_nxdomain_and_nodata_as_definitive_misses() {
+        assert_eq!(
+            classify_lookup_error(&lookup_error(ResponseCode::NXDomain)),
+            NsObservation::LacksValue
+        );
+        assert_eq!(
+            classify_lookup_error(&lookup_error(ResponseCode::NoError)),
+            NsObservation::LacksValue
+        );
+        assert_eq!(
+            classify_lookup_error(&NetError::Dns(DnsError::ResponseCode(ResponseCode::ServFail))),
+            NsObservation::Unreachable
+        );
+        assert_eq!(
+            classify_lookup_error(&NetError::Dns(DnsError::ResponseCode(ResponseCode::Refused))),
+            NsObservation::Unreachable
+        );
     }
 }

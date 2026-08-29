@@ -7,21 +7,21 @@ description: Use when reviewing Edgion Pingora Git dependency pins, Cargo.lock r
 
 ## Decision
 
-The six direct `pingora-*` workspace dependencies (`pingora-core`,
+The seven direct fork workspace dependencies (`pingora-core`,
 `pingora-http`, `pingora-proxy`, `pingora-limits`, `pingora-load-balancing`,
-`pingora-ketama`) form one indivisible source family, sourced exclusively from
+`pingora-ketama`, and `TinyUFO`) form one indivisible source family, sourced exclusively from
 the Edgion fork (`Pandaala/pingora`). There is no stock crates.io Pingora
 family — the former `body-buffering`/`upstream-pingora` flavor duality was
 removed on 2026-08-03 (fork-only build).
 
-- Normal development selects `branch = "edgion"` for all six entries.
+- Normal development selects `branch = "edgion_v3"` for all seven entries.
 - `Cargo.lock` records the exact resolved commit for the complete transitive
   fork family.
 - CI, release workflows, Cargo Chef, and image builds use `--locked`.
 - A release milestone may replace the branch selector with one protected
-  immutable tag, but all six entries must switch together.
+  immutable tag, but all seven entries must switch together.
 - Per-package `rev` pins are not used. They make every fork advance a
-  six-location manifest edit without improving a locked build's
+  seven-location manifest edit without improving a locked build's
   reproducibility.
 
 ## Why a movable branch remains reproducible
@@ -43,12 +43,12 @@ An intentional fork advance therefore consists of:
 
 `cicd/checks/check_pingora_source_policy.py` verifies:
 
-- all six direct dependencies point to the fork URL;
-- every entry uses the same supported selector (`edgion` branch or one release
+- all seven direct dependencies point to the fork URL;
+- every entry uses the same supported selector (`edgion_v3` branch or one release
   tag), with no `rev`;
 - every fork package in `Cargo.lock` uses that selector;
 - all locked fork packages resolve to exactly one commit;
-- all six direct packages exist in the locked fork family.
+- all seven direct packages exist in the locked fork family.
 
 `deny.toml` allows only the Pingora Git repository. Its generic
 `required-git-spec = "any"` is intentionally broader than the project policy

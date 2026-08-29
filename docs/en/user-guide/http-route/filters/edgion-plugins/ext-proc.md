@@ -23,6 +23,8 @@ Sometimes header logic is too dynamic to express as static config: rewriting hea
 | Read / replace **request body** (full) | ✅ | `RequestFilter`, `requestBodyMode: BUFFERED` |
 | Inspect / mutate **request body** per chunk | ✅ | `requestBodyMode: STREAMED` |
 | Inspect / mutate **response body** per transport window | ✅ | `responseBodyMode: STREAMED` |
+| Read / mutate real **response trailers** | ✅ | `responseTrailerMode: SEND`; H2 and representable H1.1 trailers are supported |
+| Processor-selected reduction of later phases | ✅ | Header verdict `mode_override`, when explicitly allowed |
 
 `BUFFERED_PARTIAL` request mode is rejected. Response `BUFFERED` and
 `BUFFERED_PARTIAL` are rejected; the main upstream response is never aggregated.
@@ -48,6 +50,10 @@ spec:
           requestBodyMode: BUFFERED
           responseHeaderMode: SEND
           responseBodyMode: STREAMED
+          responseTrailerMode: SKIP
+        disableImmediateResponse: false
+        allowModeOverride: false
+        allowedOverrideModes: []
         failureModeAllow: false
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -88,6 +94,10 @@ spec:
 | `processingMode.responseHeaderMode` | Enum | `SKIP` | `SEND` / `SKIP` for final response headers on the same attached transaction. |
 | `processingMode.requestBodyMode` | Enum | `NONE` | `NONE`, `SKIP`, `BUFFERED`, or `STREAMED`. In `BUFFERED` mode, request headers (`end_of_stream=false`) and the full request body (`end_of_stream=true`) are sent on one `Process` stream. In `STREAMED` mode each body chunk is exchanged with the processor as it flows, on the same stream as the header phase. `BUFFERED_PARTIAL` is rejected. |
 | `processingMode.responseBodyMode` | Enum | `NONE` | `NONE`, `SKIP`, or `STREAMED`. Each bounded transport window is exchanged in lockstep; `BUFFERED` and `BUFFERED_PARTIAL` are rejected. |
+| `processingMode.responseTrailerMode` | Enum | `SKIP` | `SKIP` is the currently deployable value. `SEND` is implemented and locally tested but requires the pending immutable Edgion Pingora pin; once available, it sends a phase only for real upstream trailers and never fabricates an empty message. |
+| `disableImmediateResponse` | Boolean | `false` | When `true`, ignore an `ImmediateResponse` in any phase, apply none of its mutations, deactivate ExtProc for this request, and continue the HTTP exchange unchanged. |
+| `allowModeOverride` | Boolean | `false` | Permit a processor's request- or response-header verdict to select an exact entry from `allowedOverrideModes`. Overrides can only disable later work; they cannot add capability. |
+| `allowedOverrideModes` | List of processing modes | `[]` | Exact normalized allow-list for `mode_override`, with 1–8 entries when enabled. Every entry must be a reduction of `processingMode`; normalized duplicates are rejected. The list must be empty when `allowModeOverride` is false. |
 | `failureModeAllow` | Boolean | `false` | When the processor is unreachable, times out, or returns an unusable verdict: `false` (fail-close) short-circuits the request with a `500`; `true` (fail-open) skips processing and continues. |
 
 ## Behavior
@@ -169,7 +179,96 @@ and follow the failure policy.
 
 ### ImmediateResponse (short-circuit)
 
-If the processor returns an `ImmediateResponse`, the gateway stops proxying and returns that status + body to the client. In the **request** phase the response's custom header mutations are applied to the reply; in the **response** phase only the status and body are applied (the runtime rebuilds the reply, so response-phase `ImmediateResponse` custom headers are not preserved — and on gRPC routes the reply is status-only).
+If the processor returns an `ImmediateResponse` before the downstream response
+is committed, the gateway stops proxying and returns its status and body.
+Allowed custom header mutations are queued onto the fresh local reply in both
+request-header and response-header phases; protected headers remain rejected.
+
+For a canonically classified gRPC request, an explicitly present
+`grpc_status` in the range 0–16 produces a trailers-only gRPC reply: HTTP 200,
+the exact processor-selected `grpc-status`, and the Immediate body as the
+optional encoded `grpc-message`. Presence is preserved, so status 0 is not
+treated as absent. A value above 16 is a malformed verdict and follows
+`failureModeAllow`; it is never clamped. For ordinary HTTP traffic,
+`grpc_status` is ignored and the declared HTTP status/body path is used.
+
+With `disableImmediateResponse: true`, the complete Immediate message is
+ignored before validation: no status, body, or header mutation is applied, no
+later ExtProc phase is sent, and the backend/current response continues
+unchanged. Suppression is not a processor failure and does not invoke
+`failureModeAllow`. An enabled Immediate response received after response
+commit cannot create a second local reply and follows the post-commit failure
+policy.
+
+### Dynamic mode reduction
+
+When `allowModeOverride` is enabled, a processor may attach Envoy's
+`mode_override` to a matching request-header or response-header verdict. Edgion
+normalizes the complete requested mode and accepts it only when it exactly
+matches one entry in `allowedOverrideModes`.
+
+The allow-list is reduction-only:
+
+- request body may retain its base `BUFFERED`/`STREAMED` acquisition class or
+  reduce to `NONE`; it cannot enable body access or switch acquisition class;
+- response body may retain `STREAMED` or reduce to `NONE`;
+- response headers and response trailers may retain their configured mode or
+  reduce from `SEND` to `SKIP`;
+- request-header mode is already consumed and is ignored during normalization;
+  config `SKIP` body modes normalize to wire `NONE`.
+
+For example, this base mode lets the processor choose only the listed
+request-body suppression; it cannot acquire buffered access or suppress any
+other phase:
+
+```yaml
+processingMode:
+  requestHeaderMode: SEND
+  requestBodyMode: STREAMED
+  responseHeaderMode: SEND
+  responseBodyMode: STREAMED
+  responseTrailerMode: SKIP
+allowModeOverride: true
+allowedOverrideModes:
+  - requestHeaderMode: SKIP       # Already consumed; normalized to SKIP
+    requestBodyMode: NONE         # Allowed STREAMED -> NONE reduction
+    responseHeaderMode: SEND
+    responseBodyMode: STREAMED
+    responseTrailerMode: SKIP
+```
+
+An override received while disabled, or a structurally valid but unlisted or
+expanding override, is ignored. Malformed enum/structure in an enabled header
+override is a bad verdict. Standalone overrides and body/trailer-phase
+overrides are not supported.
+
+### Response trailers
+
+This section documents the completed, locally tested behavior. It becomes
+available to ordinary Edgion builds only after the required Edgion Pingora
+revision is committed, pushed, and pinned.
+
+With `responseTrailerMode: SEND`, a real upstream trailer map is sent as the
+final `response_trailers` request on the same Process stream. If the upstream
+ends without trailers, Edgion cleanly closes the stream without fabricating an
+empty trailer phase. `SKIP` leaves real trailers unprocessed.
+
+Trailer mutation preserves duplicate raw values and commits atomically: the
+gateway validates a cloned map first, so fail-open never exposes a partial
+mutation. Both the observed input and fully mutated result are capped at 256
+fields and 64 KiB of raw name/value bytes. Pseudo-headers, `host`,
+`proxy-authenticate`, `proxy-authorization`, and proxy-managed framing or
+hop-by-hop names (`connection`, `keep-alive`, `proxy-connection`,
+`transfer-encoding`, `content-length`, `te`, `upgrade`, and `trailer`) are
+forbidden. A gRPC response must finish with exactly one valid `grpc-status`
+from 0 through 16; removal is allowed only for non-gRPC responses.
+
+H2 and custom transports may introduce a valid new trailer name. On an H1.1
+downstream, a new name must already appear in the committed `Trailer`
+declaration; an observed name may still be changed or removed. H1.0 cannot
+represent response trailers: fail-open drops them at the transport boundary,
+while fail-close terminates the connection. Trailer processing never buffers
+or aggregates the response body.
 
 ### Failure handling (`failureModeAllow`)
 
@@ -181,12 +280,18 @@ If the processor returns an `ImmediateResponse`, the gateway stops proxying and 
 ## Limitations
 
 - **No partial body mode**: `BUFFERED_PARTIAL` is rejected.
+- **No full-duplex mode**: `FULL_DUPLEX_STREAMED` is rejected.
 - **No response aggregation**: response `STREAMED` processes one bounded
   transport window at a time and does not treat a transport chunk as a semantic
   SSE event.
+- **No request trailer processing**: `responseTrailerMode` does not enable a
+  request-trailer phase; ordinary proxied request trailers are not connected to
+  ExtProc.
 - **No response `CONTINUE_AND_REPLACE`**: ordinary body mutation is supported,
   but the terminal stop-sending status follows `failureModeAllow`.
-- **Response-phase `ImmediateResponse`**: custom headers are not preserved (status + body only; gRPC routes are status-only).
+- **No newer Envoy control surfaces**: dynamic timeout override, request drain,
+  observability mode, send-body-without-waiting, and streamed ImmediateResponse
+  are not part of this trimmed protocol.
 
 ## Compatibility
 
@@ -207,8 +312,10 @@ Check the phase: request-header mutations reach the **upstream** (backend), whil
 ### Q: The controller rejected my EdgionPlugins resource?
 
 Common causes: `requestBodyMode: BUFFERED_PARTIAL`, response `BUFFERED` or
-`BUFFERED_PARTIAL`, a `grpcService.target` that is a URL or missing a
-port, or a `timeoutMs` of `0` or above `60000`.
+`BUFFERED_PARTIAL`, an invalid/expanding/duplicate `allowedOverrideModes`
+entry, a non-empty override list while `allowModeOverride` is false, a
+`grpcService.target` that is a URL or missing a port, or a `timeoutMs` of `0`
+or above `60000`.
 
 ### Q: What happens if the processor is down?
 

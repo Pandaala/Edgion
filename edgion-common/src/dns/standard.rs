@@ -1,9 +1,8 @@
 //! Standard DNS backend using hickory-resolver against an explicit server list.
 
-use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 
-use super::{strip_brackets, system, DnsError};
+use super::{hickory, strip_brackets, system, DnsError};
 
 /// Parse a `ip` or `ip:port` server string into a SocketAddr (default port 53).
 /// Accepts a bracketed IPv6 literal without a port (e.g. `"[::1]"`).
@@ -35,30 +34,22 @@ pub async fn resolve_standard(servers: &[String], domain: &str) -> Result<Vec<Ip
         };
     }
 
-    use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
-    use hickory_resolver::error::ResolveErrorKind;
-    use hickory_resolver::TokioAsyncResolver;
+    use hickory_resolver::net::runtime::TokioRuntimeProvider;
+    use hickory_resolver::net::{DnsError as HickoryDnsError, NetError};
+    use hickory_resolver::TokioResolver;
 
     let socket_addrs = parse_servers(servers);
     if socket_addrs.is_empty() {
         return Err(DnsError::Io(format!("no valid DNS servers in {servers:?}")));
     }
 
-    // Group IPs by their configured port so each server keeps its own port
-    // instead of every server inheriting the first server's port.
-    let mut ips_by_port: BTreeMap<u16, Vec<IpAddr>> = BTreeMap::new();
-    for sa in &socket_addrs {
-        ips_by_port.entry(sa.port()).or_default().push(sa.ip());
-    }
-    let mut group = NameServerConfigGroup::with_capacity(socket_addrs.len() * 2);
-    for (port, ips) in ips_by_port {
-        group.merge(NameServerConfigGroup::from_ips_clear(&ips, port, true));
-    }
-    let config = ResolverConfig::from_parts(None, vec![], group);
-    let resolver = TokioAsyncResolver::tokio(config, ResolverOpts::default());
+    let config = hickory::resolver_config(&socket_addrs);
+    let resolver = TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
+        .build()
+        .map_err(|e| DnsError::Io(e.to_string()))?;
 
     let lookup = resolver.lookup_ip(domain).await.map_err(|e| {
-        if matches!(e.kind(), ResolveErrorKind::NoRecordsFound { .. }) {
+        if matches!(e, NetError::Dns(HickoryDnsError::NoRecordsFound(_))) {
             DnsError::NoAddresses
         } else {
             DnsError::Io(e.to_string())

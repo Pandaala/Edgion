@@ -5,11 +5,11 @@ use super::EdgionHttpProxy;
 use crate::ai::canonical_sse::MAX_CANONICAL_SOURCE_CHUNK_BYTES;
 use crate::ai::terminal::{ResponseClose, ResponseProcessorSlot, ResponseTerminalCause};
 use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
-use crate::plugins::runtime::traits::StreamingResponseProcessor;
+use crate::plugins::runtime::traits::{StreamingResponseEvent, StreamingResponseProcessor};
 use crate::plugins::runtime::PluginSession;
 use crate::EdgionHttpContext;
 use pingora_http::ResponseHeader;
-use pingora_proxy::{ResponseBodySink, Session};
+use pingora_proxy::{ResponseBodySink, Session, UpstreamResponseBodyEvent};
 
 struct ResponseProcessorRunSet {
     ai: Option<Box<dyn StreamingResponseProcessor>>,
@@ -156,6 +156,20 @@ pub(crate) async fn run_stream_processors(
     end_of_stream: bool,
     sink: &mut ResponseBodySink,
 ) {
+    run_stream_processors_event(session, ctx, body, StreamingResponseEvent::Data { end_of_stream }, sink).await;
+}
+
+/// Typed variant used by the fork response lifecycle. Unlike the legacy bool,
+/// this keeps a pre-trailer boundary distinct all the way to trailer-aware
+/// processors while legacy processors still flush through their default
+/// delegation.
+pub(crate) async fn run_stream_processors_event(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    body: &mut Option<bytes::Bytes>,
+    event: StreamingResponseEvent,
+    sink: &mut ResponseBodySink,
+) {
     ctx.response_body_processing_started = true;
     if ctx.ai_state().is_some_and(|state| state.semantic_guard_claimed)
         && body
@@ -203,9 +217,7 @@ pub(crate) async fn run_stream_processors(
         if !sink.is_terminated() {
             if let Some(processor) = processors.ai.as_mut() {
                 adapter.set_response_processor_slot(ResponseProcessorSlot::Ai);
-                processor
-                    .on_chunk(body, end_of_stream, stream_kind, sink, &mut adapter)
-                    .await;
+                processor.on_event(body, event, stream_kind, sink, &mut adapter).await;
                 if sink.is_terminated() && adapter.response_terminal_winner().is_none() {
                     let _ = adapter.try_claim_response_terminal(ResponseTerminalCause::LegacyProcessor);
                 }
@@ -215,22 +227,20 @@ pub(crate) async fn run_stream_processors(
         if winner.is_none() && !sink.is_terminated() {
             if let Some(processor) = processors.semantic.as_mut() {
                 adapter.set_response_processor_slot(ResponseProcessorSlot::Semantic);
-                processor
-                    .on_chunk(body, end_of_stream, stream_kind, sink, &mut adapter)
-                    .await;
+                processor.on_event(body, event, stream_kind, sink, &mut adapter).await;
                 if sink.is_terminated() && adapter.response_terminal_winner().is_none() {
                     let _ = adapter.try_claim_response_terminal(ResponseTerminalCause::LegacyProcessor);
                 }
                 winner = adapter.response_terminal_winner();
             }
         }
-        let semantic_is_withholding = adapter.semantic_guard_active() && body.is_none() && !end_of_stream;
+        let semantic_is_withholding = adapter.semantic_guard_active()
+            && body.is_none()
+            && matches!(event, StreamingResponseEvent::Data { end_of_stream: false });
         if winner.is_none() && !sink.is_terminated() && !semantic_is_withholding {
             for (index, processor) in processors.ordinary.iter_mut().enumerate() {
                 adapter.set_response_processor_slot(ResponseProcessorSlot::Ordinary(index));
-                processor
-                    .on_chunk(body, end_of_stream, stream_kind, sink, &mut adapter)
-                    .await;
+                processor.on_event(body, event, stream_kind, sink, &mut adapter).await;
                 if sink.is_terminated() && adapter.response_terminal_winner().is_none() {
                     let _ = adapter.try_claim_response_terminal(ResponseTerminalCause::LegacyProcessor);
                 }
@@ -255,7 +265,7 @@ pub(crate) async fn run_stream_processors(
             sink.terminate();
         }
         ctx.response_terminal_state.close_gateway();
-    } else if end_of_stream {
+    } else if event.closes_without_trailers() {
         ctx.response_terminal_state.close_open(ResponseClose::NaturalEos);
     }
     processors.restore(ctx);
@@ -295,54 +305,79 @@ pub async fn upstream_response_body_filter(
     // e.g. bandwidth limiting sees post-mutation bytes.
     run_stream_processors(session, ctx, body, end_of_stream, sink).await;
 
-    // Run upstream_response_body_filter plugins for bandwidth throttling
-    let mut max_delay: Option<Duration> = None;
+    Ok(run_read_only_body_plugins(session, ctx, body, end_of_stream))
+}
 
-    // Run route-level body filter plugins
-    if let Some(route_unit) = ctx.route_unit.clone() {
-        if route_unit.plugin_runtime.upstream_response_body_plugins_count() > 0 {
-            if let Some(delay) =
-                route_unit
-                    .plugin_runtime
-                    .run_upstream_response_body_plugins(session, ctx, body, end_of_stream)
-            {
-                max_delay = Some(delay);
+/// Adapt the fork's typed response lifecycle without collapsing the
+/// pre-trailer boundary into a no-trailers EOS.
+#[inline]
+pub async fn upstream_response_body_filter_event(
+    edgion_http: &EdgionHttpProxy,
+    session: &mut Session,
+    body: &mut Option<bytes::Bytes>,
+    event: UpstreamResponseBodyEvent,
+    sink: &mut ResponseBodySink,
+    ctx: &mut EdgionHttpContext,
+) -> pingora_core::Result<Option<Duration>> {
+    match event {
+        UpstreamResponseBodyEvent::Data { end_of_stream } => {
+            let delay = upstream_response_body_filter(edgion_http, session, body, end_of_stream, sink, ctx).await?;
+            if end_of_stream {
+                super::pg_upstream_response_trailer_filter::dispatch_upstream_response_trailers(session, ctx, None)
+                    .await?;
             }
+            Ok(delay)
+        }
+        UpstreamResponseBodyEvent::TerminalWithoutTrailers => {
+            record_first_body_time(ctx, body.as_ref());
+            run_stream_processors_event(
+                session,
+                ctx,
+                body,
+                StreamingResponseEvent::TerminalWithoutTrailers,
+                sink,
+            )
+            .await;
+            let delay = run_read_only_body_plugins(session, ctx, body, true);
+            super::pg_upstream_response_trailer_filter::dispatch_upstream_response_trailers(session, ctx, None).await?;
+            Ok(delay)
+        }
+        UpstreamResponseBodyEvent::TerminalBeforeTrailers => {
+            record_first_body_time(ctx, body.as_ref());
+            run_stream_processors_event(session, ctx, body, StreamingResponseEvent::TerminalBeforeTrailers, sink).await;
+            let _ = ctx.upstream_trailer_lifecycle.mark_before_trailers();
+            Ok(None)
         }
     }
+}
 
-    // Gateway-level plugins (response onion: before GatewayClass-global).
+fn run_read_only_body_plugins(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    body: &Option<bytes::Bytes>,
+    end_of_stream: bool,
+) -> Option<Duration> {
+    let mut max_delay: Option<Duration> = None;
+    if let Some(route_unit) = ctx.route_unit.clone() {
+        max_delay = route_unit
+            .plugin_runtime
+            .run_upstream_response_body_plugins(session, ctx, body, end_of_stream);
+    }
     if let Some(plugins) = ctx.resolved_gateway_plugins.as_ref().map(Arc::clone) {
         for runtime in plugins.iter() {
-            if runtime.upstream_response_body_plugins_count() == 0 {
-                continue;
-            }
             if let Some(delay) = runtime.run_upstream_response_body_plugins(session, ctx, body, end_of_stream) {
-                max_delay = Some(match max_delay {
-                    Some(current) => current.max(delay),
-                    None => delay,
-                });
+                max_delay = Some(max_delay.map_or(delay, |current| current.max(delay)));
             }
         }
     }
-
-    // Run global plugins body filter (read from per-request snapshot; zero
-    // format/store cost on the per-chunk hot path).
     if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(Arc::clone) {
         for runtime in plugins.iter() {
-            if runtime.upstream_response_body_plugins_count() == 0 {
-                continue;
-            }
             if let Some(delay) = runtime.run_upstream_response_body_plugins(session, ctx, body, end_of_stream) {
-                max_delay = Some(match max_delay {
-                    Some(current) => current.max(delay),
-                    None => delay,
-                });
+                max_delay = Some(max_delay.map_or(delay, |current| current.max(delay)));
             }
         }
     }
-
-    Ok(max_delay)
+    max_delay
 }
 
 /// Stamp TTFT only when a non-empty response-body chunk actually arrived.
@@ -373,7 +408,9 @@ mod tests {
     use crate::ctx::ResponseStreamKind;
     use crate::plugins::http::ext_proc::{test_response_processor, AttachedExtProc, TEST_RESPONSE_WINDOW_CAP};
     use crate::plugins::runtime::traits::session::PluginSession;
-    use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
+    use crate::plugins::runtime::traits::streaming_response_processor::{
+        StreamingResponseEvent, StreamingResponseProcessor,
+    };
     use async_trait::async_trait;
     use bytes::Bytes;
     use parking_lot::Mutex;
@@ -432,6 +469,66 @@ mod tests {
                 *chunk = Some(Bytes::from(b.to_ascii_uppercase()));
             }
         }
+    }
+
+    struct TypedTerminalRecorder {
+        observed: Arc<Mutex<Vec<StreamingResponseEvent>>>,
+    }
+
+    #[async_trait]
+    impl StreamingResponseProcessor for TypedTerminalRecorder {
+        fn name(&self) -> &str {
+            "typed-terminal-recorder"
+        }
+
+        async fn on_event(
+            &mut self,
+            _chunk: &mut Option<Bytes>,
+            event: StreamingResponseEvent,
+            _stream_kind: ResponseStreamKind,
+            _sink: &mut ResponseBodySink,
+            _session: &mut dyn PluginSession,
+        ) {
+            self.observed.lock().push(event);
+        }
+
+        async fn on_chunk(
+            &mut self,
+            _chunk: &mut Option<Bytes>,
+            _end_of_stream: bool,
+            _stream_kind: ResponseStreamKind,
+            _sink: &mut ResponseBodySink,
+            _session: &mut dyn PluginSession,
+        ) {
+            panic!("typed callback must not collapse into the legacy callback")
+        }
+    }
+
+    #[tokio::test]
+    async fn pre_trailer_event_stays_typed_and_does_not_close_response_terminal() {
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let mut ctx = EdgionHttpContext::default();
+        ctx.stream_processors.push(Box::new(TypedTerminalRecorder {
+            observed: Arc::clone(&observed),
+        }));
+        let mut session = test_session().await;
+        let mut body = None;
+        let mut sink = ResponseBodySink::new();
+
+        run_stream_processors_event(
+            &mut session,
+            &mut ctx,
+            &mut body,
+            StreamingResponseEvent::TerminalBeforeTrailers,
+            &mut sink,
+        )
+        .await;
+
+        assert_eq!(*observed.lock(), [StreamingResponseEvent::TerminalBeforeTrailers]);
+        assert_eq!(
+            ctx.response_terminal_state,
+            crate::ai::terminal::ResponseTerminalState::Open
+        );
     }
 
     struct DropChunk;

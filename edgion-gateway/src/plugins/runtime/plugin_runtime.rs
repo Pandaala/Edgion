@@ -1784,7 +1784,7 @@ impl PluginRuntime {
 
         // Snapshot before `ctx` is borrowed by `session_adapter`. Set in
         // `pg_request_filter` and not mutated during plugin execution.
-        let is_grpc_request = ctx.request_info.is_grpc_request;
+        let is_grpc_request = ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched;
         let mut filter_logs = Vec::with_capacity(self.request_plugins.len());
         let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 

@@ -184,7 +184,7 @@ Includes `certificate_callback` / `handshake_complete_callback`.
 | Location | Reason |
 |------|------|
 | `plugins/**/conf_handler_impl.rs`, `PluginRuntime::build_*` | Plugin construction during config/sync; one-shot |
-| `plugins/**::new()` / `::from_config()` | Constructors, not request path |
+| `plugins/**::new()` / `::try_new()` / `::from_config()` | Constructors, not request path; the guard still requires an exact path/module-qualified-owner/function cold registration for constructors that trace |
 | `conf_sync/**`, LinkSys configuration/store management | Control/config paths; however LinkSys provider calls reached from DSL/plugins are request hot paths and remain tracing-free |
 | `api/**` | Admin API (control plane) |
 | Startup/shutdown under `runtime/server/**` | One-shot events |
@@ -242,13 +242,14 @@ Use during code review:
 ## Periodic maintenance (run quarterly or after each "data-plane entry list" change)
 
 > **Automated gate**: `cicd/checks/check_gateway_no_tracing.py` resolves the enclosing
-> function so cold constructors/config builders can trace while hot callbacks cannot.
-> Run it (and `--list`) rather than relying on a prose baseline. Any unregistered output
-> is live debt to fix, not an implied exemption. At the time of this update the list still
-> reports Wasm plugin hot-path calls; do not copy that pattern into new code. Approved
-> exceptional sites require an inline `// tracing-allow: <reason>` and review. Keep the
-> gate's function/directory coverage synchronized with this boundary, including provider
-> operations invoked by plugins.
+> function and treats every tracing use in the candidate set as hot by default. A cold
+> constructor/config builder must be registered by exact relative path, exact module-qualified owner,
+> and exact function name in `COLD_FUNCTION_REGISTRATIONS`, with a lifecycle reason; name prefixes such as
+> `build_*` or `parse_*` never grant an exemption. The registry is checked for stale,
+> duplicate, and known-hot entries. Run the checker self-test, the checker, and `--list`
+> rather than relying on a prose baseline. Approved hot-path exceptional sites require an
+> inline `// tracing-allow: <reason>` and review. Keep the candidate coverage synchronized
+> with this boundary, including provider operations invoked by plugins.
 
 **1. Scan data-plane entry files for newly introduced tracing** (note: only check **the entry files themselves** — `conf_handler_impl.rs` / `routes_mgr.rs` / `conf_handler.rs` in those directories belong to the config phase, do not scan the whole directory):
 

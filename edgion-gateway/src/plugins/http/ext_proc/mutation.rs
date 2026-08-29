@@ -11,6 +11,7 @@
 use edgion_common::ext_proc::proto::{HeaderAppendAction, HeaderMap, HeaderMutation, HeaderValue, HeaderValueOption};
 
 use crate::plugins::runtime::{PluginLog, PluginSession};
+use crate::PendingHeaderOp;
 
 /// Whether `name` is an HTTP/2 pseudo-header (leading `:`). These are sent to
 /// the processor read-only and are never mutated based on its response.
@@ -181,6 +182,63 @@ pub fn apply_to_response(session: &mut dyn PluginSession, mutation: &HeaderMutat
     applied
 }
 
+/// Translate an ExtProc mutation into generic operations for a fresh local
+/// reply. Conditions are deliberately evaluated when the fresh header exists,
+/// rather than against an upstream response that the local reply replaces.
+pub fn queue_for_local_reply(session: &mut dyn PluginSession, mutation: &HeaderMutation, log: &mut PluginLog) -> usize {
+    let ops = local_reply_ops(mutation, log);
+    let mut queued = 0;
+    for op in ops {
+        if session.queue_local_reply_header_op(op).is_ok() {
+            queued += 1;
+        } else {
+            log.push_err("resp header set fail");
+        }
+    }
+    queued
+}
+
+/// Convert ExtProc wire mutations into runtime-owned local-reply operations.
+/// This is also used by streamed body handlers, which cannot hold a session
+/// borrow while awaiting the processor.
+pub fn local_reply_ops(mutation: &HeaderMutation, log: &mut PluginLog) -> Vec<PendingHeaderOp> {
+    let mut ops = Vec::new();
+    for opt in &mutation.set_headers {
+        let Some(hv) = opt.header.as_ref() else { continue };
+        if reject_protected(&hv.key, log) {
+            continue;
+        }
+        let Some(value) = decoded_value(opt, hv) else { continue };
+        let action = HeaderAppendAction::try_from(opt.append_action).unwrap_or(HeaderAppendAction::AppendIfExistsOrAdd);
+        let op = match action {
+            HeaderAppendAction::AppendIfExistsOrAdd => PendingHeaderOp::Append {
+                name: hv.key.clone(),
+                value,
+            },
+            HeaderAppendAction::OverwriteIfExistsOrAdd => PendingHeaderOp::Set {
+                name: hv.key.clone(),
+                value,
+            },
+            HeaderAppendAction::AddIfAbsent => PendingHeaderOp::AddIfAbsent {
+                name: hv.key.clone(),
+                value,
+            },
+            HeaderAppendAction::OverwriteIfExists => PendingHeaderOp::OverwriteIfExists {
+                name: hv.key.clone(),
+                value,
+            },
+        };
+        ops.push(op);
+    }
+    for name in &mutation.remove_headers {
+        if reject_protected(name, log) {
+            continue;
+        }
+        ops.push(PendingHeaderOp::Remove { name: name.clone() });
+    }
+    ops
+}
+
 /// Log-and-skip helper: returns true if the processor must not mutate `name` —
 /// either an HTTP/2 pseudo-header or a proxy-managed hop-by-hop/framing header.
 pub(super) fn reject_protected(name: &str, log: &mut PluginLog) -> bool {
@@ -210,6 +268,45 @@ mod tests {
             append_action: action as i32,
             keep_empty_value: false,
         }
+    }
+
+    #[test]
+    fn local_reply_ops_preserve_append_conditions_removal_empty_and_duplicates() {
+        let mut empty = set_header_opt("x-empty", "", HeaderAppendAction::OverwriteIfExistsOrAdd);
+        empty.keep_empty_value = true;
+        let mutation = HeaderMutation {
+            set_headers: vec![
+                set_header_opt("x-duplicate", "one", HeaderAppendAction::AppendIfExistsOrAdd),
+                set_header_opt("x-duplicate", "two", HeaderAppendAction::AppendIfExistsOrAdd),
+                set_header_opt("x-new", "added", HeaderAppendAction::AddIfAbsent),
+                set_header_opt("x-present", "ignored", HeaderAppendAction::AddIfAbsent),
+                set_header_opt("x-present", "updated", HeaderAppendAction::OverwriteIfExists),
+                set_header_opt("x-missing", "ignored", HeaderAppendAction::OverwriteIfExists),
+                empty,
+            ],
+            remove_headers: vec!["x-remove".to_string()],
+        };
+        let mut log = PluginLog::new("ExtProc");
+        let ops = local_reply_ops(&mutation, &mut log);
+        let mut response = pingora_http::ResponseHeader::build(403, Some(8)).expect("valid response");
+        response.insert_header("x-present", "old").unwrap();
+        response.insert_header("x-remove", "gone").unwrap();
+        for op in ops {
+            op.apply(&mut response);
+        }
+
+        let duplicates = response
+            .headers
+            .get_all("x-duplicate")
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(duplicates, ["one", "two"]);
+        assert_eq!(response.headers.get("x-new").unwrap(), "added");
+        assert_eq!(response.headers.get("x-present").unwrap(), "updated");
+        assert!(response.headers.get("x-missing").is_none());
+        assert_eq!(response.headers.get("x-empty").unwrap(), "");
+        assert!(response.headers.get("x-remove").is_none());
     }
 
     #[test]

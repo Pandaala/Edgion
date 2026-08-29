@@ -328,9 +328,12 @@ impl ExtProcStream {
 
     /// Send one message and await its phase-matched verdict under the
     /// per-message timeout (the first call also resolves the lazy stream open
-    /// within the same bound). `last` half-closes the outbound direction
-    /// after sending (the final body chunk). `ImmediateResponse` is always
-    /// accepted; any other cross-phase verdict is a `failed_precondition`.
+    /// within the same bound). `last` half-closes the outbound direction after
+    /// sending, validates the matching verdict, then uses one fresh timeout of
+    /// the same configured duration to require clean inbound EOF. Keeping the
+    /// terminal drain separately bounded avoids reducing the verdict budget by
+    /// processor response latency. `ImmediateResponse` is always accepted; any
+    /// other cross-phase verdict is a `failed_precondition`.
     pub async fn exchange(
         &mut self,
         request: ProcessingRequest,
@@ -363,7 +366,41 @@ impl ExtProcStream {
                 "ext_proc processor returned a verdict for the wrong phase",
             ));
         }
+        if last {
+            self.drain_clean_eof("ext_proc terminal drain timed out").await?;
+        }
         Ok(response)
+    }
+
+    async fn drain_clean_eof(&mut self, timeout_message: &'static str) -> Result<(), tonic::Status> {
+        let drain = async {
+            if let InboundState::Opening(open) = &mut self.inbound {
+                self.inbound = InboundState::Open(open.await?.into_inner());
+            }
+            match &mut self.inbound {
+                InboundState::Open(streaming) => match streaming.message().await {
+                    Ok(None) => Ok(()),
+                    Ok(Some(_)) => Err(tonic::Status::failed_precondition(
+                        "ext_proc processor returned a verdict after clean half-close",
+                    )),
+                    Err(status) => Err(status),
+                },
+                InboundState::Opening(_) => unreachable!("resolved above"),
+            }
+        };
+        tokio::time::timeout(self.timeout, drain)
+            .await
+            .map_err(|_| tonic::Status::deadline_exceeded(timeout_message))?
+    }
+
+    /// Cleanly half-close the outbound Process direction and wait for the
+    /// processor to close its response direction. Retaining the inbound stream
+    /// until EOF prevents a successful reduction from being observed as RPC
+    /// cancellation by the processor.
+    pub async fn finish_success(&mut self) -> Result<(), tonic::Status> {
+        self.reject_observable_unsolicited()?;
+        self.sender.take();
+        self.drain_clean_eof("ext_proc clean half-close timed out").await
     }
 }
 
@@ -675,9 +712,11 @@ mod tests {
         };
         let header_response = ProcessingResponse {
             response: Some(processing_response::Response::RequestHeaders(HeadersResponse::default())),
+            mode_override: None,
         };
         let body_response = ProcessingResponse {
             response: Some(processing_response::Response::RequestBody(BodyResponse::default())),
+            mode_override: None,
         };
 
         let header_phase = ProcessingPhase::from_request(&header_request).unwrap();
@@ -697,6 +736,7 @@ mod tests {
             response: Some(processing_response::Response::ImmediateResponse(
                 ImmediateResponse::default(),
             )),
+            mode_override: None,
         };
 
         assert!(!ProcessingPhase::from_request(&request).unwrap().accepts(&immediate));
@@ -704,6 +744,19 @@ mod tests {
             immediate.response,
             Some(processing_response::Response::ImmediateResponse(_))
         ));
+    }
+
+    #[test]
+    fn standalone_mode_override_is_not_a_phase_verdict() {
+        let request = ProcessingRequest {
+            request: Some(processing_request::Request::RequestHeaders(HttpHeaders::default())),
+        };
+        let standalone = ProcessingResponse {
+            response: None,
+            mode_override: Some(Default::default()),
+        };
+
+        assert!(!ProcessingPhase::from_request(&request).unwrap().accepts(&standalone));
     }
 
     #[tokio::test]
@@ -822,11 +875,109 @@ mod tests {
     mod live_stream {
         use super::*;
         use edgion_common::ext_proc::proto::external_processor_server::{ExternalProcessor, ExternalProcessorServer};
-        use edgion_common::ext_proc::proto::{processing_request, BodyResponse, HeadersResponse, HttpHeaders};
+        use edgion_common::ext_proc::proto::{
+            processing_request, BodyResponse, HeadersResponse, HttpHeaders, HttpTrailers, TrailersResponse,
+        };
         use tokio_stream::wrappers::ReceiverStream;
         use tokio_stream::StreamExt;
 
         struct EchoProcessor;
+
+        #[derive(Clone, Copy)]
+        enum TerminalBehavior {
+            Clean,
+            ExtraVerdict,
+            Status,
+            NeverClose,
+        }
+
+        #[derive(Clone, Copy)]
+        enum TerminalPhase {
+            ResponseBody,
+            ResponseTrailers,
+        }
+
+        struct TerminalProcessor {
+            behavior: TerminalBehavior,
+            phase: TerminalPhase,
+            observed: Mutex<Option<tokio::sync::oneshot::Sender<bool>>>,
+        }
+
+        #[tonic::async_trait]
+        impl ExternalProcessor for TerminalProcessor {
+            type ProcessStream = ReceiverStream<Result<ProcessingResponse, tonic::Status>>;
+
+            async fn process(
+                &self,
+                request: tonic::Request<tonic::Streaming<ProcessingRequest>>,
+            ) -> Result<tonic::Response<Self::ProcessStream>, tonic::Status> {
+                let mut inbound = request.into_inner();
+                let (tx, rx) = tokio::sync::mpsc::channel(4);
+                let behavior = self.behavior;
+                let phase = self.phase;
+                let observed = self.observed.lock().unwrap().take();
+                tokio::spawn(async move {
+                    let first = inbound.message().await;
+                    let matches_phase = matches!(
+                        (phase, first),
+                        (
+                            TerminalPhase::ResponseBody,
+                            Ok(Some(ProcessingRequest {
+                                request: Some(processing_request::Request::ResponseBody(_)),
+                            }))
+                        ) | (
+                            TerminalPhase::ResponseTrailers,
+                            Ok(Some(ProcessingRequest {
+                                request: Some(processing_request::Request::ResponseTrailers(_)),
+                            }))
+                        )
+                    );
+                    if !matches_phase {
+                        return;
+                    }
+                    let matching_response = match phase {
+                        TerminalPhase::ResponseBody => {
+                            processing_response::Response::ResponseBody(BodyResponse::default())
+                        }
+                        TerminalPhase::ResponseTrailers => {
+                            processing_response::Response::ResponseTrailers(TrailersResponse::default())
+                        }
+                    };
+                    if tx
+                        .send(Ok(ProcessingResponse {
+                            response: Some(matching_response.clone()),
+                            mode_override: None,
+                        }))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let clean_eof = matches!(inbound.message().await, Ok(None));
+                    if let Some(observed) = observed {
+                        let _ = observed.send(clean_eof);
+                    }
+                    match behavior {
+                        TerminalBehavior::Clean => {}
+                        TerminalBehavior::ExtraVerdict => {
+                            let _ = tx
+                                .send(Ok(ProcessingResponse {
+                                    response: Some(matching_response),
+                                    mode_override: None,
+                                }))
+                                .await;
+                        }
+                        TerminalBehavior::Status => {
+                            let _ = tx
+                                .send(Err(tonic::Status::resource_exhausted("terminal status detail")))
+                                .await;
+                        }
+                        TerminalBehavior::NeverClose => std::future::pending::<()>().await,
+                    }
+                });
+                Ok(tonic::Response::new(ReceiverStream::new(rx)))
+            }
+        }
 
         #[tonic::async_trait]
         impl ExternalProcessor for EchoProcessor {
@@ -848,12 +999,14 @@ mod tests {
                                     response: Some(processing_response::Response::RequestHeaders(
                                         HeadersResponse::default(),
                                     )),
+                                    mode_override: None,
                                 },
                             ),
                             Some(processing_request::Request::RequestBody(_)) => (
                                 2,
                                 ProcessingResponse {
                                     response: Some(processing_response::Response::RequestBody(BodyResponse::default())),
+                                    mode_override: None,
                                 },
                             ),
                             Some(processing_request::Request::ResponseHeaders(_)) => (
@@ -862,6 +1015,7 @@ mod tests {
                                     response: Some(processing_response::Response::ResponseHeaders(
                                         HeadersResponse::default(),
                                     )),
+                                    mode_override: None,
                                 },
                             ),
                             Some(processing_request::Request::ResponseBody(_)) => (
@@ -870,6 +1024,16 @@ mod tests {
                                     response: Some(
                                         processing_response::Response::ResponseBody(BodyResponse::default()),
                                     ),
+                                    mode_override: None,
+                                },
+                            ),
+                            Some(processing_request::Request::ResponseTrailers(_)) => (
+                                5,
+                                ProcessingResponse {
+                                    response: Some(processing_response::Response::ResponseTrailers(
+                                        TrailersResponse::default(),
+                                    )),
+                                    mode_override: None,
                                 },
                             ),
                             _ => break,
@@ -899,6 +1063,25 @@ mod tests {
                     .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
             );
             addr
+        }
+
+        async fn spawn_terminal_server(
+            behavior: TerminalBehavior,
+            phase: TerminalPhase,
+        ) -> (std::net::SocketAddr, tokio::sync::oneshot::Receiver<bool>) {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
+            tokio::spawn(
+                tonic::transport::Server::builder()
+                    .add_service(ExternalProcessorServer::new(TerminalProcessor {
+                        behavior,
+                        phase,
+                        observed: Mutex::new(Some(observed_tx)),
+                    }))
+                    .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
+            );
+            (addr, observed_rx)
         }
 
         fn cfg_for(addr: std::net::SocketAddr) -> ExtProcConfig {
@@ -979,6 +1162,95 @@ mod tests {
             }
         }
 
+        #[tokio::test]
+        async fn streamed_response_then_trailers_is_ordered_and_half_closes_on_trailers() {
+            install_test_crypto_provider();
+            let addr = spawn_echo_server().await;
+            let client = ExtProcClient::new(&cfg_for(addr)).unwrap();
+            let mut stream = client.open_stream().await.unwrap();
+
+            for message in [
+                ProcessingRequest {
+                    request: Some(processing_request::Request::ResponseHeaders(HttpHeaders {
+                        headers: None,
+                        end_of_stream: false,
+                    })),
+                },
+                ProcessingRequest {
+                    request: Some(processing_request::Request::ResponseBody(HttpBody {
+                        body: b"response".to_vec(),
+                        end_of_stream: false,
+                    })),
+                },
+            ] {
+                stream.exchange(message, false).await.unwrap();
+            }
+            let verdict = stream
+                .exchange(
+                    ProcessingRequest {
+                        request: Some(processing_request::Request::ResponseTrailers(HttpTrailers::default())),
+                    },
+                    true,
+                )
+                .await
+                .unwrap();
+            assert!(matches!(
+                verdict.response,
+                Some(processing_response::Response::ResponseTrailers(_))
+            ));
+        }
+
+        #[tokio::test]
+        async fn final_response_body_and_trailers_produce_server_eof_not_cancellation() {
+            install_test_crypto_provider();
+            for phase in [TerminalPhase::ResponseBody, TerminalPhase::ResponseTrailers] {
+                let (addr, observed) = spawn_terminal_server(TerminalBehavior::Clean, phase).await;
+                let client = ExtProcClient::new(&cfg_for(addr)).unwrap();
+                let mut stream = client.open_stream().await.unwrap();
+                let request = match phase {
+                    TerminalPhase::ResponseBody => processing_request::Request::ResponseBody(HttpBody {
+                        body: b"final".to_vec(),
+                        end_of_stream: true,
+                    }),
+                    TerminalPhase::ResponseTrailers => {
+                        processing_request::Request::ResponseTrailers(HttpTrailers::default())
+                    }
+                };
+                stream
+                    .exchange(ProcessingRequest { request: Some(request) }, true)
+                    .await
+                    .unwrap();
+                assert!(observed.await.expect("server reports terminal receive state"));
+            }
+        }
+
+        #[tokio::test]
+        async fn terminal_drain_rejects_extra_verdict_and_timeout() {
+            install_test_crypto_provider();
+            for (behavior, expected) in [
+                (TerminalBehavior::ExtraVerdict, tonic::Code::FailedPrecondition),
+                (TerminalBehavior::Status, tonic::Code::ResourceExhausted),
+                (TerminalBehavior::NeverClose, tonic::Code::DeadlineExceeded),
+            ] {
+                let (addr, observed) = spawn_terminal_server(behavior, TerminalPhase::ResponseTrailers).await;
+                let mut config = cfg_for(addr);
+                config.grpc_service.timeout_ms = 50;
+                let client = ExtProcClient::new(&config).unwrap();
+                let mut stream = client.open_stream().await.unwrap();
+                let error = stream
+                    .exchange(
+                        ProcessingRequest {
+                            request: Some(processing_request::Request::ResponseTrailers(HttpTrailers::default())),
+                        },
+                        true,
+                    )
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code(), expected);
+                assert!(observed.await.expect("server reports terminal receive state"));
+            }
+        }
+
         /// A message sent after the outbound half-close must fail cleanly, not
         /// hang: the sender was consumed by `last = true`.
         #[tokio::test]
@@ -1011,6 +1283,7 @@ mod tests {
                     ..Default::default()
                 }),
             })),
+            mode_override: None,
         };
 
         assert_eq!(

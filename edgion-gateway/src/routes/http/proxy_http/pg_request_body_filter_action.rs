@@ -18,6 +18,11 @@ use pingora_proxy::{RequestBodyAction, RequestBodyEvent, Session};
 
 type Handlers = Vec<sync_wrapper::SyncWrapper<Box<dyn crate::plugins::runtime::RequestBodyStreamHandler>>>;
 
+#[inline]
+fn is_canonical_grpc(ctx: &EdgionHttpContext) -> bool {
+    ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched
+}
+
 pub async fn request_body_filter_action(
     edgion_http: &EdgionHttpProxy,
     session: &mut Session,
@@ -49,13 +54,14 @@ pub async fn request_body_filter_action(
                 ChunkVerdict::Continue => {}
                 ChunkVerdict::Terminate {
                     status,
+                    grpc_status,
                     body: reply,
-                    headers,
+                    header_ops,
                 } => {
                     pg_request_body_filter::abandon_request_mirror(ctx, MirrorAbandonReason::BodyAbandoned);
                     // Contract obligation: finish the downstream response
                     // before returning Terminate — the proxy never writes one.
-                    write_terminate_reply(session, ctx, status, reply, headers).await;
+                    write_terminate_reply(session, ctx, status, grpc_status, reply, header_ops).await;
                     drain_handler_logs(&mut handlers, ctx);
                     ctx.request_body_stream = handlers;
                     return Ok(RequestBodyAction::Terminate);
@@ -88,8 +94,9 @@ async fn write_terminate_reply(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     status: u16,
+    exact_grpc_status: Option<u16>,
     reply: Option<String>,
-    headers: Vec<(String, String)>,
+    header_ops: Vec<crate::PendingHeaderOp>,
 ) {
     // Contract obligation: when a FINAL response is already committed
     // downstream (an early upstream response raced the upload), observe it
@@ -105,20 +112,23 @@ async fn write_terminate_reply(
         return;
     }
 
-    let is_grpc = ctx.request_info.is_grpc_request;
+    let is_grpc = is_canonical_grpc(ctx);
     let mut adapter = PingoraSessionAdapter::new(session, ctx);
     // Handler-authored reply headers (already protected-filtered) queue as
     // pending ops; both writer paths below drain them into the reply.
-    for (name, value) in &headers {
-        let _ = adapter.set_response_header(name, value);
+    for op in header_ops {
+        let _ = adapter.queue_local_reply_header_op(op);
     }
     let written = if is_grpc {
         // gRPC route: every terminate status — including a processor's 200 —
         // must carry grpc-status trailers; a bare HTTP reply is protocol-
         // invalid for gRPC clients. Same mapping as the request-stage
         // `ErrResponse` choke point.
-        let (grpc_status, default_msg) = crate::runtime::server::http_to_grpc_status(status);
-        let message = reply.as_deref().or(Some(default_msg));
+        let (mapped_status, default_msg) = crate::runtime::server::http_to_grpc_status(status);
+        let grpc_status = exact_grpc_status.unwrap_or(mapped_status);
+        let message = reply
+            .as_deref()
+            .or_else(|| exact_grpc_status.is_none().then_some(default_msg));
         adapter.send_grpc_error_direct(grpc_status, message).await.is_ok()
     } else if let Ok(status_code) = http::StatusCode::from_u16(status) {
         match ResponseHeader::build(status_code, Some(2)) {
@@ -150,6 +160,53 @@ async fn write_terminate_reply(
     };
     if written {
         ctx.mark_local_reply_written();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn terminate_writer_classifies_grpc_route_without_content_type_fact() {
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.is_grpc_request = false;
+        ctx.is_grpc_route_matched = true;
+        assert!(is_canonical_grpc(&ctx));
+    }
+
+    #[tokio::test]
+    async fn grpc_route_only_terminate_writes_exact_status_and_local_header() {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(b"POST /svc/Method HTTP/1.1\r\nHost: test\r\nContent-Length: 1\r\n\r\n")
+            .await
+            .unwrap();
+        session.read_request().await.unwrap();
+
+        let mut ctx = EdgionHttpContext::default();
+        ctx.is_grpc_route_matched = true;
+        write_terminate_reply(
+            &mut session,
+            &mut ctx,
+            403,
+            Some(8),
+            Some("quota".to_string()),
+            vec![crate::PendingHeaderOp::Append {
+                name: "x-local".to_string(),
+                value: "reply".to_string(),
+            }],
+        )
+        .await;
+
+        let written = session.response_written().expect("gRPC local reply header");
+        assert_eq!(written.status.as_u16(), 200);
+        assert_eq!(written.headers.get("grpc-status").unwrap(), "8");
+        assert_eq!(written.headers.get("x-local").unwrap(), "reply");
+        assert_eq!(ctx.request_info.grpc_status, Some(8));
     }
 }
 

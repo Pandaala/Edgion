@@ -144,6 +144,7 @@ mod tests {
     fn insecure_tls_is_honored_when_verify_false() {
         use edgion_resources::resources::common::OutboundTlsLocal;
 
+        let _guard = super::super::outbound_tls::outbound_tls_test_guard();
         let cfg = OutboundClientConfig {
             tls: Some(TlsConfig {
                 enabled: true,

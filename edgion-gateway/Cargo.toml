@@ -37,12 +37,11 @@ rustls = [
     "pingora-proxy/rustls",
 ]
 
-# FIPS-validated BoringSSL. Image-build only (NOT a default). Links a prebuilt
-# FIPS `bcm.o` into the normal libcrypto via boring's fips-link-precompiled,
-# which avoids the from-source `boring/fips` path that conflicts with
-# pingora-boringssl's forced `pq-experimental` patch. The prebuilt module is
-# supplied at build time via BORING_BSSL_FIPS_PRECOMPILED_BCM_O.
-fips = ["boringssl", "boring/fips-link-precompiled"]
+# FIPS-validated BoringSSL. Image-build only (NOT a default). boring v5 merged
+# its precompiled mode into `fips`; BORING_BSSL_FIPS_PATH selects the prepared
+# FIPS BoringSSL tree instead of compiling the module through the ordinary
+# non-FIPS source path.
+fips = ["boringssl", "boring/fips"]
 
 # Legacy route tests using deprecated ZtraceHttpRoute (disabled by default)
 legacy_route_tests = []

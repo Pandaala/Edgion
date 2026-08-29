@@ -5,7 +5,7 @@ use crate::ctx::ClientCertInfo;
 use crate::plugins::runtime::dye_plan::CompiledDyePlan;
 use crate::plugins::runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use crate::request_body::{BodyOperationError, BodyScanResult};
-use crate::{EdgionHttpContext, MirrorState, SetJumpOutcome, UpstreamJumpTarget};
+use crate::{EdgionHttpContext, MirrorState, PendingHeaderOp, SetJumpOutcome, UpstreamJumpTarget};
 use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::common::{KeyGet, KeySet};
@@ -16,6 +16,11 @@ use std::sync::Arc;
 
 pub type PluginSessionError = Box<dyn std::error::Error + Send + Sync>;
 pub type PluginSessionResult<T> = Result<T, PluginSessionError>;
+
+#[inline]
+const fn safe_default_downstream_response_trailers_representable() -> bool {
+    false
+}
 
 /// Why a body could not be read.
 ///
@@ -468,6 +473,49 @@ pub trait PluginSession: Send + Sync {
         false
     }
 
+    /// Install an internal request-owned response-trailer companion.
+    ///
+    /// The caller is an ordinary compiled response plugin, so installation
+    /// order is already the canonical route/backend/Gateway/global response
+    /// order. This does not create an operator-visible plugin stage.
+    fn install_upstream_response_trailer(
+        &mut self,
+        processor: Box<dyn crate::plugins::runtime::traits::UpstreamResponseTrailer>,
+    ) -> bool {
+        drop(processor);
+        false
+    }
+
+    /// Number of installed response-trailer companions for this request.
+    fn upstream_response_trailer_count(&self) -> usize {
+        0
+    }
+
+    /// Whether the selected downstream transport and committed/planned
+    /// response framing can represent an upstream response trailer block.
+    ///
+    /// This is transport capability, not evidence that trailers exist. The
+    /// safe default is false so adapters without a real downstream session
+    /// cannot accidentally claim that a trailer mutation will reach the wire.
+    fn downstream_response_trailers_representable(&self) -> bool {
+        safe_default_downstream_response_trailers_representable()
+    }
+
+    /// Whether an output trailer field name may be introduced on the selected
+    /// downstream transport. HTTP/1.1 requires advance declaration in the
+    /// committed `Trailer` response header; native trailer transports do not.
+    /// The safe default rejects introduction for adapters without transport
+    /// state. Existing trailer names remain independently mutable.
+    fn downstream_response_trailer_name_allowed(&self, _name: &http::HeaderName) -> bool {
+        false
+    }
+
+    /// EOS bit from the final upstream response Header task, if this adapter
+    /// participates in the canonical proxy response lifecycle.
+    fn upstream_response_headers_end_stream(&self) -> Option<bool> {
+        None
+    }
+
     /// Claim the request-wide JSON Schema validation slot.
     ///
     /// Returns `true` only for the first validator that actually runs in the
@@ -688,6 +736,17 @@ pub trait PluginSession: Send + Sync {
         None
     }
 
+    /// Canonical request classification frozen by routing/media-type handling.
+    /// Plugins use this fact instead of re-parsing mutable headers.
+    fn is_grpc_request(&self) -> bool {
+        false
+    }
+
+    /// Queue an operation for the fresh header of a plugin-authored local
+    /// reply. Unlike the ordinary response-header methods, this must not
+    /// mutate a currently bound upstream response that will be discarded.
+    fn queue_local_reply_header_op(&mut self, op: PendingHeaderOp) -> PluginSessionResult<()>;
+
     /// The dye plan of the currently-running plugin entry, for capture into a
     /// streamed body handler (body-phase outcomes are recorded against the
     /// installing entry's plan).
@@ -764,5 +823,15 @@ pub trait PluginSession: Send + Sync {
     /// matching dye rule. Call BEFORE writing any self-authored response.
     fn record_outcome(&mut self, outcome: DyeOutcome, value: &str) {
         let _ = (outcome, value);
+    }
+}
+
+#[cfg(test)]
+mod response_trailer_capability_tests {
+    use super::safe_default_downstream_response_trailers_representable;
+
+    #[test]
+    fn response_trailer_transport_capability_defaults_fail_closed() {
+        assert!(!safe_default_downstream_response_trailers_representable());
     }
 }

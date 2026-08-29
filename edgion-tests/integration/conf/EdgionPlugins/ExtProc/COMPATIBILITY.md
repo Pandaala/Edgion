@@ -1,6 +1,6 @@
 # ExtProc Compatibility and Coverage Matrix
 
-Reviewed: 2026-08-28
+Reviewed: 2026-08-29
 
 This matrix records what Edgion currently proves about its HTTP ExtProc
 implementation. It is an evidence index, not a claim of complete Envoy
@@ -31,6 +31,9 @@ a separately built external processor. A planned row is not test evidence.
 | Header collection, duplicate preservation, append actions, remove actions, and pseudo-header observation | Supported | Mutation unit tests in [`mutation.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/mutation.rs) cover overwrite, append, add-if-absent, removal, duplicate values, pseudo-headers, and raw values. | Fast |
 | Mutation of pseudo-headers and proxy-managed framing/hop-by-hop headers | Intentionally rejected | [`mutation.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/mutation.rs) rejects pseudo-header mutations and proxy-managed headers; the same file has regression tests for both rules. | Fast |
 | Request-header `ImmediateResponse` | Supported | [`test_immediate_response_403`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) asserts status, body, and an allowed response-header mutation. [`client.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/client.rs) checks that `ImmediateResponse` is terminal rather than a phase verdict. | Fast |
+| Exact `ImmediateResponse.grpc_status` | Supported | [`external_exact_grpc_immediate_response`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) uses the official Go v1.37 field and proves exact `PERMISSION_DENIED` plus message on a real gRPC client. [`plugin.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/plugin.rs) pins presence-aware status 0, range 0–16, ordinary-HTTP ignore behavior, and rejection above 16. | Fast unit + Full interoperability |
+| `disableImmediateResponse` | Supported | [`external_disabled_immediate_continues_backend`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) proves that the complete Immediate payload and its non-empty header mutation are suppressed, the backend continues, and no later processor phase is sent. Live Gateway tests cover the shared attached-owner lifecycle. | Fast unit + Full interoperability |
+| Reduction-only allow-listed `mode_override` | Supported | Resource tests in [`ext_proc.rs`](../../../../../edgion-resources/src/resources/edgion_plugins/plugin_configs/ext_proc.rs) cover list bounds, normalized duplicates, and every capability-expansion class. [`attached.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/attached.rs) proves exact membership, current-mode inheritance, phase restrictions, and atomic application. [`external_reduction_only_mode_override`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) proves an allowed `STREAMED` to `NONE` reduction and an ignored unlisted `BUFFERED` acquisition change with official Go types. | Fast unit + Full interoperability |
 | Request body `BUFFERED`, including body replacement, empty-to-nonempty replacement, physical-cap enforcement, and interactive `CONTINUE_AND_REPLACE` | Supported | Integration cases are in [`body_plugins.rs`](../../../../../edgion-tests/src/client/suites/edgion_plugins/body_plugins.rs) (`ext_proc_buffered_body`, `ext_proc_creates_body_from_empty_request`, and `ext_proc_continue_and_replace_stops_body_phase`). Mutation/failure-policy unit coverage is in [`plugin.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/plugin.rs). The shared cap contract is documented with its regression evidence in [`request-body-mutation-physical-cap.md`](../../../../../skills/04-review/architecture/request-body-mutation-physical-cap.md). | Fast |
 | Request body `STREAMED`, per-chunk mutation, backpressure, EOS, and mid-body `ImmediateResponse` | Supported | The ExtProc integration suite checks normal, multi-chunk, fail-open, and mid-body terminal paths in [`ext_proc.rs`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs). [`streamed.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/streamed.rs) checks replace, clear, malformed/wrong-phase verdicts, EOS, abandonment, and both failure policies. | Fast |
 | Response body `STREAMED` as bounded transport windows | Supported | [`response_streamed.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/response_streamed.rs) checks lockstep pass/replace/clear behavior, the inclusive hard cap, malformed verdicts, disconnect handling, and EOS. The attached-stream integration case in [`ext_proc.rs`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) observes response mutation and safe framing. | Fast |
@@ -48,8 +51,9 @@ a separately built external processor. A planned row is not test evidence.
 | Capability | Status | Current evidence | Coverage |
 |---|---|---|---|
 | Request trailer processing by ExtProc | Not implemented | Trailer messages retain Envoy field numbers in [`ext_proc.proto`](../../../../../edgion-common/src/ext_proc/proto/ext_proc.proto), and phase matching recognizes them in [`client.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/client.rs). However, the ordinary HTTP proxy explicitly does not forward request trailers in [`proxy_http/mod.rs`](../../../../../edgion-gateway/src/routes/http/proxy_http/mod.rs), and no ExtProc request-trailer phase producer exists. | No support claim |
-| Response trailer processing by ExtProc | Blocked | Trailer messages exist in [`ext_proc.proto`](../../../../../edgion-common/src/ext_proc/proto/ext_proc.proto), but no ExtProc response-trailer phase is wired into the response pipeline. The task's prerequisite, `tasks/todo/h2-trailer-eos-bypasses-response-body-filter.md`, is absent from the reviewed tree. Until that H2 trailer/EOS dependency is restored, resolved, and covered, response processing must not be described as trailer-complete. | Blocked; no support claim |
-| Trailer mutation returned through `CommonResponse.trailers` or `TrailersResponse` | Not implemented | The fields are retained for wire decoding in [`ext_proc.proto`](../../../../../edgion-common/src/ext_proc/proto/ext_proc.proto), but no HTTP pipeline application path or integration assertion exists. | No support claim |
+| Response trailer observation and clean no-trailer completion | Supported | The canonical typed lifecycle in [`pg_upstream_response_body_filter.rs`](../../../../../edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_body_filter.rs) distinguishes terminal-before-trailers from terminal-without-trailers, and [`pg_upstream_response_trailer_filter.rs`](../../../../../edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_trailer_filter.rs) dispatches exactly once. [`external_response_trailers_and_clean_absence`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) proves a real H2 trailer phase and a clean Process EOF with no fabricated trailer message against the locked Edgion Pingora revision. | Fast unit + Full interoperability |
+| Response trailer mutation through `TrailersResponse.header_mutation` | Supported | [`response_trailer.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/response_trailer.rs) applies mutations atomically to a clone, preserves duplicate raw values, enforces 256-field/64-KiB input and output caps, protects framing/hop-by-hop fields, and requires one valid gRPC status. The official-Go full case proves the mutated fixed trailer reaches a native H2 client against the locked Edgion Pingora revision. | Fast unit + Full interoperability |
+| H1.1 declaration and H1.0 representability policy | Supported | The Gateway reserves mutable framing before commit. A new H1.1 trailer name must have been declared, while observed names remain mutable; H2/custom transports may add valid names. Unrepresentable H1.0 trailers follow fail-open/drop or fail-close/connection termination. Gateway and Edgion Pingora fork seam tests pin these boundaries. | Fast unit + fork seam evidence |
 
 ## Transport and lifecycle behavior
 
@@ -91,13 +95,21 @@ in [`ext_proc.proto`](../../../../../edgion-common/src/ext_proc/proto/ext_proc.p
 The full-test fixture in [`ext_proc_external`](../../../fixtures/ext_proc_external/README.md)
 independently implements `envoy.service.ext_proc.v3.ExternalProcessor` using the
 official `github.com/envoyproxy/go-control-plane/envoy` v1.37.0 generated types.
-The full suite proves header, `BUFFERED`, and bidirectional `STREAMED` decoding
-and mutation, `ImmediateResponse`, phase/EOS observations, normal half-close,
-a three-second idle exchange, seeded chunk reconstruction, propagated
-backpressure, 64+1 session saturation/release, retry/discard semantics, and
-connection-bound TLS/mTLS A/B rotation. This is named wire-interoperability
-evidence for that pinned SDK version, not a claim of complete Envoy behavior
-coverage or compatibility with every processor implementation.
+Descriptor tests pin the official field numbers for
+`ImmediateResponse.grpc_status`, `ProcessingResponse.mode_override`,
+`ProcessingMode.response_trailer_mode`, and
+`ProcessingRequest.response_trailers`. The 32-case targeted full suite proves
+header, `BUFFERED`, and bidirectional `STREAMED` decoding and mutation, exact
+gRPC ImmediateResponse, disabled ImmediateResponse, reduction-only mode
+override, real/no response trailers, phase/EOS observations, normal
+half-close, a three-second idle exchange, seeded chunk reconstruction,
+propagated backpressure, 64+1 session saturation/release, retry/discard
+semantics, and connection-bound TLS/mTLS A/B rotation. This is named
+wire-interoperability evidence for that pinned SDK version, not a claim of
+complete Envoy behavior coverage or compatibility with every processor
+implementation. The response-trailer scenarios pass with the ordinary locked
+dependency build on `edgion_v3` revision
+`c50f93c0bf7adee4b1ed10a0696810968f042858`.
 
 The Go module, transitive graph, upstream commit, and Apache-2.0 notice are
 pinned beside the fixture. It is built only for qualifying `--full-test` runs;
@@ -108,6 +120,9 @@ the normal fast path remains independent of Go.
 The default/fast path should retain deterministic, local cases:
 
 - header/body mutations and `ImmediateResponse`;
+- exact gRPC ImmediateResponse and disabled-Immediate lifecycle;
+- reduction-only mode-override validation and state transitions;
+- response-trailer mutation, no-trailer completion, and H1 framing rules;
 - strict phase/EOS/verdict handling;
 - fail-open and fail-close;
 - representative H1/H2 early-response and cancellation shapes;

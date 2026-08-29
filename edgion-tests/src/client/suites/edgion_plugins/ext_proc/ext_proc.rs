@@ -20,6 +20,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::suites::grpc_route::test::test_service_client::TestServiceClient;
+use crate::suites::grpc_route::test::HelloRequest;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -39,6 +41,9 @@ const EXTERNAL_STRESS_STREAMED_HOST: &str = "ext-proc-external-stress-streamed.e
 const EXTERNAL_STRESS_HEADERS_HOST: &str = "ext-proc-external-stress-headers.example.com";
 const EXTERNAL_TLS_HOST: &str = "ext-proc-external-tls.example.com";
 const EXTERNAL_MTLS_HOST: &str = "ext-proc-external-mtls.example.com";
+const EXTERNAL_DISABLED_IMMEDIATE_HOST: &str = "ext-proc-external-disabled-immediate.example.com";
+const EXTERNAL_MODE_OVERRIDE_HOST: &str = "ext-proc-external-mode-override.example.com";
+const EXTERNAL_RESPONSE_TRAILERS_HOST: &str = "ext-proc-external-response-trailers.example.com";
 const EXTERNAL_ADMIN_URL_ENV: &str = "EDGION_EXT_PROC_EXTERNAL_ADMIN_URL";
 const EXTERNAL_REQUIRED_ENV: &str = "EDGION_EXT_PROC_EXTERNAL_REQUIRED";
 const EXTERNAL_TLS_MATERIAL_DIR_ENV: &str = "EDGION_EXT_PROC_EXTERNAL_TLS_MATERIAL_DIR";
@@ -98,6 +103,10 @@ struct ExternalStreamSnapshot {
     response_body_bytes: usize,
     response_body_sha256: String,
     response_eos_count: usize,
+    response_trailer_messages: usize,
+    response_trailer_fields: usize,
+    saw_fixed_response_trailer: bool,
+    saw_grpc_status_trailer: bool,
     client_half_closed: bool,
     cancelled: bool,
     active: bool,
@@ -549,6 +558,56 @@ fn assert_plain_transport(stream: &ExternalStreamSnapshot) -> Result<(), String>
     } else {
         Err(format!("unexpected plain transport observation: {stream:?}"))
     }
+}
+
+async fn external_h2_response_trailers(
+    ctx: &TestContext,
+    case_id: &str,
+    mode: &str,
+    upstream_trailers: bool,
+) -> Result<(u16, bytes::Bytes, Option<http::HeaderMap>), String> {
+    let tcp = tokio::net::TcpStream::connect((ctx.target_host.as_str(), ctx.http_port))
+        .await
+        .map_err(|error| format!("connect h2 gateway: {error}"))?;
+    let (mut client, connection) = h2::client::handshake(tcp)
+        .await
+        .map_err(|error| format!("h2 handshake: {error}"))?;
+    let driver = tokio::spawn(async move { connection.await });
+    let uri = format!("http://{EXTERNAL_RESPONSE_TRAILERS_HOST}/transport")
+        .parse::<http::Uri>()
+        .map_err(|error| format!("build h2 URI: {error}"))?;
+    let request = http::Request::builder()
+        .method(http::Method::GET)
+        .uri(uri)
+        .header("x-ext-proc-case-id", case_id)
+        .header("x-ext-proc-test-mode", mode)
+        .header("x-up-response-trailers", upstream_trailers.to_string())
+        .body(())
+        .map_err(|error| format!("build h2 request: {error}"))?;
+    let (response, _) = client
+        .send_request(request, true)
+        .map_err(|error| format!("send h2 request: {error}"))?;
+    let response = response
+        .await
+        .map_err(|error| format!("receive h2 response: {error}"))?;
+    let status = response.status().as_u16();
+    let mut body = response.into_body();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = body.data().await {
+        let chunk = chunk.map_err(|error| format!("receive h2 body: {error}"))?;
+        bytes.extend_from_slice(&chunk);
+        body.flow_control()
+            .release_capacity(chunk.len())
+            .map_err(|error| format!("release h2 capacity: {error}"))?;
+    }
+    let trailers = body
+        .trailers()
+        .await
+        .map_err(|error| format!("receive h2 trailers: {error}"))?;
+    drop(client);
+    driver.abort();
+    let _ = driver.await;
+    Ok((status, bytes::Bytes::from(bytes), trailers))
 }
 
 fn assert_external_streamed_observation(
@@ -2270,6 +2329,304 @@ impl ExtProcTestSuite {
         )
     }
 
+    fn test_external_exact_grpc_immediate_response() -> TestCase {
+        TestCase::new(
+            "external_exact_grpc_immediate_response",
+            "official Go grpc_status field selects exact gRPC code and message",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let case_id = "external-exact-grpc-immediate";
+                    let admin_url = match prepare_external_case(&ctx.http_client, case_id).await {
+                        Ok(url) => url,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    let endpoint_url = format!("http://{}:{}", ctx.target_host, ctx.http_port);
+                    let mut endpoint = match tonic::transport::Endpoint::from_shared(endpoint_url) {
+                        Ok(endpoint) => endpoint,
+                        Err(error) => return TestResult::failed(start.elapsed(), format!("invalid endpoint: {error}")),
+                    };
+                    let origin = match format!("http://{EXTERNAL_HOST}").parse() {
+                        Ok(origin) => origin,
+                        Err(error) => return TestResult::failed(start.elapsed(), format!("invalid origin: {error}")),
+                    };
+                    endpoint = endpoint.origin(origin);
+                    let mut client = match TestServiceClient::connect(endpoint).await {
+                        Ok(client) => client,
+                        Err(error) => return TestResult::failed(start.elapsed(), format!("connect failed: {error}")),
+                    };
+                    let mut request = tonic::Request::new(HelloRequest {
+                        name: "exact-grpc-immediate".to_string(),
+                    });
+                    request.metadata_mut().insert(
+                        "x-ext-proc-case-id",
+                        case_id.parse().expect("fixed case ID is valid metadata"),
+                    );
+                    request.metadata_mut().insert(
+                        "x-ext-proc-test-mode",
+                        "grpc-immediate".parse().expect("fixed mode is valid metadata"),
+                    );
+                    let status = match client.say_hello(request).await {
+                        Ok(_) => {
+                            return TestResult::failed(start.elapsed(), "expected gRPC error, got success".to_string())
+                        }
+                        Err(status) => status,
+                    };
+                    if status.code() != tonic::Code::PermissionDenied
+                        || status.message() != "processor denied exact grpc request"
+                    {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "exact gRPC reply mismatch: code={:?} message={}",
+                                status.code(),
+                                status.message()
+                            ),
+                        );
+                    }
+                    let snapshot = match poll_external_snapshot(&ctx.http_client, &admin_url, case_id).await {
+                        Ok(snapshot) => snapshot,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    let stream = match assert_external_stream(&snapshot, case_id, false) {
+                        Ok(stream) => stream,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    if let Err(error) = assert_exact_phases(stream, &["request_headers"]) {
+                        return TestResult::failed(start.elapsed(), error);
+                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "official grpc_status produced exact PERMISSION_DENIED and message".to_string(),
+                    )
+                })
+            },
+        )
+    }
+
+    fn test_external_disabled_immediate_continues_backend() -> TestCase {
+        TestCase::new(
+            "external_disabled_immediate_continues_backend",
+            "disabled ImmediateResponse reaches the backend and deactivates every later processor phase",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let case_id = "external-disabled-immediate";
+                    let admin_url = match prepare_external_case(&ctx.http_client, case_id).await {
+                        Ok(url) => url,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    let response = match ctx
+                        .http_client
+                        .get(format!("{}/headers", ctx.http_url()))
+                        .header("host", EXTERNAL_DISABLED_IMMEDIATE_HOST)
+                        .header("x-ext-proc-case-id", case_id)
+                        .header("x-ext-proc-test-mode", "disabled-immediate")
+                        .timeout(EXTERNAL_REQUEST_TIMEOUT)
+                        .send()
+                        .await
+                    {
+                        Ok(response) => response,
+                        Err(error) => return TestResult::failed(start.elapsed(), format!("request failed: {error}")),
+                    };
+                    let status = response.status().as_u16();
+                    let has_processor_response_header = response.headers().contains_key("x-ext-proc-resp");
+                    let has_denied_header = response.headers().contains_key("x-ext-proc-denied");
+                    let body = response.text().await.unwrap_or_default();
+                    if status != 200
+                        || has_processor_response_header
+                        || has_denied_header
+                        || !body.contains("x-ext-proc-test-mode")
+                    {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("disabled ImmediateResponse did not preserve backend exchange: status={status} processor_header={has_processor_response_header} denied_header={has_denied_header}"),
+                        );
+                    }
+                    let snapshot = match poll_external_snapshot(&ctx.http_client, &admin_url, case_id).await {
+                        Ok(snapshot) => snapshot,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    let stream = match assert_external_stream(&snapshot, case_id, true) {
+                        Ok(stream) => stream,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
+                    };
+                    if let Err(error) = assert_exact_phases(stream, &["request_headers"])
+                        .and_then(|_| assert_no_body_observations(stream))
+                    {
+                        return TestResult::failed(start.elapsed(), error);
+                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "backend continued and no processor phase followed the ignored ImmediateResponse".to_string(),
+                    )
+                })
+            },
+        )
+    }
+
+    fn test_external_reduction_only_mode_override() -> TestCase {
+        TestCase::new(
+            "external_reduction_only_mode_override",
+            "allowed STREAMED to NONE suppresses request body while a forbidden BUFFERED override is ignored",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    for (case_id, mode, expect_body_phase) in [
+                        ("external-mode-reduce-none", "mode-reduce-none", false),
+                        ("external-mode-forbidden-expand", "mode-forbidden-expand", true),
+                    ] {
+                        let admin_url = match prepare_external_case(&ctx.http_client, case_id).await {
+                            Ok(url) => url,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        let response = match ctx
+                            .http_client
+                            .post(format!("{}/echo", ctx.http_url()))
+                            .header("host", EXTERNAL_MODE_OVERRIDE_HOST)
+                            .header("x-ext-proc-case-id", case_id)
+                            .header("x-ext-proc-test-mode", mode)
+                            .body("mode-override-body")
+                            .send()
+                            .await
+                        {
+                            Ok(response) => response,
+                            Err(error) => {
+                                return TestResult::failed(start.elapsed(), format!("request failed: {error}"))
+                            }
+                        };
+                        if response.status() != reqwest::StatusCode::OK {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("{mode} returned {}", response.status()),
+                            );
+                        }
+                        let _ = response.bytes().await;
+                        let snapshot = match poll_external_snapshot(&ctx.http_client, &admin_url, case_id).await {
+                            Ok(snapshot) => snapshot,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        let stream = match assert_external_stream(&snapshot, case_id, true) {
+                            Ok(stream) => stream,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        if stream.phases.iter().any(|phase| phase == "request_body") != expect_body_phase {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("{mode} body-phase expectation failed: {stream:?}"),
+                            );
+                        }
+                        let expected_phases = if expect_body_phase {
+                            &["request_headers", "request_body", "response_headers"][..]
+                        } else {
+                            &["request_headers", "response_headers"][..]
+                        };
+                        if let Err(error) = assert_exact_phases(stream, expected_phases) {
+                            return TestResult::failed(start.elapsed(), error);
+                        }
+                        if expect_body_phase {
+                            if stream.request_body_messages == 0
+                                || stream.request_body_bytes != b"mode-override-body".len()
+                                || stream.request_eos_count != 1
+                                || stream.response_body_messages != 0
+                            {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("forbidden override observation mismatch: {stream:?}"),
+                                );
+                            }
+                        } else if let Err(error) = assert_no_body_observations(stream) {
+                            return TestResult::failed(start.elapsed(), error);
+                        }
+                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "allow-listed reduction suppressed body and forbidden acquisition change was ignored"
+                            .to_string(),
+                    )
+                })
+            },
+        )
+    }
+
+    fn test_external_response_trailers_and_clean_absence() -> TestCase {
+        TestCase::new(
+            "external_response_trailers_and_clean_absence",
+            "official response_trailers mutation reaches H2 while no-trailer completion fabricates no phase",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    for (case_id, mode, upstream_trailers) in [
+                        ("external-real-response-trailers", "trailer-mutate", true),
+                        ("external-no-response-trailers", "no-trailer", false),
+                    ] {
+                        let admin_url = match prepare_external_case(&ctx.http_client, case_id).await {
+                            Ok(url) => url,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        let (status, body, trailers) =
+                            match external_h2_response_trailers(&ctx, case_id, mode, upstream_trailers).await {
+                                Ok(result) => result,
+                                Err(error) => return TestResult::failed(start.elapsed(), error),
+                            };
+                        if status != 200 || body.len() != 16 {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("{mode} response mismatch: status={status} body_len={}", body.len()),
+                            );
+                        }
+                        let fixed = trailers
+                            .as_ref()
+                            .and_then(|map| map.get("x-edgion-upstream-trailer"))
+                            .and_then(|value| value.to_str().ok());
+                        if upstream_trailers && fixed != Some("processed-by-external-go") {
+                            return TestResult::failed(start.elapsed(), format!("mutated trailer = {fixed:?}"));
+                        }
+                        if !upstream_trailers && trailers.is_some() {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                "no-trailer response fabricated trailers".to_string(),
+                            );
+                        }
+                        let snapshot = match poll_external_snapshot(&ctx.http_client, &admin_url, case_id).await {
+                            Ok(snapshot) => snapshot,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        let stream = match assert_external_stream(&snapshot, case_id, true) {
+                            Ok(stream) => stream,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        if upstream_trailers {
+                            if stream.response_trailer_messages != 1
+                                || stream.response_trailer_fields != 1
+                                || !stream.saw_fixed_response_trailer
+                                || stream.saw_grpc_status_trailer
+                            {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("trailer observation = {stream:?}"),
+                                );
+                            }
+                        } else if stream.response_trailer_messages != 0
+                            || stream.response_trailer_fields != 0
+                            || stream.saw_fixed_response_trailer
+                            || stream.saw_grpc_status_trailer
+                        {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("fabricated trailer observation = {stream:?}"),
+                            );
+                        }
+                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "real H2 trailer was mutated and absent trailers closed cleanly without a phase".to_string(),
+                    )
+                })
+            },
+        )
+    }
+
     /// Full-test-only wall-clock idle coverage. Short timeout behavior belongs
     /// in deterministic unit tests; this case deliberately holds the external
     /// side stream idle for three seconds and verifies the transaction survives.
@@ -2845,6 +3202,10 @@ impl TestSuite for ExtProcTestSuite {
                 Self::test_external_streamed_request_and_response_body(),
                 Self::test_external_streamed_status_retry_is_suppressed(),
                 Self::test_external_immediate_response(),
+                Self::test_external_exact_grpc_immediate_response(),
+                Self::test_external_disabled_immediate_continues_backend(),
+                Self::test_external_reduction_only_mode_override(),
+                Self::test_external_response_trailers_and_clean_absence(),
                 Self::test_external_long_idle_stream_survives(),
                 Self::test_external_seeded_chunk_boundaries(),
                 Self::test_external_request_body_backpressure(),
@@ -2868,6 +3229,10 @@ mod tests {
         "external_streamed_request_and_response_body",
         "external_streamed_status_retry_is_suppressed",
         "external_immediate_response",
+        "external_exact_grpc_immediate_response",
+        "external_disabled_immediate_continues_backend",
+        "external_reduction_only_mode_override",
+        "external_response_trailers_and_clean_absence",
         "external_long_idle_stream_survives",
         "external_seeded_chunk_boundaries",
         "external_request_body_backpressure",

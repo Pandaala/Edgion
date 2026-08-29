@@ -36,6 +36,7 @@ import (
 	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	extprocmodev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"google.golang.org/grpc"
@@ -632,6 +633,11 @@ type streamObservation struct {
 	ResponseBodySHA256   string `json:"response_body_sha256"`
 	ResponseEOSCount     int    `json:"response_eos_count"`
 
+	ResponseTrailerMessages int  `json:"response_trailer_messages"`
+	ResponseTrailerFields   int  `json:"response_trailer_fields"`
+	SawFixedResponseTrailer bool `json:"saw_fixed_response_trailer"`
+	SawGRPCStatusTrailer    bool `json:"saw_grpc_status_trailer"`
+
 	ClientHalfClosed bool `json:"client_half_closed"`
 	Cancelled        bool `json:"cancelled"`
 	Active           bool `json:"active"`
@@ -754,6 +760,10 @@ func (s *observationStore) addPhaseWithStatus(
 		if responseStatus == nil {
 			return errors.New("response header status is missing")
 		}
+	case "response_trailers":
+		if stream.ResponseTrailerMessages >= maxHeaderMessagesPerDirection {
+			return errors.New("response trailer message limit exceeded")
+		}
 	}
 	switch phase {
 	case "request_headers":
@@ -769,9 +779,36 @@ func (s *observationStore) addPhaseWithStatus(
 		if err := stream.responseBody.add(body, eos); err != nil {
 			return err
 		}
+	case "response_trailers":
+		stream.ResponseTrailerMessages++
 	}
 	if phaseChanged {
 		stream.Phases = append(stream.Phases, phase)
+	}
+	return nil
+}
+
+func (s *observationStore) observeResponseTrailers(
+	stream *streamObservation,
+	trailers *corev3.HeaderMap,
+) error {
+	if err := s.addPhase(stream, "response_trailers", nil, false); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fields := trailers.GetHeaders()
+	if len(fields) > maxHeaderMessagesPerDirection-stream.ResponseTrailerFields {
+		return errors.New("response trailer field limit exceeded")
+	}
+	stream.ResponseTrailerFields += len(fields)
+	for _, field := range fields {
+		switch strings.ToLower(field.GetKey()) {
+		case "x-edgion-upstream-trailer":
+			stream.SawFixedResponseTrailer = true
+		case "grpc-status":
+			stream.SawGRPCStatusTrailer = true
+		}
 	}
 	return nil
 }
@@ -1071,8 +1108,14 @@ func (p *processor) observeAndRespond(
 	switch value := request.GetRequest().(type) {
 	case *extprocv3.ProcessingRequest_RequestHeaders:
 		phase = "request_headers"
-		if mode == "immediate" {
+		if mode == "immediate" || mode == "disabled-immediate" {
 			response = immediateResponse()
+		} else if mode == "grpc-immediate" {
+			response = grpcImmediateResponse()
+		} else if mode == "mode-reduce-none" {
+			response = headerResponseWithModeOverride(extprocmodev3.ProcessingMode_NONE)
+		} else if mode == "mode-forbidden-expand" {
+			response = headerResponseWithModeOverride(extprocmodev3.ProcessingMode_BUFFERED)
 		} else {
 			response = headerResponse(true)
 		}
@@ -1090,6 +1133,11 @@ func (p *processor) observeAndRespond(
 	case *extprocv3.ProcessingRequest_ResponseBody:
 		phase, body, eos = "response_body", value.ResponseBody.GetBody(), value.ResponseBody.GetEndOfStream()
 		response = bodyResponse(false)
+	case *extprocv3.ProcessingRequest_ResponseTrailers:
+		if err := p.store.observeResponseTrailers(observation, value.ResponseTrailers.GetTrailers()); err != nil {
+			return status.Error(codes.ResourceExhausted, err.Error())
+		}
+		return stream.Send(responseTrailerResponse())
 	default:
 		return status.Error(codes.Unimplemented, "unsupported ExtProc phase")
 	}
@@ -1120,7 +1168,9 @@ func validCaseID(value string) bool { return caseIDPattern.MatchString(value) }
 
 func validMode(value string) bool {
 	switch value {
-	case "interop", "immediate", "long-idle", "barrier-headers", "barrier-request-body":
+	case "interop", "immediate", "grpc-immediate", "disabled-immediate", "mode-reduce-none",
+		"mode-forbidden-expand", "trailer-mutate", "no-trailer", "long-idle", "barrier-headers",
+		"barrier-request-body":
 		return true
 	default:
 		return false
@@ -1180,6 +1230,19 @@ func headerResponse(request bool) *extprocv3.ProcessingResponse {
 	return &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_ResponseHeaders{ResponseHeaders: &extprocv3.HeadersResponse{Response: commonResponse("x-ext-proc-resp", "external-go", nil)}}}
 }
 
+func headerResponseWithModeOverride(requestBodyMode extprocmodev3.ProcessingMode_BodySendMode) *extprocv3.ProcessingResponse {
+	response := headerResponse(true)
+	response.ModeOverride = &extprocmodev3.ProcessingMode{
+		RequestHeaderMode:   extprocmodev3.ProcessingMode_DEFAULT,
+		ResponseHeaderMode:  extprocmodev3.ProcessingMode_DEFAULT,
+		RequestBodyMode:     requestBodyMode,
+		ResponseBodyMode:    extprocmodev3.ProcessingMode_NONE,
+		RequestTrailerMode:  extprocmodev3.ProcessingMode_DEFAULT,
+		ResponseTrailerMode: extprocmodev3.ProcessingMode_DEFAULT,
+	}
+	return response
+}
+
 func bodyResponse(request bool) *extprocv3.ProcessingResponse {
 	if request {
 		return &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_RequestBody{RequestBody: &extprocv3.BodyResponse{Response: commonResponse("", "", []byte("processed-by-external-go"))}}}
@@ -1193,6 +1256,22 @@ func immediateResponse() *extprocv3.ProcessingResponse {
 		Headers: &extprocv3.HeaderMutation{SetHeaders: []*corev3.HeaderValueOption{setHeader("x-ext-proc-denied", "1")}},
 		Body:    []byte("blocked by external ext_proc"),
 	}}}
+}
+
+func grpcImmediateResponse() *extprocv3.ProcessingResponse {
+	return &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_ImmediateResponse{ImmediateResponse: &extprocv3.ImmediateResponse{
+		Status:     &typev3.HttpStatus{Code: typev3.StatusCode_Forbidden},
+		Body:       []byte("processor denied exact grpc request"),
+		GrpcStatus: &extprocv3.GrpcStatus{Status: uint32(codes.PermissionDenied)},
+	}}}
+}
+
+func responseTrailerResponse() *extprocv3.ProcessingResponse {
+	return &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_ResponseTrailers{
+		ResponseTrailers: &extprocv3.TrailersResponse{HeaderMutation: &extprocv3.HeaderMutation{
+			SetHeaders: []*corev3.HeaderValueOption{setHeader("x-edgion-upstream-trailer", "processed-by-external-go")},
+		}},
+	}}
 }
 
 type adminHandler struct {

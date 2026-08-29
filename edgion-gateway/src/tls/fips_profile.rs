@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn approved_tls12_ciphers_are_valid_boringssl_names() {
         use boring::ssl::{SslContext, SslMethod};
-        let mut b = SslContext::builder(SslMethod::tls_server()).unwrap();
+        let mut b = SslContext::builder(SslMethod::tls()).unwrap();
         // set_cipher_list parses the TLS 1.2 cipher string; a typo yields Err.
         b.set_cipher_list(FIPS_TLS12_CIPHERS)
             .expect("approved TLS 1.2 cipher names must be valid BoringSSL strings");
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn configure_fips_ciphers_and_curves_apply_cleanly() {
         use boring::ssl::{Ssl, SslContext, SslMethod};
-        let ctx = SslContext::builder(SslMethod::tls_server()).unwrap().build();
+        let ctx = SslContext::builder(SslMethod::tls()).unwrap().build();
         let mut ssl = Ssl::new(&ctx).unwrap();
         // Exercises the real strict cipher FFI and the curves FFI on a live Ssl,
         // covering the "approved strings accepted, else fail closed" risk.
@@ -318,7 +318,7 @@ mod tests {
             let x509 = X509::from_pem(&cert_pem).unwrap();
             let pkey = PKey::private_key_from_pem(&key_pem).unwrap();
 
-            let mut sb = SslContext::builder(SslMethod::tls_server()).unwrap();
+            let mut sb = SslContext::builder(SslMethod::tls()).unwrap();
             sb.set_certificate(&x509).unwrap();
             sb.set_private_key(&pkey).unwrap();
             sb.set_min_proto_version(Some(SslVersion::TLS1_2)).unwrap();
@@ -342,7 +342,7 @@ mod tests {
             let tcp = TcpStream::connect(addr).unwrap();
             tcp.set_read_timeout(Some(Duration::from_secs(5))).ok();
             tcp.set_write_timeout(Some(Duration::from_secs(5))).ok();
-            let mut cb = SslContext::builder(SslMethod::tls_client()).unwrap();
+            let mut cb = SslContext::builder(SslMethod::tls()).unwrap();
             cb.set_verify(SslVerifyMode::NONE);
             cb.set_min_proto_version(Some(SslVersion::TLS1_2)).unwrap();
             cb.set_max_proto_version(Some(SslVersion::TLS1_2)).unwrap();

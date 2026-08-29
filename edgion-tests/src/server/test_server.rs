@@ -3029,6 +3029,7 @@ mod ext_proc_server {
         };
         ProcessingResponse {
             response: Some(response),
+            mode_override: None,
         }
     }
 
@@ -3041,8 +3042,10 @@ mod ext_proc_server {
                     remove_headers: Vec::new(),
                 }),
                 body: b"blocked by ext_proc".to_vec(),
+                grpc_status: None,
                 details: String::new(),
             })),
+            mode_override: None,
         }
     }
 
@@ -3059,6 +3062,7 @@ mod ext_proc_server {
                     clear_route_cache: false,
                 }),
             })),
+            mode_override: None,
         }
     }
 
@@ -3075,6 +3079,7 @@ mod ext_proc_server {
                     clear_route_cache: false,
                 }),
             })),
+            mode_override: None,
         }
     }
 
@@ -3091,6 +3096,7 @@ mod ext_proc_server {
                     clear_route_cache: false,
                 }),
             })),
+            mode_override: None,
         }
     }
 
@@ -3131,7 +3137,13 @@ mod ext_proc_server {
                 };
                 if has(BAD_VERDICT_HEADER) {
                     // Malformed verdict: an empty ProcessingResponse (no oneof).
-                    return (Some(ProcessingResponse { response: None }), false);
+                    return (
+                        Some(ProcessingResponse {
+                            response: None,
+                            mode_override: None,
+                        }),
+                        false,
+                    );
                 }
                 match mode.as_deref() {
                     Some("wrong-order") => (Some(request_body_verdict_with(b"wrong-phase-body")), false),
@@ -3142,7 +3154,7 @@ mod ext_proc_server {
                             ResponseStatus::ContinueAndReplace,
                             Some(b"replaced-at-headers"),
                         )),
-                        true,
+                        false,
                     ),
                     _ => (
                         Some(if has(BLOCK_HEADER) {

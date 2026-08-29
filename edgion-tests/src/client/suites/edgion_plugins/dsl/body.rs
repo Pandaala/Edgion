@@ -964,7 +964,7 @@ impl DslBodyTestSuite {
                     let request_body = vec![b'x'; BODY_SIZE];
                     let result = Self::post_body_http_call(
                         &client,
-                        "http://dsl-body-http-call.example.com:31180/echo",
+                        "http://dsl-body-http-call.example.com/echo",
                         "http-call",
                         request_body.clone(),
                         &request_body,

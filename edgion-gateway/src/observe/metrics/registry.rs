@@ -628,7 +628,8 @@ pub fn record_ip_deny_entries_skipped(scope: &'static str) {
 }
 
 /// A config-aggregation conflict silently fell back to a default. `field` is a bounded
-/// constant `&'static str` naming which aggregate conflicted (e.g. "outbound_ca").
+/// constant `&'static str` naming which aggregate conflicted (for example,
+/// "outbound_ca" or "outbound_client_identity").
 /// Zero-event sentinel: it stays absent until an operator ships genuinely conflicting
 /// configs, at which point the resolved value is order-independent but non-obvious.
 pub fn record_config_conflict(field: &'static str) {

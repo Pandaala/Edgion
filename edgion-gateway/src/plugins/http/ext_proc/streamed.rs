@@ -14,7 +14,7 @@ use bytes::Bytes;
 use pingora_proxy::RequestBodyEvent;
 
 use super::attached::AttachedExtProc;
-use super::plugin::{exchange_failure_reason, sanitize_status};
+use super::plugin::{exchange_failure_reason, has_unsupported_common_fields, immediate_action, ImmediateAction};
 use crate::plugins::runtime::dye_plan::CompiledDyePlan;
 use crate::plugins::runtime::{ChunkVerdict, DyeOutcome, PluginLog, RequestBodyStreamHandler};
 use edgion_common::ext_proc::proto::{
@@ -56,6 +56,7 @@ pub struct ExtProcStreamedBodyHandler {
     /// half) is released instead of being pinned for the rest of the request.
     exchange: Option<Box<dyn BodyExchange>>,
     failure_mode_allow: bool,
+    disable_immediate_response: bool,
     /// Set when the handler stops exchanging (fail-open deactivation or a
     /// terminal verdict); later chunks pass through untouched.
     done: bool,
@@ -64,22 +65,28 @@ pub struct ExtProcStreamedBodyHandler {
     /// recording (mirrors the request-stage `fail_mode` recording).
     pending_outcome: Option<(DyeOutcome, String)>,
     terminal_at_request_eos: bool,
+    log: PluginLog,
+    has_log: bool,
 }
 
 impl ExtProcStreamedBodyHandler {
     pub fn new(
         exchange: Box<dyn BodyExchange>,
         failure_mode_allow: bool,
+        disable_immediate_response: bool,
         dye_plan: Option<Arc<CompiledDyePlan>>,
         terminal_at_request_eos: bool,
     ) -> Self {
         Self {
             exchange: Some(exchange),
             failure_mode_allow,
+            disable_immediate_response,
             done: false,
             dye_plan,
             pending_outcome: None,
             terminal_at_request_eos,
+            log: PluginLog::new("ExtProc"),
+            has_log: false,
         }
     }
 
@@ -113,8 +120,9 @@ impl ExtProcStreamedBodyHandler {
             self.pending_outcome = Some((DyeOutcome::FailClose, cause));
             ChunkVerdict::Terminate {
                 status: 500,
+                grpc_status: None,
                 body: None,
-                headers: Vec::new(),
+                header_ops: Vec::new(),
             }
         }
     }
@@ -163,6 +171,9 @@ impl RequestBodyStreamHandler for ExtProcStreamedBodyHandler {
                 let Some(common) = br.response else {
                     return self.fail("bad verdict", Some("missing common response"));
                 };
+                if has_unsupported_common_fields(&common) {
+                    return self.fail("bad verdict", Some("unsupported common response fields"));
+                }
                 let status = ResponseStatus::try_from(common.status).ok();
                 // CONTINUE_AND_REPLACE mid-stream ("replace and stop sending
                 // chunks") is not implemented; never silently downgrade it to
@@ -201,7 +212,18 @@ impl RequestBodyStreamHandler for ExtProcStreamedBodyHandler {
                 ChunkVerdict::Continue
             }
             Some(processing_response::Response::ImmediateResponse(imm)) => {
-                let status = imm.status.as_ref().map(|s| sanitize_status(s.code)).unwrap_or(500);
+                let action = match immediate_action(imm, self.disable_immediate_response) {
+                    Ok(action) => action,
+                    Err(detail) => return self.fail("bad verdict", Some(detail)),
+                };
+                if matches!(action, ImmediateAction::Suppress) {
+                    self.done = true;
+                    exchange.terminal("suppressed", "immediate-disabled");
+                    return ChunkVerdict::Continue;
+                }
+                let ImmediateAction::Reply(imm) = action else {
+                    unreachable!("suppression returned above")
+                };
                 self.done = true;
                 exchange.terminal("immediate-response", "request-immediate");
                 // Carry the immediate response's header mutations into the
@@ -209,30 +231,34 @@ impl RequestBodyStreamHandler for ExtProcStreamedBodyHandler {
                 // semantics. Protected/pseudo headers are rejected here (with
                 // the same log lines as the mutation module) so the hook can
                 // apply the pairs verbatim.
-                let mut headers = Vec::new();
-                if let Some(mutation) = imm.headers.as_ref() {
-                    for option in &mutation.set_headers {
-                        let Some(header) = option.header.as_ref() else { continue };
-                        if super::mutation::is_protected_header(&header.key) {
-                            continue;
-                        }
-                        let value = if header.raw_value.is_empty() {
-                            header.value.clone()
-                        } else {
-                            String::from_utf8_lossy(&header.raw_value).into_owned()
-                        };
-                        headers.push((header.key.clone(), value));
-                    }
+                let header_ops = imm.headers.as_ref().map_or_else(Vec::new, |mutation| {
+                    self.has_log |= mutation
+                        .set_headers
+                        .iter()
+                        .filter_map(|option| option.header.as_ref())
+                        .any(|header| super::mutation::is_protected_header(&header.key))
+                        || mutation
+                            .remove_headers
+                            .iter()
+                            .any(|name| super::mutation::is_protected_header(name));
+                    super::mutation::local_reply_ops(mutation, &mut self.log)
+                });
+                ChunkVerdict::Terminate {
+                    status: imm.status,
+                    grpc_status: imm.grpc_status,
+                    body: imm.body,
+                    header_ops,
                 }
-                let body = (!imm.body.is_empty()).then(|| String::from_utf8_lossy(&imm.body).into_owned());
-                ChunkVerdict::Terminate { status, body, headers }
             }
             _ => self.fail("bad verdict", None),
         }
     }
 
     fn take_log(&mut self) -> Option<PluginLog> {
-        None
+        self.has_log.then(|| {
+            self.has_log = false;
+            std::mem::replace(&mut self.log, PluginLog::new("ExtProc"))
+        })
     }
 
     fn dye_plan(&self) -> Option<Arc<CompiledDyePlan>> {
@@ -280,6 +306,7 @@ mod tests {
                     ..Default::default()
                 }),
             })),
+            mode_override: None,
         }
     }
 
@@ -287,7 +314,13 @@ mod tests {
         script: Vec<Result<ProcessingResponse, tonic::Status>>,
         failure_mode_allow: bool,
     ) -> ExtProcStreamedBodyHandler {
-        ExtProcStreamedBodyHandler::new(Box::new(ScriptedExchange::new(script)), failure_mode_allow, None, true)
+        ExtProcStreamedBodyHandler::new(
+            Box::new(ScriptedExchange::new(script)),
+            failure_mode_allow,
+            false,
+            None,
+            true,
+        )
     }
 
     #[tokio::test]
@@ -307,6 +340,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn request_body_phase_ignores_mode_override_even_when_enum_is_unknown() {
+        let mut verdict = body_verdict(None);
+        verdict.mode_override = Some(edgion_common::ext_proc::proto::ProcessingMode {
+            request_body_mode: 99,
+            ..Default::default()
+        });
+        let mut handler = handler_with(vec![Ok(verdict)], false);
+        let mut chunk = Some(Bytes::from_static(b"original"));
+        assert!(matches!(
+            handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await,
+            ChunkVerdict::Continue
+        ));
+        assert_eq!(chunk.as_deref(), Some(&b"original"[..]));
+    }
+
+    #[tokio::test]
     async fn clear_body_empties_current_chunk() {
         let mut handler = handler_with(
             vec![Ok(body_verdict(Some(body_mutation::Mutation::ClearBody(true))))],
@@ -321,25 +370,83 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn immediate_response_terminates_with_sanitized_status() {
+    async fn malformed_immediate_response_fails_before_using_body() {
         let immediate = ProcessingResponse {
             response: Some(processing_response::Response::ImmediateResponse(ImmediateResponse {
                 status: Some(HttpStatus { code: 100 }),
                 body: b"denied".to_vec(),
                 ..Default::default()
             })),
+            mode_override: None,
         };
         let mut handler = handler_with(vec![Ok(immediate)], false);
         let mut chunk = Some(Bytes::from_static(b"payload"));
         match handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await {
-            ChunkVerdict::Terminate { status, body, headers } => {
+            ChunkVerdict::Terminate {
+                status,
+                body,
+                header_ops,
+                ..
+            } => {
                 assert_eq!(status, 500, "1xx is not a valid final reply");
-                assert_eq!(body.as_deref(), Some("denied"));
-                assert!(headers.is_empty());
+                assert_eq!(body, None);
+                assert!(header_ops.is_empty());
             }
             ChunkVerdict::Continue => panic!("immediate response must terminate"),
         }
         assert!(handler.take_log().is_none());
+    }
+
+    #[tokio::test]
+    async fn disabled_immediate_response_deactivates_and_preserves_chunk() {
+        let immediate = ProcessingResponse {
+            response: Some(processing_response::Response::ImmediateResponse(
+                ImmediateResponse::default(),
+            )),
+            mode_override: None,
+        };
+        let mut handler = ExtProcStreamedBodyHandler::new(
+            Box::new(ScriptedExchange::new(vec![Ok(immediate)])),
+            false,
+            true,
+            None,
+            true,
+        );
+        let mut chunk = Some(Bytes::from_static(b"original"));
+        assert!(matches!(
+            handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await,
+            ChunkVerdict::Continue
+        ));
+        assert_eq!(chunk.as_deref(), Some(&b"original"[..]));
+        assert!(matches!(
+            handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await,
+            ChunkVerdict::Continue
+        ));
+    }
+
+    #[tokio::test]
+    async fn valid_immediate_carries_exact_grpc_status() {
+        use edgion_common::ext_proc::proto::GrpcStatus;
+
+        let immediate = ProcessingResponse {
+            response: Some(processing_response::Response::ImmediateResponse(ImmediateResponse {
+                status: Some(HttpStatus { code: 403 }),
+                grpc_status: Some(GrpcStatus { status: 0 }),
+                body: b"exact".to_vec(),
+                ..Default::default()
+            })),
+            mode_override: None,
+        };
+        let mut handler = handler_with(vec![Ok(immediate)], false);
+        let mut chunk = Some(Bytes::from_static(b"payload"));
+        assert!(matches!(
+            handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await,
+            ChunkVerdict::Terminate {
+                status: 403,
+                grpc_status: Some(0),
+                ..
+            }
+        ));
     }
 
     /// Immediate-response header mutations are carried into the terminate
@@ -367,16 +474,24 @@ mod tests {
                 body: b"no".to_vec(),
                 ..Default::default()
             })),
+            mode_override: None,
         };
         let mut handler = handler_with(vec![Ok(immediate)], false);
         let mut chunk = Some(Bytes::from_static(b"payload"));
         match handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await {
-            ChunkVerdict::Terminate { status, headers, .. } => {
+            ChunkVerdict::Terminate { status, header_ops, .. } => {
                 assert_eq!(status, 403);
-                assert_eq!(headers, vec![("x-denied-by".to_string(), "policy".to_string())]);
+                assert!(matches!(
+                    header_ops.as_slice(),
+                    [crate::PendingHeaderOp::Set { name, value }]
+                        if name == "x-denied-by" && value == "policy"
+                ));
             }
             ChunkVerdict::Continue => panic!("immediate response must terminate"),
         }
+        assert!(handler
+            .take_log()
+            .is_some_and(|log| log.contains("protected header mutation rejected")));
     }
 
     #[tokio::test]
@@ -429,6 +544,7 @@ mod tests {
                     ..Default::default()
                 }),
             })),
+            mode_override: None,
         };
         let mut handler = handler_with(vec![Ok(cr)], false);
         let mut chunk = Some(Bytes::from_static(b"x"));
@@ -444,12 +560,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streamed_body_rejects_unimplemented_common_fields_before_mutation() {
+        let response = ProcessingResponse {
+            response: Some(processing_response::Response::RequestBody(BodyResponse {
+                response: Some(CommonResponse {
+                    clear_route_cache: true,
+                    body_mutation: Some(BodyMutation {
+                        mutation: Some(body_mutation::Mutation::Body(b"changed".to_vec())),
+                    }),
+                    ..Default::default()
+                }),
+            })),
+            mode_override: None,
+        };
+        let mut handler = handler_with(vec![Ok(response)], false);
+        let mut chunk = Some(Bytes::from_static(b"original"));
+        assert!(matches!(
+            handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await,
+            ChunkVerdict::Terminate { status: 500, .. }
+        ));
+        assert_eq!(chunk.as_deref(), Some(&b"original"[..]));
+    }
+
+    #[tokio::test]
     async fn wrong_phase_verdict_follows_failure_policy() {
         use edgion_common::ext_proc::proto::HeadersResponse;
         let wrong = ProcessingResponse {
             response: Some(processing_response::Response::ResponseHeaders(
                 HeadersResponse::default(),
             )),
+            mode_override: None,
         };
         let mut handler = handler_with(vec![Ok(wrong)], false);
         let mut chunk = Some(Bytes::from_static(b"x"));
@@ -466,6 +606,7 @@ mod tests {
                 response: Some(processing_response::Response::RequestBody(BodyResponse {
                     response: None,
                 })),
+                mode_override: None,
             },
             ProcessingResponse {
                 response: Some(processing_response::Response::RequestBody(BodyResponse {
@@ -474,6 +615,7 @@ mod tests {
                         ..Default::default()
                     }),
                 })),
+                mode_override: None,
             },
             ProcessingResponse {
                 response: Some(processing_response::Response::RequestBody(BodyResponse {
@@ -482,6 +624,7 @@ mod tests {
                         ..Default::default()
                     }),
                 })),
+                mode_override: None,
             },
         ];
         for verdict in verdicts {
@@ -512,7 +655,7 @@ mod tests {
             }
         }
 
-        let mut handler = ExtProcStreamedBodyHandler::new(Box::new(AssertingExchange), false, None, true);
+        let mut handler = ExtProcStreamedBodyHandler::new(Box::new(AssertingExchange), false, false, None, true);
         let mut chunk = None;
         assert!(matches!(
             handler.on_chunk(&mut chunk, RequestBodyEvent::Complete).await,

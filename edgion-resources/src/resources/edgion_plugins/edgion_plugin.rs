@@ -1029,6 +1029,21 @@ mod request_body_plugin_requirement_tests {
     }
 
     #[test]
+    fn ext_proc_override_reductions_do_not_change_static_body_acquisition() {
+        let buffered: EdgionPlugin = serde_json::from_str(
+            r#"{"type":"ExtProc","config":{"grpcService":{"target":"processor:9000"},"processingMode":{"requestBodyMode":"BUFFERED"},"allowModeOverride":true,"allowedOverrideModes":[{"requestBodyMode":"NONE"}]}}"#,
+        )
+        .unwrap();
+        assert!(buffered.body_requirement(BodyStage::Request).is_some());
+
+        let streamed: EdgionPlugin = serde_json::from_str(
+            r#"{"type":"ExtProc","config":{"grpcService":{"target":"processor:9000"},"processingMode":{"requestBodyMode":"STREAMED"},"allowModeOverride":true,"allowedOverrideModes":[{"requestBodyMode":"NONE"}]}}"#,
+        )
+        .unwrap();
+        assert!(streamed.body_requirement(BodyStage::Request).is_none());
+    }
+
+    #[test]
     fn proxy_rewrite_json_body_defaults_to_64_kib_fail_close() {
         let plugin: EdgionPlugin = serde_json::from_str(
             r#"{"type":"ProxyRewrite","config":{"jsonBody":{"operations":[{"op":"add","path":"/enabled","value":true}]}}}"#,

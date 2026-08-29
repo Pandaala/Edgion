@@ -149,12 +149,12 @@ cargo clippy --locked --workspace --all-targets
 cargo test --locked --all
 ```
 
-The Edgion Pingora dependencies follow the fork's `edgion` branch during
+The Edgion Pingora dependencies follow the fork's `edgion_v3` branch during
 development, but `Cargo.lock` pins the exact commit. An intentional fork update
 is therefore a reviewed lockfile change. CI, release, and image builds never
 advance the branch implicitly because they use `--locked`. Release milestones
 may use a protected immutable tag when the manifest itself must carry the
-release identity; all six fork dependency entries must change together.
+release identity; all seven fork dependency entries must change together.
 
 If you need something closer to release binary packaging, start with:
 

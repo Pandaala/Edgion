@@ -7,6 +7,7 @@ use crate::lb::edgion_backend::EdgionBackend;
 use crate::observe::logs::LogBuffer;
 use crate::observe::RequestDiagnostics;
 use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
+use crate::plugins::runtime::traits::UpstreamResponseTrailer;
 use crate::plugins::runtime::PluginRuntime;
 use crate::plugins::{EdgionPluginsLog, StageLogs};
 use crate::request_body::RequestBodyState;
@@ -32,6 +33,58 @@ use tokio::task::JoinHandle;
 
 const PLUGIN_ENTRY_NAME_CAPACITY: usize = crate::plugins::runtime::log::NAME_CAPACITY;
 const PLUGIN_ENTRY_ALIAS_CAPACITY: usize = 32;
+
+/// Request-local exactly-once gate for the canonical response-trailer phase.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum UpstreamTrailerLifecycle {
+    #[default]
+    Open,
+    AwaitingTrailers,
+    Dispatched,
+}
+
+impl UpstreamTrailerLifecycle {
+    #[inline]
+    pub(crate) fn mark_before_trailers(&mut self) -> bool {
+        if !matches!(self, Self::Open) {
+            return false;
+        }
+        *self = Self::AwaitingTrailers;
+        true
+    }
+
+    #[inline]
+    pub(crate) fn claim_without_trailers(&mut self) -> bool {
+        if !matches!(self, Self::Open) {
+            return false;
+        }
+        *self = Self::Dispatched;
+        true
+    }
+
+    #[inline]
+    pub(crate) fn claim_real_trailers(&mut self) -> bool {
+        if matches!(self, Self::Dispatched) {
+            return false;
+        }
+        *self = Self::Dispatched;
+        true
+    }
+
+    #[inline]
+    pub(crate) fn is_open(self) -> bool {
+        matches!(self, Self::Open)
+    }
+
+    #[inline]
+    pub(crate) fn claim_cleanup(&mut self) -> bool {
+        if matches!(self, Self::Dispatched) {
+            return false;
+        }
+        *self = Self::Dispatched;
+        true
+    }
+}
 
 /// Allocation-free identity of the request-stage plugin entry currently being
 /// invoked. The runtime owns this slot; body observers may only snapshot it at
@@ -1115,6 +1168,8 @@ pub enum MirrorState {
 pub enum PendingHeaderOp {
     Set { name: String, value: String },
     Append { name: String, value: String },
+    AddIfAbsent { name: String, value: String },
+    OverwriteIfExists { name: String, value: String },
     Remove { name: String },
 }
 
@@ -1132,6 +1187,16 @@ impl PendingHeaderOp {
             }
             PendingHeaderOp::Append { name, value } => {
                 let _ = response_header.append_header(name, value);
+            }
+            PendingHeaderOp::AddIfAbsent { name, value } => {
+                if response_header.headers.get(&name).is_none() {
+                    let _ = response_header.insert_header(name, value);
+                }
+            }
+            PendingHeaderOp::OverwriteIfExists { name, value } => {
+                if response_header.headers.get(&name).is_some() {
+                    let _ = response_header.insert_header(name, value);
+                }
             }
             PendingHeaderOp::Remove { name } => {
                 response_header.remove_header(&name);
@@ -1727,6 +1792,21 @@ pub struct EdgionHttpContext {
     /// chains. Not operator-facing; not a plugin stage.
     pub stream_processors: Vec<Box<dyn StreamingResponseProcessor>>,
 
+    /// Request-owned async response-trailer companions. Ordinary compiled
+    /// response plugins install these in response onion order; the transport
+    /// terminal callback dispatches the vector serially exactly once.
+    pub(crate) upstream_response_trailer_companions: Vec<Box<dyn UpstreamResponseTrailer>>,
+
+    /// Exactly-once state shared by Header EOS, body terminal events, the real
+    /// trailer hook, and the logging fallback.
+    pub(crate) upstream_trailer_lifecycle: UpstreamTrailerLifecycle,
+
+    /// EOS fact from the final upstream response Header task. This is latched
+    /// before response plugins run so protocol owners can decide whether a
+    /// header verdict is the final outbound message without guessing from
+    /// body-mode configuration.
+    pub(crate) upstream_response_headers_end_stream: Option<bool>,
+
     /// Request-scoped ExtProc transactions keyed by the compiled request-entry
     /// identity. The request filter and its internal response companion share
     /// these owners; targets are never used as transaction identity.
@@ -1904,7 +1984,7 @@ impl EdgionHttpContext {
     }
 
     /// Drain queued response-header ops onto the given real `ResponseHeader`,
-    /// preserving each op's original semantics (Set/Append/Remove). Called
+    /// preserving each op's original set/append/conditional/remove semantics. Called
     /// from drain points: upstream-response stage and request-stage termination
     /// paths that build their own response (ErrResponse, gRPC errors).
     pub fn drain_pending_response_header_ops(&mut self, response_header: &mut ResponseHeader) {
@@ -1987,6 +2067,9 @@ impl EdgionHttpContext {
             final_downstream_status: None,
             response_write_started: false,
             stream_processors: Vec::new(),
+            upstream_response_trailer_companions: Vec::new(),
+            upstream_trailer_lifecycle: UpstreamTrailerLifecycle::Open,
+            upstream_response_headers_end_stream: None,
             attached_ext_proc: std::collections::HashMap::new(),
             attached_response_framing_reservations: 0,
             response_body_processing_started: false,

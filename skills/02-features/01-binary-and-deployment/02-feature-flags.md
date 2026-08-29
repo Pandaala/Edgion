@@ -33,7 +33,7 @@ Use `boringssl` for the normal Gateway build.
 
 The `fips` feature is a build-time property, not a runtime toggle. It is enabled only
 for release/CI image builds and requires
-`BORING_BSSL_FIPS_PRECOMPILED_BCM_O`. Runtime `require_fips` and `fips_policy` are
+`BORING_BSSL_FIPS_PATH`. Runtime `require_fips` and `fips_policy` are
 documented in `../02-config/01-gateway-config.md`.
 
 All three binaries still install the rustls crypto provider at startup for libraries
@@ -43,20 +43,20 @@ The Controller no longer links Pingora. TLS-backend selection is Gateway-local.
 
 ## Pingora Fork Source Policy
 
-The six `pingora-*` workspace dependencies (`pingora-core`, `pingora-http`,
-`pingora-proxy`, `pingora-limits`, `pingora-load-balancing`, `pingora-ketama`)
-all track the fork's `edgion` branch (`Pandaala/pingora`). They must move as
-one source family; never pin or advance only one package.
+The seven direct fork dependencies (`pingora-core`, `pingora-http`,
+`pingora-proxy`, `pingora-limits`, `pingora-load-balancing`, `pingora-ketama`,
+and `TinyUFO`) all track the fork's `edgion_v3` branch (`Pandaala/pingora`).
+They must move as one source family; never pin or advance only one package.
 
 Reproducibility comes from the committed `Cargo.lock`, which records the exact
 Git commit for every fork package. CI, release workflows, and image builds use
 `--locked`, so a moved branch cannot change a build until the lockfile is
 intentionally refreshed and reviewed. Release milestones may replace the
 branch selector with one protected immutable tag when a manifest-level release
-identity is required; all six entries must change together.
+identity is required; all seven entries must change together.
 
 Run `python3 cicd/checks/check_pingora_source_policy.py` after any Pingora
-dependency edit. It verifies the six manifest entries and that the complete
+dependency edit. It verifies the seven manifest entries and that the complete
 fork family resolves to one commit.
 
 ## Build Examples

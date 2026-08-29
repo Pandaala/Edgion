@@ -385,6 +385,7 @@ mod tests {
     #[test]
     fn test_with_tls_enabled_no_certs() {
         use edgion_resources::resources::common::OutboundTlsLocal;
+        let _guard = outbound_tls::outbound_tls_test_guard();
         let crd = EtcdClientConfig {
             tls: Some(TlsConfig {
                 enabled: true,
@@ -405,6 +406,7 @@ mod tests {
     #[test]
     fn test_insecure_skip_verify_bails() {
         use edgion_resources::resources::common::OutboundTlsLocal;
+        let _guard = outbound_tls::outbound_tls_test_guard();
         let crd = EtcdClientConfig {
             tls: Some(TlsConfig {
                 enabled: true,

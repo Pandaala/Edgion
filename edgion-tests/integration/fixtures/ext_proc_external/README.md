@@ -53,13 +53,21 @@ Every processed request must include these headers:
 
 - `x-ext-proc-case-id`: 1–64 ASCII characters matching
   `[A-Za-z0-9][A-Za-z0-9._-]*`.
-- `x-ext-proc-test-mode`: exactly `interop`, `immediate`, `long-idle`,
-  `barrier-headers`, or `barrier-request-body`.
+- `x-ext-proc-test-mode`: exactly `interop`, `immediate`, `grpc-immediate`,
+  `disabled-immediate`, `mode-reduce-none`, `mode-forbidden-expand`,
+  `trailer-mutate`, `no-trailer`, `long-idle`, `barrier-headers`, or
+  `barrier-request-body`.
 - `x-ext-proc-barrier-id`: required only for the two barrier modes and subject
   to the same grammar and length limit as the case ID.
 
 `interop` applies the fixed header and body mutations used by the Rust
 integration assertions. `immediate` returns a fixed 403 response.
+`grpc-immediate` carries the official exact gRPC status field.
+`disabled-immediate` returns the same ordinary ImmediateResponse to a route
+that disables it. `mode-reduce-none` requests the allow-listed request-body
+reduction, while `mode-forbidden-expand` requests an unlisted acquisition
+change. `trailer-mutate` returns a fixed mutation for a real response trailer;
+`no-trailer` is used to prove clean EOF without a fabricated trailer message.
 `long-idle` waits exactly three seconds before the request-header verdict.
 `barrier-headers` pauses before the first request-header verdict, while
 `barrier-request-body` pauses before the first request-body verdict. A stream
@@ -102,17 +110,17 @@ reached the fixture. Reset is idempotent but returns HTTP 409 while the barrier
 still has waiters.
 
 Case snapshots store only bounded phase transitions, message counts, response
-status codes, byte counts, SHA-256 digests, EOS counts, and stream lifecycle
-flags. Each stream includes `request_header_messages`,
+status codes, byte counts, SHA-256 digests, EOS counts, fixed response-trailer
+presence booleans, and stream lifecycle flags. Each stream includes `request_header_messages`,
 `response_header_messages`, and `response_statuses`. The status array records
 the numeric `:status` value from every `response_headers` message in arrival
 order. Repeated messages in one phase increment the corresponding counters
 without duplicating the phase name, so two consecutive response-header
 messages may produce one phase transition and two status observations. Each
-header direction is limited to 64 messages; excess messages fail the Process
+header/trailer direction is limited to 64 messages or fields; excess messages fail the Process
 stream with gRPC `ResourceExhausted`. Each body direction is limited to 8,192
 messages and 32 MiB of observed bytes. The fixture never stores request header
-values or body contents. Active cases are never evicted. Resetting an active
+values, arbitrary trailer values, or body contents. Active cases are never evicted. Resetting an active
 case returns HTTP 409.
 
 The fixture admits at most 96 concurrent gRPC streams and 96 waiters per

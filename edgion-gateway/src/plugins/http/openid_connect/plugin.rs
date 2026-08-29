@@ -34,7 +34,6 @@ use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, 
 use crate::plugins::http::common::auth_common::{
     send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers, Claims,
 };
-use crate::plugins::http::common::http_client::get_http_client_arc;
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::tls::validation::OutboundSanVerifier;
@@ -249,8 +248,8 @@ pub struct OpenidConnect {
     #[allow(dead_code)]
     plugin_namespace: String,
     /// Per-instance outbound HTTP client. Built at construction with the plugin's
-    /// resolved TLS policy (custom CA, mTLS identity, verify gate). Falls back to
-    /// the secure default client if the resolver/gate rejects the config.
+    /// resolved TLS policy (custom CA, mTLS identity, verify gate). Construction
+    /// fails closed if any declared TLS policy cannot be applied.
     pub(super) client: Arc<reqwest::Client>,
     pub(super) jwks_provider: Arc<JwksProvider<DiscoveryDocument>>,
     introspection_cache: TinyUfoTtlCache<String, IntrospectionCacheEntry>,
@@ -320,54 +319,47 @@ impl OpenidConnect {
                 .unwrap_or_default();
 
             if !san_policy.is_empty() {
-                match resolve_outbound_tls(
+                let resolved = resolve_outbound_tls(
                     &tls_for_client.outbound,
                     tls_for_client.resolved_ca_certificates.as_deref(),
                     tls_for_client.resolved_client_certificate.as_ref(),
                     true,
                     "OpenidConnect",
-                ) {
-                    Ok(resolved) => match build_oidc_rustls_config_with_san(&resolved, san_policy) {
-                        Ok(rustls_cfg) => {
-                            let builder = reqwest::ClientBuilder::new()
-                                .pool_max_idle_per_host(32)
-                                .connect_timeout(Duration::from_secs(5))
-                                .timeout(Duration::from_secs(config.timeout))
-                                .redirect(reqwest::redirect::Policy::none())
-                                .use_preconfigured_tls(rustls_cfg);
-                            match builder.build() {
-                                Ok(c) => Arc::new(c),
-                                Err(e) => {
-                                    tracing::warn!(
-                                        component = "openid_connect",
-                                        error = %e,
-                                        "SAN-pinning reqwest client build failed; using secure default client"
-                                    );
-                                    get_http_client_arc()
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                component = "openid_connect",
-                                error = %e,
-                                "SAN-pinning rustls config build failed; using secure default client"
-                            );
-                            get_http_client_arc()
-                        }
-                    },
-                    Err(e) => {
+                )
+                .map_err(|error| {
+                    tracing::warn!(
+                        component = "openid_connect",
+                        error = ?error,
+                        "outbound TLS resolution failed; OIDC plugin construction rejected"
+                    );
+                    "openid_connect outbound TLS resolution failed".to_string()
+                })?;
+                let rustls_config = build_oidc_rustls_config_with_san(&resolved, san_policy).map_err(|error| {
+                    tracing::warn!(
+                        component = "openid_connect",
+                        error = %error,
+                        "SAN-pinning TLS config build failed; OIDC plugin construction rejected"
+                    );
+                    "openid_connect SAN-pinning TLS config build failed".to_string()
+                })?;
+                let client = reqwest::ClientBuilder::new()
+                    .pool_max_idle_per_host(32)
+                    .connect_timeout(Duration::from_secs(5))
+                    .timeout(Duration::from_secs(config.timeout))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .use_preconfigured_tls(rustls_config)
+                    .build()
+                    .map_err(|error| {
                         tracing::warn!(
                             component = "openid_connect",
-                            error = ?e,
-                            "outbound TLS resolve failed (SAN path); using secure default client"
+                            error = %error,
+                            "SAN-pinning HTTP client build failed; OIDC plugin construction rejected"
                         );
-                        get_http_client_arc()
-                    }
-                }
+                        "openid_connect SAN-pinning HTTP client build failed".to_string()
+                    })?;
+                Arc::new(client)
             } else {
-                // Original path (no SAN policy) — unchanged.
-                match build_outbound_client(OutboundClientConfig {
+                let client = build_outbound_client(OutboundClientConfig {
                     pool_max_idle_per_host: Some(32),
                     connect_timeout: Some(Duration::from_secs(5)),
                     total_timeout: Some(Duration::from_secs(config.timeout)),
@@ -375,19 +367,16 @@ impl OpenidConnect {
                     tls: Some(tls_for_client),
                     tls_context: Some("OpenidConnect"),
                     ..Default::default()
-                }) {
-                    Ok(c) => Arc::new(c),
-                    Err(e) => {
-                        // Process-lifecycle / config-load event (allowed WARN). Fail closed to a
-                        // verifying client rather than running with the operator's verify=false.
-                        tracing::warn!(
-                            component = "openid_connect",
-                            error = %e,
-                            "outbound TLS resolve/gate failed; using secure default client"
-                        );
-                        get_http_client_arc()
-                    }
-                }
+                })
+                .map_err(|error| {
+                    tracing::warn!(
+                        component = "openid_connect",
+                        error = %error,
+                        "outbound HTTP client build failed; OIDC plugin construction rejected"
+                    );
+                    "openid_connect outbound HTTP client build failed".to_string()
+                })?;
+                Arc::new(client)
             }
         };
 

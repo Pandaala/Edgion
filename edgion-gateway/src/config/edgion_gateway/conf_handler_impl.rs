@@ -204,7 +204,8 @@ fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) {
     crate::backends::panic_threshold::configure_lb_panic_default(panic_threshold);
 
     // Aggregate the cluster-wide outbound TLS default. Safest-wins on verify;
-    // CA material (validation + resolved bundles + clientCertificateRef) is adopted only when exactly one config declares non-empty validation (refs or wellKnown).
+    // CA material and the client mTLS identity are independent policy axes and
+    // are each adopted only when exactly one config declares that axis.
     // Configs that do not set outbound_tls at all default to verify=true (the safe
     // default), so the verify aggregate is true whenever any config omits the block.
     let outbound_blocks: Vec<_> = store
@@ -228,8 +229,6 @@ fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) {
             // so the per-call resolver can read them for inheriting calls.
             agg.validation = one.validation.clone();
             agg.resolved_ca_certificates = one.resolved_ca_certificates.clone();
-            agg.client_certificate_ref = one.client_certificate_ref.clone();
-            agg.resolved_client_certificate = one.resolved_client_certificate.clone();
         }
         [] => {}
         _ => {
@@ -237,6 +236,38 @@ fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) {
             tracing::warn!(
                 component = "outbound_tls",
                 "multiple EdgionGatewayConfig declare conflicting outbound CA defaults; falling back to System"
+            );
+        }
+    }
+    let mut client_identity_blocks: Vec<_> = outbound_blocks
+        .iter()
+        .filter(|block| block.client_certificate_ref.is_some())
+        .collect();
+    client_identity_blocks.sort_by_key(|block| {
+        block.client_certificate_ref.as_ref().map(|reference| {
+            (
+                reference.namespace.clone().unwrap_or_default(),
+                reference.name.clone(),
+                reference.group.clone().unwrap_or_default(),
+                reference.kind.clone().unwrap_or_else(|| "Secret".to_string()),
+            )
+        })
+    });
+    match client_identity_blocks.as_slice() {
+        [one] => {
+            agg.client_certificate_ref = one.client_certificate_ref.clone();
+            agg.resolved_client_certificate = one.resolved_client_certificate.clone();
+        }
+        [] => {}
+        [first, ..] => {
+            // Keep a declared ref but no resolved material so every inheriting
+            // resolver fails closed instead of silently sending no client cert.
+            agg.client_certificate_ref = first.client_certificate_ref.clone();
+            agg.resolved_client_certificate = None;
+            crate::observe::metrics::record_config_conflict("outbound_client_identity");
+            tracing::warn!(
+                component = "outbound_tls",
+                "multiple EdgionGatewayConfig declare conflicting outbound client identities; inherited outbound TLS is disabled"
             );
         }
     }
@@ -837,6 +868,92 @@ mod tests {
         // Reset to default for subsequent tests
         set_outbound_global_default(OutboundTlsConfig::default());
         clear_store();
+    }
+
+    #[test]
+    fn outbound_tls_adopts_mtls_only_global_default() {
+        use edgion_common::link_sys_core::outbound_tls::{outbound_global_default, set_outbound_global_default};
+        use edgion_resources::resources::common::{OutboundTlsConfig, SecretObjectReference};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use std::collections::BTreeMap;
+
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        set_outbound_global_default(OutboundTlsConfig::default());
+        let identity = rcgen::generate_simple_self_signed(vec!["client.example.com".to_string()])
+            .expect("generate test client identity");
+        let mut data_map = BTreeMap::new();
+        data_map.insert("tls.crt".to_string(), ByteString(identity.cert.pem().into_bytes()));
+        data_map.insert(
+            "tls.key".to_string(),
+            ByteString(identity.signing_key.serialize_pem().into_bytes()),
+        );
+
+        let mut config = make_config("mtls-only");
+        config.spec.outbound_tls = Some(OutboundTlsConfig {
+            client_certificate_ref: Some(SecretObjectReference {
+                group: None,
+                kind: None,
+                name: "global-client".to_string(),
+                namespace: None,
+            }),
+            resolved_client_certificate: Some(Secret {
+                data: Some(data_map),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        let handler = EdgionGatewayConfigHandler;
+        handler.full_set(&HashMap::from([("mtls-only".to_string(), Arc::new(config))]));
+        let global = outbound_global_default();
+        set_outbound_global_default(OutboundTlsConfig::default());
+        clear_store();
+        assert!(global.client_certificate_ref.is_some());
+        assert!(global.resolved_client_certificate.is_some());
+    }
+
+    #[test]
+    fn outbound_tls_conflicting_global_mtls_defaults_fail_closed() {
+        use edgion_common::link_sys_core::outbound_tls::{outbound_global_default, set_outbound_global_default};
+        use edgion_resources::resources::common::{OutboundTlsConfig, SecretObjectReference};
+
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        set_outbound_global_default(OutboundTlsConfig::default());
+
+        let mut first = make_config("first");
+        first.spec.outbound_tls = Some(OutboundTlsConfig {
+            client_certificate_ref: Some(SecretObjectReference {
+                group: None,
+                kind: None,
+                name: "client-a".to_string(),
+                namespace: None,
+            }),
+            ..Default::default()
+        });
+        let mut second = make_config("second");
+        second.spec.outbound_tls = Some(OutboundTlsConfig {
+            client_certificate_ref: Some(SecretObjectReference {
+                group: None,
+                kind: None,
+                name: "client-b".to_string(),
+                namespace: None,
+            }),
+            ..Default::default()
+        });
+
+        let handler = EdgionGatewayConfigHandler;
+        handler.full_set(&HashMap::from([
+            ("first".to_string(), Arc::new(first)),
+            ("second".to_string(), Arc::new(second)),
+        ]));
+        let global = outbound_global_default();
+        set_outbound_global_default(OutboundTlsConfig::default());
+        clear_store();
+        assert!(global.client_certificate_ref.is_some());
+        assert!(global.resolved_client_certificate.is_none());
     }
 
     #[test]

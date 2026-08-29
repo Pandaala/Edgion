@@ -21,6 +21,7 @@ import (
 	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	extprocmodev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -89,6 +90,15 @@ func responseHeadersStatus(statusCode uint16) *extprocv3.ProcessingRequest {
 
 func responseBody(body string, eos bool) *extprocv3.ProcessingRequest {
 	return &extprocv3.ProcessingRequest{Request: &extprocv3.ProcessingRequest_ResponseBody{ResponseBody: &extprocv3.HttpBody{Body: []byte(body), EndOfStream: eos}}}
+}
+
+func responseTrailers() *extprocv3.ProcessingRequest {
+	return &extprocv3.ProcessingRequest{Request: &extprocv3.ProcessingRequest_ResponseTrailers{ResponseTrailers: &extprocv3.HttpTrailers{
+		Trailers: &corev3.HeaderMap{Headers: []*corev3.HeaderValue{
+			{Key: "x-edgion-upstream-trailer", RawValue: []byte("fixed-upstream-value")},
+			{Key: "grpc-status", RawValue: []byte("0")},
+		}},
+	}}}
 }
 
 func TestProcessRecordsPhasesBodiesAndHalfClose(t *testing.T) {
@@ -165,6 +175,73 @@ func TestImmediateResponseContract(t *testing.T) {
 	}
 }
 
+func TestOfficialEnvoyTypesPinNewWireFields(t *testing.T) {
+	immediateFields := (&extprocv3.ImmediateResponse{}).ProtoReflect().Descriptor().Fields()
+	if field := immediateFields.ByName("grpc_status"); field == nil || field.Number() != 4 {
+		t.Fatalf("ImmediateResponse.grpc_status descriptor = %v, want field 4", field)
+	}
+	responseFields := (&extprocv3.ProcessingResponse{}).ProtoReflect().Descriptor().Fields()
+	if field := responseFields.ByName("mode_override"); field == nil || field.Number() != 9 {
+		t.Fatalf("ProcessingResponse.mode_override descriptor = %v, want field 9", field)
+	}
+	modeFields := (&extprocmodev3.ProcessingMode{}).ProtoReflect().Descriptor().Fields()
+	if field := modeFields.ByName("response_trailer_mode"); field == nil || field.Number() != 6 {
+		t.Fatalf("ProcessingMode.response_trailer_mode descriptor = %v, want field 6", field)
+	}
+	requestFields := (&extprocv3.ProcessingRequest{}).ProtoReflect().Descriptor().Fields()
+	if field := requestFields.ByName("response_trailers"); field == nil || field.Number() != 7 {
+		t.Fatalf("ProcessingRequest.response_trailers descriptor = %v, want field 7", field)
+	}
+}
+
+func TestNewOfficialResponsesAndTrailerObservation(t *testing.T) {
+	grpcResponse := grpcImmediateResponse().GetImmediateResponse()
+	if grpcResponse.GetGrpcStatus().GetStatus() != uint32(codes.PermissionDenied) ||
+		string(grpcResponse.GetBody()) != "processor denied exact grpc request" {
+		t.Fatalf("exact gRPC ImmediateResponse = %+v", grpcResponse)
+	}
+
+	reduction := headerResponseWithModeOverride(extprocmodev3.ProcessingMode_NONE).GetModeOverride()
+	if reduction.GetRequestBodyMode() != extprocmodev3.ProcessingMode_NONE {
+		t.Fatalf("reduction override = %+v", reduction)
+	}
+	expansion := headerResponseWithModeOverride(extprocmodev3.ProcessingMode_BUFFERED).GetModeOverride()
+	if expansion.GetRequestBodyMode() != extprocmodev3.ProcessingMode_BUFFERED {
+		t.Fatalf("expansion override = %+v", expansion)
+	}
+
+	store := newObservationStore()
+	stream := &fakeProcessStream{
+		ctx: context.Background(),
+		requests: []*extprocv3.ProcessingRequest{
+			requestHeaders("trailer-case", "trailer-mutate"),
+			responseHeaders(),
+			responseTrailers(),
+		},
+	}
+	if err := (&processor{store: store}).Process(stream); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if len(stream.sent) != 3 {
+		t.Fatalf("sent responses = %d, want 3", len(stream.sent))
+	}
+	mutation := stream.sent[2].GetResponseTrailers().GetHeaderMutation().GetSetHeaders()
+	if len(mutation) != 1 || mutation[0].GetHeader().GetKey() != "x-edgion-upstream-trailer" ||
+		string(mutation[0].GetHeader().GetRawValue()) != "processed-by-external-go" {
+		t.Fatalf("response trailer mutation = %+v", mutation)
+	}
+	snapshot, ok := store.snapshot("trailer-case")
+	if !ok || len(snapshot.Streams) != 1 {
+		t.Fatalf("snapshot = %+v, present = %v", snapshot, ok)
+	}
+	got := snapshot.Streams[0]
+	if got.ResponseTrailerMessages != 1 || got.ResponseTrailerFields != 2 ||
+		!got.SawFixedResponseTrailer || !got.SawGRPCStatusTrailer ||
+		!slices.Equal(got.Phases, []string{"request_headers", "response_headers", "response_trailers"}) {
+		t.Fatalf("response trailer observation = %+v", got)
+	}
+}
+
 func TestLongIdleStopsWhenStreamIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -195,7 +272,11 @@ func TestCaseIDAndModeValidation(t *testing.T) {
 			t.Errorf("validCaseID(%q) = true", value)
 		}
 	}
-	for _, value := range []string{"interop", "immediate", "long-idle", "barrier-headers", "barrier-request-body"} {
+	for _, value := range []string{
+		"interop", "immediate", "grpc-immediate", "disabled-immediate", "mode-reduce-none",
+		"mode-forbidden-expand", "trailer-mutate", "no-trailer", "long-idle", "barrier-headers",
+		"barrier-request-body",
+	} {
 		if !validMode(value) {
 			t.Errorf("validMode(%q) = false", value)
 		}

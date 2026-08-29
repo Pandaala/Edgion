@@ -1,5 +1,6 @@
 use super::EdgionHttpProxy;
 use crate::runtime::server::send_grpc_status_trailers_only;
+use crate::runtime::server::server_header::ServerHeaderOpts;
 use crate::send_grpc_trailers_only;
 use crate::{EdgionHttpContext, ResponseStageDenial};
 use edgion_resources::EdgionErrorCode;
@@ -36,6 +37,30 @@ fn select_proxy_outcome_status(ctx: &mut EdgionHttpContext, e: &Error, code: u16
         ctx.select_terminal_downstream_status(499);
     } else {
         ctx.select_final_downstream_status(code);
+    }
+}
+
+async fn write_proxy_error_reply(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    server_header_opts: &ServerHeaderOpts,
+    code: u16,
+) -> bool {
+    if ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched {
+        send_grpc_trailers_only(session, ctx, server_header_opts, code)
+            .await
+            .is_err()
+    } else {
+        let mut resp = pingora_core::protocols::http::ServerSession::generate_error(code);
+        server_header_opts.apply_to_response(&mut resp);
+        if ctx.claim_final_response(code) {
+            session
+                .write_error_response(resp, bytes::Bytes::default())
+                .await
+                .is_err()
+        } else {
+            false
+        }
     }
 }
 
@@ -121,32 +146,11 @@ pub async fn fail_to_proxy(
     }
 
     if code > 0 && code != 499 && !ctx.response_write_started() {
-        if ctx.request_info.is_grpc_request {
-            // Send proper gRPC error with correct status mapping instead of an HTML error page.
-            // send_grpc_trailers_only uses http_to_grpc_status internally
-            // (e.g. 502->Internal, 504->DeadlineExceeded, 500->Internal).
-            if send_grpc_trailers_only(session, ctx, &edgion_http.server_header_opts, code)
-                .await
-                .is_err()
-            {
-                // Delivery failed: the downstream connection is dead.
-                ctx.record_error(EdgionErrorCode::ClientClosed);
-            }
-        } else {
-            let mut resp = pingora_core::protocols::http::ServerSession::generate_error(code);
-            edgion_http.server_header_opts.apply_to_response(&mut resp);
-            let write_failed = if ctx.claim_final_response(code) {
-                session
-                    .write_error_response(resp, bytes::Bytes::default())
-                    .await
-                    .is_err()
-            } else {
-                false
-            };
-            if write_failed {
-                // Delivery failed: the downstream connection is dead.
-                ctx.record_error(EdgionErrorCode::ClientClosed);
-            }
+        // gRPC classification uses both the media-type and route-derived facts;
+        // a GRPCRoute match must never fall through to Pingora's HTML writer.
+        if write_proxy_error_reply(session, ctx, &edgion_http.server_header_opts, code).await {
+            // Delivery failed: the downstream connection is dead.
+            ctx.record_error(EdgionErrorCode::ClientClosed);
         }
     }
 
@@ -158,10 +162,42 @@ pub async fn fail_to_proxy(
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_proxy_status, select_proxy_outcome_status};
+    use super::{classify_proxy_status, select_proxy_outcome_status, write_proxy_error_reply};
     use crate::routes::http::proxy_http::pg_upstream_response_filter::select_normalized_upstream_candidate;
+    use crate::runtime::server::ServerHeaderOpts;
     use crate::EdgionHttpContext;
     use pingora_core::{ConnectionClosed, Error};
+    use pingora_proxy::Session;
+    use tokio::io::AsyncWriteExt;
+
+    async fn live_downstream_session() -> (Session, tokio::io::DuplexStream) {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(b"POST /svc/Method HTTP/1.1\r\nHost: test\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .unwrap();
+        session.read_request().await.unwrap();
+        (session, client)
+    }
+
+    #[tokio::test]
+    async fn grpc_route_only_generic_error_writes_mapped_grpc_reply_not_html() {
+        let (mut session, _client) = live_downstream_session().await;
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.is_grpc_request = false;
+        ctx.is_grpc_route_matched = true;
+
+        assert!(!write_proxy_error_reply(&mut session, &mut ctx, &ServerHeaderOpts::default(), 403,).await);
+
+        let written = session.response_written().expect("mapped gRPC response");
+        assert_eq!(written.status.as_u16(), 200);
+        assert_eq!(written.headers.get("content-type").unwrap(), "application/grpc");
+        assert_eq!(written.headers.get("grpc-status").unwrap(), "7");
+        assert!(written.headers.get("content-length").is_none());
+        assert_eq!(ctx.request_info.grpc_status, Some(7));
+    }
 
     #[test]
     fn early_upstream_candidate_does_not_hide_downstream_close() {

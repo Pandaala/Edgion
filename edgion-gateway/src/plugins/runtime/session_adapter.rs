@@ -255,7 +255,7 @@ pub(crate) fn build_response_local_reply(
     body: Option<String>,
     is_head: bool,
 ) -> bool {
-    if ctx.request_info.is_grpc_request {
+    if ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched {
         return false;
     }
     let Ok(code) = http::StatusCode::from_u16(status) else {
@@ -552,7 +552,7 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// runner to record the gRPC-unsupported marker only for genuine gRPC
     /// routes (other local-reply refusals — Upgrade/1xx — are not gRPC).
     pub fn is_grpc_request(&self) -> bool {
-        self.ctx.request_info.is_grpc_request
+        self.ctx.request_info.is_grpc_request || self.ctx.is_grpc_route_matched
     }
 
     /// Apply queued response-header ops onto a freshly-built `ResponseHeader`.
@@ -1373,6 +1373,43 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         true
     }
 
+    fn install_upstream_response_trailer(
+        &mut self,
+        processor: Box<dyn crate::plugins::runtime::traits::UpstreamResponseTrailer>,
+    ) -> bool {
+        if self.ctx.response_body_processing_started || !self.ctx.upstream_trailer_lifecycle.is_open() {
+            return false;
+        }
+        self.ctx.upstream_response_trailer_companions.push(processor);
+        true
+    }
+
+    fn upstream_response_trailer_count(&self) -> usize {
+        self.ctx.upstream_response_trailer_companions.len()
+    }
+
+    fn downstream_response_trailers_representable(&self) -> bool {
+        self.inner.as_downstream().response_trailers_supported()
+    }
+
+    fn downstream_response_trailer_name_allowed(&self, name: &http::HeaderName) -> bool {
+        let downstream = self.inner.as_downstream();
+        if downstream.is_http2() || downstream.is_subrequest() || downstream.is_custom() {
+            return true;
+        }
+        downstream
+            .response_written()
+            .into_iter()
+            .flat_map(|response| response.headers.get_all(http::header::TRAILER).iter())
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .any(|declared| declared.trim().eq_ignore_ascii_case(name.as_str()))
+    }
+
+    fn upstream_response_headers_end_stream(&self) -> Option<bool> {
+        self.ctx.upstream_response_headers_end_stream
+    }
+
     fn claim_json_schema_validation(&mut self) -> bool {
         self.ctx.claim_json_schema_validation()
     }
@@ -1738,6 +1775,15 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.inner.as_downstream_mut().request_headers_end_stream()
     }
 
+    fn is_grpc_request(&self) -> bool {
+        self.ctx.request_info.is_grpc_request || self.ctx.is_grpc_route_matched
+    }
+
+    fn queue_local_reply_header_op(&mut self, op: PendingHeaderOp) -> PluginSessionResult<()> {
+        self.ctx.pending_response_header_ops.push(op);
+        Ok(())
+    }
+
     fn current_dye_plan(&self) -> Option<Arc<CompiledDyePlan>> {
         self.ctx.current_dye_plan.clone()
     }
@@ -1926,7 +1972,7 @@ mod local_reply_tests {
     #[test]
     fn build_grpc_route_is_refused() {
         let mut ctx = EdgionHttpContext::default();
-        ctx.request_info.is_grpc_request = true;
+        ctx.is_grpc_route_matched = true;
         assert!(!build_response_local_reply(&mut ctx, 502, Some("x".into()), false));
         assert!(!ctx.response_stage_settled());
     }
@@ -2489,6 +2535,44 @@ mod record_outcome_tests {
         session
     }
 
+    #[tokio::test]
+    async fn plugin_session_grpc_classification_includes_grpc_route_match() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.is_grpc_request = false;
+        ctx.is_grpc_route_matched = true;
+        let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert!(PluginSession::is_grpc_request(&adapter));
+        assert!(adapter.is_grpc_request());
+    }
+
+    #[tokio::test]
+    async fn explicit_local_reply_ops_bypass_bound_upstream_and_land_on_fresh_reply() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut upstream = ResponseHeader::build(200, None).unwrap();
+        upstream.insert_header("x-upstream", "preserved-there").unwrap();
+        {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut upstream);
+            adapter
+                .queue_local_reply_header_op(PendingHeaderOp::Set {
+                    name: "x-local".to_string(),
+                    value: "reply".to_string(),
+                })
+                .unwrap();
+        }
+        assert!(upstream.headers.get("x-local").is_none());
+        assert!(build_response_local_reply(
+            &mut ctx,
+            403,
+            Some("denied".to_string()),
+            false
+        ));
+        let (reply, _) = ctx.take_pending_response_local_reply().unwrap();
+        assert_eq!(reply.headers.get("x-local").unwrap(), "reply");
+        assert!(ctx.pending_response_header_ops.is_empty());
+    }
+
     /// Like `test_session`, but keeps the client half of the duplex pair
     /// alive and returns it to the caller. `write_response_header` tests
     /// (Task 10) actually write bytes back over the wire; dropping the
@@ -2512,6 +2596,69 @@ mod record_outcome_tests {
             .then_some(())
             .expect("client must not have closed before sending the request");
         (session, client)
+    }
+
+    #[tokio::test]
+    async fn response_trailer_capability_tracks_actual_h1_framing() {
+        let (mut session, _client) = test_session_with_client().await;
+        let mut ctx = EdgionHttpContext::default();
+        {
+            let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            assert!(
+                !adapter.downstream_response_trailers_representable(),
+                "an uncommitted H1 response must not claim trailer capability"
+            );
+        }
+
+        let mut response = ResponseHeader::build(200, None).expect("response header");
+        response
+            .insert_header(http::header::TRANSFER_ENCODING, "chunked")
+            .expect("valid chunked framing");
+        session
+            .write_response_header(Box::new(response), false)
+            .await
+            .expect("commit chunked H1.1 response");
+        let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert!(
+            adapter.downstream_response_trailers_representable(),
+            "committed chunked H1.1 framing can represent trailers"
+        );
+    }
+
+    #[tokio::test]
+    async fn h1_new_response_trailer_name_requires_committed_declaration() {
+        let (mut session, _client) = test_session_with_client().await;
+        let mut response = ResponseHeader::build(200, None).expect("response header");
+        response
+            .insert_header(http::header::TRANSFER_ENCODING, "chunked")
+            .expect("valid chunked framing");
+        response
+            .insert_header(http::header::TRAILER, "x-declared, x-second")
+            .expect("valid trailer declaration");
+        session
+            .write_response_header(Box::new(response), false)
+            .await
+            .expect("commit chunked H1.1 response");
+        let mut ctx = EdgionHttpContext::default();
+        let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert!(adapter.downstream_response_trailer_name_allowed(&http::HeaderName::from_static("x-declared")));
+        assert!(adapter.downstream_response_trailer_name_allowed(&http::HeaderName::from_static("x-second")));
+        assert!(!adapter.downstream_response_trailer_name_allowed(&http::HeaderName::from_static("x-undeclared")));
+    }
+
+    #[tokio::test]
+    async fn response_trailer_capability_rejects_h1_0() {
+        let (mut session, _client) = test_session_with_client().await;
+        session.req_header_mut().set_version(http::Version::HTTP_10);
+        let response = ResponseHeader::build(200, None).expect("response header");
+        session
+            .write_response_header(Box::new(response), false)
+            .await
+            .expect("commit close-delimited H1.0 response");
+        let mut ctx = EdgionHttpContext::default();
+        let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+
+        assert!(!adapter.downstream_response_trailers_representable());
     }
 
     async fn test_session_with_body(body: &[u8]) -> Session {
@@ -2758,12 +2905,12 @@ mod record_outcome_tests {
             let mut session = test_session().await;
             match case {
                 Refusal::Stage => {}
-                Refusal::Connect => session.req_header_mut().method = http::Method::CONNECT,
+                Refusal::Connect => session.req_header_mut().set_method(http::Method::CONNECT),
                 Refusal::Upgrade => {
                     session.req_header_mut().insert_header("connection", "upgrade").unwrap();
                     session.req_header_mut().insert_header("upgrade", "websocket").unwrap();
                 }
-                Refusal::Http10 => session.req_header_mut().version = http::Version::HTTP_10,
+                Refusal::Http10 => session.req_header_mut().set_version(http::Version::HTTP_10),
             }
             let mut ctx = EdgionHttpContext::default();
             ctx.request_info.in_request_body_stage = !matches!(case, Refusal::Stage);

@@ -64,7 +64,9 @@ is a bug" rule also gets a line there.
     (`edgion-gateway/src/plugins/http/openid_connect/plugin.rs`) builds a raw
     client with `use_preconfigured_tls` because a custom
     `ServerCertVerifier` cannot be attached through the factory's high-level
-    TLS helpers; it falls back to the shared client on build failure.
+    TLS helpers. Resolver, TLS-config, or client-build failure rejects plugin
+    construction; it must never fall back to a client that omits the declared
+    CA, mTLS, or SAN policy.
   - Test code.
 
 ### 2. Outbound request semantics (`ExternalHttpConnection`) — Unified for its class

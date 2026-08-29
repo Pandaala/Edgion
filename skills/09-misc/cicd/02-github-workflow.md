@@ -71,9 +71,9 @@ Key facts:
   the other build-style Rust jobs install dependencies and enable cache
 - The current CI commands do not include `--all-features`; before changing this, confirm whether you really want to expand the matrix rather than casually inflate CI cost
 - Every resolving Cargo command uses `--locked`. The manifest follows the
-  Edgion Pingora `edgion` branch, but CI always builds the exact commit in the
+  Edgion Pingora `edgion_v3` branch, but CI always builds the exact commit in the
   committed lockfile. `check_pingora_source_policy.py` also verifies that all
-  six direct fork dependencies share that branch and the complete lockfile
+  seven direct fork dependencies share that branch and the complete lockfile
   family resolves to one commit.
 - `check` and `clippy` pass `--workspace` on purpose: `edgion-tests` is a workspace member excluded from `default-members`, so a bare `--all-targets` would skip the harness. `--workspace` gives it the same fast type-check + clippy signal that `cargo test --all` already exercises at compile time
 

@@ -4,7 +4,7 @@ use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::Digest;
 use pingora_core::Error;
 use pingora_http::ResponseHeader;
-use pingora_proxy::{FailToProxy, ProxyHttp, RequestBodyEvent, ResponseBodySink, Session};
+use pingora_proxy::{FailToProxy, ProxyHttp, RequestBodyEvent, ResponseBodySink, Session, UpstreamResponseBodyEvent};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -38,8 +38,8 @@ mod pg_upstream_peer;
 mod pg_upstream_request_filter;
 mod pg_upstream_response_body_filter;
 mod pg_upstream_response_filter;
+mod pg_upstream_response_trailer_filter;
 
-#[cfg(test)]
 #[cfg(test)]
 pub(crate) use pg_upstream_response_body_filter::run_stream_processors;
 
@@ -196,6 +196,25 @@ impl ProxyHttp for EdgionHttpProxy {
         pg_upstream_response_filter::upstream_response_filter(self, session, upstream_response, ctx)
     }
 
+    async fn upstream_response_header_filter_event(
+        &self,
+        session: &mut Session,
+        upstream_response: &mut ResponseHeader,
+        end_of_stream: bool,
+        ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<()>
+    where
+        Self::CTX: Send + Sync,
+    {
+        if !pg_upstream_response_filter::is_interim_informational(upstream_response.status) {
+            ctx.upstream_response_headers_end_stream = Some(end_of_stream);
+        }
+        // The fork follows a terminal Header event with the typed
+        // TerminalWithoutTrailers callback. Keep the header hook focused on
+        // final-header processing so body processors flush before companions.
+        pg_upstream_response_filter::upstream_response_filter(self, session, upstream_response, ctx)
+    }
+
     async fn response_filter(
         &self,
         session: &mut Session,
@@ -222,6 +241,33 @@ impl ProxyHttp for EdgionHttpProxy {
     {
         pg_upstream_response_body_filter::upstream_response_body_filter(self, session, body, end_of_stream, sink, ctx)
             .await
+    }
+
+    async fn upstream_response_body_filter_event(
+        &self,
+        session: &mut Session,
+        body: &mut Option<bytes::Bytes>,
+        event: UpstreamResponseBodyEvent,
+        sink: &mut ResponseBodySink,
+        ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<Option<std::time::Duration>>
+    where
+        Self::CTX: Send + Sync,
+    {
+        pg_upstream_response_body_filter::upstream_response_body_filter_event(self, session, body, event, sink, ctx)
+            .await
+    }
+
+    async fn upstream_response_trailer_filter(
+        &self,
+        session: &mut Session,
+        trailers: &mut http::HeaderMap,
+        ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<()>
+    where
+        Self::CTX: Send + Sync,
+    {
+        pg_upstream_response_trailer_filter::dispatch_upstream_response_trailers(session, ctx, Some(trailers)).await
     }
 
     async fn logging(&self, session: &mut Session, e: Option<&Error>, ctx: &mut Self::CTX)

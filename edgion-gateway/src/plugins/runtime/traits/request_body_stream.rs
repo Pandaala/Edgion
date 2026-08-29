@@ -27,6 +27,7 @@ use pingora_proxy::RequestBodyEvent;
 use crate::plugins::runtime::dye_plan::CompiledDyePlan;
 use crate::plugins::runtime::log::PluginLog;
 use crate::plugins::runtime::traits::DyeOutcome;
+use crate::PendingHeaderOp;
 
 /// Verdict for one body event.
 pub enum ChunkVerdict {
@@ -34,14 +35,16 @@ pub enum ChunkVerdict {
     Continue,
     /// Stop the request: the hook writes this local reply downstream and
     /// terminates proxying. The handler must already have recorded its log
-    /// entry for the cause. `headers` are handler-authored reply headers,
-    /// pre-filtered by the handler (protected/pseudo headers removed) —
-    /// applied to the local reply where the reply shape permits (a gRPC
-    /// trailers-only reply keeps only trailer-valid entries).
+    /// entry for the cause. `header_ops` are generic runtime-owned local-reply
+    /// mutations, pre-filtered by the handler (protected/pseudo headers
+    /// removed) and evaluated against the fresh reply header.
     Terminate {
         status: u16,
+        /// Exact processor-authored gRPC status. The common hook consults it
+        /// only when the request's canonical classification is gRPC.
+        grpc_status: Option<u16>,
         body: Option<String>,
-        headers: Vec<(String, String)>,
+        header_ops: Vec<PendingHeaderOp>,
     },
 }
 

@@ -49,6 +49,32 @@ pub struct ResolvedOutboundTls {
 static OUTBOUND_GLOBAL_DEFAULT: LazyLock<RwLock<OutboundTlsConfig>> =
     LazyLock::new(|| RwLock::new(OutboundTlsConfig::default()));
 
+#[cfg(test)]
+static OUTBOUND_TLS_TEST_MUTEX: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+/// Serializes tests that resolve the process-wide outbound TLS default and
+/// gives each test a clean default without leaking mutations to the next test.
+#[cfg(test)]
+pub(crate) struct OutboundTlsTestGuard {
+    _lock: parking_lot::MutexGuard<'static, ()>,
+    previous: OutboundTlsConfig,
+}
+
+#[cfg(test)]
+impl Drop for OutboundTlsTestGuard {
+    fn drop(&mut self) {
+        set_outbound_global_default(std::mem::take(&mut self.previous));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn outbound_tls_test_guard() -> OutboundTlsTestGuard {
+    let lock = OUTBOUND_TLS_TEST_MUTEX.lock();
+    let previous = outbound_global_default();
+    set_outbound_global_default(OutboundTlsConfig::default());
+    OutboundTlsTestGuard { _lock: lock, previous }
+}
+
 /// Returns the cluster-wide outbound TLS default.
 ///
 /// Initialized to `OutboundTlsConfig::default()` (`verify = true`, no CA
@@ -130,6 +156,12 @@ pub fn aggregate_verify(blocks: &[OutboundTlsConfig]) -> OutboundTlsConfig {
 /// - global block wins (no local `validation`) → CA bytes come from the
 ///   Controller-shipped `global.resolved_ca_certificates`.
 ///
+/// Client-certificate inheritance follows the same ownership rule independently
+/// of the validation block: a local `clientCertificateRef` uses only the
+/// per-call `resolved_client`; otherwise a configured global ref uses only
+/// `global.resolved_client_certificate`. A declared ref without its matching
+/// resolved Secret fails closed instead of silently disabling mTLS.
+///
 /// # Fail-secure: SAN pinning overrides verify=false
 ///
 /// A non-empty `validation.subjectAltNames` policy forces full certificate
@@ -159,8 +191,9 @@ pub fn aggregate_verify(blocks: &[OutboundTlsConfig]) -> OutboundTlsConfig {
 ///   but `provider_can_disable == false`.
 /// - [`EdgionErrorCode::OutboundTlsCaMissing`] — `caCertificateRefs` declared but
 ///   no resolved Secret carries a valid CA PEM bundle.
-/// - [`EdgionErrorCode::OutboundTlsClientCertInvalid`] — `resolved_client` is
-///   `Some` but the Secret is missing `tls.crt` or `tls.key`.
+/// - [`EdgionErrorCode::OutboundTlsClientCertInvalid`] — a declared client ref
+///   has no matching resolved Secret, or the effective Secret is missing
+///   `tls.crt` or `tls.key`.
 pub fn resolve_outbound_tls(
     local: &OutboundTlsLocal,
     resolved_ca: Option<&[Secret]>,
@@ -182,6 +215,15 @@ pub fn resolve_outbound_tls(
         } else {
             (global.validation.as_ref(), global.resolved_ca_certificates.as_deref())
         };
+    let (client_ref_configured, resolved_client_effective) = if local.client_certificate_ref.is_some() {
+        (true, resolved_client)
+    } else if global.client_certificate_ref.is_some() {
+        (true, global.resolved_client_certificate.as_ref())
+    } else {
+        // Preserve direct programmatic callers that supply already-resolved
+        // identity material without an operator-facing reference.
+        (false, resolved_client)
+    };
 
     // Fail-secure: a non-empty subjectAltNames policy forces full verification
     // even if the operator set verify=false — SAN pinning is meaningless without
@@ -191,6 +233,10 @@ pub fn resolve_outbound_tls(
         .is_some_and(|s| !s.is_empty());
     let requested_verify = local.verify.unwrap_or(global.verify);
     let verify = requested_verify || san_pinned;
+
+    if client_ref_configured && resolved_client_effective.is_none() {
+        return Err(EdgionErrorCode::OutboundTlsClientCertInvalid);
+    }
 
     if !verify {
         if !provider_can_disable {
@@ -225,16 +271,27 @@ pub fn resolve_outbound_tls(
         Some(v) if v.ca_certificate_refs.as_ref().is_some_and(|r| !r.is_empty()) => {
             // CA bytes must come from the block that won precedence above; no
             // cross-block fallback (see the tuple selection comment).
+            let refs = v
+                .ca_certificate_refs
+                .as_ref()
+                .ok_or(EdgionErrorCode::OutboundTlsCaMissing)?;
             let secrets: &[Secret] = resolved_ca_effective
                 .filter(|s| !s.is_empty())
                 .ok_or(EdgionErrorCode::OutboundTlsCaMissing)?;
-            let bundles: Vec<Vec<u8>> = secrets
-                .iter()
-                .filter_map(|s| s.data.as_ref()?.get(tls_keys::CA_CERT).map(|v| v.0.clone()))
-                .collect();
-            if bundles.is_empty() {
+            if secrets.len() != refs.len() {
                 return Err(EdgionErrorCode::OutboundTlsCaMissing);
             }
+            let bundles: Vec<Vec<u8>> = secrets
+                .iter()
+                .map(|secret| {
+                    secret
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get(tls_keys::CA_CERT))
+                        .map(|value| value.0.clone())
+                        .ok_or(EdgionErrorCode::OutboundTlsCaMissing)
+                })
+                .collect::<Result<_, _>>()?;
             EffectiveCa::Custom(bundles)
         }
         // wellKnownCACertificates: System, or both absent → public roots.
@@ -242,7 +299,7 @@ pub fn resolve_outbound_tls(
     };
 
     // Resolve optional client mTLS identity
-    let client_identity = match resolved_client {
+    let client_identity = match resolved_client_effective {
         Some(secret) => {
             let cert = secret
                 .data
@@ -279,6 +336,7 @@ mod tests {
     use edgion_resources::resources::backend_tls_policy::{
         BackendTLSPolicyCACertificateRef, SubjectAltName, SubjectAltNameType, WellKnownCACertificates,
     };
+    use edgion_resources::resources::common::SecretObjectReference;
     use k8s_openapi::ByteString;
     use std::collections::BTreeMap;
 
@@ -312,6 +370,15 @@ mod tests {
         }
     }
 
+    fn secret_ref(name: &str) -> SecretObjectReference {
+        SecretObjectReference {
+            group: None,
+            kind: None,
+            name: name.to_string(),
+            namespace: None,
+        }
+    }
+
     fn hostname_san(h: &str) -> SubjectAltName {
         SubjectAltName {
             san_type: SubjectAltNameType::Hostname,
@@ -333,6 +400,7 @@ mod tests {
 
     #[test]
     fn verify_false_is_honored_when_provider_can_disable() {
+        let _guard = outbound_tls_test_guard();
         set_outbound_global_default(OutboundTlsConfig::default());
         let local = OutboundTlsLocal {
             verify: Some(false),
@@ -347,6 +415,7 @@ mod tests {
 
     #[test]
     fn gate_rejects_skip_when_provider_cannot_disable() {
+        let _guard = outbound_tls_test_guard();
         let local = OutboundTlsLocal {
             verify: Some(false),
             ..Default::default()
@@ -356,6 +425,7 @@ mod tests {
 
     #[test]
     fn inherits_global_verify_true_when_local_none() {
+        let _guard = outbound_tls_test_guard();
         set_outbound_global_default(OutboundTlsConfig {
             verify: true,
             ..Default::default()
@@ -366,6 +436,7 @@ mod tests {
 
     #[test]
     fn ca_refs_present_yields_multi_bundle_custom() {
+        let _guard = outbound_tls_test_guard();
         set_outbound_global_default(OutboundTlsConfig::default());
         let s1 = ca_secret(b"-----BEGIN CERTIFICATE-----\nA\n-----END CERTIFICATE-----\n");
         let s2 = ca_secret(b"-----BEGIN CERTIFICATE-----\nB\n-----END CERTIFICATE-----\n");
@@ -385,6 +456,7 @@ mod tests {
 
     #[test]
     fn well_known_system_yields_system() {
+        let _guard = outbound_tls_test_guard();
         set_outbound_global_default(OutboundTlsConfig::default());
         let local = OutboundTlsLocal {
             validation: Some(OutboundTlsValidation {
@@ -399,6 +471,7 @@ mod tests {
 
     #[test]
     fn both_absent_defaults_to_system_public_roots() {
+        let _guard = outbound_tls_test_guard();
         set_outbound_global_default(OutboundTlsConfig::default());
         let r = resolve_outbound_tls(&OutboundTlsLocal::default(), None, None, true, "Test").unwrap();
         assert!(matches!(r.ca, EffectiveCa::System));
@@ -409,6 +482,7 @@ mod tests {
     /// (rather than dropped by the skip-verify path).
     #[test]
     fn san_policy_overrides_verify_false_and_keeps_client_identity() {
+        let _guard = outbound_tls_test_guard();
         set_outbound_global_default(OutboundTlsConfig::default());
         let local = OutboundTlsLocal {
             verify: Some(false),
@@ -430,6 +504,7 @@ mod tests {
     /// identity is dropped (M4).
     #[test]
     fn verify_false_without_san_drops_client_identity() {
+        let _guard = outbound_tls_test_guard();
         set_outbound_global_default(OutboundTlsConfig::default());
         let local = OutboundTlsLocal {
             verify: Some(false),
@@ -448,6 +523,7 @@ mod tests {
     /// fall back to the global resolved CA (which belongs to the global refs).
     #[test]
     fn local_ca_refs_without_resolved_bytes_errors_no_global_fallback() {
+        let _guard = outbound_tls_test_guard();
         // Global has its own resolved CA that must NOT be borrowed by the local block.
         set_outbound_global_default(OutboundTlsConfig {
             validation: Some(OutboundTlsValidation {
@@ -474,10 +550,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn partially_resolved_ca_refs_fail_closed() {
+        let _guard = outbound_tls_test_guard();
+        set_outbound_global_default(OutboundTlsConfig::default());
+        let local = OutboundTlsLocal {
+            validation: Some(OutboundTlsValidation {
+                ca_certificate_refs: Some(vec![cert_ref("Secret", "ca-a"), cert_ref("Secret", "ca-b")]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let only_one_secret = [ca_secret(
+            b"-----BEGIN CERTIFICATE-----\nA\n-----END CERTIFICATE-----\n",
+        )];
+
+        let result = resolve_outbound_tls(&local, Some(&only_one_secret), None, true, "Test");
+        assert!(matches!(result, Err(EdgionErrorCode::OutboundTlsCaMissing)));
+    }
+
     /// When the local block declares no validation, the global validation block
     /// wins and its Controller-shipped resolved CA bundles are used.
     #[test]
     fn inherits_global_ca_when_local_validation_absent() {
+        let _guard = outbound_tls_test_guard();
         set_outbound_global_default(OutboundTlsConfig {
             validation: Some(OutboundTlsValidation {
                 ca_certificate_refs: Some(vec![cert_ref("Secret", "global-ca")]),
@@ -493,5 +589,64 @@ mod tests {
             EffectiveCa::Custom(b) => assert_eq!(b.len(), 1),
             _ => panic!("expected global resolved CA to be inherited as Custom"),
         }
+    }
+
+    #[test]
+    fn local_client_ref_without_resolved_secret_fails_closed() {
+        let _guard = outbound_tls_test_guard();
+        set_outbound_global_default(OutboundTlsConfig::default());
+        let local = OutboundTlsLocal {
+            client_certificate_ref: Some(secret_ref("local-client")),
+            ..Default::default()
+        };
+
+        let result = resolve_outbound_tls(&local, None, None, true, "Test");
+        assert!(matches!(result, Err(EdgionErrorCode::OutboundTlsClientCertInvalid)));
+    }
+
+    #[test]
+    fn global_client_ref_without_resolved_secret_fails_closed() {
+        let _guard = outbound_tls_test_guard();
+        set_outbound_global_default(OutboundTlsConfig {
+            client_certificate_ref: Some(secret_ref("global-client")),
+            ..Default::default()
+        });
+
+        let result = resolve_outbound_tls(&OutboundTlsLocal::default(), None, None, true, "Test");
+        assert!(matches!(result, Err(EdgionErrorCode::OutboundTlsClientCertInvalid)));
+        set_outbound_global_default(OutboundTlsConfig::default());
+    }
+
+    #[test]
+    fn global_client_identity_is_inherited_when_local_ref_is_absent() {
+        let _guard = outbound_tls_test_guard();
+        set_outbound_global_default(OutboundTlsConfig {
+            client_certificate_ref: Some(secret_ref("global-client")),
+            resolved_client_certificate: Some(client_secret()),
+            ..Default::default()
+        });
+
+        let resolved = resolve_outbound_tls(&OutboundTlsLocal::default(), None, None, true, "Test")
+            .expect("global client identity must resolve");
+        assert!(resolved.client_identity.is_some());
+        set_outbound_global_default(OutboundTlsConfig::default());
+    }
+
+    #[test]
+    fn local_client_ref_does_not_borrow_global_resolved_identity() {
+        let _guard = outbound_tls_test_guard();
+        set_outbound_global_default(OutboundTlsConfig {
+            client_certificate_ref: Some(secret_ref("global-client")),
+            resolved_client_certificate: Some(client_secret()),
+            ..Default::default()
+        });
+        let local = OutboundTlsLocal {
+            client_certificate_ref: Some(secret_ref("local-client")),
+            ..Default::default()
+        };
+
+        let result = resolve_outbound_tls(&local, None, None, true, "Test");
+        assert!(matches!(result, Err(EdgionErrorCode::OutboundTlsClientCertInvalid)));
+        set_outbound_global_default(OutboundTlsConfig::default());
     }
 }

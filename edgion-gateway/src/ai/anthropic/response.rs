@@ -235,7 +235,7 @@ impl AnthropicResponseProcessor {
         clear_provider_headers(response);
         let _ = response.insert_header("cache-control", "no-store");
         if let Some(error) = error {
-            response.status = StatusCode::from_u16(error.status).unwrap_or(StatusCode::SERVICE_UNAVAILABLE);
+            let _ = response.set_status(StatusCode::from_u16(error.status).unwrap_or(StatusCode::SERVICE_UNAVAILABLE));
             let _ = response.insert_header("content-type", "application/json");
             if error.status == 429 {
                 if let Some(retry_after) = retry_after {

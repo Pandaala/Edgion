@@ -150,6 +150,21 @@ pub(crate) async fn send_grpc_status_trailers_only(
 
     let mut resp = ResponseHeader::build(200, None)?;
     server_header_opts.apply_to_response(&mut resp);
+    // Response-stage plugin mutations target this fresh local reply, not the
+    // discarded upstream response. Apply them after gateway defaults so
+    // conditional operations observe the reply's real initial header set.
+    ctx.drain_pending_response_header_ops(&mut resp);
+    // The local-reply queue is shared by all plugins. Reassert the mandatory
+    // trailers-only framing and media type even if a non-ExtProc producer
+    // queued an unsafe operation.
+    resp.remove_header(&http::header::CONTENT_LENGTH);
+    resp.remove_header(&http::header::TRANSFER_ENCODING);
+    // grpc-status/message belong exclusively to the canonical terminal shape:
+    // native gRPC adds them to its trailers-only HEADERS below, while gRPC-Web
+    // encodes them into the 0x80 trailer body frame. Never let queued values
+    // survive in the initial response headers.
+    resp.remove_header("grpc-status");
+    resp.remove_header("grpc-message");
     resp.insert_header("content-type", "application/grpc")
         .expect("static ASCII header literal, cannot fail");
     send_grpc_trailers_only_frame(session, resp, grpc_status, grpc_message).await
@@ -377,10 +392,12 @@ pub async fn end_response_503(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::EdgionHttpContext;
+    use crate::{EdgionHttpContext, PendingHeaderOp};
     use edgion_resources::EdgionErrorCode;
+    use pingora_core::modules::http::grpc_web::GrpcWeb;
+    use pingora_core::modules::http::HttpModules;
     use pingora_proxy::Session;
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     async fn closed_downstream_session() -> Session {
         let (mut client, server) = tokio::io::duplex(4096);
@@ -393,6 +410,114 @@ mod tests {
         session.read_request().await.unwrap();
         drop(client);
         session
+    }
+
+    async fn live_downstream_session() -> (Session, tokio::io::DuplexStream) {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(b"POST /svc/Method HTTP/1.1\r\nHost: test\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .unwrap();
+        session.read_request().await.unwrap();
+        (session, client)
+    }
+
+    async fn live_grpc_web_session() -> (Session, tokio::io::DuplexStream) {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut modules = HttpModules::new();
+        modules.add_module(Box::new(GrpcWeb));
+        let mut session = Session::new_h1_with_modules(stream, &modules);
+        client
+            .write_all(
+                b"POST /svc/Method HTTP/1.1\r\nHost: test\r\nContent-Type: application/grpc-web\r\nContent-Length: 0\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        session.read_request().await.unwrap();
+        **session
+            .downstream_modules_ctx
+            .get_mut::<GrpcWebBridge>()
+            .expect("gRPC-Web bridge module") = GrpcWebCtx::Upgrade;
+        (session, client)
+    }
+
+    #[tokio::test]
+    async fn response_stage_exact_grpc_reply_drains_allowed_ops_and_reasserts_invariants() {
+        let (mut session, _client) = live_downstream_session().await;
+        let mut ctx = EdgionHttpContext::new();
+        ctx.pending_response_header_ops.push(PendingHeaderOp::Append {
+            name: "x-ext-proc".to_string(),
+            value: "allowed".to_string(),
+        });
+        ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
+            name: "content-type".to_string(),
+            value: "text/plain".to_string(),
+        });
+        ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
+            name: "content-length".to_string(),
+            value: "999".to_string(),
+        });
+
+        send_grpc_status_trailers_only(&mut session, &mut ctx, &ServerHeaderOpts::default(), 8, Some("quota"))
+            .await
+            .unwrap();
+
+        let written = session.response_written().expect("trailers-only response");
+        assert_eq!(written.status.as_u16(), 200);
+        assert_eq!(written.headers.get("x-ext-proc").unwrap(), "allowed");
+        assert_eq!(written.headers.get("content-type").unwrap(), "application/grpc");
+        assert!(written.headers.get("content-length").is_none());
+        assert!(written.headers.get("transfer-encoding").is_none());
+        assert_eq!(written.headers.get("grpc-status").unwrap(), "8");
+        assert!(ctx.pending_response_header_ops.is_empty());
+    }
+
+    #[tokio::test]
+    async fn grpc_web_exact_reply_strips_conflicting_status_headers_and_encodes_canonical_trailer() {
+        let (mut session, mut client) = live_grpc_web_session().await;
+        let mut ctx = EdgionHttpContext::new();
+        for op in [
+            PendingHeaderOp::Append {
+                name: "x-ext-proc".to_string(),
+                value: "allowed".to_string(),
+            },
+            PendingHeaderOp::Set {
+                name: "grpc-status".to_string(),
+                value: "1".to_string(),
+            },
+            PendingHeaderOp::Set {
+                name: "grpc-message".to_string(),
+                value: "conflict".to_string(),
+            },
+        ] {
+            ctx.pending_response_header_ops.push(op);
+        }
+
+        send_grpc_status_trailers_only(&mut session, &mut ctx, &ServerHeaderOpts::default(), 8, Some("quota"))
+            .await
+            .unwrap();
+
+        let written = session.response_written().expect("gRPC-Web response header");
+        assert_eq!(written.headers.get("x-ext-proc").unwrap(), "allowed");
+        assert!(written.headers.get("grpc-status").is_none());
+        assert!(written.headers.get("grpc-message").is_none());
+
+        let mut wire = Vec::new();
+        while let Ok(Ok(read)) =
+            tokio::time::timeout(std::time::Duration::from_millis(20), client.read_buf(&mut wire)).await
+        {
+            if read == 0 {
+                break;
+            }
+        }
+        let wire = String::from_utf8_lossy(&wire);
+        assert!(wire.contains("x-ext-proc: allowed\r\n"));
+        assert!(!wire.contains("grpc-status: 1\r\n"));
+        assert!(!wire.contains("grpc-message: conflict\r\n"));
+        assert!(wire.contains("grpc-status:8\r\ngrpc-message:quota\r\n"));
     }
 
     #[tokio::test]

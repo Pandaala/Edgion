@@ -7,10 +7,10 @@ use bytes::Bytes;
 use pingora_proxy::ResponseBodySink;
 
 use super::attached::AttachedExtProc;
-use super::plugin::exchange_failure_reason;
+use super::plugin::{exchange_failure_reason, has_unsupported_common_fields};
 use crate::ctx::ResponseStreamKind;
 use crate::plugins::runtime::dye_plan::CompiledDyePlan;
-use crate::plugins::runtime::traits::StreamingResponseProcessor;
+use crate::plugins::runtime::traits::{StreamingResponseEvent, StreamingResponseProcessor};
 use crate::plugins::runtime::{DyeOutcome, PluginSession};
 use edgion_common::ext_proc::proto::{
     body_mutation, common_response::ResponseStatus, processing_request, processing_response, HttpBody,
@@ -56,6 +56,8 @@ fn within_cap(parts: &[usize], cap: usize) -> bool {
 pub(super) struct ExtProcResponseProcessor {
     owner: Arc<dyn ResponseExchange>,
     failure_mode_allow: bool,
+    disable_immediate_response: bool,
+    response_trailers_send: bool,
     done: bool,
     dye_plan: Option<Arc<CompiledDyePlan>>,
 }
@@ -64,11 +66,15 @@ impl ExtProcResponseProcessor {
     pub(super) fn new(
         owner: Arc<AttachedExtProc>,
         failure_mode_allow: bool,
+        disable_immediate_response: bool,
+        response_trailers_send: bool,
         dye_plan: Option<Arc<CompiledDyePlan>>,
     ) -> Self {
         Self {
             owner,
             failure_mode_allow,
+            disable_immediate_response,
+            response_trailers_send,
             done: false,
             dye_plan,
         }
@@ -120,10 +126,10 @@ impl StreamingResponseProcessor for ExtProcResponseProcessor {
         self.owner.release_inflight();
     }
 
-    async fn on_chunk(
+    async fn on_event(
         &mut self,
         chunk: &mut Option<Bytes>,
-        end_of_stream: bool,
+        event: StreamingResponseEvent,
         _stream_kind: ResponseStreamKind,
         sink: &mut ResponseBodySink,
         session: &mut dyn PluginSession,
@@ -131,6 +137,17 @@ impl StreamingResponseProcessor for ExtProcResponseProcessor {
         if self.done {
             return;
         }
+        let (end_of_stream, last) = match event {
+            StreamingResponseEvent::Data { end_of_stream } => (end_of_stream, end_of_stream),
+            StreamingResponseEvent::TerminalWithoutTrailers => (true, true),
+            StreamingResponseEvent::TerminalBeforeTrailers if self.response_trailers_send => {
+                // Completion belongs to the following real trailer exchange.
+                // In particular, do not fabricate an empty body verdict here.
+                self.done = true;
+                return;
+            }
+            StreamingResponseEvent::TerminalBeforeTrailers => (true, true),
+        };
         let input_len = chunk.as_ref().map_or(0, Bytes::len);
         if !within_cap(&[input_len], RESPONSE_WINDOW_CAP) {
             self.fail(chunk, sink, session, "input-cap");
@@ -142,7 +159,7 @@ impl StreamingResponseProcessor for ExtProcResponseProcessor {
                 end_of_stream,
             })),
         };
-        let response = match self.owner.exchange(request, end_of_stream).await {
+        let response = match self.owner.exchange(request, last).await {
             Ok(response) => response,
             Err(status) => {
                 let _reason = exchange_failure_reason(&status);
@@ -150,6 +167,15 @@ impl StreamingResponseProcessor for ExtProcResponseProcessor {
                 return;
             }
         };
+        if matches!(
+            response.response,
+            Some(processing_response::Response::ImmediateResponse(_))
+        ) && self.disable_immediate_response
+        {
+            self.done = true;
+            self.owner.terminal("suppressed", "immediate-disabled");
+            return;
+        }
         let Some(processing_response::Response::ResponseBody(response)) = response.response else {
             let reason = if matches!(
                 response.response,
@@ -166,6 +192,10 @@ impl StreamingResponseProcessor for ExtProcResponseProcessor {
             self.fail(chunk, sink, session, "missing-verdict");
             return;
         };
+        if has_unsupported_common_fields(&common) {
+            self.fail(chunk, sink, session, "invalid-verdict");
+            return;
+        }
         if common.header_mutation.is_some()
             || ResponseStatus::try_from(common.status).ok() != Some(ResponseStatus::Continue)
         {
@@ -191,6 +221,24 @@ impl StreamingResponseProcessor for ExtProcResponseProcessor {
             session.record_outcome(DyeOutcome::Success, "response-eos");
         }
     }
+
+    async fn on_chunk(
+        &mut self,
+        chunk: &mut Option<Bytes>,
+        end_of_stream: bool,
+        stream_kind: ResponseStreamKind,
+        sink: &mut ResponseBodySink,
+        session: &mut dyn PluginSession,
+    ) {
+        self.on_event(
+            chunk,
+            StreamingResponseEvent::Data { end_of_stream },
+            stream_kind,
+            sink,
+            session,
+        )
+        .await;
+    }
 }
 
 #[cfg(test)]
@@ -204,16 +252,14 @@ mod tests {
 
     struct Scripted {
         results: Mutex<Vec<Result<ProcessingResponse, tonic::Status>>>,
+        requests: Mutex<Vec<(ProcessingRequest, bool)>>,
         terminal: Mutex<Option<(&'static str, &'static str)>>,
     }
 
     #[async_trait]
     impl ResponseExchange for Scripted {
-        async fn exchange(
-            &self,
-            _request: ProcessingRequest,
-            _last: bool,
-        ) -> Result<ProcessingResponse, tonic::Status> {
+        async fn exchange(&self, request: ProcessingRequest, last: bool) -> Result<ProcessingResponse, tonic::Status> {
+            self.requests.lock().unwrap().push((request, last));
             self.results.lock().unwrap().remove(0)
         }
 
@@ -234,6 +280,7 @@ mod tests {
                     ..Default::default()
                 }),
             })),
+            mode_override: None,
         }
     }
 
@@ -250,17 +297,86 @@ mod tests {
     ) -> (ExtProcResponseProcessor, Arc<Scripted>) {
         let exchange = Arc::new(Scripted {
             results: Mutex::new(vec![result]),
+            requests: Mutex::new(Vec::new()),
             terminal: Mutex::new(None),
         });
         (
             ExtProcResponseProcessor {
                 owner: exchange.clone(),
                 failure_mode_allow: fail_open,
+                disable_immediate_response: false,
+                response_trailers_send: false,
                 done: false,
                 dye_plan: None,
             },
             exchange,
         )
+    }
+
+    #[tokio::test]
+    async fn typed_pre_trailer_boundary_obeys_exact_terminal_table() {
+        let (mut send_trailers, owner) = processor(Ok(verdict(None, false)), false);
+        send_trailers.response_trailers_send = true;
+        let mut chunk = None;
+        let mut sink = ResponseBodySink::new();
+        let mut session = mock_session();
+        send_trailers
+            .on_event(
+                &mut chunk,
+                StreamingResponseEvent::TerminalBeforeTrailers,
+                ResponseStreamKind::None,
+                &mut sink,
+                &mut session,
+            )
+            .await;
+        assert!(owner.requests.lock().unwrap().is_empty());
+
+        let (mut skip_trailers, owner) = processor(Ok(verdict(None, false)), false);
+        let mut session = mock_session();
+        session.expect_install_dye_plan().times(1).return_const(());
+        session.expect_record_outcome().times(1).return_const(());
+        skip_trailers
+            .on_event(
+                &mut chunk,
+                StreamingResponseEvent::TerminalBeforeTrailers,
+                ResponseStreamKind::None,
+                &mut sink,
+                &mut session,
+            )
+            .await;
+        let requests = owner.requests.lock().unwrap();
+        assert!(requests[0].1);
+        let Some(processing_request::Request::ResponseBody(body)) = requests[0].0.request.as_ref() else {
+            panic!("expected terminal response body")
+        };
+        assert!(body.body.is_empty());
+        assert!(body.end_of_stream);
+    }
+
+    #[tokio::test]
+    async fn trailer_free_terminal_sends_zero_body_last() {
+        let (mut processor, owner) = processor(Ok(verdict(None, false)), false);
+        let mut chunk = None;
+        let mut sink = ResponseBodySink::new();
+        let mut session = mock_session();
+        session.expect_install_dye_plan().times(1).return_const(());
+        session.expect_record_outcome().times(1).return_const(());
+        processor
+            .on_event(
+                &mut chunk,
+                StreamingResponseEvent::TerminalWithoutTrailers,
+                ResponseStreamKind::None,
+                &mut sink,
+                &mut session,
+            )
+            .await;
+        let requests = owner.requests.lock().unwrap();
+        assert!(requests[0].1);
+        let Some(processing_request::Request::ResponseBody(body)) = requests[0].0.request.as_ref() else {
+            panic!("expected terminal response body")
+        };
+        assert!(body.body.is_empty());
+        assert!(body.end_of_stream);
     }
 
     fn failure_session(outcome: DyeOutcome) -> MockPluginSession {
@@ -302,6 +418,24 @@ mod tests {
             assert_eq!(chunk.as_deref(), expected);
             assert!(!sink.is_terminated());
         }
+    }
+
+    #[tokio::test]
+    async fn response_body_phase_ignores_mode_override_even_when_enum_is_unknown() {
+        let mut response = verdict(None, false);
+        response.mode_override = Some(edgion_common::ext_proc::proto::ProcessingMode {
+            response_body_mode: 99,
+            ..Default::default()
+        });
+        let (mut processor, _) = processor(Ok(response), false);
+        let mut chunk = Some(Bytes::from_static(b"original"));
+        let mut sink = ResponseBodySink::new();
+        let mut session = mock_session();
+        processor
+            .on_chunk(&mut chunk, false, ResponseStreamKind::None, &mut sink, &mut session)
+            .await;
+        assert_eq!(chunk.as_deref(), Some(&b"original"[..]));
+        assert!(!sink.is_terminated());
     }
 
     #[tokio::test]
@@ -379,6 +513,7 @@ mod tests {
             response: Some(processing_response::Response::ImmediateResponse(
                 ImmediateResponse::default(),
             )),
+            mode_override: None,
         };
         let (mut fail_open, terminal) = processor(Ok(immediate), true);
         let mut original = Some(Bytes::from_static(b"original"));
@@ -396,6 +531,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn disabled_post_commit_immediate_preserves_body_without_failure_policy() {
+        let immediate = ProcessingResponse {
+            response: Some(processing_response::Response::ImmediateResponse(
+                ImmediateResponse::default(),
+            )),
+            mode_override: None,
+        };
+        let (mut processor, terminal) = processor(Ok(immediate), false);
+        processor.disable_immediate_response = true;
+        let mut original = Some(Bytes::from_static(b"original"));
+        let mut sink = ResponseBodySink::new();
+        let mut session = mock_session();
+        processor
+            .on_chunk(&mut original, false, ResponseStreamKind::None, &mut sink, &mut session)
+            .await;
+        assert_eq!(original.as_deref(), Some(&b"original"[..]));
+        assert!(!sink.is_terminated());
+        assert_eq!(
+            *terminal.terminal.lock().unwrap(),
+            Some(("suppressed", "immediate-disabled"))
+        );
+    }
+
+    #[tokio::test]
     async fn missing_and_wrong_response_body_verdicts_fail_closed() {
         use edgion_common::ext_proc::proto::HeadersResponse;
 
@@ -404,11 +563,13 @@ mod tests {
                 response: Some(processing_response::Response::ResponseBody(BodyResponse {
                     response: None,
                 })),
+                mode_override: None,
             },
             ProcessingResponse {
                 response: Some(processing_response::Response::ResponseHeaders(
                     HeadersResponse::default(),
                 )),
+                mode_override: None,
             },
         ];
         for verdict in verdicts {
@@ -425,6 +586,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn response_body_rejects_unimplemented_common_fields_before_mutation() {
+        let response = ProcessingResponse {
+            response: Some(processing_response::Response::ResponseBody(BodyResponse {
+                response: Some(CommonResponse {
+                    clear_route_cache: true,
+                    body_mutation: Some(BodyMutation {
+                        mutation: Some(body_mutation::Mutation::Body(b"changed".to_vec())),
+                    }),
+                    ..Default::default()
+                }),
+            })),
+            mode_override: None,
+        };
+        let (mut processor, _) = processor(Ok(response), false);
+        let mut chunk = Some(Bytes::from_static(b"original"));
+        let mut sink = ResponseBodySink::new();
+        let mut session = failure_session(DyeOutcome::FailClose);
+        processor
+            .on_chunk(&mut chunk, false, ResponseStreamKind::None, &mut sink, &mut session)
+            .await;
+        assert!(sink.is_terminated());
+        assert!(chunk.is_none());
+    }
+
+    #[tokio::test]
     async fn disconnect_fail_open_preserves_window_and_eos_records_success() {
         let (mut disconnected, _) = processor(Err(tonic::Status::unavailable("private detail")), true);
         let mut chunk = Some(Bytes::from_static(b"original"));
@@ -435,12 +621,13 @@ mod tests {
             .await;
         assert_eq!(chunk.as_deref(), Some(&b"original"[..]));
 
-        let (mut eos, _) = processor(Ok(verdict(None, false)), false);
+        let (mut eos, owner) = processor(Ok(verdict(None, false)), false);
         let mut empty = None;
         let mut sink = ResponseBodySink::new();
         let mut session = failure_session(DyeOutcome::Success);
         eos.on_chunk(&mut empty, true, ResponseStreamKind::None, &mut sink, &mut session)
             .await;
         assert!(!sink.is_terminated());
+        assert!(owner.requests.lock().unwrap()[0].1);
     }
 }

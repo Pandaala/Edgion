@@ -13,7 +13,7 @@ description: Gateway TLS build backends and capability boundaries — BoringSSL,
 default = ["allocator-jemalloc", "boringssl"]
 boringssl = ["pingora-core/boringssl", "pingora-proxy/boringssl", "dep:boring-sys", "dep:boring"]
 rustls = ["pingora-core/rustls", "pingora-proxy/rustls"]
-fips = ["boringssl", "boring/fips-link-precompiled"]
+fips = ["boringssl", "boring/fips"]
 ```
 
 There is no gateway `openssl` feature or `tls/openssl` implementation. Do not introduce an

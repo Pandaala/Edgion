@@ -101,7 +101,7 @@ impl FrontendValidationTestSuite {
                     };
 
                     let url = format!("https://{}:{}/health", HOSTNAME, PORT);
-                    let request = client.get(&url).header("Host", HOSTNAME);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => {
@@ -138,7 +138,7 @@ impl FrontendValidationTestSuite {
                     };
 
                     let url = format!("https://{}:{}/health", HOSTNAME, PORT);
-                    let request = client.get(&url).header("Host", HOSTNAME);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => TestResult::failed(
@@ -187,7 +187,7 @@ impl FrontendValidationTestSuite {
                     };
 
                     let url = format!("https://{}:{}/health", HOSTNAME, PORT);
-                    let request = client.get(&url).header("Host", HOSTNAME);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => TestResult::failed(
@@ -230,7 +230,7 @@ impl FrontendValidationTestSuite {
                         };
 
                     let url = format!("https://{}:{}/health", HOSTNAME, PORT_INSECURE);
-                    let request = client.get(&url).header("Host", HOSTNAME);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => {
@@ -267,7 +267,7 @@ impl FrontendValidationTestSuite {
                     };
 
                     let url = format!("https://{}:{}/health", HOSTNAME, PORT_INSECURE);
-                    let request = client.get(&url).header("Host", HOSTNAME);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => {
@@ -353,7 +353,7 @@ impl FrontendValidationTestSuite {
             Err(e) => return TestResult::failed(start.elapsed(), format!("Failed to create mTLS client: {}", e)),
         };
         let url = format!("https://{}:{}{}", HOSTNAME, PORT, path);
-        match client.get(&url).header("Host", HOSTNAME).send().await {
+        match client.get(&url).send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
                 if status == expected {
@@ -472,7 +472,7 @@ impl FrontendValidationTestSuite {
                         };
 
                     let url = format!("https://{}:{}/health", HOSTNAME, PORT_INSECURE);
-                    let request = client.get(&url).header("Host", HOSTNAME);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => {

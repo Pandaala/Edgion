@@ -29,7 +29,7 @@ use crate::resources::edgion_plugins::PluginValidation;
 /// failureModeAllow: false      # fail-close when the processor is unreachable
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExtProcConfig {
     /// External processing gRPC service connection.
     pub grpc_service: GrpcServiceConfig,
@@ -43,11 +43,26 @@ pub struct ExtProcConfig {
     /// - `true`: fail-open — skip processing and continue as if unconfigured.
     #[serde(default)]
     pub failure_mode_allow: bool,
+
+    /// Ignore processor-authored immediate responses and deactivate ExtProc
+    /// for the remainder of the request.
+    #[serde(default)]
+    pub disable_immediate_response: bool,
+
+    /// Allow a processor to select an explicitly allow-listed reduction of
+    /// the configured processing mode from a header verdict.
+    #[serde(default)]
+    pub allow_mode_override: bool,
+
+    /// Exact reduction-only modes accepted from the processor. Required when
+    /// `allowModeOverride` is true and bounded to eight entries.
+    #[serde(default)]
+    pub allowed_override_modes: Vec<ProcessingMode>,
 }
 
 /// gRPC connection settings for the external processing service.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GrpcServiceConfig {
     /// Target authority in `host:port` form (gRPC endpoint). Required.
     /// Example: "ext-proc.svc.cluster.local:9000"
@@ -65,8 +80,8 @@ pub struct GrpcServiceConfig {
 }
 
 /// Per-phase processing control, mirroring Envoy's `ProcessingMode`.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProcessingMode {
     /// Whether to send the request headers to the processor. Default: SEND.
     #[serde(default = "default_header_send")]
@@ -84,6 +99,10 @@ pub struct ProcessingMode {
     /// Full or partial buffering is forbidden for proxied upstream responses.
     #[serde(default)]
     pub response_body_mode: BodySendMode,
+
+    /// Whether to send real upstream response trailers to the processor.
+    #[serde(default = "default_header_skip")]
+    pub response_trailer_mode: HeaderSendMode,
 }
 
 /// Header-phase send control.
@@ -166,8 +185,63 @@ impl Default for ProcessingMode {
             response_header_mode: HeaderSendMode::Skip,
             request_body_mode: BodySendMode::None,
             response_body_mode: BodySendMode::None,
+            response_trailer_mode: HeaderSendMode::Skip,
         }
     }
+}
+
+impl ProcessingMode {
+    /// Canonical representation used for exact override-list membership.
+    /// Request headers are already consumed when an override is observed, and
+    /// config-only body `SKIP` is wire-equivalent to `NONE`.
+    pub fn normalized_override(&self) -> Self {
+        Self {
+            request_header_mode: HeaderSendMode::Skip,
+            response_header_mode: self.response_header_mode,
+            request_body_mode: normalize_body(self.request_body_mode),
+            response_body_mode: normalize_body(self.response_body_mode),
+            response_trailer_mode: self.response_trailer_mode,
+        }
+    }
+
+    pub fn is_reduction_of(&self, base: &Self) -> bool {
+        let requested = self.normalized_override();
+        let base = base.normalized_override();
+        header_is_reduction(requested.response_header_mode, base.response_header_mode)
+            && body_is_reduction(requested.request_body_mode, base.request_body_mode)
+            && body_is_reduction(requested.response_body_mode, base.response_body_mode)
+            && header_is_reduction(requested.response_trailer_mode, base.response_trailer_mode)
+    }
+
+    fn validation_error(&self, prefix: &str) -> Option<String> {
+        if !self.request_body_mode.is_supported_request() {
+            return Some(format!(
+                "{prefix}.requestBodyMode supports NONE, SKIP, BUFFERED, or STREAMED"
+            ));
+        }
+        if !self.response_body_mode.is_supported_response() {
+            return Some(format!(
+                "{prefix}.responseBodyMode supports NONE, SKIP, or STREAMED; BUFFERED and BUFFERED_PARTIAL would aggregate the upstream response"
+            ));
+        }
+        None
+    }
+}
+
+fn normalize_body(mode: BodySendMode) -> BodySendMode {
+    if matches!(mode, BodySendMode::Skip) {
+        BodySendMode::None
+    } else {
+        mode
+    }
+}
+
+fn header_is_reduction(requested: HeaderSendMode, base: HeaderSendMode) -> bool {
+    requested == base || matches!((base, requested), (HeaderSendMode::Send, HeaderSendMode::Skip))
+}
+
+fn body_is_reduction(requested: BodySendMode, base: BodySendMode) -> bool {
+    requested == base || matches!(requested, BodySendMode::None)
 }
 
 impl Default for ExtProcConfig {
@@ -180,6 +254,9 @@ impl Default for ExtProcConfig {
             },
             processing_mode: ProcessingMode::default(),
             failure_mode_allow: false,
+            disable_immediate_response: false,
+            allow_mode_override: false,
+            allowed_override_modes: Vec::new(),
         }
     }
 }
@@ -243,17 +320,34 @@ impl PluginValidation for ExtProcConfig {
         if self.grpc_service.timeout_ms > MAX_TIMEOUT_MS {
             return Some(format!("grpcService.timeoutMs must not exceed {MAX_TIMEOUT_MS}"));
         }
-        // Reject unsupported body modes loudly so a user never configures a
-        // silently ignored mode.
-        if !self.processing_mode.request_body_mode.is_supported_request() {
-            return Some("processingMode.requestBodyMode supports NONE, SKIP, BUFFERED, or STREAMED".to_string());
+        if let Some(error) = self.processing_mode.validation_error("processingMode") {
+            return Some(error);
         }
-        if !self.processing_mode.response_body_mode.is_supported_response() {
+        if !self.allow_mode_override && !self.allowed_override_modes.is_empty() {
+            return Some("allowedOverrideModes must be empty when allowModeOverride is false".to_string());
+        }
+        if self.allow_mode_override && !(1..=8).contains(&self.allowed_override_modes.len()) {
             return Some(
-                "processingMode.responseBodyMode supports NONE, SKIP, or STREAMED; \
-                 BUFFERED and BUFFERED_PARTIAL would aggregate the upstream response"
-                    .to_string(),
+                "allowedOverrideModes must contain 1 through 8 entries when allowModeOverride is true".to_string(),
             );
+        }
+        let mut normalized = Vec::with_capacity(self.allowed_override_modes.len());
+        for (index, mode) in self.allowed_override_modes.iter().enumerate() {
+            if let Some(error) = mode.validation_error(&format!("allowedOverrideModes[{index}]")) {
+                return Some(error);
+            }
+            let mode = mode.normalized_override();
+            if !mode.is_reduction_of(&self.processing_mode) {
+                return Some(format!(
+                    "allowedOverrideModes[{index}] must be a reduction of processingMode"
+                ));
+            }
+            if normalized.contains(&mode) {
+                return Some(format!(
+                    "allowedOverrideModes[{index}] duplicates an earlier normalized mode"
+                ));
+            }
+            normalized.push(mode);
         }
         None
     }
@@ -400,7 +494,45 @@ mod tests {
         assert!(!config.grpc_service.tls.enabled);
         assert_eq!(config.processing_mode.request_header_mode, HeaderSendMode::Send);
         assert_eq!(config.processing_mode.response_header_mode, HeaderSendMode::Skip);
+        assert_eq!(config.processing_mode.response_trailer_mode, HeaderSendMode::Skip);
         assert!(!config.failure_mode_allow);
+        assert!(!config.disable_immediate_response);
+        assert!(!config.allow_mode_override);
+        assert!(config.allowed_override_modes.is_empty());
+    }
+
+    #[test]
+    fn deserializes_disable_immediate_response() {
+        let config: ExtProcConfig = serde_json::from_value(serde_json::json!({
+            "grpcService": {"target": "ext-proc:9000"},
+            "disableImmediateResponse": true
+        }))
+        .unwrap();
+        assert!(config.disable_immediate_response);
+    }
+
+    #[test]
+    fn rejects_unknown_extproc_keys_at_each_closed_boundary() {
+        for json in [
+            serde_json::json!({
+                "grpcService": {"target": "ext-proc:9000"},
+                "disableImmediateReponse": true
+            }),
+            serde_json::json!({
+                "grpcService": {"target": "ext-proc:9000", "timeoutMillis": 10}
+            }),
+            serde_json::json!({
+                "grpcService": {"target": "ext-proc:9000"},
+                "processingMode": {"responseHeadersMode": "SEND"}
+            }),
+            serde_json::json!({
+                "grpcService": {"target": "ext-proc:9000"},
+                "allowModeOverride": true,
+                "allowedOverrideModes": [{"responseBodyModes": "NONE"}]
+            }),
+        ] {
+            assert!(serde_json::from_value::<ExtProcConfig>(json).is_err());
+        }
     }
 
     #[test]
@@ -430,6 +562,72 @@ mod tests {
         assert_eq!(config.grpc_service.timeout_ms, 150);
         assert_eq!(config.processing_mode.response_header_mode, HeaderSendMode::Send);
         assert!(config.failure_mode_allow);
+        assert!(config.validation_error().is_none());
+    }
+
+    #[test]
+    fn override_allow_list_requires_enabled_bounded_nonempty_configuration() {
+        let mut config = valid_base();
+        config.allowed_override_modes.push(ProcessingMode::default());
+        assert!(config.validation_error().unwrap().contains("must be empty"));
+
+        config.allow_mode_override = true;
+        config.allowed_override_modes.clear();
+        assert!(config.validation_error().unwrap().contains("1 through 8"));
+
+        config.allowed_override_modes = vec![ProcessingMode::default(); 9];
+        assert!(config.validation_error().unwrap().contains("1 through 8"));
+    }
+
+    #[test]
+    fn override_allow_list_rejects_normalized_duplicates() {
+        let mut config = valid_base();
+        config.allow_mode_override = true;
+        let mut first = ProcessingMode::default();
+        first.request_header_mode = HeaderSendMode::Send;
+        first.request_body_mode = BodySendMode::Skip;
+        let mut duplicate = first.clone();
+        duplicate.request_header_mode = HeaderSendMode::Skip;
+        duplicate.request_body_mode = BodySendMode::None;
+        config.allowed_override_modes = vec![first, duplicate];
+        assert!(config.validation_error().unwrap().contains("duplicates"));
+    }
+
+    #[test]
+    fn override_allow_list_accepts_only_supported_reductions() {
+        let mut config = valid_base();
+        config.processing_mode.request_body_mode = BodySendMode::Buffered;
+        config.processing_mode.response_header_mode = HeaderSendMode::Send;
+        config.processing_mode.response_body_mode = BodySendMode::Streamed;
+        config.allow_mode_override = true;
+        config.allowed_override_modes = vec![ProcessingMode {
+            request_header_mode: HeaderSendMode::Skip,
+            response_header_mode: HeaderSendMode::Skip,
+            request_body_mode: BodySendMode::None,
+            response_body_mode: BodySendMode::None,
+            response_trailer_mode: HeaderSendMode::Skip,
+        }];
+        assert!(config.validation_error().is_none());
+
+        for invalid in [
+            ProcessingMode {
+                request_body_mode: BodySendMode::Streamed,
+                ..config.processing_mode.clone()
+            },
+            ProcessingMode {
+                response_body_mode: BodySendMode::Buffered,
+                ..config.processing_mode.clone()
+            },
+        ] {
+            config.allowed_override_modes = vec![invalid];
+            assert!(config.validation_error().is_some());
+        }
+    }
+
+    #[test]
+    fn base_response_trailer_send_is_supported() {
+        let mut config = valid_base();
+        config.processing_mode.response_trailer_mode = HeaderSendMode::Send;
         assert!(config.validation_error().is_none());
     }
 }

@@ -13,6 +13,7 @@
 //   x-up-delay-ms        delay before the response head is written (cap 10 000)
 //   x-up-status          response status, default 200
 //   x-up-resp-len        response body length, default 16 (cap 65 536)
+//   x-up-response-trailers emit one fixed, test-only response trailer (default false)
 //   x-up-drain           keep reading the request body after acting (default true)
 //   x-trace-id           the recorder key — the existing project idiom
 
@@ -164,6 +165,7 @@ pub struct UpScript {
     pub delay_ms: u64,
     pub status: u16,
     pub resp_len: usize,
+    pub response_trailers: bool,
     pub drain: bool,
     pub trace_id: Option<String>,
     /// Set when a control header carried a value this backend does not know.
@@ -183,6 +185,7 @@ impl Default for UpScript {
             delay_ms: 0,
             status: 200,
             resp_len: DEFAULT_RESP_LEN,
+            response_trailers: false,
             drain: true,
             trace_id: None,
             warning: None,
@@ -240,6 +243,13 @@ impl UpScript {
                 Err(_) => warnings.push(format!("unparsable x-up-resp-len '{}', using default", raw)),
             }
         }
+        if let Some(raw) = get("x-up-response-trailers") {
+            match raw.trim().to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" => script.response_trailers = true,
+                "false" | "0" | "no" => script.response_trailers = false,
+                other => warnings.push(format!("unknown x-up-response-trailers '{}', using false", other)),
+            }
+        }
         if let Some(raw) = get("x-up-drain") {
             match raw.trim().to_ascii_lowercase().as_str() {
                 "true" | "1" | "yes" => script.drain = true,
@@ -288,6 +298,7 @@ mod tests {
         assert_eq!(s.at_bytes, 0);
         assert!(s.drain);
         assert_eq!(s.resp_len, DEFAULT_RESP_LEN);
+        assert!(!s.response_trailers);
         assert!(s.warning.is_none());
         assert!(s.trace_id.is_none());
     }
@@ -356,6 +367,14 @@ mod tests {
         assert!(!script_from(&[("x-up-drain", "0")]).drain);
         assert!(script_from(&[("x-up-drain", "yes")]).drain);
         assert!(script_from(&[("x-up-drain", "maybe")]).warning.is_some());
+    }
+
+    #[test]
+    fn response_trailers_are_explicit_and_fail_closed_on_typos() {
+        assert!(script_from(&[("x-up-response-trailers", "true")]).response_trailers);
+        let typo = script_from(&[("x-up-response-trailers", "tru")]);
+        assert!(!typo.response_trailers);
+        assert!(typo.warning.is_some());
     }
 
     #[test]

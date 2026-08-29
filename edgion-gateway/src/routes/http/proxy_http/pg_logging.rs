@@ -123,6 +123,7 @@ pub async fn logging(
 }
 
 fn finalize_attached_ext_proc_logs(ctx: &mut EdgionHttpContext) {
+    super::pg_upstream_response_trailer_filter::finalize_incomplete_trailer_companions(ctx);
     for (identity, owner) in &ctx.attached_ext_proc {
         owner.terminalize_for_logging();
         let Some(line) = owner.take_summary_line() else {

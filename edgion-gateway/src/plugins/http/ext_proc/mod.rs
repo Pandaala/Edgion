@@ -3,6 +3,7 @@ mod client;
 mod mutation;
 mod plugin;
 mod response_streamed;
+mod response_trailer;
 mod streamed;
 
 pub(crate) use attached::AttachedExtProc;
@@ -16,6 +17,8 @@ pub(crate) fn test_response_processor(
     Box::new(response_streamed::ExtProcResponseProcessor::new(
         owner,
         failure_mode_allow,
+        false,
+        false,
         None,
     ))
 }

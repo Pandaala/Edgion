@@ -347,3 +347,174 @@ spec:
         - name: test-http
           namespace: edgion-test
           port: 30001
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-external-disabled-immediate
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "__EXTERNAL_EXT_PROC_TARGET__"
+          timeoutMs: 5000
+        processingMode:
+          requestHeaderMode: SEND
+          responseHeaderMode: SEND
+        disableImmediateResponse: true
+        failureModeAllow: false
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ext-proc-external-disabled-immediate-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "ext-proc-external-disabled-immediate.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ext-proc-external-disabled-immediate
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-external-mode-override
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "__EXTERNAL_EXT_PROC_TARGET__"
+          timeoutMs: 5000
+        processingMode:
+          requestHeaderMode: SEND
+          requestBodyMode: STREAMED
+          responseHeaderMode: SEND
+        allowModeOverride: true
+        allowedOverrideModes:
+          - requestBodyMode: NONE
+            responseHeaderMode: SEND
+        failureModeAllow: false
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ext-proc-external-mode-override-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "ext-proc-external-mode-override.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ext-proc-external-mode-override
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ext-proc-transport-h2
+  namespace: edgion-test
+spec:
+  ports:
+    - port: 30031
+      targetPort: 30031
+      protocol: TCP
+      appProtocol: kubernetes.io/h2c
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: ext-proc-transport-h2
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: ext-proc-transport-h2
+addressType: IPv4
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+ports:
+  - port: 30031
+    protocol: TCP
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-external-response-trailers
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "__EXTERNAL_EXT_PROC_TARGET__"
+          timeoutMs: 5000
+        processingMode:
+          requestHeaderMode: SEND
+          responseHeaderMode: SEND
+          responseTrailerMode: SEND
+        failureModeAllow: false
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ext-proc-external-response-trailers-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "ext-proc-external-response-trailers.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ext-proc-external-response-trailers
+      backendRefs:
+        - name: ext-proc-transport-h2
+          namespace: edgion-test
+          port: 30031

@@ -139,6 +139,7 @@ pub fn apply_custom_ca_pem(
     bundles: &[Vec<u8>],
 ) -> anyhow::Result<reqwest::ClientBuilder> {
     let mut builder = builder.tls_built_in_root_certs(false);
+    let mut certificate_count = 0usize;
     for bundle in bundles {
         // Split the bundle into individual PEM blocks (handles root + intermediate chains).
         let pem_blocks = split_pem_certificates(bundle.as_slice());
@@ -146,8 +147,10 @@ pub fn apply_custom_ca_pem(
             let cert =
                 reqwest::Certificate::from_pem(cert_pem.as_slice()).context("TLS: invalid CA certificate PEM")?;
             builder = builder.add_root_certificate(cert);
+            certificate_count += 1;
         }
     }
+    anyhow::ensure!(certificate_count > 0, "TLS: custom CA bundle contains no certificates");
     Ok(builder)
 }
 
@@ -255,6 +258,7 @@ mod tests {
 
     #[test]
     fn rustls_config_none_without_material() {
+        let _guard = outbound_tls::outbound_tls_test_guard();
         install_test_crypto_provider();
         // No CA, no client identity → None (caller uses default connector)
         let tls = TlsConfig {
@@ -268,6 +272,7 @@ mod tests {
 
     #[test]
     fn rustls_config_with_inline_ca() {
+        let _guard = outbound_tls::outbound_tls_test_guard();
         install_test_crypto_provider();
         let (ca_pem, _cert_pem, _key_pem) = gen_ca_and_leaf();
         let tls = TlsConfig {
@@ -282,6 +287,7 @@ mod tests {
 
     #[test]
     fn rustls_config_with_ca_and_client_mtls() {
+        let _guard = outbound_tls::outbound_tls_test_guard();
         install_test_crypto_provider();
         let (ca_pem, cert_pem, key_pem) = gen_ca_and_leaf();
         let tls = TlsConfig {
@@ -301,6 +307,7 @@ mod tests {
 
     #[test]
     fn rustls_config_invalid_ca_pem_errors() {
+        let _guard = outbound_tls::outbound_tls_test_guard();
         install_test_crypto_provider();
         let tls = TlsConfig {
             enabled: true,
@@ -318,6 +325,7 @@ mod tests {
     /// operator's explicit choice is honored regardless of any environment variable.
     #[test]
     fn resolved_outbound_tls_verify_false_is_honored() {
+        let _guard = outbound_tls::outbound_tls_test_guard();
         let tls_skip = TlsConfig {
             enabled: true,
             outbound: OutboundTlsLocal {
@@ -349,6 +357,7 @@ mod tests {
 
     #[test]
     fn rustls_config_system_roots_when_ca_absent() {
+        let _guard = outbound_tls::outbound_tls_test_guard();
         install_test_crypto_provider();
         // No inline CA + a client cert pair → must use built-in webpki roots
         // for the server chain. The webpki roots are always present (compiled in),
@@ -375,6 +384,7 @@ mod tests {
 
     #[test]
     fn apply_resolved_outbound_tls_passthrough_when_no_material() {
+        let _guard = outbound_tls::outbound_tls_test_guard();
         let tls = TlsConfig {
             enabled: true,
             outbound: OutboundTlsLocal::default(),
@@ -389,6 +399,7 @@ mod tests {
 
     #[test]
     fn apply_resolved_outbound_tls_valid_ca_only() {
+        let _guard = outbound_tls::outbound_tls_test_guard();
         let (ca_pem, _cert_pem, _key_pem) = gen_ca_and_leaf();
         let tls = TlsConfig {
             enabled: true,
@@ -403,7 +414,22 @@ mod tests {
     }
 
     #[test]
+    fn apply_resolved_outbound_tls_rejects_bundle_without_certificate() {
+        let _guard = outbound_tls::outbound_tls_test_guard();
+        let tls = TlsConfig {
+            enabled: true,
+            outbound: outbound_with_ca_ref("invalid-ca"),
+            resolved_ca_certificates: Some(vec![ca_secret(b"not-a-pem")]),
+            resolved_client_certificate: None,
+        };
+
+        apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "Test")
+            .expect_err("custom CA bundle without a certificate must fail closed");
+    }
+
+    #[test]
     fn apply_resolved_outbound_tls_valid_mtls() {
+        let _guard = outbound_tls::outbound_tls_test_guard();
         let (ca_pem, cert_pem, key_pem) = gen_ca_and_leaf();
         let tls = TlsConfig {
             enabled: true,
@@ -422,6 +448,7 @@ mod tests {
 
     #[test]
     fn apply_resolved_outbound_tls_invalid_identity_errors() {
+        let _guard = outbound_tls::outbound_tls_test_guard();
         let (ca_pem, _cert_pem, _key_pem) = gen_ca_and_leaf();
         let tls = TlsConfig {
             enabled: true,
@@ -444,6 +471,7 @@ mod tests {
     /// not return an error — a failure to parse either bundle would surface there.
     #[test]
     fn apply_resolved_outbound_tls_multi_bundle_reqwest() {
+        let _guard = outbound_tls::outbound_tls_test_guard();
         let (ca_pem_a, _c, _k) = gen_ca_and_leaf();
         let (ca_pem_b, _c, _k) = gen_ca_and_leaf();
 
@@ -494,6 +522,7 @@ mod tests {
     /// multi-certificate PEM bundles instead of silently dropping certificates after the first.
     #[test]
     fn apply_custom_ca_pem_multi_cert_in_single_bundle() {
+        let _guard = outbound_tls::outbound_tls_test_guard();
         let (ca_root_pem, _c, _k) = gen_ca_and_leaf();
         let (_ca_intermediate_pem, _c, _k) = gen_ca_and_leaf();
 

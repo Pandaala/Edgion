@@ -569,13 +569,28 @@ async fn respond_h2(
         }
     };
     send.reserve_capacity(body.len());
-    if let Err(e) = send.send_data(Bytes::from(body.clone()), true) {
+    if let Err(e) = send.send_data(Bytes::from(body.clone()), !script.response_trailers) {
         recorder::record(
             ctx.event(recorder::KIND_PEER_RESET)
                 .code(&e.reason().map(reason_name).unwrap_or_else(|| "NONE".to_string()))
                 .detail(&format!("send_data failed: {e}")),
         );
         return;
+    }
+    if script.response_trailers {
+        let mut trailers = http::HeaderMap::new();
+        trailers.insert(
+            "x-edgion-upstream-trailer",
+            http::HeaderValue::from_static("fixed-upstream-value"),
+        );
+        if let Err(e) = send.send_trailers(trailers) {
+            recorder::record(
+                ctx.event(recorder::KIND_PEER_RESET)
+                    .code(&e.reason().map(reason_name).unwrap_or_else(|| "NONE".to_string()))
+                    .detail(&format!("send_trailers failed: {e}")),
+            );
+            return;
+        }
     }
     recorder::record(ctx.event(recorder::KIND_RESP_DONE).len(body.len()));
 

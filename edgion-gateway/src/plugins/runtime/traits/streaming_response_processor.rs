@@ -39,6 +39,33 @@ use pingora_proxy::ResponseBodySink;
 use super::session::PluginSession;
 use crate::ctx::ResponseStreamKind;
 
+/// Typed completion evidence for the canonical upstream response stream.
+///
+/// Keeping the pre-trailer boundary distinct is essential: bounded processors
+/// still need an opportunity to flush, while a trailer-aware processor must
+/// not mistake that boundary for a response that ended without trailers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StreamingResponseEvent {
+    Data { end_of_stream: bool },
+    TerminalBeforeTrailers,
+    TerminalWithoutTrailers,
+}
+
+impl StreamingResponseEvent {
+    #[inline]
+    pub fn end_of_stream_for_legacy(self) -> bool {
+        match self {
+            Self::Data { end_of_stream } => end_of_stream,
+            Self::TerminalBeforeTrailers | Self::TerminalWithoutTrailers => true,
+        }
+    }
+
+    #[inline]
+    pub fn closes_without_trailers(self) -> bool {
+        matches!(self, Self::Data { end_of_stream: true } | Self::TerminalWithoutTrailers)
+    }
+}
+
 #[async_trait]
 pub trait StreamingResponseProcessor: Send + Sync {
     /// Processor name for diagnostics (never logged per chunk).
@@ -70,6 +97,24 @@ pub trait StreamingResponseProcessor: Send + Sync {
     /// Release resources held across an async callback when its future is
     /// cancelled before the run set can be restored to the request context.
     fn release_inflight(&mut self) {}
+
+    /// Typed response-stream callback.
+    ///
+    /// Existing processors delegate to [`Self::on_chunk`] and therefore flush
+    /// at either terminal boundary. Trailer-aware processors override this
+    /// method so `TerminalBeforeTrailers` can preserve protocol ownership for
+    /// the following trailer phase.
+    async fn on_event(
+        &mut self,
+        chunk: &mut Option<Bytes>,
+        event: StreamingResponseEvent,
+        stream_kind: ResponseStreamKind,
+        sink: &mut ResponseBodySink,
+        session: &mut dyn PluginSession,
+    ) {
+        self.on_chunk(chunk, event.end_of_stream_for_legacy(), stream_kind, sink, session)
+            .await;
+    }
 
     /// Called for every upstream response body chunk, including the
     /// end-of-stream call (where `chunk` may be `None`). `stream_kind` is the

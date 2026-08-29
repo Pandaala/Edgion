@@ -172,6 +172,46 @@ The normal processing order remains:
 3. **Global body filter plugins**: loaded from `EdgionGatewayConfig.spec.global_plugins_ref`.
 4. **Limit merging**: when multiple plugins return delays, the maximum is taken.
 
+### Response terminal and trailer companion lifecycle
+
+Response completion is a typed boundary, not only a body callback with an EOS
+boolean. The Edgion Pingora fork reports one of these events to the Gateway:
+
+- `Data { end_of_stream }` for an ordinary body task;
+- `TerminalWithoutTrailers` when the representation ends and no trailer task
+  follows;
+- `TerminalBeforeTrailers` when bounded body processors must flush before a
+  real trailer task is delivered.
+
+The distinction prevents a trailer-aware processor from closing its protocol
+transaction at the pre-trailer boundary. Legacy bounded body processors still
+receive an EOS-compatible callback and flush normally. The request-local
+`UpstreamTrailerLifecycle` gate moves `Open -> AwaitingTrailers -> Dispatched`
+for a trailer-bearing response, or directly `Open -> Dispatched` for a
+trailer-free response. This makes a Trailer followed by Done, duplicate
+transport evidence, and logging fallback exactly-once.
+
+Request-stage plugins install `UpstreamResponseTrailer` companions in resolved
+plugin order. The Gateway awaits them serially, passing the current mutable
+`HeaderMap` to each companion so a later companion observes its predecessor's
+committed mutation. `None` means a real no-trailers terminal observation; it is
+never converted into an empty map. Fail-close stops the chain and preempts the
+remaining companions before Pingora forwards trailers. Implementations must
+keep any retained trailer state and mutations bounded; the canonical driver
+does not aggregate the response body.
+
+This lifecycle depends on two APIs implemented in the local Edgion Pingora
+fork worktree:
+`upstream_response_body_filter_event` supplies the typed terminal evidence,
+and the asynchronous `upstream_response_trailer_filter` is awaited before the
+transport writes the trailer block. The fork change is not yet
+committed/pushed or pinned to an immutable Edgion dependency revision, so the
+ordinary dependency build cannot consume this lifecycle yet. Once pinned,
+replacing the fork with upstream Pingora or reverting either hook without
+disabling trailer consumers would break the contract. H1
+parsing/serialization and H2/custom trailer tasks converge on the same Gateway
+companion chain.
+
 ### Phase 7: response_filter (async)
 
 **File**: `pg_response_filter.rs`

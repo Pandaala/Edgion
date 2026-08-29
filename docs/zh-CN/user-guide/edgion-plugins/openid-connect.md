@@ -72,7 +72,7 @@
 | `tokenSigningAlg` | String | 无 | 指定 Token 签名算法（不可为 `none`） |
 | `allowedSigningAlgs` | Array\<String\> | 无 | 允许的签名算法列表（不可包含 `none`） |
 | `useJwks` | Boolean | `true` | 是否使用 JWKS 进行本地验证 |
-| `verify` | Boolean | `true` | 是否验证 OIDC Provider 的 TLS 证书。`false` 时跳过对端证书验证（由运维人员负责，启动时记录 WARN）。对于使用私有 CA 的 IdP，请配合 `validation.caCertificateRefs`（Secret/ConfigMap 引用列表，含 `ca.crt` 键）或 `validation.wellKnownCACertificates: System` 使用。如需对 IdP 进行 mTLS 连接，请配合 `clientCertificateRef`（含 `tls.crt`/`tls.key` 的 Secret）。内联 CA（`caCert`）已不再支持。Phase 1 说明：`validation.hostname` 和 `validation.subjectAltNames`（SAN 固定）已暴露但暂不强制执行，配置后导致 `Accepted=False`。注意：上表「基础参数」中的 `clientSecretRef` 是 OAuth2 客户端密钥，与 TLS 配置无关。 |
+| `verify` | Boolean | `true` | 是否验证 OIDC Provider 的 TLS 证书。`false` 时跳过对端证书验证（由运维人员负责，启动时记录 WARN）。对于使用私有 CA 的 IdP，请配合 `validation.caCertificateRefs`（Secret/ConfigMap 引用列表，含 `ca.crt` 键）或 `validation.wellKnownCACertificates: System` 使用；`validation.subjectAltNames` 会增加 SAN 固定并强制进行完整证书验证。如需对 IdP 进行 mTLS 连接，请配合 `clientCertificateRef`（含 `tls.crt`/`tls.key` 的 Secret）。已声明的 TLS 材料如果未解析、只解析了一部分或格式错误，OIDC 插件构建会失败，受影响路由将 fail-close；系统绝不会回退到忽略声明策略的客户端。内联 CA（`caCert`）已不再支持。注意：上表「基础参数」中的 `clientSecretRef` 是 OAuth2 客户端密钥，与 TLS 配置无关。 |
 | `issuers` | Array\<String\> | 无 | 允许的 issuer 列表 |
 | `audiences` | Array\<String\> | 无 | 允许的 audience 列表 |
 | `clockSkewSeconds` | Integer | `120` | 时钟偏差容差（秒） |

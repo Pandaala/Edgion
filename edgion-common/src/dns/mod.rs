@@ -3,6 +3,7 @@
 //! backend uses hickory-resolver, HTTP DNS reuses link_sys_core's HTTP client,
 //! and the no-config path falls back to the system resolver.
 
+mod hickory;
 pub mod http_fetcher;
 pub mod httpdns;
 pub mod resolver_select;

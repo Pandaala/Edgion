@@ -1458,6 +1458,118 @@ fn oidc_san_pinning_config_fails_with_empty_custom_ca() {
     assert!(r.is_err(), "invalid CA PEM should error");
 }
 
+#[test]
+fn oidc_construction_fails_closed_when_custom_ca_is_unresolved() {
+    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+    use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+
+    let mut config = base_config();
+    config.tls.verify = Some(true);
+    config.tls.validation = Some(OutboundTlsValidation {
+        ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+            group: String::new(),
+            kind: "Secret".to_string(),
+            name: "idp-ca".to_string(),
+            namespace: None,
+        }]),
+        ..Default::default()
+    });
+
+    let error = OpenidConnect::try_new(&config, "default".to_string())
+        .err()
+        .expect("unresolved custom CA must reject plugin construction");
+    assert_eq!(error, "openid_connect outbound HTTP client build failed");
+}
+
+#[test]
+fn oidc_construction_fails_closed_when_custom_ca_contains_no_certificate() {
+    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+    use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+    use k8s_openapi::ByteString;
+    use std::collections::BTreeMap;
+
+    let mut config = base_config();
+    config.tls.verify = Some(true);
+    config.tls.validation = Some(OutboundTlsValidation {
+        ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+            group: String::new(),
+            kind: "Secret".to_string(),
+            name: "idp-ca".to_string(),
+            namespace: None,
+        }]),
+        ..Default::default()
+    });
+    config.resolved_ca_certificates = Some(vec![k8s_openapi::api::core::v1::Secret {
+        data: Some(BTreeMap::from([(
+            "ca.crt".to_string(),
+            ByteString(b"not-a-pem".to_vec()),
+        )])),
+        ..Default::default()
+    }]);
+
+    let error = OpenidConnect::try_new(&config, "default".to_string())
+        .err()
+        .expect("custom CA without a certificate must reject plugin construction");
+    assert_eq!(error, "openid_connect outbound HTTP client build failed");
+}
+
+#[test]
+fn oidc_construction_fails_closed_when_mtls_secret_is_unresolved() {
+    use edgion_resources::resources::common::SecretObjectReference;
+
+    let mut config = base_config();
+    config.tls.client_certificate_ref = Some(SecretObjectReference {
+        group: None,
+        kind: None,
+        name: "idp-client".to_string(),
+        namespace: None,
+    });
+
+    let error = OpenidConnect::try_new(&config, "default".to_string())
+        .err()
+        .expect("unresolved mTLS Secret must reject plugin construction");
+    assert_eq!(error, "openid_connect outbound HTTP client build failed");
+}
+
+#[test]
+fn oidc_san_construction_fails_closed_when_custom_ca_is_invalid() {
+    use edgion_resources::resources::backend_tls_policy::{
+        BackendTLSPolicyCACertificateRef, SubjectAltName, SubjectAltNameType,
+    };
+    use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+    use k8s_openapi::ByteString;
+    use std::collections::BTreeMap;
+
+    let mut config = base_config();
+    config.tls.verify = Some(true);
+    config.tls.validation = Some(OutboundTlsValidation {
+        ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+            group: String::new(),
+            kind: "Secret".to_string(),
+            name: "idp-ca".to_string(),
+            namespace: None,
+        }]),
+        subject_alt_names: Some(vec![SubjectAltName {
+            san_type: SubjectAltNameType::Hostname,
+            hostname: Some("idp.example.com".to_string()),
+            uri: None,
+        }]),
+        ..Default::default()
+    });
+    config.resolved_ca_certificates = Some(vec![k8s_openapi::api::core::v1::Secret {
+        data: Some(BTreeMap::from([(
+            "ca.crt".to_string(),
+            ByteString(b"not-a-pem".to_vec()),
+        )])),
+        ..Default::default()
+    }]);
+
+    let error = OpenidConnect::try_new(&config, "default".to_string())
+        .err()
+        .expect("invalid SAN-pinning CA must reject plugin construction");
+    assert_eq!(error, "openid_connect SAN-pinning TLS config build failed");
+}
+
 // -----------------------------------------------------------------------
 // Task 11: JWKS staleness -> dye records.
 //
