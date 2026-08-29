@@ -37,7 +37,7 @@ if [ -z "${EDGION_CONF_SYNC_CERTS_DIR:-}" ]; then
     exit 1
 fi
 CERTS_DIR="$EDGION_CONF_SYNC_CERTS_DIR"
-EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
+EDGION_CLI="${EDGION_CLI_BIN:-${PROJECT_ROOT}/target/debug/edgion-cli}"
 
 FORCE=false
 for arg in "$@"; do

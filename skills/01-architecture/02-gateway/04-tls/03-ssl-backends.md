@@ -1,6 +1,6 @@
 ---
 name: gateway-tls-backends
-description: Gateway TLS build backends and capability boundaries — BoringSSL, rustls, and the image-only FIPS feature.
+description: Gateway TLS build backends and capability boundaries — BoringSSL, rustls, and the opt-in FIPS image feature.
 ---
 
 # TLS build backends and capability boundaries
@@ -28,7 +28,7 @@ OpenSSL fallback branch when changing TLS code.
 | TLSRoute terminate-to-TCP | Supported | Not implemented because it uses the same custom callback runtime |
 | TLSRoute passthrough | Does not terminate TLS | Does not require the custom termination callback |
 | EdgionTls SNI selection, per-connection minimum version/ciphers, mTLS allowlists, SSL ex_data | Supported by the BoringSSL-gated runtime | Not implemented by the gateway callback runtime |
-| Image-only validated crypto module | `fips` feature | Not available |
+| Image-only BoringSSL FIPS mode | `fips` feature | Not available |
 
 The custom runtime is gated in `tls/runtime/mod.rs` and `tls/mod.rs`. Treat build-backend support
 and feature-level support as separate questions: a crate may compile with rustls while a particular
@@ -48,9 +48,13 @@ TLS 1.3 cipher suites cannot be restricted through BoringSSL's TLS 1.2 cipher-li
 
 ## FIPS build and policy
 
-`fips` is an image/release build feature, not a runtime Cargo default. At startup:
+`fips` is an explicit image-build feature, not a runtime Cargo default and not
+part of the ordinary release workflow. Boring 5 builds its bundled FIPS module
+source in the dedicated Linux amd64 builder, which then runs the isolated module
+and TLS-profile verification. The canonical source FIPS path rejects arm64
+before compilation; ordinary non-FIPS arm64 builds remain supported. At startup:
 
-- `require_fips: true` fails startup when the validated module is not present;
+- `require_fips: true` fails startup when BoringSSL FIPS mode is not present;
 - `fips_policy` is `auto | on | off` and resolves with environment (`EDGION_FIPS_POLICY`) over
   CLI (`--fips-policy`) over config over `auto`;
 - `auto` follows `/proc/sys/crypto/fips_enabled` and tightens the downstream profile on a FIPS host;
@@ -65,7 +69,8 @@ Limitations:
 
 - BoringSSL TLS 1.3 suites cannot be restricted, so ChaCha20 can still negotiate.
 - Upstream gateway-to-backend cipher suites are not FIPS-restricted by this policy.
-- Host-policy alignment is not by itself a validated-module compliance claim.
+- The runtime FIPS-mode signal and host-policy alignment do not establish CMVP
+  certificate scope, artifact provenance, or deployment compliance.
 
 ## Key source files
 

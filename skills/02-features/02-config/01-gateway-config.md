@@ -479,19 +479,19 @@ config field.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `require_fips` | `bool` | `false` | Require the FIPS-validated crypto module to be present at startup |
+| `require_fips` | `bool` | `false` | Require BoringSSL FIPS mode to be present at startup |
 
 - `require_fips: false` (default): starts normally regardless of whether the binary is a FIPS
   build.
 - `require_fips: true` on a FIPS build (image compiled with the `fips` cargo feature): the guard
   passes; the FIPS-approved default cipher/curve set applies automatically to downstream TLS.
-- `require_fips: true` on a non-FIPS build (validated module absent): the gateway logs a clear
+- `require_fips: true` on a non-FIPS build (BoringSSL FIPS mode absent): the gateway logs a clear
   error and exits non-zero at startup (fail-close) — no silent downgrade.
 
 This is a gateway-local field, not a cluster-synced one: a bad value can't be hot-pushed to
 crashloop a fleet, and it surfaces on first run. The `fips` cargo feature itself is an image/build
 concern, not something toggled at runtime. See
-`docs/superpowers/specs/2026-07-10-fips-host-detection-design.md` for the full design, including the
+`skills/04-review/edgion-tls/boring-v5-fips-build-verification.md` for the current build contract. The
 approved cipher/curve set and known limitations (TLS 1.3 ChaCha20 not restrictable in BoringSSL;
 upstream/backend TLS ciphers are not FIPS-restricted).
 
@@ -507,11 +507,11 @@ on downstream listeners, independent of whether the binary is a FIPS build.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `fips_policy` | `"auto" \| "on" \| "off"` | `auto` | Select the FIPS-approved cipher/curve enforcement regardless of the validated module |
+| `fips_policy` | `"auto" \| "on" \| "off"` | `auto` | Select the FIPS-approved cipher/curve enforcement regardless of BoringSSL FIPS mode |
 
 - `auto` (default): follow the host kernel. Enforces the approved set when the host kernel reports
   FIPS mode via `/proc/sys/crypto/fips_enabled`; otherwise does not. This is cipher-suite policy
-  alignment only — it is **not** a validated-module compliance claim.
+  alignment only — it is **not** a compliance claim.
 - `on`: always enforces the approved cipher/curve set, even on a normal (non-FIPS) boringssl build.
   Two uses: (1) exercise the FIPS policy in integration tests without a FIPS toolchain/module (the
   approved-suite behavior is pure SSL config, so it works on any boringssl build); (2) opt into the
@@ -521,8 +521,8 @@ on downstream listeners, independent of whether the binary is a FIPS build.
   FIPS-build enforcement. Effective gate is `fips_module_available() OR fips_policy_forced` where
   `fips_policy_forced` is derived from this setting (and, for `auto`, from the host state).
   Operator `EdgionTls.ciphers` still overrides the cipher list (approved curves still apply). This
-  field does **not** provide the validated crypto module — for real FIPS compliance the binary must
-  still be a FIPS build.
+  field does **not** provide BoringSSL FIPS mode. A FIPS-mode build is necessary for this posture,
+  but does not by itself establish certificate scope, provenance, or deployment compliance.
 
 **Accepted values.** Only the three strings above — no legacy booleans, no legacy truthy/falsey
 tokens. A YAML boolean (`fips_policy: true`) is a hard deserialize error. YAML 1.1 reads a bare
@@ -616,5 +616,5 @@ production enablement even when the startup WARN goes unread.
 - Toggle business logs: change `access_log` / `ssl_log` / `tcp_log` / `udp_log`
 - Tune Pingora workers and keepalive: change `server`
 - Tune the default RateLimit precision: change `rate_limit`
-- Require the FIPS-validated crypto module at startup (FIPS builds only): change `require_fips` or set `EDGION_REQUIRE_FIPS`
+- Require BoringSSL FIPS mode at startup (FIPS builds only): change `require_fips` or set `EDGION_REQUIRE_FIPS`
 - Tune the Wasm `source.oci` disk cache / pull behavior: change `gateway.wasm_oci_cache_dir` / `wasm_oci_cache_ttl_secs` / `wasm_oci_cache_purge_interval_secs` / `wasm_oci_cache_max_bytes` / `wasm_oci_pull_timeout_secs` / `wasm_oci_pull_attempts`

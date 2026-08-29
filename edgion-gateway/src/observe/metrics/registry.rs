@@ -89,9 +89,9 @@ pub mod names {
     // and lines that failed to backfill (kept for retry). Cold/failure-path.
     pub const ACCESS_LOG_BACKFILL_INGESTED_TOTAL: &str = "edgion_access_log_backfill_ingested_total";
     pub const ACCESS_LOG_BACKFILL_FAILED_TOTAL: &str = "edgion_access_log_backfill_failed_total";
-    // FIPS: 1 = the BoringSSL FIPS-validated crypto module is linked and enabled
-    // in this binary, 0 = not present (non-FIPS build). Set once at startup.
-    // This is the ONLY validated-module compliance signal.
+    // FIPS: 1 = BoringSSL reports FIPS mode in this binary, 0 = not present
+    // (non-FIPS build). Set once at startup. This mode signal does not establish
+    // CMVP certificate scope or build provenance.
     pub const FIPS_MODULE_ENABLED: &str = "edgion_gateway_fips_module_enabled";
     // 1 = the host kernel reports FIPS mode (/proc/sys/crypto/fips_enabled).
     // Left operand of the compliance alert:
@@ -101,9 +101,8 @@ pub mod names {
     // the guardrail and the fips_policy=auto default are inert in this state.
     pub const FIPS_HOST_DETECT_ERROR: &str = "edgion_gateway_fips_host_detect_error";
     // 1 = the approved cipher/curve profile is in effect on downstream
-    // listeners. Labeled `validated="true|false"` by whether the validated
-    // module backs it. NOT a compliance signal on its own: validated="false"
-    // means approved suites over an unvalidated module.
+    // listeners. Labeled `module_enabled="true|false"` by whether BoringSSL
+    // FIPS mode backs it. This is not a certification or compliance signal.
     pub const FIPS_POLICY_ACTIVE: &str = "edgion_gateway_fips_policy_active";
     // Wasm plugin host metrics. The `module` label is the human-readable
     // source descriptor (file path / url / "inline:<sha8>"), NOT the raw

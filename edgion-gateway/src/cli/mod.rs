@@ -392,13 +392,13 @@ impl EdgionGatewayCli {
         //
         // The host FIPS state is informational: BoringSSL is linked statically,
         // so the node's mode has no effect on our crypto. It drives the
-        // compliance guardrail and the `fips_policy: auto` default only.
+        // posture guardrail and the `fips_policy: auto` default only.
         use crate::tls::fips_host::{self, HostFipsState};
         use crate::tls::fips_profile;
 
         let fips_available = fips_profile::fips_module_available();
         // The detection-path override is production-unsafe (it is the sole input
-        // to detection, so it can suppress the compliance signal entirely), and
+        // to detection, so it can suppress the posture signal entirely), and
         // is honored only under the same integration-testing gate as the other
         // production-unsafe modes.
         let host_state = fips_host::detect_host_fips(integration_testing);
@@ -421,16 +421,16 @@ impl EdgionGatewayCli {
             std::process::exit(1);
         }
 
-        // Compliance guardrail: a FIPS node running a binary without the
-        // validated module. WARN rather than exit, because `fips_enabled=1` is a
+        // Posture guardrail: a FIPS node running a binary without BoringSSL
+        // FIPS mode. WARN rather than exit, because `fips_enabled=1` is a
         // node property the gateway's operator may not control; fail-fast is
         // opt-in via `require_fips`.
         if fips_host::host_fips_mismatch(host_state, fips_available) {
             tracing::warn!(
                 target: "startup",
-                "host kernel reports FIPS mode but this binary does not link the \
-                 FIPS-validated crypto module. Traffic is served by unvalidated \
-                 crypto. Deploy a FIPS build, or set require_fips to fail closed. \
+                "host kernel reports FIPS mode but this binary was not built with \
+                 BoringSSL FIPS mode. Deploy a FIPS-mode build, or set require_fips \
+                 to fail closed. This signal does not establish CMVP compliance. \
                  Alert on: fips_host_enabled == 1 and fips_module_enabled == 0"
             );
         }
@@ -458,7 +458,7 @@ impl EdgionGatewayCli {
         let policy_active = fips_profile::fips_policy_active();
         ::metrics::gauge!(
             crate::observe::metrics::registry::names::FIPS_POLICY_ACTIVE,
-            "validated" => if fips_available { "true" } else { "false" },
+            "module_enabled" => if fips_available { "true" } else { "false" },
         )
         .set(if policy_active { 1.0 } else { 0.0 });
 

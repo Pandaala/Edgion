@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
-# Integration test for the runtime FIPS-approved TLS policy toggle.
+# Integration test for the FIPS module and approved TLS policy.
 #
 # The gateway applies the FIPS-approved cipher/curve set to downstream listeners
-# when the policy is active. On a real FIPS build the validated module makes it
+# when the policy is active. On a FIPS-mode build the linked module makes it
 # active automatically; on a normal boringssl build the gateway-local
 # `fips_policy` config / `EDGION_FIPS_POLICY` env force-enables the same policy
 # (gate: fips_module_available() OR fips_policy). Because the policy is pure SSL
 # config, this test exercises it on the ordinary boringssl build — no FIPS
-# toolchain or validated module required.
+# toolchain or FIPS-mode module required.
 #
 # It runs an ISOLATED stack (its own minimal Controller + Gateway on dedicated
-# ports, EDGION_FIPS_POLICY=on) so it does not disturb the main sweep's single
-# shared gateway: the process-global toggle would otherwise force FIPS on every
-# listener in the shared run.
+# ports) so it does not disturb the main sweep's single shared gateway. The
+# default mode uses EDGION_FIPS_POLICY=on with an ordinary BoringSSL build. Set
+# EDGION_EXPECT_FIPS_MODULE=1 to require a real FIPS build, assert the module
+# metric, and let the linked module activate the same policy.
 #
 # Assertions (openssl s_client, TLS 1.2 — BoringSSL cannot restrict TLS 1.3
 # suites, so ChaCha20 exclusion is only observable at 1.2):
@@ -33,6 +34,15 @@ source "${UTILS_DIR}/conf_sync_certs.sh"
 
 GATEWAY_BIN="${EDGION_GATEWAY_BIN:-$REPO_ROOT/target/debug/edgion-gateway}"
 CONTROLLER_BIN="${EDGION_CONTROLLER_BIN:-$REPO_ROOT/target/debug/edgion-controller}"
+EXPECT_FIPS_MODULE="${EDGION_EXPECT_FIPS_MODULE:-0}"
+
+case "$EXPECT_FIPS_MODULE" in
+    0|1) ;;
+    *)
+        echo "ERROR: EDGION_EXPECT_FIPS_MODULE must be 0 or 1"
+        exit 2
+        ;;
+esac
 
 TLS_HOST="fips.example.com"
 
@@ -255,7 +265,7 @@ EOF
 }
 
 # =============================================================================
-# Gateway launch (EDGION_FIPS_POLICY=on)
+# Gateway launch
 # =============================================================================
 GW_TMPDIR=""
 GW_PID=""
@@ -287,11 +297,21 @@ EOF
     precheck_port "$GW_METRICS_PORT" "gateway metrics" || return 1
     precheck_port "$GW_HTTPS_PORT"   "gateway https"   || return 1
 
-    echo "=== Starting gateway with EDGION_FIPS_POLICY=on ==="
-    RUST_LOG="info,pingora_proxy=error,pingora_core=error" \
-    EDGION_ALLOW_INTEGRATION_TESTING_MODE=1 \
-    EDGION_FIPS_POLICY=on \
-    "$GATEWAY_BIN" \
+    local fips_env=("EDGION_FIPS_POLICY=on")
+    if [ "$EXPECT_FIPS_MODULE" = "1" ]; then
+        fips_env=("EDGION_REQUIRE_FIPS=1")
+        echo "=== Starting gateway with EDGION_REQUIRE_FIPS=1 ==="
+    else
+        echo "=== Starting gateway with EDGION_FIPS_POLICY=on ==="
+    fi
+
+    env \
+        -u EDGION_FIPS_POLICY \
+        -u EDGION_REQUIRE_FIPS \
+        RUST_LOG="info,pingora_proxy=error,pingora_core=error" \
+        EDGION_ALLOW_INTEGRATION_TESTING_MODE=1 \
+        "${fips_env[@]}" \
+        "$GATEWAY_BIN" \
         -c "$GW_TMPDIR/gateway.yaml" \
         --work-dir "$GW_TMPDIR" \
         --server-addr "https://127.0.0.1:${CTRL_GRPC_PORT}" \
@@ -317,6 +337,26 @@ EOF
         return 1
     fi
     echo "PASS: gateway HTTPS listener is accepting connections on ${GW_HTTPS_PORT}"
+
+    local metrics expected_module_label
+    metrics=$(curl -fsS "http://127.0.0.1:${GW_METRICS_PORT}/metrics")
+    expected_module_label="false"
+    if [ "$EXPECT_FIPS_MODULE" = "1" ]; then
+        expected_module_label="true"
+        if ! grep -qE '^edgion_gateway_fips_module_enabled(\{[^}]*\})? (1|1\.0)$' <<< "$metrics"; then
+            echo "FAIL: edgion_gateway_fips_module_enabled did not report 1"
+            echo "$metrics" | grep 'edgion_gateway_fips_' || true
+            return 1
+        fi
+        echo "PASS: edgion_gateway_fips_module_enabled reports 1"
+    fi
+
+    if ! grep -qE "^edgion_gateway_fips_policy_active\\{[^}]*module_enabled=\"${expected_module_label}\"[^}]*\\} (1|1\\.0)$" <<< "$metrics"; then
+        echo "FAIL: edgion_gateway_fips_policy_active did not report module_enabled=${expected_module_label} and value 1"
+        echo "$metrics" | grep 'edgion_gateway_fips_' || true
+        return 1
+    fi
+    echo "PASS: edgion_gateway_fips_policy_active reports module_enabled=${expected_module_label} and value 1"
 }
 
 # =============================================================================
@@ -382,7 +422,11 @@ main() {
     start_gateway
     run_assertions
     echo ""
-    echo "PASS: FIPS policy (ChaCha20 rejected / approved suite accepted)"
+    if [ "$EXPECT_FIPS_MODULE" = "1" ]; then
+        echo "PASS: BoringSSL FIPS mode enabled and approved TLS policy enforced"
+    else
+        echo "PASS: FIPS policy (ChaCha20 rejected / approved suite accepted)"
+    fi
 }
 
 main

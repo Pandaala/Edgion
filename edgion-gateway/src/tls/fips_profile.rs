@@ -2,7 +2,8 @@
 //!
 //! When the gateway is a FIPS build, downstream listeners default to the
 //! FIPS-approved cipher/curve set unless the operator overrides via
-//! `EdgionTls.ciphers`. See docs/superpowers/specs/2026-07-10-fips-host-detection-design.md.
+//! `EdgionTls.ciphers`. See
+//! skills/04-review/edgion-tls/boring-v5-fips-build-verification.md.
 //!
 //! Backend-agnostic surface: `fips_module_available` and `decide_cipher_action`
 //! are callable on both the boringssl and rustls builds (the startup path uses
@@ -25,8 +26,9 @@ ECDHE-RSA-AES256-GCM-SHA384";
 /// FIPS-approved ECDH curves (NIST P-curves), for `SSL_set1_curves_list`.
 pub const FIPS_CURVES: &str = "P-256:P-384:P-521";
 
-/// Whether this binary links the FIPS-validated crypto module. Compile-time,
-/// process-wide; `false` on any non-boringssl build.
+/// Whether BoringSSL reports that this binary is running in FIPS mode.
+/// Compile-time, process-wide; `false` on any non-boringssl build. This signal
+/// does not establish CMVP certificate scope or build provenance.
 #[cfg(feature = "boringssl")]
 pub fn fips_module_available() -> bool {
     boring::fips::enabled()
@@ -38,8 +40,8 @@ pub fn fips_module_available() -> bool {
 }
 
 /// Process-global override that forces the FIPS-approved TLS policy (approved
-/// cipher list + curves) on downstream listeners even when the validated crypto
-/// module is absent (a non-FIPS build). Default false; set once at startup from
+/// cipher list + curves) on downstream listeners even when BoringSSL FIPS mode
+/// is absent (a non-FIPS build). Default false; set once at startup from
 /// gateway config / `EDGION_FIPS_POLICY`. This lets the FIPS policy be exercised
 /// in integration tests on a normal boringssl build, and lets an operator opt
 /// into the approved-suite restriction as defense-in-depth on a non-FIPS build.
@@ -56,7 +58,7 @@ pub fn fips_policy_forced() -> bool {
 }
 
 /// Whether downstream listeners should enforce the FIPS-approved cipher/curve
-/// set for this connection: true on a real FIPS build (validated module linked),
+/// set for this connection: true on a BoringSSL FIPS-mode build,
 /// OR when the policy is force-enabled via config/env. This is the single gate
 /// the handshake paths consult.
 pub fn fips_policy_active() -> bool {
@@ -140,8 +142,8 @@ pub(crate) fn configure_fips_curves(ssl: &mut SslRef) -> Result<(), Box<PingoraE
     Ok(())
 }
 
-/// How the approved cipher/curve policy is selected when the validated crypto
-/// module is absent. `Auto` follows the host kernel's FIPS mode.
+/// How the approved cipher/curve policy is selected when BoringSSL FIPS mode is
+/// absent. `Auto` follows the host kernel's FIPS mode.
 ///
 /// This governs only the `fips_policy_forced` half of `fips_policy_active()`.
 /// A genuine FIPS build enforces the profile unconditionally, so `Off` can
@@ -206,7 +208,7 @@ impl<'de> serde::Deserialize<'de> for FipsPolicyMode {
 }
 
 /// Whether the approved profile should be force-enabled given the operator's
-/// mode and the detected host state. The validated module is NOT considered
+/// mode and the detected host state. BoringSSL FIPS mode is NOT considered
 /// here — `fips_policy_active()` OR-s it in — so that `Off` cannot disable
 /// enforcement on a genuine FIPS build.
 pub fn resolve_policy(mode: FipsPolicyMode, host: crate::tls::fips_host::HostFipsState) -> bool {
@@ -270,7 +272,7 @@ mod tests {
     #[cfg(feature = "fips")]
     #[test]
     fn fips_module_reports_enabled() {
-        assert!(fips_module_available(), "fips build must link the validated module");
+        assert!(fips_module_available(), "fips build must enable BoringSSL FIPS mode");
     }
 
     #[cfg(feature = "boringssl")]

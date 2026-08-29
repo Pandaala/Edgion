@@ -107,21 +107,21 @@ rcgen = { version = "0.14.7", features = ["x509-parser"] }
 instant-acme = "0.8.4"
 # BoringSSL bindings for custom TLS callbacks — pulled in (optional) only by the
 # `boringssl` feature of the crates that hold the callback code.
-boring = "4"
-boring-sys = "4"
+boring = "5"
+boring-sys = "5"
 
 # Pingora — the Gateway builds exclusively against the Edgion fork family so
 # public types never cross a source boundary. Development follows the fork's
-# `edgion` branch; the committed Cargo.lock pins the exact commit, and
+# `edgion_v3` branch; the committed Cargo.lock pins the exact commit, and
 # CI/release builds use `--locked`. Release milestones may temporarily use a
 # protected immutable tag when a manifest-level source identity is required.
-pingora-core = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion", features = ["connection_filter"] }
-pingora-http = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
-pingora-proxy = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
-pingora-limits = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
-pingora-load-balancing = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
-pingora-ketama = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
-tinyufo = { package = "TinyUFO", git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
+pingora-core = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3", features = ["connection_filter"] }
+pingora-http = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
+pingora-proxy = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
+pingora-limits = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
+pingora-load-balancing = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
+pingora-ketama = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
+tinyufo = { package = "TinyUFO", git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
 
 # HTTP server / client
 axum = { version = "0.8.8", features = ["macros", "ws"] }
@@ -226,7 +226,7 @@ wat = "1"
 # cannot). default-features = false to avoid pulling a second TLS backend into
 # the workspace TLS-backend unification; enable only the tokio runtime and
 # system-config features.
-hickory-resolver = { version = "0.24", default-features = false, features = ["tokio-runtime", "system-config"] }
+hickory-resolver = { version = "0.26.1", default-features = false, features = ["tokio", "system-config"] }
 
 # MaxMind GeoIP2/GeoLite2 MMDB reader (GeoIP country/city restriction feature).
 # `mmap` feature enables `Reader::open_mmap` for zero-copy database loading.

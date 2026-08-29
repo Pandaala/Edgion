@@ -70,8 +70,8 @@ spec:
 > build, the same approved default is also applied when `fips_policy` resolves to enforce
 > (default `auto`: enabled when the host kernel reports FIPS mode via
 > `/proc/sys/crypto/fips_enabled`, or explicit `on`) — this is cipher-suite policy alignment
-> only, not a validated-module compliance claim. See
-> `docs/superpowers/specs/2026-07-10-fips-host-detection-design.md` for details.
+> only, not a compliance claim. See
+> `skills/04-review/edgion-tls/boring-v5-fips-build-verification.md` for the current contract.
 
 ### TlsVersion Enum
 

@@ -185,7 +185,7 @@ Match failures are handled in select_cb only (`"cert not found"`); cert_cb perfo
 |------|-------|
 | [01-downstream-tls.md](01-downstream-tls.md) | Downstream TLS (client→gateway) — Pingora Listener callbacks, certificate selection, client cert verification |
 | [02-upstream-tls.md](02-upstream-tls.md) | Upstream TLS (gateway→backend) — mTLS configuration, BackendTLSPolicy, certificate extraction |
-| [03-ssl-backends.md](03-ssl-backends.md) | TLS build backends — BoringSSL/rustls capability boundary and image-only FIPS policy |
+| [03-ssl-backends.md](03-ssl-backends.md) | TLS build backends — BoringSSL/rustls capability boundary and opt-in FIPS image policy |
 
 ## Key source files
 

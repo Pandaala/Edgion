@@ -3,11 +3,11 @@
 //! Edgion links BoringSSL statically, so the host's FIPS mode has no effect on
 //! the crypto executing in this process — `fips_module_available()` is fixed at
 //! build time. This module answers a different, purely informational question:
-//! is the *node* in FIPS mode? The answer drives two things: a compliance
+//! is the *node* in FIPS mode? The answer drives two things: a posture
 //! guardrail (a non-FIPS binary on a FIPS node is a WARN) and the `auto`
 //! default of the approved cipher/curve policy.
 //!
-//! See docs/superpowers/specs/2026-07-10-fips-host-detection-design.md.
+//! See skills/04-review/edgion-tls/boring-v5-fips-build-verification.md.
 //!
 //! Known limitation: under VM- or sandbox-isolated runtimes (Kata, Firecracker,
 //! gVisor) this file reflects the guest kernel, not the physical node. The read
@@ -39,7 +39,7 @@ pub enum HostFipsState {
 const DEFAULT_FIPS_PROC_PATH: &str = "/proc/sys/crypto/fips_enabled";
 
 /// Test-only override for the detection path. Production-unsafe: it is the sole
-/// input to detection, so pointing it at an empty file suppresses the compliance
+/// input to detection, so pointing it at an empty file suppresses the posture
 /// guardrail entirely. Honored only under integration-testing mode; see
 /// `detect_host_fips`.
 pub const FIPS_HOST_PATH_ENV: &str = "EDGION_FIPS_HOST_PATH";
@@ -75,7 +75,7 @@ pub fn detect_host_fips_at(path: &Path) -> HostFipsState {
                 path = %path.display(),
                 error = %e,
                 "could not read the host FIPS flag; host FIPS state is unknown. \
-                 The compliance guardrail and the fips_policy=auto default are \
+                 The posture guardrail and the fips_policy=auto default are \
                  both inert until this is resolved. Set fips_policy explicitly \
                  to remove the ambiguity."
             );
@@ -90,7 +90,7 @@ pub fn detect_host_fips_at(path: &Path) -> HostFipsState {
 /// The override is double-gated because, unlike `EDGION_FIPS_POLICY` — which
 /// only feeds the enforcement atomic and cannot suppress the WARN or the
 /// `fips_host_enabled` gauge — this variable is the sole input to detection.
-/// Ungated, it would be a one-line kill switch for the entire compliance signal.
+/// Ungated, it would be a one-line kill switch for the entire posture signal.
 pub fn detect_host_fips(allow_path_override: bool) -> HostFipsState {
     let override_path = std::env::var(FIPS_HOST_PATH_ENV).ok();
 
@@ -118,8 +118,8 @@ pub fn detect_host_fips(allow_path_override: bool) -> HostFipsState {
     }
 }
 
-/// The compliance guardrail predicate: a FIPS node running a binary that does
-/// not link the validated crypto module. `Unknown` never fires it — an
+/// The posture guardrail predicate: a FIPS node running a binary that does not
+/// run BoringSSL in FIPS mode. `Unknown` never fires it — an
 /// undetermined host is not evidence of a violation.
 pub fn host_fips_mismatch(host: HostFipsState, module_available: bool) -> bool {
     matches!(host, HostFipsState::Enabled) && !module_available
@@ -180,7 +180,7 @@ mod tests {
         assert!(host_fips_mismatch(HostFipsState::Enabled, false));
         assert!(!host_fips_mismatch(HostFipsState::Enabled, true));
         assert!(!host_fips_mismatch(HostFipsState::Disabled, false));
-        // Unknown must not fire the compliance guardrail: we could not tell.
+        // Unknown must not fire the posture guardrail: we could not tell.
         assert!(!host_fips_mismatch(HostFipsState::Unknown, false));
     }
 }

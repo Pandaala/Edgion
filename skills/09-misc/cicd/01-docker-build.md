@@ -138,6 +138,34 @@ docker build \
   -f cicd/docker/Dockerfile .
 ```
 
+### Build and verify a FIPS Gateway
+
+Use the multi-architecture build script rather than a host-local Cargo build.
+It supplies the Linux build environment Boring 5 needs and, whenever the exact
+`fips` feature is selected, automatically runs the isolated FIPS module and TLS
+profile test before packaging an image:
+
+```bash
+FEATURES="allocator-jemalloc,fips" \
+  ./cicd/build-image.sh --arch amd64 --compile-only
+```
+
+The canonical source FIPS build currently supports amd64 only. The script
+rejects `fips` with arm64 before compilation because the upstream BoringSSL
+runtime integrity self-test fails for that source build. Ordinary non-FIPS
+arm64 builds are unchanged. The ordinary release workflow and a default
+invocation of `build-image.sh` stay non-FIPS. Boring 5 builds its bundled FIPS
+module source by default. The upstream `BORING_BSSL_FIPS_PATH` prebuilt-tree
+escape hatch is outside the canonical script contract.
+
+The verification reuses
+`edgion-tests/integration/scripts/integration/test_fips_policy.sh` in its real
+module mode. It starts the built Gateway with `EDGION_REQUIRE_FIPS=1`, requires
+`edgion_gateway_fips_module_enabled` to equal `1`, rejects a ChaCha20-only TLS
+1.2 client, and accepts an approved AES-GCM client. It deliberately does not run
+the full compatibility suite under the FIPS binary, so weak-cipher support tests
+remain ordinary-BoringSSL coverage rather than becoming a growing skip list.
+
 ## When to use `cicd/docker/Dockerfile.runtime`
 
 This file is not a source-build image; it "packages an already-built artifact into a runtime image".

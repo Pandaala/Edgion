@@ -1,21 +1,24 @@
 # FIPS 模式（BoringSSL）
 
-> **🔒 合规特性**
+> **🔒 FIPS 模式构建特性**
 >
-> FIPS 模式让 Gateway 数据面运行在经过 FIPS 验证的 BoringSSL 加密模块之上，并使下行（客户端 →
+> FIPS 模式让 Gateway 数据面运行在 BoringSSL 的 FIPS 模式加密模块之上，并使下行（客户端 →
 > Gateway）TLS 默认采用 FIPS 批准的密码套件与椭圆曲线集合。它是**构建 / 镜像层面的能力**，而非运行时
-> 开关：验证模块在使用 `fips` cargo feature 构建 Gateway 镜像时编译进去。没有针对单个 listener 或单条
+> 开关：模块在使用 `fips` cargo feature 构建 Gateway 镜像时编译进去。没有针对单个 listener 或单条
 > 连接的 FIPS 开关。
 
-FIPS 模式面向必须以 FIPS 合规姿态运行的部署（美国联邦、受监管行业）。当 Gateway 二进制是 FIPS 构建
-时，有两点成立：
+FIPS 模式面向需要 FIPS 对齐加密姿态的部署。当 Gateway 二进制是 FIPS 构建时，有两点成立：
 
-1. **验证模块**——链接的加密实现是经过 FIPS 验证的 BoringSSL 模块（`boring::fips::enabled()` 为
-   true）。
+1. **FIPS 模式模块**——BoringSSL 报告 FIPS 模式（`boring::fips::enabled()` 为 `true`），且运行时
+   完整性自检通过。
 2. **默认即批准套件**——下行服务端 TLS 默认采用 FIPS 批准的 TLS 1.2 密码套件与 ECDH 曲线，除非运维在
    listener 上显式覆盖密码套件。
 
 本特性仅适用于 **BoringSSL** 后端（默认 TLS 后端）。`rustls` 后端不支持 FIPS。
+
+> `boring::fips::enabled()`、模块指标和完整性自检只能证明运行模式与已构建行为，不能识别 CMVP 验证
+> 模块流、证书范围、制品来源，也不能证明整个部署合规。需要提出合规声明的运维方必须按照适用计划和平台
+> 另行核验这些事项。
 
 ## FIPS 构建强制哪些内容
 
@@ -33,20 +36,34 @@ FIPS 模式面向必须以 FIPS 合规姿态运行的部署（美国联邦、受
 
 ## 启用 FIPS
 
-FIPS 在**镜像构建期**启用，而非运行时。发布 / CI 的 Docker 构建以 `fips` cargo feature 编译 Gateway
-并将预编译的验证模块烘焙进镜像。默认的 workspace 构建和本地 `cargo build` **不**包含 FIPS——这样本地 /
-开发构建保持精简且始终可编译。
+FIPS 在**镜像构建期**启用，而非运行时。普通发布 workflow、默认 workspace 构建和本地
+`cargo build` **不**包含 FIPS。请通过仓库提供的 Linux 多架构 builder 显式构建：
 
-没有任何配置字段或环境变量能把 FIPS “打开”——你需要部署一个 FIPS 镜像。下面的配置开关控制的是**断言与
-策略**，而不是验证模块是否存在。
+```bash
+FEATURES="allocator-jemalloc,fips" \
+  ./cicd/build-image.sh --arch amd64 --compile-only
+```
+
+规范的 FIPS 源码构建当前仅支持 `amd64`；由于 BoringSSL 上游运行时完整性自检在该源码的 `arm64` 构建上
+失败，脚本会在编译前拒绝该组合。普通非 FIPS 的 `arm64` 构建不受影响。去掉 `--compile-only` 即会继续
+打包 amd64 镜像。Boring 5 默认从其随 crate 提供的 FIPS 模块源码构建。`BORING_BSSL_FIPS_PATH` 是上游
+提供的预构建目录逃生口，不属于 Edgion 规范脚本的支持契约。
+
+选择 `fips` 后，脚本会对 amd64 release 二进制自动执行隔离验证。Gateway 必须能以
+`EDGION_REQUIRE_FIPS=1` 启动，报告 `edgion_gateway_fips_module_enabled 1`，拒绝仅提供 ChaCha20 的
+TLS 1.2 客户端，并接受批准的 AES-GCM 客户端，构建才会成功。通用集成套件继续使用普通 BoringSSL
+构建，因为其中的弱密码兼容性用例有意验证另一种安全姿态。
+
+没有任何配置字段或环境变量能把 FIPS “打开”——你需要部署一个显式构建并通过验证的 FIPS 镜像。下面的
+配置开关控制的是**断言与策略**，而不是 BoringSSL FIPS 模式是否存在。
 
 ## 主机 FIPS 检测与 `auto` 默认值
 
 Gateway 还会在启动时通过读取一次 `/proc/sys/crypto/fips_enabled` 来检测**宿主机内核**是否处于 FIPS
 模式。BoringSSL 静态链接进二进制文件，因此宿主机的 FIPS 模式对进程内实际执行的加密代码没有任何影响——
-这项检测不能把一个非 FIPS 二进制变成经过验证的 FIPS 二进制。它驱动两件互相独立的事情：
+这项检测不能把一个非 FIPS 二进制变成 FIPS 模式二进制。它驱动两件互相独立的事情：
 
-1. **合规护栏**——如果宿主机内核报告处于 FIPS 模式，但本二进制并未链接验证模块，Gateway 会在启动时发出
+1. **姿态护栏**——如果宿主机内核报告处于 FIPS 模式，但本二进制未运行 BoringSSL FIPS 模式，Gateway 会在启动时发出
    一条 WARN，指出被限制的套件与逃生舱口，然后正常启动（fail-fast 仍然是通过 `require_fips` 的可选行
    为）。
 2. **`auto` 策略默认值**——`fips_policy`（见下文）默认为 `auto`，只要宿主机是 FIPS 节点，即使二进制不
@@ -69,7 +86,7 @@ Gateway 还会在启动时通过读取一次 `/proc/sys/crypto/fips_enabled` 来
 |------|----------|------|
 | `Enabled` | 文件可读，内容为 `1` | `auto` 生效强制；如果本二进制非 FIPS，mismatch 护栏可能触发 |
 | `Disabled` | 文件可读但内容非 `1`，或文件不存在（ENOENT / 非 Linux） | `auto` 不强制 |
-| `Unknown` | 文件存在但无法读取（例如被加固 / 屏蔽的 `/proc`） | 记录一条 **WARN**，将 `edgion_gateway_fips_host_detect_error` 指标置为 `1`，**不**触发合规护栏，也**不**在 `auto` 下收紧密码套件 |
+| `Unknown` | 文件存在但无法读取（例如被加固 / 屏蔽的 `/proc`） | 记录一条 **WARN**，将 `edgion_gateway_fips_host_detect_error` 指标置为 `1`，**不**触发姿态护栏，也**不**在 `auto` 下收紧密码套件 |
 
 `Unknown` 在流量上选择失败开放（无法确定的主机状态不能作为违规证据），但会在日志与指标中刻意保持醒目，
 因为屏蔽 `/proc` 的加固节点恰恰是本特性面向的高保障环境。
@@ -95,7 +112,7 @@ Gateway 还会在启动时通过读取一次 `/proc/sys/crypto/fips_enabled` 来
 
 | 字段 | 类型 | 默认 | 环境变量 | 说明 |
 |------|------|------|----------|------|
-| `require_fips` | `bool` | `false` | `EDGION_REQUIRE_FIPS` | 启动时要求 FIPS 验证加密模块存在 |
+| `require_fips` | `bool` | `false` | `EDGION_REQUIRE_FIPS` | 启动时要求 BoringSSL FIPS 模式存在 |
 
 - `require_fips: false`（默认）——无论二进制是否为 FIPS 构建都正常启动。
 - `require_fips: true` 且为 **FIPS 构建**——守卫通过；批准默认值自动生效。
@@ -115,14 +132,14 @@ require_fips: true
 EDGION_REQUIRE_FIPS=1 ./edgion-gateway --config-file config/edgion-gateway.yaml
 ```
 
-### `fips_policy`——无论验证模块是否存在都选择批准策略
+### `fips_policy`——无论 FIPS 模式是否存在都选择批准策略
 
 一个三态开关，用于在下行 listener 上选择 FIPS 批准的密码套件 / 曲线**策略**，与二进制是否为 FIPS 构建
-无关。这只是策略开关——它**不**提供验证模块。
+无关。这只是策略开关——它**不**提供 BoringSSL FIPS 模式。
 
 | 字段 | 类型 | 默认 | 环境变量 | 说明 |
 |------|------|------|----------|------|
-| `fips_policy` | `"auto" \| "on" \| "off"` | `auto` | `EDGION_FIPS_POLICY` | 无论验证模块是否存在都选择批准的密码套件 / 曲线强制策略 |
+| `fips_policy` | `"auto" \| "on" \| "off"` | `auto` | `EDGION_FIPS_POLICY` | 无论 FIPS 模式是否存在都选择批准的密码套件 / 曲线强制策略 |
 
 - `auto`（默认）——跟随宿主机：当[主机 FIPS 检测](#主机-fips-检测与-auto-默认值)报告宿主机内核处于
   FIPS 模式时强制启用批准集合，否则不强制。这只是密码套件层面的策略对齐，不是合规声明。
@@ -138,7 +155,8 @@ EDGION_REQUIRE_FIPS=1 ./edgion-gateway --config-file config/edgion-gateway.yaml
 2. 作为纵深防御主动开启批准套件限制。
 
 > ⚠️ `fips_policy: on`（或 `auto` 默认值在 FIPS 主机上收紧）**不会**让非 FIPS 二进制变得 FIPS 合规。
-> 真正的 FIPS 合规要求二进制是 FIPS 构建（验证模块）。此字段仅镜像**密码套件 / 曲线策略**。
+> FIPS 模式二进制是 Edgion 这一姿态的必要条件，但本身不能证明 CMVP 证书范围、制品来源、平台验证或部署
+> 合规。此字段仅镜像**密码套件 / 曲线策略**。
 
 **取值与优先级。** 只接受上面这三个字符串——没有历史遗留的布尔值，也没有历史遗留的 truthy/falsey 令
 牌。YAML 布尔值（`fips_policy: true`）会触发反序列化硬错误；而 YAML 1.1 会把裸写的 `on` / `off` 标量
@@ -212,23 +230,22 @@ Gateway 通过可观测性而非业务 API 暴露 FIPS 状态：
 
   | 指标 | 含义 |
   |------|------|
-  | `edgion_gateway_fips_module_enabled` | 本二进制链接了 FIPS 验证加密模块时为 `1`（Layer-1 事实：真正的 FIPS 构建）。**这是唯一的验证模块信号。** |
+  | `edgion_gateway_fips_module_enabled` | BoringSSL 在本二进制中报告 FIPS 模式时为 `1`；该值不能证明 CMVP 证书范围或构建来源。 |
   | `edgion_gateway_fips_host_enabled` | 宿主机内核报告处于 FIPS 模式（`/proc/sys/crypto/fips_enabled`）时为 `1` |
   | `edgion_gateway_fips_host_detect_error` | 主机检测无法读取标志文件（`HostFipsState::Unknown`）时为 `1`——此时护栏与 `auto` 默认值均处于失效状态 |
-  | `edgion_gateway_fips_policy_active{validated="true\|false"}` | 该进程上批准的密码套件 / 曲线配置实际生效时为 `1`；`validated` 标签携带 `fips_module_enabled` 的值，使两个信号始终同行 |
+  | `edgion_gateway_fips_policy_active{module_enabled="true\|false"}` | 该进程上批准的密码套件 / 曲线配置实际生效时为 `1`；标签记录 BoringSSL FIPS 模式信号 |
 
   通过 Gateway 指标端点抓取（见 [监控指标](../../observability/metrics.md)）。
 
-> ⚠️ **`fips_policy_active{validated="false"}` 不是合规通过的标志。** 它意味着批准的密码套件正运行在
-> *未经验证*的加密实现之上——这正是 `auto`/`on` 在非 FIPS 二进制上产生的结果。只检查协商套件的仪表盘
+> ⚠️ **`fips_policy_active{module_enabled="false"}` 不是合规通过的标志。** 它意味着批准的密码套件运行时
+> 没有 BoringSSL FIPS 模式——这正是 `auto`/`on` 在非 FIPS 二进制上产生的结果。只检查协商套件的仪表盘
 > 面板或外部密码套件扫描器，会看到与真正 FIPS 构建相同的批准套件，从而可能误读为"合规"。事实并非如
-> 此：`edgion_gateway_fips_module_enabled` 是**唯一**的验证模块信号，任何对 `fips_policy_active` 的解
-> 读都必须与它联合判断。
+> 此：模块指标可以区分两种运行模式，但两个值都不能证明证书范围、来源或部署合规。
 
-### 合规告警
+### 姿态告警
 
-对合规而言真正重要的主机-二进制不匹配情况——FIPS 节点运行了不含验证模块的二进制——可以用一条 PromQL
-表达式表达：
+主机与二进制的姿态不匹配——FIPS 节点运行了未启用 BoringSSL FIPS 模式的二进制——可以用一条 PromQL
+表达式捕获：
 
 ```promql
 edgion_gateway_fips_host_enabled == 1 and edgion_gateway_fips_module_enabled == 0
@@ -251,13 +268,13 @@ openssl s_client -connect secure.example.com:443 -tls1_2 \
 
 ## 已知限制
 
-FIPS 模式覆盖了常见的下行姿态，但存在若干有记录的缺口（完整设计见
-`docs/superpowers/specs/2026-07-10-fips-host-detection-design.md`）：
+FIPS 模式覆盖了常见的下行姿态，但存在若干有记录的缺口（当前契约见
+`skills/04-review/edgion-tls/boring-v5-fips-build-verification.md`）：
 
 - **BoringSSL 无法限制 TLS 1.3 密码套件。** `TLS_CHACHA20_POLY1305_SHA256` 在 TLS 1.3 上仍可协商。
   批准套件强制仅在 **TLS 1.2** 生效。若要彻底排除 TLS 1.3 ChaCha20，必须禁用 TLS 1.3（默认不禁用）。
 - **上行（Gateway → 后端）TLS 密码套件不受 FIPS 限制。** Pingora 0.8.1 连接器使用静态密码套件列表，无
-  per-peer 钩子。上行依赖验证模块加既有的服务端证书校验。
+  per-peer 钩子。上行依赖 BoringSSL FIPS 模式加既有的服务端证书校验。
 - **不强制密钥类型策略**（例如拒绝 Ed25519 叶子密钥）。
 - **TLS 1.3 会话恢复（PSK）** 跳过 per-connection 的密码套件 / 曲线限制，因此恢复的 TLS 1.3 握手的临时
   群组不会被重新限制。这与既有的 per-connection `EdgionTls.ciphers` 机制一致，且属于上述 TLS 1.3 限制

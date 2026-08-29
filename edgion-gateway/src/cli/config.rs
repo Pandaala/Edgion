@@ -208,7 +208,7 @@ pub struct GatewayConfig {
     #[serde(default, skip_serializing)]
     pub admin_token: Option<crate::util::RedactedString>,
 
-    /// Require the FIPS-validated crypto module at startup. Default false.
+    /// Require BoringSSL FIPS mode at startup. Default false.
     /// When true and the module is absent (a non-FIPS build), the gateway logs
     /// a clear error and exits non-zero. Also settable via `EDGION_REQUIRE_FIPS`
     /// (truthy: 1/true/yes/on). See the FIPS design spec.
@@ -229,7 +229,7 @@ pub struct GatewayConfig {
     /// Accepts only `auto`/`on`/`off`. Also settable via `EDGION_FIPS_POLICY`
     /// (same three values), which takes precedence over this field. `None`
     /// means "not specified".
-    /// See docs/superpowers/specs/2026-07-10-fips-host-detection-design.md.
+    /// See skills/04-review/edgion-tls/boring-v5-fips-build-verification.md.
     #[arg(
         long = "fips-policy",
         value_name = "MODE",
@@ -436,12 +436,12 @@ pub fn resolve_outbound_egress_dns_cache_ttl_ms(config_value: u64, env_value: Op
     }
 }
 
-/// Startup gate: when FIPS is required but the validated module is absent,
+/// Startup gate: when FIPS mode is required but absent,
 /// return an error string for the caller to log before exiting non-zero.
 pub fn check_fips_requirement(require_fips: bool, module_available: bool) -> Result<(), String> {
     if require_fips && !module_available {
         return Err("FIPS required (require_fips / EDGION_REQUIRE_FIPS) but this binary \
-             does not link the FIPS-validated crypto module; deploy a FIPS build \
+             does not run BoringSSL in FIPS mode; deploy a FIPS-mode build \
              or unset the requirement"
             .to_string());
     }

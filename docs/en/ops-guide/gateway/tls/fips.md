@@ -1,23 +1,28 @@
 # FIPS Mode (BoringSSL)
 
-> **🔒 Compliance feature**
+> **🔒 FIPS-mode build feature**
 >
-> FIPS mode runs the Gateway data plane on a FIPS-validated BoringSSL crypto module and makes
+> FIPS mode runs the Gateway data plane on BoringSSL's FIPS-mode crypto module and makes
 > downstream (client → Gateway) TLS default to the FIPS-approved cipher and curve set. It is a
-> **build/image concern**, not a runtime toggle: the validated module is compiled in when the
+> **build/image concern**, not a runtime toggle: the module is compiled in when the
 > Gateway image is built with the `fips` cargo feature. There is no per-listener or per-connection
 > FIPS switch.
 
-FIPS mode targets deployments that must run in a FIPS-compliant posture (US federal, regulated
-industries). When the Gateway binary is a FIPS build, two things hold:
+FIPS mode targets deployments that need a FIPS-aligned cryptographic posture. When the Gateway
+binary is a FIPS build, two things hold:
 
-1. **Validated module** — the linked crypto is the FIPS-validated BoringSSL module
-   (`boring::fips::enabled()` is true).
+1. **FIPS-mode module** — BoringSSL reports FIPS mode (`boring::fips::enabled()` is true) and its
+   runtime integrity self-test passes.
 2. **Approved-by-default TLS** — downstream server TLS defaults to the FIPS-approved TLS 1.2
    cipher set and ECDH curves, unless an operator overrides ciphers explicitly on a listener.
 
 This applies to the **BoringSSL** backend only (the default TLS backend). FIPS is not available on
 the `rustls` backend.
+
+> `boring::fips::enabled()`, the module metric, and the integrity self-test prove runtime mode and
+> built behavior only. They do not identify a CMVP validated-module stream, certificate scope,
+> artifact provenance, or the compliance of a complete deployment. Operators making a compliance
+> claim must validate those items separately against their required program and platform.
 
 ## What a FIPS build enforces
 
@@ -36,13 +41,31 @@ instead of the FIPS default (the approved curves still apply). See
 
 ## Enabling FIPS
 
-FIPS is enabled at **image build time**, not at runtime. Release/CI Docker builds compile the
-Gateway with the `fips` cargo feature and bake in the prebuilt validated module. The default
-workspace build and local `cargo build` do **not** include FIPS — this keeps local/dev builds lean
-and always buildable.
+FIPS is enabled at **image build time**, not at runtime. The ordinary release workflow, default
+workspace build, and local `cargo build` do **not** include FIPS. Build it explicitly through the
+repository's Linux multi-architecture builder:
 
-There is no config field or environment variable that turns FIPS "on" — you deploy a FIPS image.
-The config flags below control **assertions and policy**, not whether the validated module is
+```bash
+FEATURES="allocator-jemalloc,fips" \
+  ./cicd/build-image.sh --arch amd64 --compile-only
+```
+
+The canonical source FIPS build currently supports `amd64` only; the script rejects `arm64` before
+compilation because BoringSSL's upstream runtime integrity self-test fails for that source build.
+Ordinary non-FIPS `arm64` builds are unchanged. Omit `--compile-only` to package the amd64 image.
+Boring 5 builds its bundled FIPS module source by default. Its `BORING_BSSL_FIPS_PATH`
+prebuilt-tree input is an upstream escape hatch, not part of the canonical Edgion script contract.
+
+When `fips` is selected, the script automatically runs an isolated verification on the amd64
+release binary. The Gateway must start with `EDGION_REQUIRE_FIPS=1`, report
+`edgion_gateway_fips_module_enabled 1`, reject a ChaCha20-only TLS 1.2 client, and accept an
+approved AES-GCM client before the build succeeds. The general integration suite stays on the
+ordinary BoringSSL build because its weak-cipher compatibility cases intentionally exercise a
+different posture.
+
+There is no config field or environment variable that turns FIPS "on" — you deploy an explicitly
+built and verified FIPS image.
+The config flags below control **assertions and policy**, not whether BoringSSL FIPS mode is
 present.
 
 ## Host FIPS detection and the `auto` default
@@ -50,10 +73,10 @@ present.
 The gateway also detects whether the **host kernel** is in FIPS mode, by reading
 `/proc/sys/crypto/fips_enabled` once at startup. BoringSSL is statically linked into the binary, so
 the host's FIPS mode has no effect on the crypto executing in the process — this detection cannot
-turn a non-FIPS binary into a FIPS-validated one. It drives two independent things instead:
+turn a non-FIPS binary into a FIPS-mode one. It drives two independent things instead:
 
-1. **Compliance guardrail** — if the host kernel reports FIPS mode but this binary does not link the
-   validated module, the gateway emits a startup WARN naming the restricted suites and the escape
+1. **Posture guardrail** — if the host kernel reports FIPS mode but this binary does not run
+   BoringSSL in FIPS mode, the gateway emits a startup WARN naming the restricted suites and the escape
    hatch, and starts normally (fail-fast remains opt-in via `require_fips`).
 2. **`auto` policy default** — `fips_policy` (below) defaults to `auto`, which enforces the
    approved cipher/curve profile whenever the host is a FIPS node, even on a non-FIPS binary.
@@ -77,7 +100,7 @@ Reading the flag file can end in three states, not just enabled/disabled:
 |-------|------|--------|
 | `Enabled` | file readable, contents `1` | `auto` enforces; mismatch guardrail can fire if this binary is non-FIPS |
 | `Disabled` | file readable and not `1`, or absent (ENOENT / non-Linux) | `auto` does not enforce |
-| `Unknown` | file exists but cannot be read (e.g. a hardened/masked `/proc`) | logs a **WARN**, sets the `edgion_gateway_fips_host_detect_error` gauge to `1`, does **not** fire the compliance guardrail, and does **not** tighten ciphers under `auto` |
+| `Unknown` | file exists but cannot be read (e.g. a hardened/masked `/proc`) | logs a **WARN**, sets the `edgion_gateway_fips_host_detect_error` gauge to `1`, does **not** fire the posture guardrail, and does **not** tighten ciphers under `auto` |
 
 `Unknown` fails open on traffic (an undetermined host is not evidence of a violation) but is
 deliberately loud in logs and metrics, since a hardened node masking `/proc` is exactly the kind of
@@ -107,7 +130,7 @@ to catch a misconfigured (non-FIPS) image before it serves traffic.
 
 | Field | Type | Default | Env | Description |
 |-------|------|---------|-----|-------------|
-| `require_fips` | `bool` | `false` | `EDGION_REQUIRE_FIPS` | Require the FIPS-validated crypto module to be present at startup |
+| `require_fips` | `bool` | `false` | `EDGION_REQUIRE_FIPS` | Require BoringSSL FIPS mode to be present at startup |
 
 - `require_fips: false` (default) — starts normally regardless of whether the binary is a FIPS build.
 - `require_fips: true` on a **FIPS build** — guard passes; approved defaults apply automatically.
@@ -127,15 +150,15 @@ require_fips: true
 EDGION_REQUIRE_FIPS=1 ./edgion-gateway --config-file config/edgion-gateway.yaml
 ```
 
-### `fips_policy` — select the approved policy regardless of the validated module
+### `fips_policy` — select the approved policy regardless of FIPS mode
 
 A tri-state that selects the FIPS-approved cipher/curve **policy** on downstream listeners,
 independent of whether the binary is a FIPS build. This is a policy switch only — it does **not**
-provide the validated module.
+provide BoringSSL FIPS mode.
 
 | Field | Type | Default | Env | Description |
 |-------|------|---------|-----|-------------|
-| `fips_policy` | `"auto" \| "on" \| "off"` | `auto` | `EDGION_FIPS_POLICY` | Select the approved cipher/curve enforcement regardless of the validated module |
+| `fips_policy` | `"auto" \| "on" \| "off"` | `auto` | `EDGION_FIPS_POLICY` | Select the approved cipher/curve enforcement regardless of FIPS mode |
 
 - `auto` (default) — follow the host: enforces the approved set when [host FIPS
   detection](#host-fips-detection-and-the-auto-default) reports the host kernel is in FIPS mode;
@@ -154,8 +177,9 @@ for `on`:
 2. Opt into the approved-suite restriction as defense-in-depth.
 
 > ⚠️ `fips_policy: on` (or the `auto` default tightening on a FIPS host) does **not** make a
-> non-FIPS binary FIPS-compliant. For real FIPS compliance the binary must be a FIPS build
-> (validated module). This field only mirrors the **cipher/curve policy**.
+> non-FIPS binary FIPS-compliant. A FIPS-mode binary is necessary for this Edgion posture but is
+> not, by itself, proof of CMVP certificate scope, artifact provenance, platform validation, or
+> deployment compliance. This field only mirrors the **cipher/curve policy**.
 
 **Accepted values and precedence.** Only `auto`/`on`/`off` are accepted — there are no legacy
 booleans and no legacy truthy/falsey tokens. A YAML boolean (`fips_policy: true`) is a hard
@@ -234,25 +258,24 @@ The Gateway exposes FIPS status through observability, not through a business AP
 
   | Gauge | Meaning |
   |-------|---------|
-  | `edgion_gateway_fips_module_enabled` | `1` when this binary links the FIPS-validated crypto module (Layer-1 truth: a real FIPS build). **This is the only validated-module signal.** |
+  | `edgion_gateway_fips_module_enabled` | `1` when BoringSSL reports FIPS mode in this binary. This proves mode, not CMVP certificate scope or build provenance. |
   | `edgion_gateway_fips_host_enabled` | `1` when the host kernel reports FIPS mode (`/proc/sys/crypto/fips_enabled`) |
   | `edgion_gateway_fips_host_detect_error` | `1` when host detection could not read the flag file (`HostFipsState::Unknown`) — the guardrail and the `auto` default are both inert while this is `1` |
-  | `edgion_gateway_fips_policy_active{validated="true\|false"}` | `1` when the approved cipher/curve profile is actually enforced on this process; the `validated` label carries `fips_module_enabled` so the two signals travel together |
+  | `edgion_gateway_fips_policy_active{module_enabled="true\|false"}` | `1` when the approved cipher/curve profile is actually enforced on this process; the label records the BoringSSL FIPS-mode signal |
 
   Scrape them via the Gateway metrics endpoint (see [Metrics](../../observability/metrics.md)).
 
-> ⚠️ **`fips_policy_active{validated="false"}` is not a compliance pass.** It means the approved
-> cipher suites are being presented over an *unvalidated* crypto implementation — exactly what
+> ⚠️ **`fips_policy_active{module_enabled="false"}` is not a compliance pass.** It means the approved
+> cipher suites are being presented without BoringSSL FIPS mode — exactly what
 > `auto`/`on` produce on a non-FIPS binary. A dashboard tile or an external cipher-suite scanner that
 > only checks the negotiated suite will see the same approved suites a real FIPS build presents and
-> may read this as "compliant". It is not: `edgion_gateway_fips_module_enabled` is the **only**
-> signal for the validated module, and every reading of `fips_policy_active` must be joined against
-> it.
+> may read this as "compliant". It is not. The module metric distinguishes the two runtime modes,
+> but neither value proves certificate scope, provenance, or deployment compliance.
 
-### Compliance alert
+### Posture alert
 
-The host-vs-binary mismatch that matters for compliance — a FIPS node running a binary without the
-validated module — is one PromQL expression:
+The host-vs-binary posture mismatch — a FIPS node running a binary without BoringSSL FIPS mode — is
+one PromQL expression:
 
 ```promql
 edgion_gateway_fips_host_enabled == 1 and edgion_gateway_fips_module_enabled == 0
@@ -276,14 +299,14 @@ openssl s_client -connect secure.example.com:443 -tls1_2 \
 
 ## Known limitations
 
-FIPS mode covers the common downstream posture, but has documented gaps (see the full design in
-`docs/superpowers/specs/2026-07-10-fips-host-detection-design.md`):
+FIPS mode covers the common downstream posture, but has documented gaps (see the current contract in
+`skills/04-review/edgion-tls/boring-v5-fips-build-verification.md`):
 
 - **TLS 1.3 cipher suites cannot be restricted in BoringSSL.** `TLS_CHACHA20_POLY1305_SHA256`
   remains negotiable at TLS 1.3. Approved-suite enforcement bites at **TLS 1.2 only**. To eliminate
   TLS 1.3 ChaCha20 entirely you would have to disable TLS 1.3 (not done by default).
 - **Upstream (Gateway → backend) TLS ciphers are not FIPS-restricted.** The Pingora 0.8.1 connector
-  has a static cipher list with no per-peer hook. Upstream relies on the validated module plus
+  has a static cipher list with no per-peer hook. Upstream relies on BoringSSL FIPS mode plus
   existing server-certificate verification.
 - **No key-type policy** (e.g. rejecting Ed25519 leaf keys) is enforced.
 - **TLS 1.3 session resumption (PSK)** skips the per-connection cipher/curve restriction, so a

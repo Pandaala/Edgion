@@ -59,8 +59,13 @@ that do NOT resolve bare are the ones in `edgion-tests` (`test_server`,
 - TLS backend: `boringssl` (default) | `rustls`
 - Memory allocator: `allocator-jemalloc` (default) | `allocator-mimalloc` | `allocator-system`
 
-**BoringSSL FIPS (image-only)**: `fips` is a gateway cargo feature enabled only in release/CI
-Docker builds (requires `boringssl`; not a default, not toggled at runtime). On a FIPS build,
+**BoringSSL FIPS (opt-in image build)**: `fips` is a gateway cargo feature enabled explicitly
+through `cicd/build-image.sh` (requires `boringssl`; not a default, not enabled by the ordinary
+release workflow, and not toggled at runtime). Boring 5 builds its bundled FIPS module source by
+default on the canonical amd64 path; arm64 FIPS is rejected before compilation because its upstream
+runtime integrity self-test currently fails, while ordinary arm64 builds remain supported. The
+upstream `BORING_BSSL_FIPS_PATH` prebuilt-tree escape hatch is outside the canonical script contract.
+On a FIPS build,
 downstream server TLS defaults to the FIPS-approved TLS 1.2 cipher set
 (`ECDHE-{ECDSA,RSA}-AES{128,256}-GCM-SHA{256,384}`) and ECDH curves (`P-256`/`P-384`/`P-521`)
 unless `EdgionTls.spec.ciphers` is set explicitly (operator override always wins). The gateway-local
@@ -73,12 +78,14 @@ and no legacy truthy/falsey tokens — a YAML boolean or an unrecognized env tok
 can never silently disable enforcement). `auto` enables the approved cipher/curve policy when the
 host kernel reports FIPS mode (`/proc/sys/crypto/fips_enabled`), which lets a FIPS node tighten the
 profile without per-cluster configuration — this is cipher-suite policy alignment only and is NOT a
-validated-module compliance claim. A non-FIPS binary on a FIPS node also emits a startup WARN;
+compliance claim. The module metric reports BoringSSL FIPS mode; it does not establish CMVP
+certificate scope, artifact provenance, or deployment compliance. A non-FIPS binary on a FIPS node also emits a startup WARN;
 alert on `edgion_gateway_fips_host_enabled == 1 and edgion_gateway_fips_module_enabled == 0`. Known
 limitations: TLS 1.3 cipher suites
 cannot be restricted in BoringSSL (`TLS_CHACHA20_POLY1305_SHA256` still negotiable under FIPS), and
 upstream (gateway→backend) TLS cipher suites are not FIPS-restricted (pingora connector
-limitation). See `docs/superpowers/specs/2026-07-10-fips-host-detection-design.md` for the full design.
+limitation). See `skills/04-review/edgion-tls/boring-v5-fips-build-verification.md` for the current
+build and verification contract.
 
 ## Knowledge System
 

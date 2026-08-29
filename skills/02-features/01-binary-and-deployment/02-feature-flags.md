@@ -17,7 +17,7 @@ individual binary crates, so feature-selecting commands must name a package with
 | `allocator-system` | Yes | Yes | Yes | Optional |
 | `boringssl` | Yes | No | No | Default Gateway TLS backend; mutually exclusive with `rustls` |
 | `rustls` | Yes | No | No | Alternate Gateway Pingora TLS backend |
-| `fips` | Yes | No | No | Release/image-only; implies `boringssl`, requires the precompiled FIPS module |
+| `fips` | Yes | No | No | Opt-in image build; implies `boringssl`, uses Boring 5's bundled FIPS module source by default |
 | `legacy_route_tests` | Yes | No | No | Non-default legacy test surface |
 
 Allocator selection and `#[global_allocator]` live in each binary entry point,
@@ -31,10 +31,15 @@ Gateway custom TLS termination paths are BoringSSL-only. A `rustls` build is not
 feature-equivalent for HTTPS listeners, TLSRoute proxying, or all data-plane TLS hooks.
 Use `boringssl` for the normal Gateway build.
 
-The `fips` feature is a build-time property, not a runtime toggle. It is enabled only
-for release/CI image builds and requires
-`BORING_BSSL_FIPS_PATH`. Runtime `require_fips` and `fips_policy` are
-documented in `../02-config/01-gateway-config.md`.
+The `fips` feature is a build-time property, not a runtime toggle. The ordinary
+release workflow does not enable it. Use the dedicated Linux builder in
+`cicd/build-image.sh`; Boring 5 builds its bundled FIPS module source by default
+on the canonical amd64 path. The script rejects arm64 FIPS builds before
+compilation because the upstream runtime integrity self-test fails there;
+ordinary arm64 builds are unchanged. `BORING_BSSL_FIPS_PATH` is an upstream
+prebuilt-tree escape hatch outside the canonical script contract. Runtime
+`require_fips` and `fips_policy` are documented in
+`../02-config/01-gateway-config.md`.
 
 All three binaries still install the rustls crypto provider at startup for libraries
 that use rustls; this does not change the Pingora data-plane backend.

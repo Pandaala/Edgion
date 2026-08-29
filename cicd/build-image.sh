@@ -47,6 +47,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Script lives in cicd/; the build context / project root is one level up.
 PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
 BUILDER_IMAGE="edgion-builder"
+BUILDER_IMAGES_READY=""
 
 # Docker image name for the standalone controller-gateway bundle.
 CONTROLLER_GATEWAY_IMAGE="edgion-controller-gateway"
@@ -65,6 +66,33 @@ configure_gateway_features() {
         GATEWAY_FEATURES="${FEATURES}"
         GATEWAY_NO_DEFAULT_FEATURES=true
     fi
+}
+
+gateway_features_include() {
+    local feature=$1
+    local feature_list=${GATEWAY_FEATURES//,/ }
+    local feature_tokens=()
+    local token
+
+    read -r -a feature_tokens <<< "${feature_list}"
+    for token in "${feature_tokens[@]}"; do
+        if [[ "${token}" == "${feature}" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+validate_fips_architectures() {
+    local arch
+    for arch in "$@"; do
+        if [[ "${arch}" != "amd64" ]]; then
+            log_error "The canonical Boring 5 source FIPS build supports amd64 only."
+            log_error "arm64 currently fails BoringSSL's upstream runtime integrity self-test."
+            log_info "Build arm64 without the fips feature, or select --arch amd64 for FIPS."
+            return 1
+        fi
+    done
 }
 
 # Ensure Docker Buildx builder exists and is selected
@@ -285,12 +313,15 @@ ensure_builder_image() {
     local platform=$1
     local tag="${BUILDER_IMAGE}:${platform//\//-}"
 
-    if docker image inspect "${tag}" &> /dev/null; then
-        log_info "Builder image ${tag} already exists"
-        return 0
-    fi
+    case " ${BUILDER_IMAGES_READY} " in
+        *" ${tag} "*) return 0 ;;
+    esac
 
-    log_info "Building builder image for ${platform}..."
+    # Always ask Docker to build once per architecture in this invocation. Its
+    # layer cache makes an unchanged builder cheap, while Dockerfile dependency
+    # changes (such as the clang/runtime tools required by FIPS verification)
+    # cannot be hidden behind a stale local tag.
+    log_info "Ensuring builder image for ${platform}..."
     docker build \
         --platform "${platform}" \
         --build-arg "RUST_VERSION=${RUST_VERSION}" \
@@ -298,7 +329,33 @@ ensure_builder_image() {
         -f "${PROJECT_DIR}/cicd/docker/Dockerfile.builder" \
         "${PROJECT_DIR}"
 
-    log_success "Builder image ${tag} created"
+    BUILDER_IMAGES_READY="${BUILDER_IMAGES_READY} ${tag}"
+    log_success "Builder image ${tag} ready"
+}
+
+verify_fips_binary() {
+    local arch=$1
+    local arch_info
+    arch_info=$(get_arch_info "${arch}")
+    IFS=':' read -r platform target suffix <<< "${arch_info}"
+    local builder_tag="${BUILDER_IMAGE}:${platform//\//-}"
+
+    log_info "Verifying BoringSSL FIPS mode and the approved TLS profile for ${arch}..."
+    docker run --rm \
+        --platform "${platform}" \
+        -v "${PROJECT_DIR}":/project \
+        -v "${HOME}/.cargo/registry":/usr/local/cargo/registry \
+        -v "${HOME}/.cargo/git":/usr/local/cargo/git \
+        -v "edgion-rustup-${suffix}":/usr/local/rustup \
+        -w /project \
+        -e "EDGION_GATEWAY_BIN=/project/target/${target}/release/edgion-gateway" \
+        -e "EDGION_CONTROLLER_BIN=/project/target/${target}/release/edgion-controller" \
+        -e "EDGION_CLI_BIN=/project/target/${target}/release/edgion-cli" \
+        -e EDGION_EXPECT_FIPS_MODULE=1 \
+        "${builder_tag}" \
+        bash edgion-tests/integration/scripts/integration/test_fips_policy.sh
+
+    log_success "BoringSSL FIPS mode and TLS profile verified for ${arch}"
 }
 
 # =============================================================================
@@ -360,6 +417,10 @@ compile_binaries() {
     fi
 
     log_success "Compiled binaries for ${arch}"
+
+    if gateway_features_include "fips"; then
+        verify_fips_binary "${arch}"
+    fi
 }
 
 # =============================================================================
@@ -723,6 +784,10 @@ compile_controller_gateway_binaries() {
     fi
 
     log_success "Compiled controller-gateway binaries for ${arch}"
+
+    if gateway_features_include "fips"; then
+        verify_fips_binary "${arch}"
+    fi
 }
 
 # =============================================================================
@@ -991,6 +1056,10 @@ main() {
         fi
     done
 
+    if [[ "${test_images}" != "true" ]] && gateway_features_include "fips"; then
+        validate_fips_architectures "${archs[@]}"
+    fi
+
     # Header
     echo ""
     log_info "Edgion Multi-Architecture Docker Image Builder"
@@ -1204,4 +1273,6 @@ main() {
     echo ""
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
