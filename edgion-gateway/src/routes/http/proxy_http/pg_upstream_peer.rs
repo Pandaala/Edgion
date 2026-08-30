@@ -35,6 +35,7 @@ use pingora_core::upstreams::peer::Peer;
 use pingora_core::{BError, Error as PingoraError, ErrorType};
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
+use std::sync::Arc;
 
 fn ai_predispatch_error(error: AiDispatchError) -> Option<AiProxyError> {
     match error {
@@ -430,10 +431,7 @@ fn apply_upstream_authority(
     ctx: &mut EdgionHttpContext,
     peer: &mut HttpPeer,
 ) -> pingora_core::Result<()> {
-    if matches!(
-        ctx.selected_backend.as_ref().and_then(SelectedHttpBackend::routed),
-        Some(SelectedLogicalBackend::Ai(_))
-    ) {
+    if ctx.selected_backend.as_ref().is_some_and(SelectedHttpBackend::is_ai) {
         ctx.upstream_authority = None;
         return Ok(());
     }
@@ -676,10 +674,7 @@ pub async fn upstream_peer_http(
     //    as None, which would otherwise silently drop those writes (P0 g1-001).
     begin_upstream_attempt(ctx);
 
-    let selected_logical = ctx
-        .selected_backend
-        .as_ref()
-        .and_then(|selected| selected.routed().cloned());
+    let selected_logical = ctx.selected_backend.as_ref().and_then(SelectedHttpBackend::routed);
 
     // 5. Get peer — common path defers to LB; the SP-affinity branch lives in its own helper.
     // On a strict cross-attempt retry, restore the sticky target so the retry
@@ -762,7 +757,7 @@ pub async fn select_http_backend(
     let sticky_backend = sp_idx.and_then(|idx| {
         let cb = &route_unit.backends[idx];
         if cb.schema.ref_denied.is_none() {
-            Some(cb.clone())
+            crate::backends::LogicalBackendHandle::new(Arc::clone(&route_unit.backends), idx)
         } else {
             // The sticky backendRef's cross-namespace reference is now denied:
             // treat as a miss — drop the sticky target, refresh the token, and
@@ -778,7 +773,7 @@ pub async fn select_http_backend(
     // Pick backend_ref: sticky session hit wins outright; otherwise InternalJump
     // (plugin-injected) tries by name first and falls back to weighted
     // round-robin on miss; without InternalJump, plain weighted round-robin.
-    let mut backend_ref = match sticky_backend {
+    let backend_ref = match sticky_backend {
         Some(b) => b,
         None => match pick_backend_ref(&route_unit, &route_unit.matched_info.rsc.ns, ctx.jump.as_ref()) {
             Ok(b) => b,
@@ -792,22 +787,21 @@ pub async fn select_http_backend(
 
     // Project policy identity from the selected WP2 logical slot. Route-local
     // occurrence remains proof of selection but is not part of attachment.
-    let logical = backend_ref.logical_handle();
-    let service_port = backend_ref.port;
-    backend_ref.schema.backend_tls_policy =
-        crate::backends::query_backend_tls_policy_for_logical_backend(&logical, service_port);
+    let service_port = backend_ref.compiled().port;
+    let backend_tls_policy = crate::backends::query_backend_tls_policy_for_logical_backend(&backend_ref, service_port);
 
-    backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
+    let backend_plugin_runtime = Arc::clone(&backend_ref.compiled().plugin_runtime);
+    backend_plugin_runtime.run_request_plugins(session, ctx).await;
     if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
         let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
         return Err(PingoraError::new(ErrorType::InternalError));
     }
 
-    ctx.selected_backend = Some(match backend_ref.target {
+    ctx.selected_backend = Some(match backend_ref.target() {
         CompiledBackendTarget::Service { .. } => {
-            let selected = SelectedServiceBackend::new(backend_ref.logical_handle())
+            let selected = SelectedServiceBackend::new(backend_ref, backend_tls_policy)
                 .ok_or_else(|| PingoraError::new(ErrorType::InternalError))?;
-            SelectedHttpBackend::Routed(SelectedLogicalBackend::Service(selected))
+            SelectedHttpBackend::Service(selected)
         }
         CompiledBackendTarget::Invalid { .. } => SelectedHttpBackend::Invalid(backend_ref),
         CompiledBackendTarget::EdgionBackend { .. } => {
@@ -961,7 +955,7 @@ fn pick_backend_ref(
     unit: &std::sync::Arc<crate::routes::http::HttpRouteRuleUnit>,
     route_ns: &str,
     jump: Option<&crate::UpstreamJumpTarget>,
-) -> Result<crate::routes::http::match_unit::CompiledBackend, EdError> {
+) -> Result<crate::backends::LogicalBackendHandle, EdError> {
     if let Some(crate::UpstreamJumpTarget::Internal(j)) = jump {
         if let Ok(b) =
             RouteRules::find_backend_by_name(unit, &j.backend_ref_name, j.backend_ref_namespace.as_deref(), route_ns)
@@ -1130,10 +1124,7 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
     // never an instant-fail connect (see resolve_connect_deadline).
     let service_key = ctx.backend_context.as_ref().and_then(|bc| bc.service_key.as_deref());
     let captured_timeout = selected_effective_policy(ctx).and_then(|policy| policy.connect_timeout);
-    let selected_is_logical_backend = matches!(
-        ctx.selected_backend.as_ref().and_then(SelectedHttpBackend::routed),
-        Some(SelectedLogicalBackend::Ai(_))
-    );
+    let selected_is_logical_backend = ctx.selected_backend.as_ref().is_some_and(SelectedHttpBackend::is_ai);
     let service_timeout = if selected_is_logical_backend {
         None
     } else {
@@ -1255,12 +1246,7 @@ pub(super) fn retry_budget_for(ctx: &EdgionHttpContext) -> Option<std::sync::Arc
     let captured_budget = selected_effective_policy(ctx)
         .and_then(|policy| policy.retry_budget.as_ref())
         .map(std::sync::Arc::clone);
-    if captured_budget.is_some()
-        || matches!(
-            ctx.selected_backend.as_ref().and_then(SelectedHttpBackend::routed),
-            Some(SelectedLogicalBackend::Ai(_))
-        )
-    {
+    if captured_budget.is_some() || ctx.selected_backend.as_ref().is_some_and(SelectedHttpBackend::is_ai) {
         return captured_budget;
     }
     let service_key = ctx.backend_context.as_ref()?.service_key.as_deref()?;
@@ -1270,9 +1256,9 @@ pub(super) fn retry_budget_for(ctx: &EdgionHttpContext) -> Option<std::sync::Arc
 fn selected_effective_policy(
     ctx: &EdgionHttpContext,
 ) -> Option<&std::sync::Arc<crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy>> {
-    match ctx.selected_backend.as_ref()?.routed()? {
-        SelectedLogicalBackend::Ai(_) => ctx.ai_state().and_then(|state| state.effective_policy.as_ref()),
-        SelectedLogicalBackend::Service(_) => None,
+    match ctx.selected_backend.as_ref()? {
+        SelectedHttpBackend::Ai(_) => ctx.ai_state().and_then(|state| state.effective_policy.as_ref()),
+        SelectedHttpBackend::Service(_) | SelectedHttpBackend::Invalid(_) | SelectedHttpBackend::Direct(_) => None,
     }
 }
 
@@ -1811,7 +1797,8 @@ mod tests {
             }
         );
         let mut ctx = EdgionHttpContext::new();
-        ctx.selected_backend = Some(crate::backends::SelectedHttpBackend::Invalid(backend));
+        let logical = crate::backends::LogicalBackendHandle::new(Arc::new(vec![backend]), 0).unwrap();
+        ctx.selected_backend = Some(crate::backends::SelectedHttpBackend::Invalid(logical));
 
         init_backend_context_if_needed(&mut ctx).unwrap();
 

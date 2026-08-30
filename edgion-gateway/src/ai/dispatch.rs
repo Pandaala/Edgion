@@ -23,7 +23,9 @@ use crate::ai::{
     AiAttemptPlan, AiProviderLabel, AiProxyError, AiRequestContext, AiUsageShared, ReadyAiAttemptPlan,
     UsageExtractionProcessor,
 };
-use crate::backends::{SelectedAiBackend, SelectedHttpBackend, SelectedLogicalBackend};
+#[cfg(test)]
+use crate::backends::SelectedLogicalBackend;
+use crate::backends::{SelectedAiBackend, SelectedHttpBackend};
 use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
 use crate::plugins::runtime::traits::{PluginSession, StreamingResponseProcessor};
 use crate::EdgionHttpContext;
@@ -502,9 +504,7 @@ fn prepare_ready_attempt(
         eos: Arc::clone(&eos),
     });
 
-    ctx.selected_backend = Some(SelectedHttpBackend::Routed(SelectedLogicalBackend::Ai(
-        selected_backend.clone(),
-    )));
+    ctx.selected_backend = Some(SelectedHttpBackend::Ai(selected_backend.logical().clone()));
     let target = PreparedAiAttempt {
         selected: selected_backend,
         provider,
@@ -980,7 +980,7 @@ mod tests {
     }
 
     fn compiled_ai_logical(ref_denied: Option<RefDenied>) -> crate::backends::LogicalBackendHandle {
-        CompiledBackend::compile(
+        let compiled = CompiledBackend::compile(
             HTTPBackendRef {
                 name: "provider".to_string(),
                 namespace: Some("default".to_string()),
@@ -995,8 +995,8 @@ mod tests {
             "default",
             0,
             Arc::new(PluginRuntime::new()),
-        )
-        .logical_handle()
+        );
+        crate::backends::LogicalBackendHandle::new(Arc::new(vec![compiled]), 0).unwrap()
     }
 
     fn denied_route_unit() -> Arc<HttpRouteRuleUnit> {

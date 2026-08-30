@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -28,15 +29,12 @@ use crate::routes::http::match_unit::CompiledBackendTarget;
 
 const DEFAULT_MAXIMUM_REQUEST_DURATION: Duration = Duration::from_secs(300);
 
-fn ai_candidate_spec(
-    backend: &crate::routes::http::match_unit::CompiledBackend,
-) -> Option<(crate::backends::LogicalBackendHandle, usize, i32, String)> {
+fn ai_candidate_spec(backend: &crate::routes::http::match_unit::CompiledBackend) -> Option<(usize, i32, String)> {
     if !backend.is_permitted_ai_backend() {
         return None;
     }
     match &backend.target {
         CompiledBackendTarget::EdgionBackend { namespace, name } => Some((
-            backend.logical_handle(),
             backend.slot,
             backend.schema.weight.unwrap_or(1),
             format!("{namespace}/{name}"),
@@ -71,7 +69,7 @@ fn visible_model_ids(
 ) -> Vec<String> {
     let mut proposed = BTreeSet::new();
     for backend in backends.iter().filter(|backend| backend.is_permitted_ai_backend()) {
-        let Some((_, _, _, key)) = ai_candidate_spec(backend) else {
+        let Some((_, _, key)) = ai_candidate_spec(backend) else {
             continue;
         };
         if let Some(runtime) = lookup(&key) {
@@ -94,7 +92,7 @@ fn visible_model_ids(
                 if weight <= 0 || !backend.is_permitted_ai_backend() {
                     return false;
                 }
-                let Some((_, _, _, key)) = ai_candidate_spec(backend) else {
+                let Some((_, _, key)) = ai_candidate_spec(backend) else {
                     return false;
                 };
                 lookup(&key).is_some_and(|runtime| {
@@ -309,7 +307,7 @@ impl AiProxy {
         let mut gate_candidates = Vec::with_capacity(backends.len());
         for (order, backend) in backends.iter().enumerate() {
             let runtime_available = ai_candidate_spec(backend)
-                .and_then(|(_, _, _, key)| snapshot.get_by_key(&key))
+                .and_then(|(_, _, key)| snapshot.get_by_key(&key))
                 .is_some();
             let Ok(mut candidate) = gate_candidate(order, backend, runtime_available) else {
                 return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
@@ -339,10 +337,11 @@ impl AiProxy {
         let adaptive_store = get_adaptive_telemetry_store();
         let candidate_specs: Vec<_> = backends
             .iter()
-            .filter_map(|backend| {
-                ai_candidate_spec(backend).map(|(logical, slot, _, key)| {
-                    (logical, slot, decision.weights.get(slot).copied().unwrap_or(0), key)
-                })
+            .enumerate()
+            .filter_map(|(index, backend)| {
+                let (slot, _, key) = ai_candidate_spec(backend)?;
+                let logical = crate::backends::LogicalBackendHandle::new(Arc::clone(&backends), index)?;
+                Some((logical, slot, decision.weights.get(slot).copied().unwrap_or(0), key))
             })
             .collect();
         let resolved = snapshot.get_many_by_key(candidate_specs.iter().map(|(_, _, _, key)| key.as_str()));
@@ -910,8 +909,10 @@ mod tests {
         let gate_candidates = [gate_candidate(0, &denied, false).unwrap()];
         assert_eq!(invalid_weight_gate(&gate_candidates, 0), Ok(ConformanceGate::Invalid));
         assert!(ai_candidate_spec(&denied).is_none());
-        let (logical, slot, weight, key) = ai_candidate_spec(&allowed).unwrap();
+        let (slot, weight, key) = ai_candidate_spec(&allowed).unwrap();
         assert_eq!((slot, weight, key), (0, 1, "tenant-b/provider".to_string()));
+        let generation = Arc::new(vec![allowed.clone()]);
+        let logical = crate::backends::LogicalBackendHandle::new(generation, 0).unwrap();
         assert_eq!(logical.identity(), &allowed.identity);
     }
 
@@ -1152,8 +1153,10 @@ mod tests {
             canonical_models: HashSet::from(["premium".to_string(), "economy".to_string()]),
             public_model_ids: BTreeSet::from(["premium".to_string(), "economy".to_string()]),
         });
+        let compiled = compiled_ai_backend(None);
+        let logical = crate::backends::LogicalBackendHandle::new(Arc::new(vec![compiled]), 0).unwrap();
         let mut candidates = vec![AiPlanCandidate {
-            logical: compiled_ai_backend(None).logical_handle(),
+            logical,
             slot: 0,
             order: 0,
             weight: 1,

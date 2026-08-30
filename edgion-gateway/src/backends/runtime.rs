@@ -13,42 +13,47 @@ use edgion_resources::resources::BackendTLSPolicy;
 /// One immutable, gateway-compiled HTTPRoute backend slot.
 #[derive(Clone)]
 pub struct LogicalBackendHandle {
-    compiled: CompiledBackend,
+    generation: Arc<Vec<CompiledBackend>>,
+    index: usize,
 }
 
 impl LogicalBackendHandle {
-    pub(crate) fn new(compiled: CompiledBackend) -> Self {
-        Self { compiled }
+    pub(crate) fn new(generation: Arc<Vec<CompiledBackend>>, index: usize) -> Option<Self> {
+        if generation.get(index).is_some_and(|compiled| compiled.slot == index) {
+            Some(Self { generation, index })
+        } else {
+            None
+        }
     }
 
     #[inline]
     pub fn compiled(&self) -> &CompiledBackend {
-        &self.compiled
+        &self.generation[self.index]
     }
 
     #[inline]
     pub fn slot(&self) -> usize {
-        self.compiled.slot
+        self.compiled().slot
     }
 
     #[inline]
     pub fn identity(&self) -> &edgion_resources::LogicalBackendSlotIdentity {
-        &self.compiled.identity
+        &self.compiled().identity
     }
 
     #[inline]
     pub fn target(&self) -> &CompiledBackendTarget {
-        &self.compiled.target
+        &self.compiled().target
     }
 
     #[inline]
     pub fn declared_weight(&self) -> i32 {
-        self.compiled.schema.weight.unwrap_or(1)
+        self.compiled().schema.weight.unwrap_or(1)
     }
 
     #[inline]
     pub fn is_authorized(&self) -> bool {
-        self.compiled.schema.ref_denied.is_none()
+        self.compiled().schema.ref_denied.is_none()
     }
 
     /// Canonical resource identity used by backend-attached policy stores.
@@ -90,17 +95,28 @@ impl fmt::Debug for LogicalBackendHandle {
 #[derive(Clone, Debug)]
 pub struct SelectedServiceBackend {
     logical: LogicalBackendHandle,
+    backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
 }
 
 impl SelectedServiceBackend {
-    pub(crate) fn new(logical: LogicalBackendHandle) -> Option<Self> {
-        (logical.is_authorized() && matches!(logical.target(), CompiledBackendTarget::Service { .. }))
-            .then_some(Self { logical })
+    pub(crate) fn new(
+        logical: LogicalBackendHandle,
+        backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
+    ) -> Option<Self> {
+        (logical.is_authorized() && matches!(logical.target(), CompiledBackendTarget::Service { .. })).then_some(Self {
+            logical,
+            backend_tls_policy,
+        })
     }
 
     #[inline]
     pub fn logical(&self) -> &LogicalBackendHandle {
         &self.logical
+    }
+
+    #[inline]
+    pub fn backend_tls_policy(&self) -> Option<&Arc<BackendTLSPolicy>> {
+        self.backend_tls_policy.as_ref()
     }
 }
 
@@ -170,7 +186,7 @@ impl fmt::Debug for SelectedAiBackend {
 #[derive(Clone, Debug)]
 pub enum SelectedLogicalBackend {
     Service(SelectedServiceBackend),
-    Ai(SelectedAiBackend),
+    Ai(LogicalBackendHandle),
 }
 
 impl SelectedLogicalBackend {
@@ -178,7 +194,7 @@ impl SelectedLogicalBackend {
     pub fn logical(&self) -> &LogicalBackendHandle {
         match self {
             Self::Service(selected) => selected.logical(),
-            Self::Ai(selected) => selected.logical(),
+            Self::Ai(logical) => logical,
         }
     }
 
@@ -189,22 +205,23 @@ impl SelectedLogicalBackend {
 }
 
 /// The sole selected HTTP-backend fact stored in a request context.
-#[derive(Clone)]
 pub enum SelectedHttpBackend {
-    Routed(SelectedLogicalBackend),
-    Invalid(CompiledBackend),
-    Direct(CompiledBackend),
+    Service(SelectedServiceBackend),
+    Ai(LogicalBackendHandle),
+    Invalid(LogicalBackendHandle),
+    Direct(Box<CompiledBackend>),
 }
 
 impl fmt::Debug for SelectedHttpBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Routed(selected) => f.debug_tuple("Routed").field(selected).finish(),
-            Self::Invalid(compiled) => f
+            Self::Service(selected) => f.debug_tuple("Service").field(selected).finish(),
+            Self::Ai(logical) => f.debug_tuple("Ai").field(logical).finish(),
+            Self::Invalid(logical) => f
                 .debug_struct("Invalid")
-                .field("slot", &compiled.slot)
-                .field("identity", &compiled.identity)
-                .field("target", &compiled.target)
+                .field("slot", &logical.slot())
+                .field("identity", &logical.identity())
+                .field("target", &logical.target())
                 .finish(),
             Self::Direct(compiled) => f
                 .debug_struct("Direct")
@@ -220,17 +237,29 @@ impl SelectedHttpBackend {
     #[inline]
     pub fn compiled(&self) -> &CompiledBackend {
         match self {
-            Self::Routed(selected) => selected.compiled(),
-            Self::Invalid(compiled) | Self::Direct(compiled) => compiled,
+            Self::Service(selected) => selected.logical().compiled(),
+            Self::Ai(logical) | Self::Invalid(logical) => logical.compiled(),
+            Self::Direct(compiled) => compiled,
         }
     }
 
     #[inline]
-    pub fn routed(&self) -> Option<&SelectedLogicalBackend> {
+    pub fn routed(&self) -> Option<SelectedLogicalBackend> {
         match self {
-            Self::Routed(selected) => Some(selected),
+            Self::Service(selected) => Some(SelectedLogicalBackend::Service(selected.clone())),
+            Self::Ai(logical) => Some(SelectedLogicalBackend::Ai(logical.clone())),
             Self::Invalid(_) | Self::Direct(_) => None,
         }
+    }
+
+    #[inline]
+    pub fn is_ai(&self) -> bool {
+        matches!(self, Self::Ai(_))
+    }
+
+    #[inline]
+    pub fn plugin_runtime(&self) -> Arc<crate::plugins::PluginRuntime> {
+        Arc::clone(&self.compiled().plugin_runtime)
     }
 }
 
@@ -245,8 +274,15 @@ impl Deref for SelectedHttpBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backends::policy::backend_tls::BackendTLSPolicyStore;
     use crate::plugins::PluginRuntime;
+    use edgion_resources::resources::backend_tls_policy::{
+        BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation,
+    };
+    use edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass;
     use edgion_resources::HTTPBackendRef;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use std::collections::HashMap;
 
     fn compiled(name: &str, slot: usize, weight: Option<i32>) -> CompiledBackend {
         let schema = HTTPBackendRef {
@@ -263,10 +299,47 @@ mod tests {
         CompiledBackend::compile(schema, "route-ns", slot, Arc::new(PluginRuntime::new()))
     }
 
+    fn logical(compiled: CompiledBackend) -> LogicalBackendHandle {
+        let generation = Arc::new(vec![compiled]);
+        LogicalBackendHandle::new(generation, 0).expect("single-slot fixture must be valid")
+    }
+
+    fn tls_policy(name: &str, hostname: &str) -> Arc<BackendTLSPolicy> {
+        Arc::new(BackendTLSPolicy {
+            metadata: ObjectMeta {
+                namespace: Some("backend-ns".to_string()),
+                name: Some(name.to_string()),
+                uid: Some(format!("uid-{name}")),
+                ..Default::default()
+            },
+            spec: BackendTLSPolicySpec {
+                target_refs: vec![BackendTLSPolicyTargetRef {
+                    group: String::new(),
+                    kind: "Service".to_string(),
+                    name: "api".to_string(),
+                    section_name: None,
+                }],
+                resolved_target_class: Some(ResolvedPolicyTargetClass::Service),
+                validation: BackendTLSPolicyValidation {
+                    ca_certificate_refs: None,
+                    hostname: hostname.to_string(),
+                    subject_alt_names: None,
+                    well_known_ca_certificates: None,
+                },
+                options: None,
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
+                use_system_ca: true,
+            },
+            status: None,
+        })
+    }
+
     #[test]
     fn logical_handle_preserves_slot_identity_target_and_declared_weight() {
-        let logical = LogicalBackendHandle::new(compiled("api", 7, Some(0)));
-        assert_eq!(logical.slot(), 7);
+        let generation = Arc::new(vec![compiled("api", 0, Some(0))]);
+        let logical = LogicalBackendHandle::new(generation, 0).unwrap();
+        assert_eq!(logical.slot(), 0);
         assert_eq!(logical.declared_weight(), 0);
         assert!(logical.is_authorized());
         assert!(matches!(
@@ -288,23 +361,112 @@ mod tests {
 
     #[test]
     fn invalid_slot_cannot_materialize_selected_service() {
-        let mut backend = compiled("api", 2, None);
+        let mut backend = compiled("api", 0, None);
         backend.target = CompiledBackendTarget::Invalid {
             classified_kind: edgion_resources::HTTPBackendRefKind::Unsupported,
         };
-        assert!(SelectedServiceBackend::new(LogicalBackendHandle::new(backend)).is_none());
+        assert!(SelectedServiceBackend::new(logical(backend), None).is_none());
     }
 
     #[test]
     fn denied_service_cannot_materialize_selected_service() {
-        let mut backend = compiled("api", 2, Some(1));
+        let mut backend = compiled("api", 0, Some(1));
         backend.schema.ref_denied = Some(edgion_resources::resources::common::RefDenied {
             target_namespace: "backend-ns".to_string(),
             target_name: "api".to_string(),
             reason: Some("NoMatchingReferenceGrant".to_string()),
         });
-        let logical = LogicalBackendHandle::new(backend);
+        let logical = logical(backend);
         assert!(logical.policy_target_key().is_none());
-        assert!(SelectedServiceBackend::new(logical).is_none());
+        assert!(SelectedServiceBackend::new(logical, None).is_none());
+    }
+
+    #[test]
+    fn logical_handle_rejects_invalid_generation_indexes() {
+        let generation = Arc::new(vec![compiled("api", 0, None)]);
+        assert!(LogicalBackendHandle::new(Arc::clone(&generation), 1).is_none());
+
+        let mismatched = Arc::new(vec![compiled("api", 3, None)]);
+        assert!(LogicalBackendHandle::new(mismatched, 0).is_none());
+    }
+
+    #[test]
+    fn compact_backend_state_stays_within_hot_path_budget() {
+        assert_eq!(std::mem::size_of::<LogicalBackendHandle>(), 16);
+        assert_eq!(std::mem::size_of::<SelectedServiceBackend>(), 24);
+        assert_eq!(std::mem::size_of::<Option<SelectedHttpBackend>>(), 32);
+    }
+
+    #[test]
+    fn service_selection_and_runtime_projection_are_allocation_free() {
+        let generation = Arc::new(vec![compiled("api", 0, None)]);
+        let (selected, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            let logical = LogicalBackendHandle::new(Arc::clone(&generation), 0).unwrap();
+            let selected = SelectedHttpBackend::Service(SelectedServiceBackend::new(logical, None).unwrap());
+            let runtime = selected.plugin_runtime();
+            drop(runtime);
+            selected
+        });
+
+        assert_eq!(selected.slot, 0);
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
+    }
+
+    #[test]
+    fn logical_handle_pins_generation_and_plugin_runtime() {
+        let old_runtime = Arc::new(PluginRuntime::new());
+        let old_generation = Arc::new(vec![CompiledBackend::compile(
+            HTTPBackendRef {
+                name: "old".to_string(),
+                namespace: Some("backend-ns".to_string()),
+                port: Some(8080),
+                weight: Some(1),
+                group: None,
+                kind: Some("Service".to_string()),
+                filters: None,
+                backend_tls_policy: None,
+                ref_denied: None,
+            },
+            "route-ns",
+            0,
+            Arc::clone(&old_runtime),
+        )]);
+        let logical = LogicalBackendHandle::new(Arc::clone(&old_generation), 0).unwrap();
+        let selected = SelectedHttpBackend::Service(SelectedServiceBackend::new(logical, None).unwrap());
+
+        let replacement = Arc::new(vec![compiled("new", 0, None)]);
+        drop(old_generation);
+
+        assert_eq!(selected.name, "old");
+        assert!(!Arc::ptr_eq(
+            &selected.routed().unwrap().logical().generation,
+            &replacement
+        ));
+        assert!(Arc::ptr_eq(&selected.plugin_runtime(), &old_runtime));
+    }
+
+    #[test]
+    fn selected_service_pins_tls_policy_without_mutating_compiled_schema() {
+        let store = BackendTLSPolicyStore::new();
+        let old_policy = tls_policy("old", "old.example.com");
+        store.replace_all(HashMap::from([("backend-ns/old".to_string(), Arc::clone(&old_policy))]));
+
+        let generation = Arc::new(vec![compiled("api", 0, None)]);
+        let logical = LogicalBackendHandle::new(Arc::clone(&generation), 0).unwrap();
+        let target = logical.policy_target_key().unwrap();
+        let captured = store.snapshot().get_policy(&target, None).unwrap();
+        let selected = SelectedServiceBackend::new(logical, Some(captured)).unwrap();
+
+        let new_policy = tls_policy("new", "new.example.com");
+        store.replace_all(HashMap::from([("backend-ns/new".to_string(), Arc::clone(&new_policy))]));
+        let current = store.snapshot().get_policy(&target, None).unwrap();
+
+        let retained = selected.backend_tls_policy().unwrap();
+        assert!(Arc::ptr_eq(retained, &old_policy));
+        assert!(Arc::ptr_eq(&current, &new_policy));
+        assert_eq!(retained.spec.validation.hostname, "old.example.com");
+        assert_eq!(current.spec.validation.hostname, "new.example.com");
+        assert!(selected.logical().compiled().schema.backend_tls_policy.is_none());
     }
 }

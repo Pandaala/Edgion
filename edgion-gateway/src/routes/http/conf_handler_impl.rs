@@ -226,7 +226,7 @@ struct RouteUnitCtx<'a> {
     /// into every match-item unit (see `HttpRouteRuleUnit::compile_http_rule`).
     plugin_runtime: Arc<PluginRuntime>,
     /// Per-(rule,hostname) LB selector, Arc-shared across this rule's units.
-    backend_finder: Arc<BackendSelector<CompiledBackend>>,
+    backend_finder: Arc<BackendSelector<usize>>,
     /// Per-rule compiled backends (Arc-shared), for by-name lookup.
     backends: Arc<Vec<CompiledBackend>>,
     /// Route's raw metadata maps, resolved once per route, Arc-shared into

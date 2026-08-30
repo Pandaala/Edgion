@@ -104,7 +104,7 @@ fn selected_http_service_input(
     }
     Ok(ServicePeerInput {
         port: compiled.port,
-        backend_tls_policy: compiled.backend_tls_policy.clone(),
+        backend_tls_policy: selected.backend_tls_policy().cloned(),
         lb_policy: crate::backends::policy::backend_traffic::resolve_lb_policy(&service_key),
         service_key,
         service_type: service_kind,
@@ -154,10 +154,11 @@ pub(crate) async fn try_get_peer(
         }
     } else {
         let http_br = match ctx.selected_backend.as_ref() {
-            Some(SelectedHttpBackend::Invalid(compiled)) => compiled,
-            Some(SelectedHttpBackend::Routed(_)) | Some(SelectedHttpBackend::Direct(_)) | None => {
-                return Err(EdgionErrorCode::UpstreamNotBackendRefs)
-            }
+            Some(SelectedHttpBackend::Invalid(logical)) => logical.compiled(),
+            Some(SelectedHttpBackend::Service(_))
+            | Some(SelectedHttpBackend::Ai(_))
+            | Some(SelectedHttpBackend::Direct(_))
+            | None => return Err(EdgionErrorCode::UpstreamNotBackendRefs),
         };
         let (service_key, service_type) = ctx
             .backend_context
@@ -170,7 +171,10 @@ pub(crate) async fn try_get_peer(
         let lb_policy = crate::backends::policy::backend_traffic::resolve_lb_policy(&service_key);
         ServicePeerInput {
             port: http_br.port,
-            backend_tls_policy: http_br.backend_tls_policy.clone(),
+            // Invalid targets cannot resolve a typed BackendTLSPolicy. The old
+            // clone-and-mutate path also replaced any schema-local value with
+            // `None` before this branch.
+            backend_tls_policy: None,
             service_key,
             lb_policy,
             service_type,
@@ -691,7 +695,9 @@ mod selected_service_input_tests {
             0,
             Arc::new(PluginRuntime::new()),
         );
-        SelectedServiceBackend::new(compiled.logical_handle()).unwrap()
+        let generation = Arc::new(vec![compiled]);
+        let logical = LogicalBackendHandle::new(generation, 0).unwrap();
+        SelectedServiceBackend::new(logical, None).unwrap()
     }
 
     fn backend_context(service_key: &str) -> crate::BackendContext {

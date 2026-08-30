@@ -1,8 +1,8 @@
+use crate::backends::LogicalBackendHandle;
 use crate::ctx::EdgionHttpContext;
 use crate::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
 use crate::routes::http::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::routes::http::match_engine::regex_routes_engine::RegexRoutesEngine;
-use crate::routes::http::match_unit::CompiledBackend;
 use crate::routes::http::match_unit::RouteMatchResult;
 use crate::routes::http::HttpRouteRuleUnit;
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
@@ -51,16 +51,17 @@ impl Clone for RouteRules {
 
 impl RouteRules {
     /// Select backend from the matched route rule
-    pub fn select_backend(unit: &Arc<HttpRouteRuleUnit>) -> Result<CompiledBackend, EdError> {
+    pub fn select_backend(unit: &Arc<HttpRouteRuleUnit>) -> Result<LogicalBackendHandle, EdError> {
         // The unit's `backend_finder` is eagerly initialized at unit construction
         // (`build_backend_selector`), so no lazy init is needed here.
-        let backend = unit.backend_finder.select().map_err(|err_code| match err_code {
+        let index = unit.backend_finder.select().map_err(|err_code| match err_code {
             ERR_NO_BACKEND_REFS => EdError::BackendNotFound(),
             ERR_INCONSISTENT_WEIGHT => EdError::InconsistentWeight(),
             _ => EdError::BackendNotFound(),
         })?;
 
         // Check if this backend reference is denied (no matching ReferenceGrant)
+        let backend = unit.backends.get(index).ok_or_else(EdError::BackendNotFound)?;
         if let Some(ref denied) = backend.schema.ref_denied {
             return Err(EdError::RefDenied {
                 target_namespace: denied.target_namespace.clone(),
@@ -75,7 +76,7 @@ impl RouteRules {
         // Note: BackendTLSPolicy query is performed in pg_upstream_peer.rs
         // where route namespace is available for proper namespace inheritance
 
-        Ok(backend)
+        LogicalBackendHandle::new(Arc::clone(&unit.backends), index).ok_or_else(EdError::BackendNotFound)
     }
 
     /// Find a specific backend_ref by name from the route rule's backend_refs.
@@ -95,12 +96,12 @@ impl RouteRules {
         target_name: &str,
         target_namespace: Option<&str>,
         route_namespace: &str,
-    ) -> Result<CompiledBackend, EdError> {
+    ) -> Result<LogicalBackendHandle, EdError> {
         if unit.backends.is_empty() {
             return Err(EdError::BackendNotFound());
         }
 
-        for cb in unit.backends.iter() {
+        for (index, cb) in unit.backends.iter().enumerate() {
             if !cb.is_service() {
                 continue;
             }
@@ -130,7 +131,7 @@ impl RouteRules {
                 });
             }
 
-            return Ok(cb.clone());
+            return LogicalBackendHandle::new(Arc::clone(&unit.backends), index).ok_or_else(EdError::BackendNotFound);
         }
 
         Err(EdError::BackendNotFound())

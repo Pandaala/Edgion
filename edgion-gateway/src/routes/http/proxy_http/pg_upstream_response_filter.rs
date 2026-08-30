@@ -414,10 +414,12 @@ pub fn upstream_response_filter(
             backend
                 .plugin_runtime
                 .run_upstream_response_plugins_sync(session, ctx, upstream_response);
-        } else if let Some(backend) = ctx.selected_backend.clone() {
-            backend
-                .plugin_runtime
-                .run_upstream_response_plugins_sync(session, ctx, upstream_response);
+        } else if let Some(runtime) = ctx
+            .selected_backend
+            .as_ref()
+            .map(crate::backends::SelectedHttpBackend::plugin_runtime)
+        {
+            runtime.run_upstream_response_plugins_sync(session, ctx, upstream_response);
         }
     }
 

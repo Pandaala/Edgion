@@ -121,9 +121,12 @@ pub async fn response_filter(
                 .plugin_runtime
                 .run_upstream_response_plugins_async(session, ctx, upstream_response)
                 .await;
-        } else if let Some(backend) = ctx.selected_backend.clone() {
-            backend
-                .plugin_runtime
+        } else if let Some(runtime) = ctx
+            .selected_backend
+            .as_ref()
+            .map(crate::backends::SelectedHttpBackend::plugin_runtime)
+        {
+            runtime
                 .run_upstream_response_plugins_async(session, ctx, upstream_response)
                 .await;
         }

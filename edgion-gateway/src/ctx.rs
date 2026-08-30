@@ -2810,14 +2810,14 @@ impl EdgionHttpContext {
             // Plugin-injected direct endpoint: no backend-level plugin chain
             // (matches today, where the synthetic backend's runtime is empty).
             let route_namespace = backend_ref.namespace.as_deref().unwrap_or_default();
-            self.selected_backend = Some(SelectedHttpBackend::Direct(
+            self.selected_backend = Some(SelectedHttpBackend::Direct(Box::new(
                 crate::routes::http::match_unit::CompiledBackend::compile(
                     backend_ref.as_ref().clone(),
                     route_namespace,
                     preset.backend_ref_idx,
                     Arc::new(PluginRuntime::new()),
                 ),
-            ));
+            )));
         }
         self.jump = Some(target);
         SetJumpOutcome::Set
@@ -3659,7 +3659,7 @@ mod ai_context_claim_tests {
     #[test]
     fn ordinary_context_size_stays_within_budget() {
         assert!(
-            std::mem::size_of::<EdgionHttpContext>() <= 2560,
+            std::mem::size_of::<EdgionHttpContext>() <= 2080,
             "EdgionHttpContext grew beyond the ordinary-request hot-path size budget"
         );
     }
@@ -3669,7 +3669,7 @@ mod ai_context_claim_tests {
     fn ordinary_context_construction_is_allocation_free() {
         let (ctx, allocations) = crate::test_allocation_counter::count_allocation_stats(EdgionHttpContext::new);
 
-        assert_eq!(std::mem::size_of_val(&ctx), 2504);
+        assert_eq!(std::mem::size_of_val(&ctx), 2032);
         assert!(ctx.gateway_info.is_none());
         assert_eq!(allocations.calls, 0);
         assert_eq!(allocations.requested_bytes, 0);

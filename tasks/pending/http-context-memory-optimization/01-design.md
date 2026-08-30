@@ -30,6 +30,9 @@ are present on most proxied requests and must not gain a mandatory allocation.
 Store request-stable `Arc` snapshots or stable `(Arc<Vec<_>>, index)` handles
 for Gateway/listener information and compiled backends. Request-specific
 effective policy is stored separately from the immutable compiled object.
+HTTP backend selection stores the exact compiled route generation and its
+original backend slot. Backend TLS policy is captured beside that handle;
+published `CompiledBackend` schemas are never mutated per request.
 
 ### Optional scenario state
 
