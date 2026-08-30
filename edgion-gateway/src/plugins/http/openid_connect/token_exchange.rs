@@ -46,16 +46,14 @@ impl OpenidConnect {
             return None;
         }
         // Expiry (including clock_skew) was baked into TTL at insert time — no manual check needed.
-        self.access_token_cache
-            .get(&session_ref.to_string())
-            .map(|entry| entry.token)
+        self.access_token_cache.get(session_ref).map(|entry| entry.token)
     }
 
     pub(super) async fn remove_cached_access_token(&self, session_ref: &str) {
         if session_ref.is_empty() {
             return;
         }
-        self.access_token_cache.remove(&session_ref.to_string());
+        self.access_token_cache.remove(session_ref);
     }
 
     pub(super) async fn resolve_access_token_from_session(&self, session_cookie: &OidcSessionCookie) -> Option<String> {
@@ -389,7 +387,7 @@ impl OpenidConnect {
     }
 
     pub(super) async fn try_get_recent_refresh_result(&self, lock_key: &str) -> Option<OidcSessionCookie> {
-        self.refresh_singleflight_results.get(&lock_key.to_string())
+        self.refresh_singleflight_results.get(lock_key)
     }
 
     pub(super) async fn put_refresh_result(&self, lock_key: &str, payload: OidcSessionCookie) {

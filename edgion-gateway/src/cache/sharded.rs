@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -49,7 +50,11 @@ where
     }
 
     #[inline]
-    fn shard_index(&self, key: &K) -> usize {
+    fn shard_index<Q>(&self, key: &Q) -> usize
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
         if self.shards.len() == 1 {
             return 0;
         }
@@ -58,7 +63,11 @@ where
         hasher.finish() as usize % self.shards.len()
     }
 
-    pub fn get(&self, key: &K) -> Option<V> {
+    pub fn get<Q>(&self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
         self.shards[self.shard_index(key)].get(key)
     }
 
@@ -66,7 +75,11 @@ where
         self.shards[self.shard_index(&key)].insert(key, value, ttl);
     }
 
-    pub fn remove(&self, key: &K) -> Option<V> {
+    pub fn remove<Q>(&self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
         self.shards[self.shard_index(key)].remove(key)
     }
 
@@ -167,6 +180,17 @@ mod tests {
         assert_eq!(cache.len(), 1);
 
         cache.clear();
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_string_key_supports_borrowed_str_lookup_and_removal() {
+        let cache = ShardedLruCache::new(8, 2);
+
+        cache.insert("key".to_string(), 1, None);
+
+        assert_eq!(cache.get("key"), Some(1));
+        assert_eq!(cache.remove("key"), Some(1));
         assert!(cache.is_empty());
     }
 

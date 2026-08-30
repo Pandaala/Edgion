@@ -1,4 +1,5 @@
 use parking_lot::Mutex;
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
@@ -259,8 +260,10 @@ where
         evicted
     }
 
-    fn get(&mut self, key: &K) -> (Option<V>, CacheStatus)
+    fn get<Q>(&mut self, key: &Q) -> (Option<V>, CacheStatus)
     where
+        K: Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
         V: Clone,
     {
         let Some(&idx) = self.map.get(key) else {
@@ -282,7 +285,11 @@ where
         (Some(value), CacheStatus::Hit)
     }
 
-    fn remove(&mut self, key: &K) -> Option<V> {
+    fn remove<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
         let idx = *self.map.get(key)?;
         self.remove_index(idx)
     }
@@ -374,7 +381,11 @@ where
         self.evictions.store(0, Relaxed);
     }
 
-    pub fn remove(&self, key: &K) -> Option<V> {
+    pub fn remove<Q>(&self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
         self.inner.lock().remove(key)
     }
 
@@ -418,11 +429,19 @@ where
         keys
     }
 
-    pub fn get(&self, key: &K) -> Option<V> {
+    pub fn get<Q>(&self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
         self.get_with_status(key).0
     }
 
-    pub fn get_with_status(&self, key: &K) -> (Option<V>, CacheStatus) {
+    pub fn get_with_status<Q>(&self, key: &Q) -> (Option<V>, CacheStatus)
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
         let result = self.inner.lock().get(key); // MutexGuard dropped here
         match result.1 {
             CacheStatus::Hit => {
@@ -575,6 +594,17 @@ mod tests {
         assert_eq!(cache.len(), 1);
 
         cache.clear();
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_string_key_supports_borrowed_str_lookup_and_removal() {
+        let cache = LocalLruCache::new(2);
+
+        cache.insert("key".to_string(), 1, None);
+
+        assert_eq!(cache.get("key"), Some(1));
+        assert_eq!(cache.remove("key"), Some(1));
         assert!(cache.is_empty());
     }
 
