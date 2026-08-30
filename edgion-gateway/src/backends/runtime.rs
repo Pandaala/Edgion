@@ -92,10 +92,19 @@ impl fmt::Debug for LogicalBackendHandle {
 }
 
 /// A Service slot after sticky/Internal/WRR logical selection and TLS-policy capture.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SelectedServiceBackend {
     logical: LogicalBackendHandle,
     backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
+}
+
+impl fmt::Debug for SelectedServiceBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SelectedServiceBackend")
+            .field("logical", &self.logical)
+            .field("backend_tls_policy", &self.backend_tls_policy.is_some())
+            .finish()
+    }
 }
 
 impl SelectedServiceBackend {
@@ -460,5 +469,28 @@ mod tests {
         assert_eq!(retained.spec.validation.hostname, "old.example.com");
         assert_eq!(current.spec.validation.hostname, "new.example.com");
         assert!(selected.logical().compiled().schema.backend_tls_policy.is_none());
+    }
+
+    #[test]
+    fn selected_service_debug_does_not_expose_tls_policy_secrets() {
+        let mut policy = (*tls_policy("private", "private.example.com")).clone();
+        let secret = k8s_openapi::api::core::v1::Secret {
+            string_data: Some(std::collections::BTreeMap::from([(
+                "tls.key".to_string(),
+                "PRIVATE-KEY-SENTINEL".to_string(),
+            )])),
+            ..Default::default()
+        };
+        policy.spec.resolved_ca_certificates = Some(vec![secret.clone()]);
+        policy.spec.resolved_client_certificate = Some(secret);
+
+        let selected = SelectedServiceBackend::new(logical(compiled("api", 0, None)), Some(Arc::new(policy)))
+            .expect("authorized Service fixture must be selectable");
+        let debug = format!("{:?}", SelectedHttpBackend::Service(selected));
+
+        assert!(debug.contains("backend_tls_policy: true"));
+        assert!(!debug.contains("PRIVATE-KEY-SENTINEL"));
+        assert!(!debug.contains("resolved_ca_certificates"));
+        assert!(!debug.contains("resolved_client_certificate"));
     }
 }

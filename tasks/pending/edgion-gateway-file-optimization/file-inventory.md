@@ -210,7 +210,7 @@
 | `edgion-gateway/src/backends/policy/mod.rs` | `backends-policy-root` | source | reviewed-no-change | BACKENDS-POLICY-ROOT-001: typed lookup boundary retained; unresolved Service section fail-close redesign deferred to dedicated TODO |
 | `edgion-gateway/src/backends/port_resolver.rs` | `backends-port-resolver` | source | reviewed-no-change | BACKENDS-PORT-RESOLVER-001: precompiled typed fail-close redesign deferred to dedicated TODO |
 | `edgion-gateway/src/backends/preload.rs` | `backends-core` | source | optimized | BACKENDS-PRELOAD-001: routable-ref filtering and accurate hydration result; L4 runtime denial deferred to dedicated TODO |
-| `edgion-gateway/src/backends/runtime.rs` | `backends-core` | source | pending | — |
+| `edgion-gateway/src/backends/runtime.rs` | `backends-core` | source | optimized | BACKENDS-RUNTIME-001: TLS-policy-safe selected-backend Debug boundary |
 | `edgion-gateway/src/backends/selector.rs` | `backends-core` | source | optimized | BACKENDS-SELECTOR-001: borrowed hash keys and per-selection health/outlier handles; lifecycle/runtime snapshot work deferred to TODOs |
 | `edgion-gateway/src/backends/service_kind.rs` | `backends-core` | source | reviewed-no-change | BACKENDS-SERVICE-KIND-001: canonical resources-layer type re-export retained |
 | `edgion-gateway/src/backends/validation.rs` | `backends-core` | source | reviewed-no-change | BACKENDS-VALIDATION-001: DirectEndpoint membership/port proof redesign deferred to the shared backend-port TODO |

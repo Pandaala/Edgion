@@ -189,7 +189,7 @@ pub(crate) fn extract_hash_key<'a>(
                     // key of existing deployments.
                     let matched =
                         name == arg_name || (name.contains(['%', '+']) && uri_utils::url_decode(name) == *arg_name);
-                    matched.then(|| value.as_bytes())
+                    matched.then_some(value.as_bytes())
                 })
             })
             .unwrap_or_default(),
