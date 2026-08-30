@@ -146,7 +146,7 @@ pub(crate) async fn send_grpc_status_trailers_only(
         return Ok(());
     }
 
-    ctx.request_info.grpc_status = Some(grpc_status);
+    ctx.request_info.set_grpc_status(grpc_status);
 
     let mut resp = ResponseHeader::build(200, None)?;
     server_header_opts.apply_to_response(&mut resp);

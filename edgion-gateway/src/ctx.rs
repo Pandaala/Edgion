@@ -680,7 +680,38 @@ mod normalized_hostname_tests {
     }
 }
 
-/// Request information extracted from the incoming request
+/// TLS-only request facts allocated when handshake metadata is present.
+#[derive(Debug, Clone, Default, Serialize)]
+pub(crate) struct RequestTlsInfo {
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "edgion_resources::sensitive::masked_opt::serialize"
+    )]
+    sni: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_cert_info: Option<ClientCertInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tls_id: Option<String>,
+    #[serde(skip)]
+    matched_listener: Option<String>,
+    #[serde(skip)]
+    matched_gateway_key: Option<String>,
+}
+
+/// gRPC-only request facts allocated on the first gRPC-specific write.
+#[derive(Debug, Clone, Default, Serialize)]
+pub(crate) struct RequestGrpcInfo {
+    #[serde(rename = "grpc_service", skip_serializing_if = "Option::is_none")]
+    service: Option<String>,
+    #[serde(rename = "grpc_method", skip_serializing_if = "Option::is_none")]
+    method: Option<String>,
+    #[serde(rename = "grpc_status", skip_serializing_if = "Option::is_none")]
+    status: Option<u16>,
+    #[serde(skip)]
+    client_deadline: Option<Instant>,
+}
+
+/// Request information extracted from the incoming request.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RequestInfo {
     /// Physical downstream transport peer IP before PROXY/XFF rewriting.
@@ -694,9 +725,6 @@ pub struct RequestInfo {
     /// PROXY-effective downstream peer before HTTP RealIp/XFF processing.
     #[serde(skip)]
     pub downstream_peer_ip: String,
-    /// PROXY-effective downstream peer port, or zero when unknown.
-    #[serde(skip)]
-    pub downstream_peer_port: u16,
     /// Layer-resolved client IP, possibly updated by trusted RealIp processing.
     #[serde(
         rename = "remote_ip",
@@ -739,13 +767,6 @@ pub struct RequestInfo {
         serialize_with = "edgion_resources::sensitive::masked_opt::serialize"
     )]
     pub x_forwarded_for: Option<String>,
-    /// SNI (Server Name Indication) from TLS handshake
-    /// Only present for HTTPS connections; HTTP connections will have None
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "edgion_resources::sensitive::masked_opt::serialize"
-    )]
-    pub sni: Option<String>,
     /// Auto-discovered protocol (e.g., "grpc", "grpc-web", "websocket")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discover_protocol: Option<String>,
@@ -819,41 +840,15 @@ pub struct RequestInfo {
     /// `PassThrough`. A genuine HEAD response has no body to buffer either way.
     #[serde(skip)]
     pub method_is_head: bool,
-    /// gRPC service (parsed from path)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub grpc_service: Option<String>,
-    /// gRPC method (parsed from path)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub grpc_method: Option<String>,
-    /// Client certificate information (for mTLS connections)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_cert_info: Option<ClientCertInfo>,
-    /// TLS connection id for correlating tls.log and access.log
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tls_id: Option<String>,
-    /// Listener name that matched the SNI during TLS handshake (Gateway TLS only).
-    /// None for HTTP connections, EdgionTls connections, or when TLS metadata is unavailable.
-    /// Used for 421 Misdirected Request detection.
-    #[serde(skip)]
-    pub tls_matched_listener: Option<String>,
-    /// Gateway key (ns/name) from TLS handshake matching (Gateway TLS only).
-    /// Used together with tls_matched_listener for 421 detection.
-    #[serde(skip)]
-    pub tls_matched_gateway_key: Option<String>,
     /// Listener port that received this request (set at context creation, always available)
     #[serde(rename = "listener-port")]
     pub listener_port: u16,
-    /// gRPC status code sent in the trailers-only response (e.g. 12=UNIMPLEMENTED, 14=UNAVAILABLE).
-    /// None for non-gRPC requests or when no gRPC error was generated locally.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub grpc_status: Option<u16>,
-    /// Parsed `grpc-timeout` deadline (`start_time + value`). Populated by
-    /// `pg_request_filter::build_request_metadata` when the request carries
-    /// a syntactically valid header. `None` when no header, malformed
-    /// header, or non-gRPC request — callers fall back to route-level
-    /// `request_timeout` semantics.
-    #[serde(skip)]
-    pub grpc_client_deadline: Option<Instant>,
+    /// TLS-only request facts. Absent on cleartext requests.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    tls: Option<Box<RequestTlsInfo>>,
+    /// gRPC-only request facts. Absent until a gRPC-specific fact is written.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    grpc: Option<Box<RequestGrpcInfo>>,
 
     /// Lazily allocated GeoIP facts derived from the downstream identities.
     /// Ordinary requests retain only the empty `OnceLock`; the first GeoIP
@@ -872,6 +867,97 @@ pub(crate) struct RequestGeoInfo {
 }
 
 impl RequestInfo {
+    #[inline]
+    pub(crate) fn install_tls_info(
+        &mut self,
+        tls_id: Option<String>,
+        sni: Option<String>,
+        client_cert_info: Option<ClientCertInfo>,
+        matched_listener: Option<String>,
+        matched_gateway_key: Option<String>,
+    ) {
+        self.tls = Some(Box::new(RequestTlsInfo {
+            sni,
+            client_cert_info,
+            tls_id,
+            matched_listener,
+            matched_gateway_key,
+        }));
+    }
+
+    #[inline]
+    pub(crate) fn set_tls_id(&mut self, tls_id: String) {
+        self.tls.get_or_insert_with(Default::default).tls_id = Some(tls_id);
+    }
+
+    #[inline]
+    pub(crate) fn sni(&self) -> Option<&str> {
+        self.tls.as_deref().and_then(|info| info.sni.as_deref())
+    }
+
+    #[inline]
+    pub(crate) fn client_cert_info(&self) -> Option<&ClientCertInfo> {
+        self.tls.as_deref().and_then(|info| info.client_cert_info.as_ref())
+    }
+
+    #[inline]
+    pub(crate) fn gateway_tls_match(&self) -> Option<(&str, &str)> {
+        let info = self.tls.as_deref()?;
+        Some((info.matched_listener.as_deref()?, info.matched_gateway_key.as_deref()?))
+    }
+
+    #[inline]
+    fn grpc_mut(&mut self) -> &mut RequestGrpcInfo {
+        self.grpc.get_or_insert_with(Default::default)
+    }
+
+    #[inline]
+    pub(crate) fn set_grpc_method(&mut self, service: String, method: String) {
+        let info = self.grpc_mut();
+        info.service = Some(service);
+        info.method = Some(method);
+    }
+
+    #[inline]
+    pub(crate) fn grpc_service(&self) -> Option<&str> {
+        self.grpc.as_deref().and_then(|info| info.service.as_deref())
+    }
+
+    #[inline]
+    pub(crate) fn grpc_method(&self) -> Option<&str> {
+        self.grpc.as_deref().and_then(|info| info.method.as_deref())
+    }
+
+    #[inline]
+    pub(crate) fn set_grpc_status(&mut self, status: u16) {
+        self.grpc_mut().status = Some(status);
+    }
+
+    #[inline]
+    pub fn grpc_status(&self) -> Option<u16> {
+        self.grpc.as_deref().and_then(|info| info.status)
+    }
+
+    #[inline]
+    pub(crate) fn set_grpc_client_deadline(&mut self, deadline: Instant) {
+        self.grpc_mut().client_deadline = Some(deadline);
+    }
+
+    #[inline]
+    pub(crate) fn grpc_client_deadline(&self) -> Option<Instant> {
+        self.grpc.as_deref().and_then(|info| info.client_deadline)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_tls_info(&self) -> bool {
+        self.tls.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_grpc_info(&self) -> bool {
+        self.grpc.is_some()
+    }
+
     #[inline]
     pub fn status(&self) -> u16 {
         self.status
@@ -906,6 +992,73 @@ impl RequestInfo {
         if let Some(geo) = self.geo.get_mut() {
             geo.remote.take();
         }
+    }
+}
+
+#[cfg(test)]
+mod request_scenario_state_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_request_keeps_tls_and_grpc_state_absent() {
+        let info = RequestInfo::default();
+
+        assert!(!info.has_tls_info());
+        assert!(!info.has_grpc_info());
+        assert_eq!(std::mem::size_of::<RequestInfo>(), 288);
+    }
+
+    #[test]
+    fn tls_facts_share_one_lazy_allocation_and_keep_flat_json() {
+        let cert = ClientCertInfo {
+            subject: "CN=client".to_string(),
+            sans: vec!["client.example.com".to_string()],
+            cn: Some("client".to_string()),
+            fingerprint: "sha256".to_string(),
+        };
+        let tls_id = "tls-1".to_string();
+        let sni = "api.example.com".to_string();
+        let listener = "https".to_string();
+        let gateway = "default/gateway".to_string();
+        let (info, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            let mut info = RequestInfo::default();
+            info.install_tls_info(Some(tls_id), Some(sni), Some(cert), Some(listener), Some(gateway));
+            assert_eq!(info.sni(), Some("api.example.com"));
+            assert!(info.client_cert_info().is_some());
+            assert_eq!(info.gateway_tls_match(), Some(("https", "default/gateway")));
+            info
+        });
+
+        assert_eq!(allocations.calls, 1);
+        let json = serde_json::to_value(&info).unwrap();
+        assert!(json.get("sni").is_some());
+        assert_eq!(json["tls_id"], "tls-1");
+        assert!(json.get("tls").is_none());
+    }
+
+    #[test]
+    fn grpc_facts_share_one_lazy_allocation_and_keep_flat_json() {
+        let service = "catalog.v1.Catalog".to_string();
+        let method = "GetItem".to_string();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let (info, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            let mut info = RequestInfo::default();
+            info.set_grpc_method(service, method);
+            info.set_grpc_status(8);
+            info.set_grpc_client_deadline(deadline);
+            assert_eq!(info.grpc_service(), Some("catalog.v1.Catalog"));
+            assert_eq!(info.grpc_method(), Some("GetItem"));
+            assert_eq!(info.grpc_client_deadline(), Some(deadline));
+            info
+        });
+
+        assert_eq!(allocations.calls, 1);
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["grpc_service"], "catalog.v1.Catalog");
+        assert_eq!(json["grpc_method"], "GetItem");
+        assert_eq!(json["grpc_status"], 8);
+        assert!(json.get("grpc").is_none());
+        assert!(json.get("client_deadline").is_none());
     }
 }
 
@@ -2566,7 +2719,7 @@ impl EdgionHttpContext {
     #[inline]
     pub fn grpc_remaining(&self) -> Option<Duration> {
         self.request_info
-            .grpc_client_deadline
+            .grpc_client_deadline()
             .map(|d| d.saturating_duration_since(Instant::now()))
     }
 
@@ -3022,15 +3175,15 @@ mod sensitive_tests {
     #[test]
     fn test_request_info_wrap_mode() {
         let _g = set_mode(2);
-        let ri = RequestInfo {
+        let mut ri = RequestInfo {
             direct_peer_ip: "127.0.0.1".to_string(),
             remote_ip: "10.0.0.1".to_string(),
             entry_raw_path: "/api/users/alice".to_string(),
             normalized_current_path: "/api/users/alice".to_string(),
             x_forwarded_for: Some("203.0.113.5, 10.0.0.1".to_string()),
-            sni: Some("example.com".to_string()),
             ..Default::default()
         };
+        ri.install_tls_info(None, Some("example.com".to_string()), None, None, None);
         let json = serde_json::to_string(&ri).unwrap();
         assert!(json.contains("<E>127.0.0.1</E>"), "direct_peer_ip: {}", json);
         assert!(json.contains("<E>10.0.0.1</E>"), "remote_ip: {}", json);
@@ -3525,12 +3678,12 @@ mod final_downstream_status_tests {
         let mut ctx = EdgionHttpContext::default();
         assert!(ctx.select_final_downstream_status(504));
         assert!(ctx.claim_final_response(200));
-        ctx.request_info.grpc_status = Some(4);
+        ctx.request_info.set_grpc_status(4);
 
         ctx.finalize_downstream_status(None);
 
         assert_eq!(ctx.request_info.status(), 200);
-        assert_eq!(ctx.request_info.grpc_status, Some(4));
+        assert_eq!(ctx.request_info.grpc_status(), Some(4));
     }
 }
 
@@ -3622,7 +3775,7 @@ mod ai_context_claim_tests {
     #[test]
     fn ordinary_context_size_stays_within_budget() {
         assert!(
-            std::mem::size_of::<EdgionHttpContext>() <= 1880,
+            std::mem::size_of::<EdgionHttpContext>() <= 1640,
             "EdgionHttpContext grew beyond the ordinary-request hot-path size budget"
         );
     }
@@ -3632,7 +3785,7 @@ mod ai_context_claim_tests {
     fn ordinary_context_construction_is_allocation_free() {
         let (ctx, allocations) = crate::test_allocation_counter::count_allocation_stats(EdgionHttpContext::new);
 
-        assert_eq!(std::mem::size_of_val(&ctx), 1832);
+        assert_eq!(std::mem::size_of_val(&ctx), 1592);
         assert!(ctx.gateway_info.is_none());
         assert_eq!(allocations.calls, 0);
         assert_eq!(allocations.requested_bytes, 0);

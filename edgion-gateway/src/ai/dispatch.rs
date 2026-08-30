@@ -1191,7 +1191,8 @@ mod tests {
             limits: None,
         };
         let mut ctx = EdgionHttpContext::new();
-        ctx.request_info.grpc_client_deadline = Some(Instant::now() - Duration::from_secs(1));
+        ctx.request_info
+            .set_grpc_client_deadline(Instant::now() - Duration::from_secs(1));
         ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(selectable_plan(vec![credential])));
         let mut session = test_session().await;
 

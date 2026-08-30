@@ -269,6 +269,18 @@ mod tests {
     }
 
     #[test]
+    fn access_log_read_does_not_create_protocol_scenario_state() {
+        let ctx = EdgionHttpContext::new();
+        assert!(!ctx.request_info.has_tls_info());
+        assert!(!ctx.request_info.has_grpc_info());
+
+        let _entry = AccessLogEntry::from_context(&ctx);
+
+        assert!(!ctx.request_info.has_tls_info());
+        assert!(!ctx.request_info.has_grpc_info());
+    }
+
+    #[test]
     fn diagnostic_overflow_emits_the_full_marker_and_only_kind_and_code() {
         let mut ctx = EdgionHttpContext::new();
         for _ in 0..=crate::observe::request_diagnostics::MAX_REQUEST_DIAGNOSTICS {

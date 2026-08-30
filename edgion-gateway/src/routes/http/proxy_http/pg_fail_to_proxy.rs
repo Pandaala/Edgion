@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(written.headers.get("content-type").unwrap(), "application/grpc");
         assert_eq!(written.headers.get("grpc-status").unwrap(), "7");
         assert!(written.headers.get("content-length").is_none());
-        assert_eq!(ctx.request_info.grpc_status, Some(7));
+        assert_eq!(ctx.request_info.grpc_status(), Some(7));
     }
 
     #[test]

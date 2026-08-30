@@ -1779,7 +1779,8 @@ mod tests {
     #[tokio::test]
     async fn post_io_predispatch_gate_returns_standard_deadline_error() {
         let mut ctx = EdgionHttpContext::new();
-        ctx.request_info.grpc_client_deadline = Some(Instant::now() - Duration::from_secs(1));
+        ctx.request_info
+            .set_grpc_client_deadline(Instant::now() - Duration::from_secs(1));
 
         let response = stop_ai_predispatch_if_expired(&mut ctx)
             .await

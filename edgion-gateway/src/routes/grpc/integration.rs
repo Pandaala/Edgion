@@ -37,8 +37,8 @@ pub async fn try_match_grpc_route(
     index: &GatewayInfoIndex,
 ) -> Result<bool, EdError> {
     if let Ok((service, method)) = super::match_engine::parse_grpc_path(&ctx.request_info.normalized_current_path) {
-        ctx.request_info.grpc_service = Some(service.to_string());
-        ctx.request_info.grpc_method = Some(method.to_string());
+        ctx.request_info
+            .set_grpc_method(service.to_string(), method.to_string());
     }
 
     match grpc_routes.match_route(session, ctx, index, &ctx.request_info.hostname) {

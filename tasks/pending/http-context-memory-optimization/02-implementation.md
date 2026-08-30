@@ -4,7 +4,7 @@
 
 | Measurement | ARM64 baseline | Current | Final |
 |-------------|---------------:|--------:|------:|
-| `size_of::<EdgionHttpContext>()` | 2,672 bytes | 1,832 bytes | pending |
+| `size_of::<EdgionHttpContext>()` | 2,672 bytes | 1,592 bytes | pending |
 | `Option<Box<WafRequestContext>>` | 8 bytes | 8 bytes | pending |
 | Default Context allocation calls | 1 | 0 | pending |
 | Default Context requested allocation bytes | 192 | 0 | pending |
@@ -34,6 +34,14 @@ generation. This removes the Direct-only schema clones, two Box allocations,
 identity reconstruction, and empty plugin runtime allocation. AI already stores
 only a generation/index handle in the base Context, so no additional AI copy
 was removed. The ordinary Context remains 1,832 bytes and allocation-free.
+
+Stage 3 moved TLS handshake facts and gRPC service/method/status/deadline facts
+behind two independent lazy boxes while retaining common protocol/body gates
+inline. The access-log JSON remains flat, reads never instantiate either
+state, and cleartext ordinary HTTP stays allocation-free. The unused,
+non-serialized `downstream_peer_port` field was removed. This reduced
+`RequestInfo` from 528 to 288 bytes and `EdgionHttpContext` from 1,832 to 1,592
+bytes.
 
 ## Per-stage verification
 

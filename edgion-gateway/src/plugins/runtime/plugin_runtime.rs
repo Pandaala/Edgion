@@ -2256,7 +2256,7 @@ mod tests {
         runtime.run_request_plugins(&mut session, &mut ctx).await;
 
         assert_eq!(ctx.final_downstream_status(), Some(200));
-        assert_eq!(ctx.request_info.grpc_status, Some(7));
+        assert_eq!(ctx.request_info.grpc_status(), Some(7));
         assert_eq!(client_closed_count(&ctx), 1);
     }
 

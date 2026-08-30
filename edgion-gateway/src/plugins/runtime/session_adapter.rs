@@ -542,7 +542,7 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// so that — not the gRPC code — is what the access log records.
     pub fn set_response_denied_grpc(&mut self, status: u16, message: Option<String>) {
         self.ctx.select_final_downstream_status(200);
-        self.ctx.request_info.grpc_status = Some(status);
+        self.ctx.request_info.set_grpc_status(status);
         self.ctx
             .set_response_denial(ResponseStageDenial::Grpc { status, message });
         self.ctx.record_error(EdgionErrorCode::PluginResponseDenyAborted);
@@ -587,7 +587,7 @@ impl<'a> PingoraSessionAdapter<'a> {
         if !self.ctx.claim_final_response(200) {
             return Ok(());
         }
-        self.ctx.request_info.grpc_status = Some(grpc_status);
+        self.ctx.request_info.set_grpc_status(grpc_status);
         self.grpc_response_terminated = true;
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
@@ -646,7 +646,7 @@ impl<'a> PingoraSessionAdapter<'a> {
         if !self.ctx.claim_final_response(200) {
             return Ok(());
         }
-        self.ctx.request_info.grpc_status = Some(grpc_status);
+        self.ctx.request_info.set_grpc_status(grpc_status);
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
         // Drain queued response-header ops, strip framing headers, then re-assert content-type
@@ -1240,7 +1240,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn client_cert_info(&self) -> Option<crate::ctx::ClientCertInfo> {
-        self.ctx.request_info.client_cert_info.clone()
+        self.ctx.request_info.client_cert_info().cloned()
     }
 
     fn downstream_is_tls(&self) -> Option<bool> {
@@ -1711,11 +1711,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn grpc_service(&self) -> Option<String> {
-        self.ctx.request_info.grpc_service.clone()
+        self.ctx.request_info.grpc_service().map(str::to_string)
     }
 
     fn grpc_method(&self) -> Option<String> {
-        self.ctx.request_info.grpc_method.clone()
+        self.ctx.request_info.grpc_method().map(str::to_string)
     }
 
     fn resolved_route_ext_ref(&self, index: usize) -> Option<std::sync::Arc<crate::plugins::runtime::PluginRuntime>> {
@@ -3237,7 +3237,7 @@ mod record_outcome_tests {
         assert_eq!(written.headers.get("X-O").unwrap().to_str().unwrap(), "v1");
         assert!(written.headers.get("grpc-status").is_some());
         assert_eq!(ctx.final_downstream_status(), Some(200));
-        assert!(ctx.request_info.grpc_status.is_some());
+        assert!(ctx.request_info.grpc_status().is_some());
         assert!(pending_ops(&ctx).is_empty());
     }
 
@@ -4098,7 +4098,7 @@ mod record_outcome_tests {
                 message: Some("quota exceeded".to_string()),
             })
         );
-        assert_eq!(ctx.request_info.grpc_status, Some(8));
+        assert_eq!(ctx.request_info.grpc_status(), Some(8));
         assert_eq!(
             ctx.final_downstream_status(),
             Some(200),

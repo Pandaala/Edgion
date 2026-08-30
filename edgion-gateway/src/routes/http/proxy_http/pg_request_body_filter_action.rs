@@ -372,7 +372,7 @@ mod tests {
         assert_eq!(written.status.as_u16(), 200);
         assert_eq!(written.headers.get("grpc-status").unwrap(), "8");
         assert_eq!(written.headers.get("x-local").unwrap(), "reply");
-        assert_eq!(ctx.request_info.grpc_status, Some(8));
+        assert_eq!(ctx.request_info.grpc_status(), Some(8));
     }
 }
 

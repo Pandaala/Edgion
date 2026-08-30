@@ -49,10 +49,7 @@ pub async fn request_filter(
     // Enabled by global requireSniHostMatch OR per-Gateway annotation edgion.io/require-sni-host-match.
     // Only applies to Gateway TLS (tls_matched_listener is None for HTTP/EdgionTls).
     if edgion_http.listener.protocol.eq_ignore_ascii_case("HTTPS") {
-        if let (Some(sni_listener_name), Some(gateway_key)) = (
-            ctx.request_info.tls_matched_listener.as_deref(),
-            ctx.request_info.tls_matched_gateway_key.as_deref(),
-        ) {
+        if let Some((sni_listener_name, gateway_key)) = ctx.request_info.gateway_tls_match() {
             if let Some(gw_listeners) = gateway_index.get_gateway(gateway_key) {
                 if let Some(sni_entry) = gw_listeners.get(sni_listener_name) {
                     let global_enabled = edgion_http
@@ -330,7 +327,7 @@ async fn build_request_metadata(
     // missing, or overflowing headers fall through to route-level
     // `request_timeout` behaviour. `checked_add` guards against an upper-bound
     // value (e.g. `99999999H` from a hostile client) overflowing `Instant`.
-    if ctx.request_info.is_grpc_request && ctx.request_info.grpc_client_deadline.is_none() {
+    if ctx.request_info.is_grpc_request && ctx.request_info.grpc_client_deadline().is_none() {
         if let Some(raw) = req_header.headers.get("grpc-timeout") {
             if let Some(deadline) = raw
                 .to_str()
@@ -338,7 +335,7 @@ async fn build_request_metadata(
                 .and_then(parse_grpc_timeout)
                 .and_then(|dur| ctx.start_time.checked_add(dur))
             {
-                ctx.request_info.grpc_client_deadline = Some(deadline);
+                ctx.request_info.set_grpc_client_deadline(deadline);
             }
         }
     }
@@ -353,7 +350,6 @@ async fn build_request_metadata(
         .and_then(|d| d.raw_peer_addr());
     let addrs = crate::util::resolve_transport_client_addrs(session.client_addr(), raw, "");
     ctx.request_info.downstream_peer_ip = addrs.remote_ip;
-    ctx.request_info.downstream_peer_port = addrs.remote_port;
     ctx.request_info.direct_peer_ip = addrs.direct_peer_ip;
     ctx.request_info.direct_peer_port = addrs.direct_peer_port;
 
@@ -423,21 +419,29 @@ async fn build_request_metadata(
     if let Some(digest) = session.as_downstream().digest() {
         if let Some(ssl_digest) = digest.ssl_digest.as_ref() {
             if let Some(meta) = ssl_digest.extension.get::<TlsConnMeta>() {
-                ctx.request_info.tls_id = meta.tls_id.clone();
-                ctx.request_info.sni = meta.sni.clone();
-                ctx.request_info.client_cert_info = meta.client_cert_info.clone();
                 // Extract Gateway TLS listener info for 421 Misdirected Request detection.
                 // Only set for Gateway TLS (not EdgionTls, which has no listener concept).
-                if let Some(ref matched) = meta.matched {
-                    if matched.rsc.kind == "Gateway" {
-                        ctx.request_info.tls_matched_listener = matched.section.clone();
-                        ctx.request_info.tls_matched_gateway_key =
-                            Some(format_gateway_key(&matched.rsc.ns, &matched.rsc.name));
-                    }
-                }
+                let (matched_listener, matched_gateway_key) = meta
+                    .matched
+                    .as_ref()
+                    .filter(|matched| matched.rsc.kind == "Gateway")
+                    .map(|matched| {
+                        (
+                            matched.section.clone(),
+                            Some(format_gateway_key(&matched.rsc.ns, &matched.rsc.name)),
+                        )
+                    })
+                    .unwrap_or((None, None));
+                ctx.request_info.install_tls_info(
+                    meta.tls_id.clone(),
+                    meta.sni.clone(),
+                    meta.client_cert_info.clone(),
+                    matched_listener,
+                    matched_gateway_key,
+                );
             } else if let Some(tls_id) = ssl_digest.extension.get::<TlsConnId>() {
                 // Backward compatibility for connections created before metadata upgrade.
-                ctx.request_info.tls_id = Some(tls_id.0.to_string());
+                ctx.request_info.set_tls_id(tls_id.0.to_string());
             }
         }
     }
