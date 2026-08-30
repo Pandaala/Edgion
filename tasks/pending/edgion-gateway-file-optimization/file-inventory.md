@@ -140,7 +140,7 @@
 | `tls-boringssl` | 2 | 1 | 1 | 0 | complete |
 | `tls-core` | 3 | 1 | 2 | 0 | complete |
 | `tls-runtime` | 6 | 2 | 4 | 0 | complete |
-| `tls-store` | 4 | 0 | 0 | 0 | pending |
+| `tls-store` | 4 | 2 | 2 | 0 | complete |
 | `tls-validation` | 5 | 0 | 0 | 0 | pending |
 | `util` | 6 | 4 | 2 | 0 | complete |
 
@@ -662,10 +662,10 @@
 | `edgion-gateway/src/tls/runtime/gateway/mod.rs` | `tls-runtime` | source | reviewed-no-change | TLS-RUNTIME-001 / `0090e5bf` |
 | `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` | `tls-runtime` | source | optimized | TLS-RUNTIME-001 / `0090e5bf`; owned handoff and exactly-once fault audit deferred to `tasks/todo/tls-ssl-ctx-owned-handoff-and-exactly-once-audit.md` |
 | `edgion-gateway/src/tls/runtime/mod.rs` | `tls-runtime` | source | reviewed-no-change | TLS-RUNTIME-001 / `0090e5bf` |
-| `edgion-gateway/src/tls/store/cert_matcher.rs` | `tls-store` | source | pending | — |
-| `edgion-gateway/src/tls/store/conf_handler.rs` | `tls-store` | source | pending | — |
-| `edgion-gateway/src/tls/store/mod.rs` | `tls-store` | source | pending | — |
-| `edgion-gateway/src/tls/store/tls_store.rs` | `tls-store` | source | pending | — |
+| `edgion-gateway/src/tls/store/cert_matcher.rs` | `tls-store` | source | reviewed-no-change | TLS-STORE-001 / `19d6e382` |
+| `edgion-gateway/src/tls/store/conf_handler.rs` | `tls-store` | source | optimized | TLS-STORE-001 / `19d6e382` |
+| `edgion-gateway/src/tls/store/mod.rs` | `tls-store` | source | reviewed-no-change | TLS-STORE-001 / `19d6e382` |
+| `edgion-gateway/src/tls/store/tls_store.rs` | `tls-store` | source | optimized | TLS-STORE-001 / `19d6e382`; full-snapshot identity and true incremental publication deferred to dedicated todos |
 | `edgion-gateway/src/tls/validation/backend_san.rs` | `tls-validation` | source | pending | — |
 | `edgion-gateway/src/tls/validation/cert.rs` | `tls-validation` | source | pending | — |
 | `edgion-gateway/src/tls/validation/mod.rs` | `tls-validation` | source | pending | — |
