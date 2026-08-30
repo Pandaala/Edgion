@@ -36,6 +36,7 @@ struct StoredSlice {
 pub(crate) struct SliceChain {
     storage: ChainStorage,
     len: usize,
+    normalized_slice_prefix: usize,
     coalesce_count: usize,
     copied_bytes: usize,
 }
@@ -161,6 +162,7 @@ impl SliceChain {
                 self.copied_bytes = self.copied_bytes.saturating_add(new_len);
                 self.coalesce_count = self.coalesce_count.saturating_add(1);
                 self.storage = ChainStorage::Coalesced(arena);
+                self.normalized_slice_prefix = 0;
             }
             ChainStorage::Coalesced(current) => {
                 if new_len > current.capacity() {
@@ -316,18 +318,23 @@ impl SliceChain {
 
     pub(super) fn commit_append(&mut self, plan: ChainAppendPlan) {
         match plan.storage {
-            PlannedStorage::Slices(slices) => self.storage = ChainStorage::Slices(slices),
+            PlannedStorage::Slices(slices) => {
+                self.normalized_slice_prefix = slices.len();
+                self.storage = ChainStorage::Slices(slices);
+            }
             PlannedStorage::AppendSlices(incoming) => {
                 let ChainStorage::Slices(current) = &mut self.storage else {
                     unreachable!("append plan matches the chain representation")
                 };
                 debug_assert!(current.capacity() - current.len() >= incoming.len());
                 current.extend(incoming);
+                self.normalized_slice_prefix = current.len();
             }
             PlannedStorage::Coalesced(arena) => {
                 self.coalesce_count = self.coalesce_count.saturating_add(1);
                 self.copied_bytes = self.copied_bytes.saturating_add(plan.len);
                 self.storage = ChainStorage::Coalesced(arena);
+                self.normalized_slice_prefix = 0;
             }
             PlannedStorage::AppendCoalesced(incoming) => {
                 let ChainStorage::Coalesced(current) = &mut self.storage else {
@@ -335,6 +342,7 @@ impl SliceChain {
                 };
                 current.extend_from_slice(&incoming);
                 self.copied_bytes = self.copied_bytes.saturating_add(incoming.len());
+                self.normalized_slice_prefix = 0;
             }
             PlannedStorage::Noop => {}
         }
@@ -347,9 +355,29 @@ impl SliceChain {
         let ChainStorage::Slices(current) = &self.storage else {
             return Ok(());
         };
-        let source: Vec<Bytes> = current.iter().map(|slice| slice.bytes.clone()).collect();
-        let normalized = normalize_slices(source, byte_limit).map_err(|_| ())?;
-        self.storage = ChainStorage::Slices(normalized);
+        if self.normalized_slice_prefix > current.len() {
+            return Err(());
+        }
+        let prefix_resident = current[..self.normalized_slice_prefix]
+            .iter()
+            .try_fold(0usize, |total, slice| total.checked_add(slice.resident_capacity))
+            .ok_or(())?;
+        let remaining = byte_limit.checked_sub(prefix_resident).ok_or(())?;
+        if self.normalized_slice_prefix == current.len() {
+            return Ok(());
+        }
+        let source = current[self.normalized_slice_prefix..]
+            .iter()
+            .map(|slice| slice.bytes.clone())
+            .collect();
+        let normalized = normalize_slices(source, remaining).map_err(|_| ())?;
+
+        let ChainStorage::Slices(current) = &mut self.storage else {
+            unreachable!("normalization does not change the live representation")
+        };
+        current.truncate(self.normalized_slice_prefix);
+        current.extend(normalized);
+        self.normalized_slice_prefix = current.len();
         Ok(())
     }
 
@@ -435,6 +463,7 @@ impl SliceChain {
     pub(super) fn take_raw_slices_into(&mut self, mut output: Vec<Bytes>) -> Vec<Bytes> {
         debug_assert!(output.capacity() >= self.handle_count());
         self.len = 0;
+        self.normalized_slice_prefix = 0;
         self.coalesce_count = 0;
         self.copied_bytes = 0;
         match std::mem::take(&mut self.storage) {
@@ -506,4 +535,76 @@ fn copy_exact_stored(bytes: &[u8], byte_limit: usize) -> Result<StoredSlice, Cha
         bytes: normalized.freeze(),
         resident_capacity,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn slack_slice(byte: u8) -> Bytes {
+        let mut bytes = BytesMut::with_capacity(64);
+        bytes.extend_from_slice(&[byte]);
+        bytes.freeze()
+    }
+
+    #[test]
+    fn repeated_normalization_near_handle_cap_preserves_prior_allocations() {
+        let mut chain = SliceChain::default();
+        let mut retained_pointers = Vec::new();
+
+        for byte in 0..MAX_SLICE_HANDLES {
+            chain.push(slack_slice(byte as u8), 1024).unwrap();
+            chain.normalize_retained(1024).unwrap();
+
+            let slices = chain.raw_slices();
+            assert_eq!(slices.len(), byte + 1);
+            for (slice, pointer) in slices.iter().zip(&retained_pointers) {
+                assert_eq!(slice.as_ptr(), *pointer, "a previously normalized slice was recopied");
+            }
+            retained_pointers.push(slices.last().unwrap().as_ptr());
+        }
+
+        assert_eq!(chain.coalesce_count(), 0);
+        assert_eq!(chain.copied_bytes(), 0);
+        assert_eq!(chain.len(), MAX_SLICE_HANDLES);
+
+        chain.push(Bytes::from_static(b"x"), 1024).unwrap();
+        assert_eq!(chain.coalesce_count(), 1);
+        chain.normalize_retained(1024).unwrap();
+        assert_eq!(chain.handle_count(), 1);
+        assert_eq!(chain.len(), MAX_SLICE_HANDLES + 1);
+    }
+
+    #[test]
+    fn failed_suffix_normalization_is_atomic_for_prefix_and_new_handle() {
+        let mut chain = SliceChain::default();
+        chain.push(slack_slice(b'a'), 8).unwrap();
+        chain.normalize_retained(8).unwrap();
+        chain.push(slack_slice(b'b'), 8).unwrap();
+
+        let before = chain.raw_slices();
+        assert!(chain.normalize_retained(1).is_err());
+        let after = chain.raw_slices();
+
+        assert_eq!(after, before);
+        assert_eq!(after[0].as_ptr(), before[0].as_ptr());
+        assert_eq!(after[1].as_ptr(), before[1].as_ptr());
+        assert_eq!(chain.len(), 2);
+    }
+
+    #[test]
+    fn empty_and_already_normalized_chains_are_noops() {
+        let mut empty = SliceChain::default();
+        empty.normalize_retained(0).unwrap();
+
+        let mut chain = SliceChain::default();
+        chain.push(slack_slice(b'a'), 8).unwrap();
+        chain.normalize_retained(8).unwrap();
+        let pointer = chain.raw_slices()[0].as_ptr();
+        let resident = chain.resident_capacity();
+        chain.normalize_retained(resident).unwrap();
+        assert_eq!(chain.raw_slices()[0].as_ptr(), pointer);
+        assert!(chain.normalize_retained(resident - 1).is_err());
+        assert_eq!(chain.raw_slices()[0].as_ptr(), pointer);
+    }
 }
