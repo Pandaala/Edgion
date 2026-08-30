@@ -51,7 +51,7 @@
 | `backends-policy-traffic` | 5 | 0 | 0 | 0 | pending |
 | `cache` | 4 | 2 | 2 | 0 | complete |
 | `cli` | 3 | 0 | 0 | 0 | pending |
-| `conf-sync-cache-client` | 4 | 0 | 0 | 0 | pending |
+| `conf-sync-cache-client` | 4 | 1 | 3 | 0 | complete |
 | `conf-sync-conf-client` | 5 | 0 | 0 | 0 | pending |
 | `conf-sync-root` | 1 | 0 | 0 | 0 | pending |
 | `config-edgion-gateway` | 2 | 1 | 1 | 0 | complete |
@@ -222,10 +222,10 @@
 | `edgion-gateway/src/cli/config.rs` | `cli` | source | pending | — |
 | `edgion-gateway/src/cli/mod.rs` | `cli` | source | pending | — |
 | `edgion-gateway/src/cli/pingora.rs` | `cli` | source | pending | — |
-| `edgion-gateway/src/conf_sync/cache_client/cache.rs` | `conf-sync-cache-client` | source | pending | — |
-| `edgion-gateway/src/conf_sync/cache_client/cache_data.rs` | `conf-sync-cache-client` | source | pending | — |
-| `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` | `conf-sync-cache-client` | source | pending | — |
-| `edgion-gateway/src/conf_sync/cache_client/mod.rs` | `conf-sync-cache-client` | source | pending | — |
+| `edgion-gateway/src/conf_sync/cache_client/cache.rs` | `conf-sync-cache-client` | source | reviewed-no-change | CONF-SYNC-CACHE-001 / `21b01524` |
+| `edgion-gateway/src/conf_sync/cache_client/cache_data.rs` | `conf-sync-cache-client` | source | reviewed-no-change | CONF-SYNC-CACHE-001 / `21b01524`; malformed-event recovery deferred to `tasks/todo/conf-sync-generic-watch-malformed-event-recovery.md` |
+| `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` | `conf-sync-cache-client` | source | optimized | CONF-SYNC-CACHE-001 / `21b01524` |
+| `edgion-gateway/src/conf_sync/cache_client/mod.rs` | `conf-sync-cache-client` | source | reviewed-no-change | CONF-SYNC-CACHE-001 / `21b01524` |
 | `edgion-gateway/src/conf_sync/conf_client/cert_watch.rs` | `conf-sync-conf-client` | source | pending | — |
 | `edgion-gateway/src/conf_sync/conf_client/config_client.rs` | `conf-sync-conf-client` | source | pending | — |
 | `edgion-gateway/src/conf_sync/conf_client/grpc_client.rs` | `conf-sync-conf-client` | source | pending | — |

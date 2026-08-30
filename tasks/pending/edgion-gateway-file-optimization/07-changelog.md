@@ -145,3 +145,13 @@ This is the single concise record of actual changes across the file-by-file audi
 - Verification: config tests 91/91; focused DNS snapshot test 1/1; `cargo fmt --all -- --check`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
 - Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
 - Commit: `4621d075`
+
+### `CONF-SYNC-CACHE-001` — Gateway conf-sync typed cache and watch dispatch
+
+- Outcome: mixed (1 optimized, 3 reviewed-no-change; one complex recovery defect separately tracked)
+- Files reviewed: all 4 files under `conf_sync/cache_client/`, covering typed cache access, cache state and compressed updates, list/watch dispatch, and module exports
+- Changes: consumed each already-owned watch envelope and moved its JSON `data` subtree into typed deserialization instead of deep-cloning a potentially message-sized resource; applied the same ownership path to generic resources and `EdgionBackend`; added a pointer-identity regression that prevents reintroducing the deep copy.
+- Generality and architecture review: independent review approved the ownership change with no findings. Event-kind mapping, event-level sync-version with response fallback, resource preparse/key derivation, backend raw-key validation, malformed exact-key withdrawal, and unsafe-batch fail-close behavior remain unchanged; no resource or secret payload is newly logged. The audit confirmed that malformed generic watch events can be skipped after a valid prefix is published while the stream advances. Correct recovery requires an atomic batch/failure/readiness/relist design, so no partial state-machine patch was made; the complete requirements and acceptance tests are recorded in `tasks/todo/conf-sync-generic-watch-malformed-event-recovery.md`.
+- Verification: cache-client tests 40/40; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
+- Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
+- Commit: `21b01524`
