@@ -296,10 +296,11 @@ mod tests {
         transaction.execute_request_headers().unwrap();
         transaction.start_request_body_stream().unwrap();
         let owner = Arc::new(());
-        let mut waf = crate::ctx::WafRequestContext::new(Arc::clone(&owner), transaction);
-        assert!(waf.enable_request_body_streaming(&owner, body_limit));
         let mut ctx = EdgionHttpContext::default();
-        ctx.waf = Some(Box::new(waf));
+        assert!(ctx.select_waf(Some(Arc::clone(&owner))));
+        let waf = ctx.waf.as_deref_mut().unwrap();
+        assert!(waf.install(Arc::clone(&owner), transaction));
+        assert!(waf.enable_request_body_streaming(&owner, body_limit));
         ctx.request_body_stream_active = true;
         ctx
     }

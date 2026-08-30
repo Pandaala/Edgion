@@ -1260,11 +1260,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         owner: Arc<()>,
         transaction: edgion_waf::seclang::Transaction<'static>,
     ) -> bool {
-        if let Some(waf) = self.ctx.waf.as_deref_mut() {
-            return waf.install(owner, transaction);
-        }
-        self.ctx.waf = Some(Box::new(crate::ctx::WafRequestContext::new(owner, transaction)));
-        true
+        self.ctx
+            .waf
+            .as_deref_mut()
+            .is_some_and(|waf| waf.install(owner, transaction))
     }
 
     fn take_waf_transaction(&mut self, owner: &Arc<()>) -> Option<edgion_waf::seclang::Transaction<'static>> {

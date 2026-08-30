@@ -106,6 +106,7 @@ pub(crate) struct CurrentPluginEntryIdentity {
 /// because a request may move between executor workers.
 pub(crate) struct WafRequestContext {
     owner: Arc<()>,
+    claimed_phases: u8,
     transaction: Option<edgion_waf::seclang::Transaction<'static>>,
     request_body_streaming: bool,
     request_body_streamed_bytes: u64,
@@ -115,18 +116,25 @@ pub(crate) struct WafRequestContext {
 }
 
 impl WafRequestContext {
-    pub(crate) fn new(owner: Arc<()>, transaction: edgion_waf::seclang::Transaction<'static>) -> Self {
-        let mut context = Self {
+    fn selected(owner: Arc<()>) -> Self {
+        Self {
             owner,
-            transaction: Some(transaction),
+            claimed_phases: 0,
+            transaction: None,
             request_body_streaming: false,
             request_body_streamed_bytes: 0,
             request_body_stream_limit: 0,
             request_body_execution_micros: 0,
             charged_runtime_bytes: 0,
-        };
-        context.refresh_runtime_charge();
-        context
+        }
+    }
+
+    fn claim_phase(&mut self, owner: &Arc<()>, phase: WafPhase) -> WafPhaseClaim {
+        if !Arc::ptr_eq(&self.owner, owner) || self.claimed_phases & phase.bit() != 0 {
+            return WafPhaseClaim::Skip;
+        }
+        self.claimed_phases |= phase.bit();
+        WafPhaseClaim::Execute
     }
 
     pub(crate) fn install(&mut self, owner: Arc<()>, transaction: edgion_waf::seclang::Transaction<'static>) -> bool {
@@ -244,71 +252,40 @@ pub enum WafPhaseClaim {
     Pending,
 }
 
-enum WafSelection {
-    Pending,
-    None,
-    Selected { owner: Arc<()>, claimed_phases: u8 },
-}
-
-impl WafSelection {
-    fn select(&mut self, owner: Option<Arc<()>>) -> bool {
-        if !matches!(self, Self::Pending) {
-            return false;
-        }
-        *self = owner.map_or(Self::None, |owner| Self::Selected {
-            owner,
-            claimed_phases: 0,
-        });
-        true
-    }
-
-    fn claim(&mut self, owner: &Arc<()>, phase: WafPhase) -> WafPhaseClaim {
-        let Self::Selected {
-            owner: selected,
-            claimed_phases,
-        } = self
-        else {
-            return if matches!(self, Self::Pending) {
-                WafPhaseClaim::Pending
-            } else {
-                WafPhaseClaim::Skip
-            };
-        };
-        if !Arc::ptr_eq(selected, owner) || *claimed_phases & phase.bit() != 0 {
-            return WafPhaseClaim::Skip;
-        }
-        *claimed_phases |= phase.bit();
-        WafPhaseClaim::Execute
-    }
-}
-
 #[cfg(test)]
-mod waf_selection_tests {
+mod waf_context_tests {
     use super::*;
 
     #[test]
     fn winner_selection_and_phase_claims_are_exact_once() {
         let selected = Arc::new(());
         let other = Arc::new(());
-        let mut selection = WafSelection::Pending;
+        let mut ctx = EdgionHttpContext::new();
 
-        assert_eq!(selection.claim(&selected, WafPhase::Request), WafPhaseClaim::Pending);
-        assert!(selection.select(Some(Arc::clone(&selected))));
-        assert!(!selection.select(Some(Arc::clone(&other))));
-        assert_eq!(selection.claim(&other, WafPhase::Request), WafPhaseClaim::Skip);
+        assert!(ctx.waf.is_none());
+        assert!(ctx.select_waf(Some(Arc::clone(&selected))));
+        assert!(!ctx.select_waf(Some(Arc::clone(&other))));
+        assert_eq!(ctx.claim_waf_phase(&other, WafPhase::Request), WafPhaseClaim::Skip);
         for phase in [WafPhase::Request, WafPhase::ResponseHeaders, WafPhase::ResponseComplete] {
-            assert_eq!(selection.claim(&selected, phase), WafPhaseClaim::Execute);
-            assert_eq!(selection.claim(&selected, phase), WafPhaseClaim::Skip);
+            assert_eq!(ctx.claim_waf_phase(&selected, phase), WafPhaseClaim::Execute);
+            assert_eq!(ctx.claim_waf_phase(&selected, phase), WafPhaseClaim::Skip);
         }
     }
 
     #[test]
-    fn no_winner_is_final_and_skips_every_claim() {
+    fn no_winner_keeps_the_unified_waf_state_unallocated() {
         let owner = Arc::new(());
-        let mut selection = WafSelection::Pending;
-        assert!(selection.select(None));
-        assert!(!selection.select(Some(Arc::clone(&owner))));
-        assert_eq!(selection.claim(&owner, WafPhase::Request), WafPhaseClaim::Skip);
+        let mut ctx = EdgionHttpContext::new();
+
+        assert!(ctx.select_waf(None));
+        assert!(!ctx.select_waf(None));
+        assert!(!ctx.select_waf(Some(Arc::clone(&owner))));
+        assert!(ctx.waf.is_none());
+        assert_eq!(ctx.claim_waf_phase(&owner, WafPhase::Request), WafPhaseClaim::Pending);
+        assert_eq!(
+            std::mem::size_of::<Option<Box<WafRequestContext>>>(),
+            std::mem::size_of::<usize>()
+        );
     }
 }
 
@@ -1738,13 +1715,15 @@ pub struct EdgionHttpContext {
     /// invoked. Nested ExtensionRef execution replaces and restores this slot.
     pub(crate) current_plugin_entry: Option<CurrentPluginEntryIdentity>,
 
-    /// The sole native WAF runtime state for this request. Pointer identity on
-    /// its owner token prevents another logical WAF from consuming or replacing
-    /// the selected transaction.
+    /// The sole native WAF state for this request: selected owner, exactly-once
+    /// phase claims, transaction, streaming state, timing, and memory charge.
+    /// Ordinary requests retain only this pointer-sized empty option.
     pub(crate) waf: Option<Box<WafRequestContext>>,
 
-    /// Request-wide WAF winner and exactly-once phase claims.
-    waf_selection: WafSelection,
+    /// Whether request-wide WAF winner selection has completed. Kept separate
+    /// from the nullable WAF box so a completed no-winner result remains final
+    /// without allocating a sentinel box.
+    waf_selection_complete: bool,
 
     // --- Upstream attempts and retry bookkeeping ---
     /// Number of connection attempts to backends
@@ -2206,11 +2185,27 @@ impl EdgionHttpContext {
     }
 
     pub(crate) fn select_waf(&mut self, owner: Option<Arc<()>>) -> bool {
-        self.waf_selection.select(owner)
+        if self.waf_selection_complete {
+            return false;
+        }
+        self.waf_selection_complete = true;
+        // This is resolved once before any request-stage plugin runs. Keeping
+        // the no-winner state as `None` avoids an allocation for ordinary
+        // requests; a selected winner allocates the sole WAF state box.
+        let Some(owner) = owner else {
+            return true;
+        };
+        debug_assert!(self.waf.is_none());
+        self.waf = Some(Box::new(WafRequestContext::selected(owner)));
+        true
     }
 
     pub(crate) fn claim_waf_phase(&mut self, owner: &Arc<()>, phase: WafPhase) -> WafPhaseClaim {
-        self.waf_selection.claim(owner, phase)
+        // No selected box means no WAF callback should run. Report `Pending`
+        // so an ordering/wiring bug fails closed instead of silently skipping.
+        self.waf
+            .as_deref_mut()
+            .map_or(WafPhaseClaim::Pending, |waf| waf.claim_phase(owner, phase))
     }
 
     /// Drain queued response-header ops onto the given real `ResponseHeader`,
@@ -2261,7 +2256,7 @@ impl EdgionHttpContext {
             plugin_running_result: PluginRunningResult::Nothing,
             current_plugin_entry: None,
             waf: None,
-            waf_selection: WafSelection::Pending,
+            waf_selection_complete: false,
             try_cnt: 0,
             retry_on_status: false,
             peer_timeout_source: None,
