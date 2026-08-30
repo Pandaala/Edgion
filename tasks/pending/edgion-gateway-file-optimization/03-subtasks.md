@@ -43,7 +43,7 @@
 | `ai-quota` | 2 | 0 | 0 | 0 | pending |
 | `api` | 2 | 0 | 0 | 0 | pending |
 | `backends-circuit-breaker` | 2 | 1 | 1 | 0 | complete |
-| `backends-core` | 8 | 3 | 2 | 0 | pending |
+| `backends-core` | 8 | 3 | 2 | 1 | pending |
 | `backends-discovery-endpoints` | 4 | 1 | 1 | 2 | complete |
 | `backends-discovery-services` | 3 | 0 | 3 | 0 | complete |
 | `backends-discovery-shared` | 3 | 1 | 1 | 1 | complete |
@@ -190,7 +190,7 @@
 | `edgion-gateway/src/backends/discovery/services/conf_handler_impl.rs` | `backends-discovery-services` | source | examined-no-change | `B0038`: serialized lifecycle and accepted cross-kind convergence retained |
 | `edgion-gateway/src/backends/discovery/services/mod.rs` | `backends-discovery-services` | source | examined-no-change | `B0038`: minimal live façade retained |
 | `edgion-gateway/src/backends/discovery/services/service_store.rs` | `backends-discovery-services` | source | examined-no-change | `B0038`: atomic ArcSwap snapshots and cold-path incremental clone retained |
-| `edgion-gateway/src/backends/gateway_backend_tls_store.rs` | `backends-core` | source | pending | — |
+| `edgion-gateway/src/backends/gateway_backend_tls_store.rs` | `backends-core` | source | deferred | `B0039`: D0003 authoritative Gateway identity replacement |
 | `edgion-gateway/src/backends/health/check/config_store.rs` | `backends-health` | source | pending | — |
 | `edgion-gateway/src/backends/health/check/manager.rs` | `backends-health` | source | pending | — |
 | `edgion-gateway/src/backends/health/check/mod.rs` | `backends-health` | source | pending | — |
