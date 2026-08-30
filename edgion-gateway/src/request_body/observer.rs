@@ -72,8 +72,8 @@ impl ObserverBudget {
     /// Charge semantic parser work before performing it.
     #[must_use]
     pub(crate) fn charge_work(&mut self, units: usize) -> bool {
-        if units > self.remaining_work {
-            self.exhausted = true;
+        if self.exhausted || units > self.remaining_work {
+            self.latch_exhausted();
             return false;
         }
         self.remaining_work -= units;
@@ -81,8 +81,8 @@ impl ObserverBudget {
     }
 
     fn charge_callback(&mut self, bytes: usize) -> bool {
-        if bytes > self.remaining_bytes || self.remaining_events == 0 || self.remaining_work == 0 {
-            self.exhausted = true;
+        if self.exhausted || bytes > self.remaining_bytes || self.remaining_events == 0 || self.remaining_work == 0 {
+            self.latch_exhausted();
             return false;
         }
         self.remaining_bytes -= bytes;
@@ -673,6 +673,21 @@ mod tests {
     }
 
     #[test]
+    fn work_exhaustion_is_monotonic_and_latches_the_whole_budget() {
+        let limits = ObserverLimits::new(8, 8, 3, 8).unwrap();
+        let mut budget = ObserverBudget::new(limits);
+
+        assert!(!budget.charge_work(4));
+        assert!(budget.exhausted);
+        assert_eq!(budget.remaining_bytes, 0);
+        assert_eq!(budget.remaining_events, 0);
+        assert_eq!(budget.remaining_work, 0);
+        assert!(!budget.charge_work(1));
+        assert!(!budget.charge_work(0));
+        assert!(!budget.charge_callback(0));
+    }
+
+    #[test]
     fn zero_registry_branch_and_registered_dispatch_do_not_allocate() {
         let mut absent: Option<Box<RequestBodyObservers>> = None;
         let (_, absent_allocations) = crate::test_allocation_counter::count_allocations(|| {
@@ -946,6 +961,24 @@ mod tests {
         ));
         registry.observe(&[], RequestBodyEvent::Complete, 1);
         assert!(outcome(&mut registry).contains("panicked"));
+    }
+
+    #[test]
+    fn active_registry_drop_isolates_observer_destructor_panic() {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut registry = RequestBodyObservers::default();
+            assert!(registry.try_install(
+                identity("drop_panic"),
+                Box::new(|| Ok(Box::new(DropPanicObserver))),
+                ObserverLimits::default(),
+            ));
+            drop(registry);
+        }));
+
+        assert!(
+            result.is_ok(),
+            "observer destructor panic must not escape registry drop"
+        );
     }
 
     #[test]
