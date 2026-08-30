@@ -1,7 +1,6 @@
 //! Typed immutable runtime store for `BackendTLSPolicy` resources.
 
 use arc_swap::ArcSwap;
-use edgion_resources::resources::backend_tls_policy::backend_tls_identity_validation_errors;
 use edgion_resources::resources::edgion_backend_traffic_policy::precedence_key;
 use edgion_resources::resources::edgion_backend_traffic_policy::{
     PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass,
@@ -184,9 +183,6 @@ impl BackendTLSPolicyStore {
             return None;
         };
         if policy.spec.target_refs.len() != 1 {
-            return None;
-        }
-        if !backend_tls_identity_validation_errors(&policy.spec.validation).is_empty() {
             return None;
         }
         let namespace = policy.namespace().unwrap_or("");
@@ -523,44 +519,6 @@ mod tests {
             .snapshot()
             .get_policy(&target(PolicyTargetKind::Service), None)
             .is_none());
-    }
-
-    #[test]
-    fn malformed_identity_is_retained_but_cannot_shadow_valid_policy() {
-        let store = BackendTLSPolicyStore::new();
-        let mut invalid = policy(
-            "a-invalid",
-            PolicyTargetKind::Service,
-            "shared",
-            None,
-            Some(ResolvedPolicyTargetClass::Service),
-        );
-        Arc::make_mut(&mut invalid).spec.validation.hostname = "*.example.com".to_string();
-        let valid = policy(
-            "z-valid",
-            PolicyTargetKind::Service,
-            "shared",
-            None,
-            Some(ResolvedPolicyTargetClass::Service),
-        );
-        store.replace_all(HashMap::from([
-            ("tenant/a-invalid".to_string(), invalid),
-            ("tenant/z-valid".to_string(), valid),
-        ]));
-
-        let snapshot = store.snapshot();
-        assert_eq!(
-            store.count(),
-            2,
-            "invalid resources remain visible to store diagnostics"
-        );
-        assert_eq!(
-            snapshot
-                .get_policy(&target(PolicyTargetKind::Service), None)
-                .unwrap()
-                .name(),
-            "z-valid"
-        );
     }
 
     #[test]
