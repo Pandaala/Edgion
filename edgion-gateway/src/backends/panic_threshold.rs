@@ -50,10 +50,6 @@ impl PanicThresholdStore {
         }
     }
 
-    pub fn remove_service(&self, service_key: &str) {
-        self.services.remove(service_key);
-    }
-
     fn get_override(&self, service_key: &str) -> Option<u8> {
         self.services.get(service_key).map(|v| *v)
     }

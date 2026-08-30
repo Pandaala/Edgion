@@ -17,7 +17,7 @@ Make the Gateway's request-visible core Service `EdgionBackendTrafficPolicy` sta
 ## Requirements
 
 - Put every request-visible Service policy value in one `EffectiveBackendTrafficPolicy` generation keyed by typed `PolicyTargetKey`.
-- Capture the effective Service policy once at the defined request or attempt boundary and use that generation for load balancing, authority, retry budget, circuit breaker, and connect timeout.
+- Capture the effective Service policy once at the defined request or attempt boundary and use that generation for load balancing, authority, retry budget, circuit breaker, connect timeout, and panic threshold.
 - Make load-balancer-only and authority-only changes advance the immutable generation and retain old captured generations for in-flight requests.
 - Keep health-check task reconciliation and other background side effects ordered, but do not use their mutable stores as the canonical request-configuration source.
 - Preserve oldest-creation-time-then-name winner selection, typed Service/EdgionBackend isolation, equivalent-config `Arc` retention, and clear-before-add behavior.
