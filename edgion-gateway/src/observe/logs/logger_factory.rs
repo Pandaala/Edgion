@@ -158,7 +158,8 @@ mod tests {
     // A primary ES + LocalFile fallback must register TWO senders.
     #[tokio::test]
     async fn async_logger_registers_primary_then_fallback() {
-        let tmp = std::env::temp_dir().join("edgion_test_fallback.log");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let log_path = temp_dir.path().join("fallback.log");
         let cfg = LogConfig {
             enabled: true,
             output: StringOutput::Es {
@@ -168,7 +169,7 @@ mod tests {
                 },
             },
             fallback: Some(StringOutput::LocalFile(LocalFileWriterCfg {
-                path: tmp.to_string_lossy().into_owned(),
+                path: log_path.to_string_lossy().into_owned(),
                 ..Default::default()
             })),
         };
@@ -178,11 +179,12 @@ mod tests {
 
     #[tokio::test]
     async fn async_logger_skips_disabled_fallback() {
-        let tmp = std::env::temp_dir().join("edgion_test_primary_only.log");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let log_path = temp_dir.path().join("primary.log");
         let cfg = LogConfig {
             enabled: true,
             output: StringOutput::LocalFile(LocalFileWriterCfg {
-                path: tmp.to_string_lossy().into_owned(),
+                path: log_path.to_string_lossy().into_owned(),
                 ..Default::default()
             }),
             // Empty path => disabled fallback => skipped, primary still registered.

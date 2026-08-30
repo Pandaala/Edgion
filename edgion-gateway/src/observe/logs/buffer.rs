@@ -5,9 +5,8 @@ use smallvec::SmallVec;
 /// into the tier-2 `ULogBuffer`.
 pub const BUFFER_CAPACITY: usize = 128;
 
-/// Inline capacity hint for the `positions` SmallVec — NOT a hard entry-count
-/// cap. The only limit on tier 1 is `BUFFER_CAPACITY`; in the pathological
-/// many-tiny-entries case `positions` simply spills to the heap.
+/// Inline capacity hint for the `positions` SmallVec — NOT the hard entry-count
+/// cap. The index may spill to the heap beyond this capacity.
 const POSITIONS_INLINE_CAP: usize = 20;
 
 /// Tier-2 overflow buffer cap (bytes).
@@ -15,7 +14,8 @@ pub const ULOG_MAX_BUFFER: usize = 512;
 
 /// Byte-bounded log buffer. The byte store is stack-allocated; the `positions`
 /// index is inline for up to `POSITIONS_INLINE_CAP` entries and spills to the
-/// heap beyond that.
+/// heap beyond that. The entry count is also capped at `BUFFER_CAPACITY` so
+/// zero-length entries cannot grow the index without bound.
 #[derive(Debug, Clone)]
 pub struct LogBuffer {
     buffer: SmallVec<[u8; BUFFER_CAPACITY]>,
@@ -36,7 +36,7 @@ impl LogBuffer {
     /// block accidental token/claim leakage via `format!` or error `Display`.
     #[inline]
     pub fn push(&mut self, log: &str) -> bool {
-        if self.buffer.len() + log.len() > BUFFER_CAPACITY {
+        if self.positions.len() >= BUFFER_CAPACITY || log.len() > BUFFER_CAPACITY - self.buffer.len() {
             return false;
         }
 
@@ -51,8 +51,8 @@ impl LogBuffer {
     #[inline]
     pub fn push_err(&mut self, kind: &'static str) -> bool {
         const PREFIX: &[u8] = b"err: ";
-        let total = PREFIX.len() + kind.len();
-        if self.buffer.len() + total > BUFFER_CAPACITY {
+        let total = PREFIX.len().saturating_add(kind.len());
+        if self.positions.len() >= BUFFER_CAPACITY || total > BUFFER_CAPACITY - self.buffer.len() {
             return false;
         }
         self.buffer.extend_from_slice(PREFIX);
@@ -95,7 +95,7 @@ impl Serialize for LogBuffer {
     }
 }
 
-/// Unbounded log buffer with an upper size limit.
+/// Heap-backed log buffer with byte and entry-count limits.
 #[derive(Debug, Clone)]
 pub struct ULogBuffer {
     buffer: String,
@@ -115,7 +115,7 @@ impl ULogBuffer {
     /// see [`LogBuffer::push_err`] for rationale.
     #[inline]
     pub fn push(&mut self, log: &str) -> bool {
-        if self.buffer.len() + log.len() > ULOG_MAX_BUFFER {
+        if self.positions.len() >= ULOG_MAX_BUFFER || log.len() > ULOG_MAX_BUFFER - self.buffer.len() {
             return false;
         }
         self.buffer.push_str(log);
@@ -128,8 +128,8 @@ impl ULogBuffer {
     #[inline]
     pub fn push_err(&mut self, kind: &'static str) -> bool {
         const PREFIX: &str = "err: ";
-        let total = PREFIX.len() + kind.len();
-        if self.buffer.len() + total > ULOG_MAX_BUFFER {
+        let total = PREFIX.len().saturating_add(kind.len());
+        if self.positions.len() >= ULOG_MAX_BUFFER || total > ULOG_MAX_BUFFER - self.buffer.len() {
             return false;
         }
         self.buffer.push_str(PREFIX);
@@ -188,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn log_buffer_has_no_entry_count_cap() {
+    fn log_buffer_accepts_one_entry_per_byte() {
         let mut b = LogBuffer::new();
         // 1-byte entries: all 128 fit within the 128-byte budget.
         for i in 0..128 {
@@ -198,11 +198,59 @@ mod tests {
     }
 
     #[test]
+    fn log_buffer_bounds_zero_length_entries() {
+        let mut b = LogBuffer::new();
+        for i in 0..BUFFER_CAPACITY {
+            assert!(b.push(""), "empty entry {i} should fit the entry budget");
+        }
+        assert!(!b.push(""), "entry index must remain bounded when entries use no bytes");
+        assert_eq!(b.entries().count(), BUFFER_CAPACITY);
+    }
+
+    #[test]
     fn log_buffer_rejects_oversize_entry_without_partial_write() {
         let mut b = LogBuffer::new();
         let big = "y".repeat(200);
         assert!(!b.push(&big), "an over-budget entry is rejected");
         // The buffer was not partially mutated: a small entry still fits.
         assert!(b.push("ok"), "buffer untouched after a rejected oversize push");
+    }
+
+    #[test]
+    fn log_buffer_push_err_preserves_prefix_and_entry_boundaries() {
+        let mut b = LogBuffer::new();
+        assert!(b.push("OK"));
+        assert!(b.push_err("dependency fail"));
+
+        assert_eq!(b.entries().collect::<Vec<_>>(), ["OK", "err: dependency fail"]);
+        assert_eq!(serde_json::to_string(&b).unwrap(), r#"["OK","err: dependency fail"]"#);
+    }
+
+    #[test]
+    fn ulog_buffer_enforces_byte_cap_without_partial_write() {
+        let mut b = ULogBuffer::new();
+        assert!(b.push(&"x".repeat(ULOG_MAX_BUFFER)));
+        assert!(!b.push("y"), "an entry beyond the byte cap must be rejected");
+        assert_eq!(b.entries().collect::<Vec<_>>(), ["x".repeat(ULOG_MAX_BUFFER)]);
+    }
+
+    #[test]
+    fn ulog_buffer_bounds_zero_length_entries() {
+        let mut b = ULogBuffer::new();
+        for i in 0..ULOG_MAX_BUFFER {
+            assert!(b.push(""), "empty entry {i} should fit the entry budget");
+        }
+        assert!(!b.push(""), "entry index must remain bounded when entries use no bytes");
+        assert_eq!(b.entries().count(), ULOG_MAX_BUFFER);
+    }
+
+    #[test]
+    fn ulog_buffer_push_err_preserves_prefix_and_entry_boundaries() {
+        let mut b = ULogBuffer::new();
+        assert!(b.push("OK"));
+        assert!(b.push_err("dependency fail"));
+
+        assert_eq!(b.entries().collect::<Vec<_>>(), ["OK", "err: dependency fail"]);
+        assert_eq!(serde_json::to_string(&b).unwrap(), r#"["OK","err: dependency fail"]"#);
     }
 }

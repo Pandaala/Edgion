@@ -27,7 +27,7 @@ pub struct UdpLogEntry {
     pub bytes_sent: u64,
     pub bytes_received: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
+    pub status: Option<&'static str>,
 }
 
 impl UdpLogEntry {
@@ -56,7 +56,7 @@ impl UdpLogEntry {
     }
 
     /// Create a failure log entry for packets that couldn't establish a session.
-    pub fn failure(listener_port: u16, direct_peer_ip: String, direct_peer_port: u16, status: &str) -> Self {
+    pub fn failure(listener_port: u16, direct_peer_ip: String, direct_peer_port: u16, status: &'static str) -> Self {
         Self {
             ts: chrono::Utc::now().timestamp_millis(),
             listener_port,
@@ -68,7 +68,7 @@ impl UdpLogEntry {
             packets_received: 0,
             bytes_sent: 0,
             bytes_received: 0,
-            status: Some(status.to_string()),
+            status: Some(status),
         }
     }
 
@@ -108,5 +108,43 @@ pub async fn init_udp_logger(config: &edgion_resources::LogConfig) -> Result<()>
 pub async fn log_udp(entry: &UdpLogEntry) {
     if let Some(logger) = UDP_LOGGER.get() {
         let _ = logger.send(entry.to_json()).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failure_entry_preserves_wire_fields_and_omits_upstream() {
+        let entry = UdpLogEntry::failure(9000, "127.0.0.1".to_owned(), 50000, "NoRouteMatched");
+        let value = serde_json::to_value(&entry).unwrap();
+
+        assert_eq!(value["listener_port"], 9000);
+        assert!(value["direct_peer_ip"].is_string());
+        assert_eq!(value["direct_peer_port"], 50000);
+        assert_eq!(value["session_duration_ms"], 0);
+        assert_eq!(value["status"], "NoRouteMatched");
+        assert!(value.get("upstream_addr").is_none());
+    }
+
+    #[test]
+    fn session_entry_carries_all_counters_and_omits_status() {
+        let entry = UdpLogEntry::new(
+            9000,
+            "127.0.0.1".to_owned(),
+            50000,
+            Some("127.0.0.2:8080".to_owned()),
+            Instant::now(),
+        )
+        .with_stats(1, 2, 3, 4);
+        let value = serde_json::to_value(&entry).unwrap();
+
+        assert_eq!(value["upstream_addr"], "127.0.0.2:8080");
+        assert_eq!(value["packets_sent"], 1);
+        assert_eq!(value["packets_received"], 2);
+        assert_eq!(value["bytes_sent"], 3);
+        assert_eq!(value["bytes_received"], 4);
+        assert!(value.get("status").is_none());
     }
 }

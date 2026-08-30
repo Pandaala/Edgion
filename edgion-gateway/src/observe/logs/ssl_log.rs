@@ -44,10 +44,14 @@ impl SslLogger {
     /// Log an entry — non-blocking, safe to call from TLS callbacks
     #[inline]
     pub fn log(&self, entry: &TlsConnMeta) {
-        let payload = serde_json::to_string(entry).unwrap_or_else(|_| "{}".to_string());
-        if self.tx.try_send(payload).is_err() {
+        // Reserve first so a saturated/closed channel does not pay the JSON
+        // serialization cost on the synchronous TLS callback path.
+        let Ok(permit) = self.tx.try_reserve() else {
             global_metrics().ssl_log_dropped();
-        }
+            return;
+        };
+        let payload = serde_json::to_string(entry).unwrap_or_else(|_| "{}".to_string());
+        permit.send(payload);
     }
 }
 
