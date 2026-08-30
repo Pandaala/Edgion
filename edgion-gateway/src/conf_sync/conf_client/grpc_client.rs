@@ -128,7 +128,7 @@ impl ConfigSyncClient {
         let uri = build_grpc_uri(&initial_addr, use_tls);
 
         tracing::info!(
-            server_addrs = ?server_addrs,
+            server_addr_count = server_addrs.len(),
             initial_addr = %initial_addr,
             tls_enabled = use_tls,
             "Initializing gRPC client with lazy connection"
