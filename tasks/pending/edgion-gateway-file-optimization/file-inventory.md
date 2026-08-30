@@ -199,7 +199,7 @@
 | `edgion-gateway/src/backends/outlier_detection/store.rs` | `backends-outlier` | source | pending | — |
 | `edgion-gateway/src/backends/panic_threshold.rs` | `backends-core` | source | pending | — |
 | `edgion-gateway/src/backends/peer_builder.rs` | `backends-core` | source | pending | — |
-| `edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs` | `backends-policy-tls` | source | optimized | BACKENDS-POLICY-TLS-001 / `f4acade9`; true incremental publication deferred to dedicated TODO |
+| `edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs` | `backends-policy-tls` | source | optimized | BACKENDS-POLICY-TLS-001 / `f4acade9`, `c34041f3`; fail-close validation and true incremental publication deferred to dedicated TODOs |
 | `edgion-gateway/src/backends/policy/backend_tls/conf_handler_impl.rs` | `backends-policy-tls` | source | reviewed-no-change | BACKENDS-POLICY-TLS-001: Arc-preserving count-only conf-sync adapter retained |
 | `edgion-gateway/src/backends/policy/backend_tls/mod.rs` | `backends-policy-tls` | source | reviewed-no-change | BACKENDS-POLICY-TLS-001: narrow module exports retained |
 | `edgion-gateway/src/backends/policy/backend_traffic/authority.rs` | `backends-policy-traffic` | source | pending | — |
@@ -207,7 +207,7 @@
 | `edgion-gateway/src/backends/policy/backend_traffic/mod.rs` | `backends-policy-traffic` | source | pending | — |
 | `edgion-gateway/src/backends/policy/backend_traffic/retry_budget.rs` | `backends-policy-traffic` | source | pending | — |
 | `edgion-gateway/src/backends/policy/backend_traffic/store.rs` | `backends-policy-traffic` | source | pending | — |
-| `edgion-gateway/src/backends/policy/mod.rs` | `backends-policy-root` | source | pending | — |
+| `edgion-gateway/src/backends/policy/mod.rs` | `backends-policy-root` | source | reviewed-no-change | BACKENDS-POLICY-ROOT-001: typed lookup boundary retained; unresolved Service section fail-close redesign deferred to dedicated TODO |
 | `edgion-gateway/src/backends/port_resolver.rs` | `backends-core` | source | pending | — |
 | `edgion-gateway/src/backends/preload.rs` | `backends-core` | source | pending | — |
 | `edgion-gateway/src/backends/runtime.rs` | `backends-core` | source | pending | — |
