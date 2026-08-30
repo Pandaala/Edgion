@@ -53,4 +53,4 @@
 
 - Ledger/changelog updated: yes
 - Deferred finding: [`D0002`](../deferred/D0002-endpoint-slice-ownership-transitions.md)
-- Commit: pending automatic commit
+- Commit: `353268ec`

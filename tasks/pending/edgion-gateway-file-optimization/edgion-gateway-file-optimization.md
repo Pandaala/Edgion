@@ -11,8 +11,8 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress |
-| Coverage | 530 tracked files: 47 changed, 55 examined-no-change, 3 deferred, 425 pending |
-| Active batch | [`B0037-backend-endpoint-slice`](batches/B0037-backend-endpoint-slice.md) |
+| Coverage | 530 tracked files: 47 changed, 58 examined-no-change, 3 deferred, 422 pending |
+| Active batch | [`B0038-backend-service-discovery`](batches/B0038-backend-service-discovery.md) |
 
 ## AI guide summary
 
