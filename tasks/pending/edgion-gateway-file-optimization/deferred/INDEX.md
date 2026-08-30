@@ -4,6 +4,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 
 | Finding | Status | Canonical task |
 |---------|--------|----------------|
+| D0001 — Define complete ExternalName DNS cache identity and lifecycle | needs-discussion | [campaign finding](D0001-external-name-dns-cache-identity-lifecycle.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
