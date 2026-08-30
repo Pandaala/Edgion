@@ -260,8 +260,9 @@ pub struct GRPCBackendRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filters: Option<Vec<GRPCRouteFilter>>,
 
-    /// BackendTLSPolicy for this backend (runtime only, not serialized)
-    /// Queried and populated during select_backend
+    /// Runtime-only BackendTLSPolicy attachment used by standalone backend
+    /// utilities. Routed gRPC selection captures its request-stable policy
+    /// separately and does not mutate this schema field.
     #[serde(skip)]
     #[schemars(skip)]
     pub backend_tls_policy: Option<Arc<crate::resources::BackendTLSPolicy>>,

@@ -1501,20 +1501,11 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
             .unwrap_or_default()
             .to_string();
         let ns = grpc_br.namespace.clone().unwrap_or(route_ns);
-        // (name, namespace) is effectively unique per rule's backend_refs
-        // in well-formed routes; position() returns the first match.
-        let idx = ctx.grpc_route_unit.as_ref().and_then(|unit| {
-            let route_ns_str = unit.matched_info.rsc.ns.as_str();
-            unit.rule.backend_refs.as_ref().and_then(|refs| {
-                refs.iter()
-                    .position(|r| r.name == grpc_br.name && r.namespace.as_deref().unwrap_or(route_ns_str) == ns)
-            })
-        });
         (
             grpc_br.name.clone(),
             ns,
             ServiceBackendKind::from_kind(grpc_br.kind.as_ref()),
-            idx,
+            Some(grpc_br.slot()),
         )
     } else if let Some(http_br) = ctx.selected_backend.as_ref() {
         let route_ns = ctx

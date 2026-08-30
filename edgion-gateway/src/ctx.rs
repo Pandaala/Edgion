@@ -11,7 +11,7 @@ use crate::plugins::runtime::traits::UpstreamResponseTrailer;
 use crate::plugins::runtime::PluginRuntime;
 use crate::plugins::{EdgionPluginsLog, StageLogs};
 use crate::request_body::RequestBodyState;
-use crate::routes::grpc::{CompiledGrpcBackend, GrpcRouteRuleUnit};
+use crate::routes::grpc::{GrpcRouteRuleUnit, SelectedGrpcBackend};
 use crate::routes::HttpRouteRuleUnit;
 use crate::runtime::GatewayInfo;
 use bytes::Bytes;
@@ -1692,8 +1692,8 @@ pub struct EdgionHttpContext {
     /// Matched gRPC route unit (for gRPC routes)
     pub grpc_route_unit: Option<Arc<GrpcRouteRuleUnit>>,
 
-    /// Selected gRPC backend (schema + compiled plugin runtime, for gRPC routes)
-    pub selected_grpc_backend: Option<CompiledGrpcBackend>,
+    /// Request-stable gRPC backend generation/slot and captured TLS policy.
+    pub selected_grpc_backend: Option<SelectedGrpcBackend>,
 
     /// Whether this request is handled by GRPCRoute (not just gRPC protocol)
     /// Used to determine backend peer selection and plugin execution
@@ -3659,7 +3659,7 @@ mod ai_context_claim_tests {
     #[test]
     fn ordinary_context_size_stays_within_budget() {
         assert!(
-            std::mem::size_of::<EdgionHttpContext>() <= 2080,
+            std::mem::size_of::<EdgionHttpContext>() <= 1880,
             "EdgionHttpContext grew beyond the ordinary-request hot-path size budget"
         );
     }
@@ -3669,7 +3669,7 @@ mod ai_context_claim_tests {
     fn ordinary_context_construction_is_allocation_free() {
         let (ctx, allocations) = crate::test_allocation_counter::count_allocation_stats(EdgionHttpContext::new);
 
-        assert_eq!(std::mem::size_of_val(&ctx), 2032);
+        assert_eq!(std::mem::size_of_val(&ctx), 1832);
         assert!(ctx.gateway_info.is_none());
         assert_eq!(allocations.calls, 0);
         assert_eq!(allocations.requested_bytes, 0);

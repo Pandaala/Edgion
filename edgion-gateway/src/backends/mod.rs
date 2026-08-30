@@ -139,8 +139,8 @@ pub(crate) async fn try_get_peer(
             .ok_or(EdgionErrorCode::UpstreamNotBackendRefs)?;
         let lb_policy = crate::backends::policy::backend_traffic::resolve_lb_policy(&service_key);
         ServicePeerInput {
-            port: grpc_br.port,
-            backend_tls_policy: grpc_br.backend_tls_policy.clone(),
+            port: grpc_br.compiled().port,
+            backend_tls_policy: grpc_br.backend_tls_policy().cloned(),
             service_key,
             lb_policy,
             service_type,

@@ -410,10 +410,12 @@ pub fn upstream_response_filter(
     // Run backend-level upstream_response edgion_plugins (sync) for the same
     // matched route type.
     if !response_stage_settled(ctx) {
-        if let Some(backend) = ctx.selected_grpc_backend.clone() {
-            backend
-                .plugin_runtime
-                .run_upstream_response_plugins_sync(session, ctx, upstream_response);
+        if let Some(runtime) = ctx
+            .selected_grpc_backend
+            .as_ref()
+            .map(crate::routes::grpc::SelectedGrpcBackend::plugin_runtime)
+        {
+            runtime.run_upstream_response_plugins_sync(session, ctx, upstream_response);
         } else if let Some(runtime) = ctx
             .selected_backend
             .as_ref()

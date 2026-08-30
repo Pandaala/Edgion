@@ -116,9 +116,12 @@ pub async fn response_filter(
     }
 
     if !response_stage_settled(ctx) {
-        if let Some(backend) = ctx.selected_grpc_backend.clone() {
-            backend
-                .plugin_runtime
+        if let Some(runtime) = ctx
+            .selected_grpc_backend
+            .as_ref()
+            .map(crate::routes::grpc::SelectedGrpcBackend::plugin_runtime)
+        {
+            runtime
                 .run_upstream_response_plugins_async(session, ctx, upstream_response)
                 .await;
         } else if let Some(runtime) = ctx

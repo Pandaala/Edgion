@@ -97,7 +97,7 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     let sticky_backend = sp_idx.and_then(|idx| {
         let cb = &grpc_route_unit.backends[idx];
         if cb.schema.ref_denied.is_none() {
-            Some(cb.clone())
+            Some(idx)
         } else {
             // The sticky backendRef's cross-namespace reference is now denied:
             // treat as a miss — drop the sticky target, refresh the token, and
@@ -110,8 +110,8 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
         }
     });
 
-    let mut backend_ref = match sticky_backend {
-        Some(b) => b,
+    let backend_index = match sticky_backend {
+        Some(index) => index,
         None => grpc_route_unit
             .backend_finder
             .select()
@@ -121,6 +121,10 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
                 _ => EdError::BackendNotFound(),
             })?,
     };
+
+    let logical = super::GrpcBackendHandle::new(Arc::clone(&grpc_route_unit.backends), backend_index)
+        .ok_or_else(EdError::BackendNotFound)?;
+    let backend_ref = logical.compiled();
 
     if let Some(ref denied) = backend_ref.ref_denied {
         return Err(EdError::RefDenied {
@@ -136,12 +140,12 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     let target = backend_ref
         .policy_target_key(&grpc_route_unit.matched_info.rsc.ns)
         .ok_or_else(EdError::BackendNotFound)?;
-    backend_ref.schema.backend_tls_policy =
-        crate::backends::policy::query_backend_tls_policy_for_target(&target, backend_ref.port);
+    let backend_tls_policy = crate::backends::policy::query_backend_tls_policy_for_target(&target, backend_ref.port);
 
     // Run backend-level request plugins.
     // TODO: evaluate whether backend plugins should run before route-level plugins
-    backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
+    let backend_plugin_runtime = Arc::clone(&backend_ref.plugin_runtime);
+    backend_plugin_runtime.run_request_plugins(session, ctx).await;
 
     if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
         if !ctx.response_write_started() {
@@ -151,7 +155,7 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     }
 
     // Backend context is initialized in upstream_peer_grpc by init_backend_context_if_needed
-    ctx.selected_grpc_backend = Some(backend_ref);
+    ctx.selected_grpc_backend = Some(super::SelectedGrpcBackend::new(logical, backend_tls_policy));
 
     Ok(Some(())) // Handled
 }

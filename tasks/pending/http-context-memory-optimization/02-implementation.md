@@ -4,7 +4,7 @@
 
 | Measurement | ARM64 baseline | Current | Final |
 |-------------|---------------:|--------:|------:|
-| `size_of::<EdgionHttpContext>()` | 2,672 bytes | 2,032 bytes | pending |
+| `size_of::<EdgionHttpContext>()` | 2,672 bytes | 1,832 bytes | pending |
 | `Option<Box<WafRequestContext>>` | 8 bytes | 8 bytes | pending |
 | Default Context allocation calls | 1 | 0 | pending |
 | Default Context requested allocation bytes | 192 | 0 | pending |
@@ -22,6 +22,10 @@ Stage 2b reduced `Option<SelectedHttpBackend>` from 504 bytes to 32 bytes.
 Service and AI selections now retain a validated route-generation/index handle;
 Service TLS policy is captured separately, and Direct remains a boxed cold-path
 compatibility variant until its synthetic backend is removed.
+
+Stage 2c reduced the selected gRPC backend from 224 bytes to a 24-byte
+generation/index handle plus captured TLS policy. The handle also carries the
+exact original backend slot, removing the former duplicate-name linear lookup.
 
 ## Per-stage verification
 

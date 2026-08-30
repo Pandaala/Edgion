@@ -6,8 +6,8 @@
 | 0 | completed | Task plan and layout/allocation baseline | completed; nested measurement and lifecycle findings fixed | `ae423041` |
 | 1 | completed | Allocation-free default Context and lazy stage logs | completed; no blocking findings | `f9e377c9` |
 | 2a | completed | Shared request-stable GatewayInfo generation | completed; no blocking findings | `9db6d4a2` |
-| 2b | completed | Compact HTTP backend selection with generation/index handles | completed; Arc classification and TLS test findings fixed | this commit |
-| 2c | pending | Compact gRPC backend selection with request-stable TLS policy | pending | pending |
+| 2b | completed | Compact HTTP backend selection with generation/index handles | completed; Arc classification and TLS test findings fixed | `300035fd` |
+| 2c | completed | Compact gRPC backend selection with request-stable TLS policy | completed; no blocking findings | pending |
 | 2d | pending | Remove residual AI/direct-endpoint backend copies | pending | pending |
 | 3 | pending | Common/TLS/gRPC RequestInfo split | pending | pending |
 | 4 | pending | Optional boxed plugin request state | pending | pending |
