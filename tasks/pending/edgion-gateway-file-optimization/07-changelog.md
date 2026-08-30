@@ -195,3 +195,13 @@ This is the single concise record of actual changes across the file-by-file audi
 - Verification: mTLS validation tests 6/6; BoringSSL module compiled through the gateway library test target; `cargo fmt --all`; workspace check; workspace clippy (exit 0, 929 pre-existing gateway warnings); SSA, metrics inventory, and Pingora source guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
 - Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
 - Commit: `f33146ef`
+
+### `TLS-RUNTIME-001` — TLS callback context ownership and certificate extraction
+
+- Outcome: mixed (2 optimized, 4 reviewed-no-change; one cross-callback refactor separately tracked)
+- Files reviewed: all 6 files under `tls/runtime/`, covering backend callback wiring and certificate extraction, Gateway callback state, and module exports
+- Changes: protected the `SslCtx` BoringSSL destructor with the shared redacted panic boundary; made ex-data replacement release the displaced `Box` only after a successful store; made take clear the slot before reconstructing ownership; encoded SHA-256 certificate fingerprints directly into one preallocated string instead of allocating one string per byte plus an intermediate vector; and replaced an empty placeholder test with real DNS/IP SAN extraction coverage plus exact fingerprint-format coverage. TLS architecture docs now name the canonical panic helper.
+- Generality and architecture review: independent review approved the final diff. Store failure preserves the old live slot, take failure leaves ownership with BoringSSL, panic hooks and payload destruction stay inside the FFI boundary, certificate and SAN data are not newly logged, and fingerprint format/fallback semantics are unchanged. The audit also confirmed that an owned `SslCtx` handoff could remove full resolved-Secret clones and that injected finalize-store failure lacks an exactly-once log owner. Because that change crosses select, certificate, completion, and destructor callbacks, it was not implemented; the required state matrix and fault-injection proof are recorded in `tasks/todo/tls-ssl-ctx-owned-handoff-and-exactly-once-audit.md`. Unsupported Gateway rustls parity remained excluded.
+- Verification: certificate extraction tests 2/2 and TLS callback helper tests 9/9; `cargo fmt --all`; workspace check; workspace clippy (exit 0, 929 pre-existing gateway warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
+- Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
+- Commit: `0090e5bf`

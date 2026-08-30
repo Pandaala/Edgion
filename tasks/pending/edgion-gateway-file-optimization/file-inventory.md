@@ -139,7 +139,7 @@
 | `sse` | 3 | 1 | 2 | 0 | complete |
 | `tls-boringssl` | 2 | 1 | 1 | 0 | complete |
 | `tls-core` | 3 | 1 | 2 | 0 | complete |
-| `tls-runtime` | 6 | 0 | 0 | 0 | pending |
+| `tls-runtime` | 6 | 2 | 4 | 0 | complete |
 | `tls-store` | 4 | 0 | 0 | 0 | pending |
 | `tls-validation` | 5 | 0 | 0 | 0 | pending |
 | `util` | 6 | 4 | 2 | 0 | complete |
@@ -656,12 +656,12 @@
 | `edgion-gateway/src/tls/fips_host.rs` | `tls-core` | source | reviewed-no-change | TLS-CORE-001 / `9ab98fd0` |
 | `edgion-gateway/src/tls/fips_profile.rs` | `tls-core` | source | optimized | TLS-CORE-001 / `9ab98fd0` |
 | `edgion-gateway/src/tls/mod.rs` | `tls-core` | source | reviewed-no-change | TLS-CORE-001 / `9ab98fd0` |
-| `edgion-gateway/src/tls/runtime/backend/backend_api.rs` | `tls-runtime` | source | pending | — |
-| `edgion-gateway/src/tls/runtime/backend/cert_extractor.rs` | `tls-runtime` | source | pending | — |
-| `edgion-gateway/src/tls/runtime/backend/mod.rs` | `tls-runtime` | source | pending | — |
-| `edgion-gateway/src/tls/runtime/gateway/mod.rs` | `tls-runtime` | source | pending | — |
-| `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` | `tls-runtime` | source | pending | — |
-| `edgion-gateway/src/tls/runtime/mod.rs` | `tls-runtime` | source | pending | — |
+| `edgion-gateway/src/tls/runtime/backend/backend_api.rs` | `tls-runtime` | source | reviewed-no-change | TLS-RUNTIME-001 / `0090e5bf` |
+| `edgion-gateway/src/tls/runtime/backend/cert_extractor.rs` | `tls-runtime` | source | optimized | TLS-RUNTIME-001 / `0090e5bf` |
+| `edgion-gateway/src/tls/runtime/backend/mod.rs` | `tls-runtime` | source | reviewed-no-change | TLS-RUNTIME-001 / `0090e5bf` |
+| `edgion-gateway/src/tls/runtime/gateway/mod.rs` | `tls-runtime` | source | reviewed-no-change | TLS-RUNTIME-001 / `0090e5bf` |
+| `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` | `tls-runtime` | source | optimized | TLS-RUNTIME-001 / `0090e5bf`; owned handoff and exactly-once fault audit deferred to `tasks/todo/tls-ssl-ctx-owned-handoff-and-exactly-once-audit.md` |
+| `edgion-gateway/src/tls/runtime/mod.rs` | `tls-runtime` | source | reviewed-no-change | TLS-RUNTIME-001 / `0090e5bf` |
 | `edgion-gateway/src/tls/store/cert_matcher.rs` | `tls-store` | source | pending | — |
 | `edgion-gateway/src/tls/store/conf_handler.rs` | `tls-store` | source | pending | — |
 | `edgion-gateway/src/tls/store/mod.rs` | `tls-store` | source | pending | — |
