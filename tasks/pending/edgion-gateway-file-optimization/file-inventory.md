@@ -81,7 +81,7 @@
 | `observe-access-log` | 5 | 0 | 0 | 0 | pending |
 | `observe-core` | 3 | 0 | 0 | 0 | pending |
 | `observe-metrics` | 5 | 0 | 0 | 0 | pending |
-| `observe-protocol-logs` | 7 | 0 | 0 | 0 | pending |
+| `observe-protocol-logs` | 7 | 4 | 3 | 0 | complete |
 | `plugins-common` | 3 | 0 | 0 | 0 | pending |
 | `plugins-http-ai-guard` | 5 | 0 | 0 | 0 | pending |
 | `plugins-http-ai-proxy` | 2 | 0 | 0 | 0 | pending |
@@ -237,7 +237,7 @@
 | `edgion-gateway/src/config/gateway_class/conf_handler_impl.rs` | `config-gateway-class` | source | pending | — |
 | `edgion-gateway/src/config/gateway_class/mod.rs` | `config-gateway-class` | source | pending | — |
 | `edgion-gateway/src/config/mod.rs` | `config-root` | source | pending | — |
-| `edgion-gateway/src/ctx.rs` | `http-context` | source | pending | — |
+| `edgion-gateway/src/ctx.rs` | `http-context` | source | pending | OBS-LOG-001 follow-up: verify `TlsConnMeta.sni` masking |
 | `edgion-gateway/src/geoip/config.rs` | `geoip` | source | pending | — |
 | `edgion-gateway/src/geoip/info.rs` | `geoip` | source | pending | — |
 | `edgion-gateway/src/geoip/mod.rs` | `geoip` | source | pending | — |
@@ -299,13 +299,13 @@
 | `edgion-gateway/src/observe/access_log/logger.rs` | `observe-access-log` | source | pending | — |
 | `edgion-gateway/src/observe/access_log/mod.rs` | `observe-access-log` | source | pending | — |
 | `edgion-gateway/src/observe/access_log_store.rs` | `observe-core` | source | pending | — |
-| `edgion-gateway/src/observe/logs/buffer.rs` | `observe-protocol-logs` | source | pending | — |
-| `edgion-gateway/src/observe/logs/logger_factory.rs` | `observe-protocol-logs` | source | pending | — |
-| `edgion-gateway/src/observe/logs/mod.rs` | `observe-protocol-logs` | source | pending | — |
-| `edgion-gateway/src/observe/logs/ssl_log.rs` | `observe-protocol-logs` | source | pending | — |
-| `edgion-gateway/src/observe/logs/tcp_log.rs` | `observe-protocol-logs` | source | pending | — |
-| `edgion-gateway/src/observe/logs/tls_log.rs` | `observe-protocol-logs` | source | pending | — |
-| `edgion-gateway/src/observe/logs/udp_log.rs` | `observe-protocol-logs` | source | pending | — |
+| `edgion-gateway/src/observe/logs/buffer.rs` | `observe-protocol-logs` | source | optimized | OBS-LOG-001 / `11d3e79c` |
+| `edgion-gateway/src/observe/logs/logger_factory.rs` | `observe-protocol-logs` | source | optimized | OBS-LOG-001 / `11d3e79c` |
+| `edgion-gateway/src/observe/logs/mod.rs` | `observe-protocol-logs` | source | reviewed-no-change | OBS-LOG-001 / `11d3e79c` |
+| `edgion-gateway/src/observe/logs/ssl_log.rs` | `observe-protocol-logs` | source | optimized | OBS-LOG-001 / `11d3e79c` |
+| `edgion-gateway/src/observe/logs/tcp_log.rs` | `observe-protocol-logs` | source | reviewed-no-change | OBS-LOG-001 / `11d3e79c` |
+| `edgion-gateway/src/observe/logs/tls_log.rs` | `observe-protocol-logs` | source | reviewed-no-change | OBS-LOG-001 / `11d3e79c` |
+| `edgion-gateway/src/observe/logs/udp_log.rs` | `observe-protocol-logs` | source | optimized | OBS-LOG-001 / `11d3e79c` |
 | `edgion-gateway/src/observe/metrics/api.rs` | `observe-metrics` | source | pending | — |
 | `edgion-gateway/src/observe/metrics/mod.rs` | `observe-metrics` | source | pending | — |
 | `edgion-gateway/src/observe/metrics/registry.rs` | `observe-metrics` | source | pending | — |

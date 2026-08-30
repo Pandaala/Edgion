@@ -35,3 +35,13 @@ This is the single concise record of actual changes across the file-by-file audi
 - Verification: cache tests 54 passed/1 ignored benchmark; OIDC tests 61 passed; focused borrowed-key tests 2 passed; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains its pre-existing missing external Pingora-link failures and found no task-local error.
 - Integration-test guard: no `edgion-tests` change
 - Commit: `40f7eb74`
+
+### `OBS-LOG-001` — protocol log buffers, entries, and logger construction
+
+- Outcome: mixed (4 optimized, 3 reviewed-no-change)
+- Files reviewed: all 7 files under `edgion-gateway/src/observe/logs/`
+- Changes: bounded zero-length buffer entries so the position index cannot grow past the existing 128/512 limits; reserved SSL log channel capacity before JSON serialization to avoid wasted callback-path work on full/closed queues; removed the per-failure UDP status allocation by storing the existing static labels directly; isolated logger-factory tests with temporary directories; added buffer and UDP wire-contract coverage.
+- Generality and architecture review: independent review found the empty-entry bound and UDP allocation after the initial implementation. Final verdict: approved with no remaining in-scope findings. Log schemas, masking, DirectPeerIp/RemoteIp meaning, `{}` serialization fallback, typed `LogType`, sender order, OnceLock behavior, and startup-only tracing remain unchanged. The reviewer routed `TlsConnMeta.sni` masking to the pending `ctx.rs` batch.
+- Verification: protocol-log tests 16/16; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains its pre-existing missing external Pingora-link failures and found no task-local error.
+- Integration-test guard: baseline `edgion-tests` tree unchanged
+- Commit: `11d3e79c`
