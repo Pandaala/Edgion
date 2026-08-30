@@ -24,12 +24,12 @@ use super::operation::{
 use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
 
 const SCAN_CHUNK_SIZE: usize = 64 * 1024;
-const DISK_SCAN_CONCURRENCY: usize = 32;
+const SCAN_CONCURRENCY: usize = 32;
 const STORAGE_IO_CONCURRENCY: usize = 32;
 
-fn disk_scan_limiter() -> &'static Arc<Semaphore> {
+fn scan_limiter() -> &'static Arc<Semaphore> {
     static LIMITER: OnceLock<Arc<Semaphore>> = OnceLock::new();
-    LIMITER.get_or_init(|| Arc::new(Semaphore::new(DISK_SCAN_CONCURRENCY)))
+    LIMITER.get_or_init(|| Arc::new(Semaphore::new(SCAN_CONCURRENCY)))
 }
 
 fn storage_io_limiter() -> &'static Arc<Semaphore> {
@@ -365,38 +365,105 @@ fn slice_segment(segment: &Segment, local_start: u64, len: u64) -> Result<Segmen
 }
 
 fn normalize_segments(segments: Vec<Segment>) -> Result<Vec<Segment>, BodyOperationError> {
-    let mut normalized: Vec<Segment> = Vec::with_capacity(segments.len());
+    let mut normalized: Vec<Segment> = Vec::with_capacity(segments.len().min(MAX_BODY_SEGMENTS));
     for segment in segments {
-        if segment.len()? == 0 {
-            continue;
-        }
-        if let (
-            Some(Segment::SourceRange {
-                source: previous_source,
-                offset: previous_offset,
-                len: previous_len,
-            }),
-            Segment::SourceRange { source, offset, len },
-        ) = (normalized.last_mut(), &segment)
-        {
-            let previous_end = previous_offset
-                .checked_add(*previous_len)
-                .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
-            if Arc::ptr_eq(previous_source, source) && previous_end == *offset {
-                *previous_len = previous_len
-                    .checked_add(*len)
-                    .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
-                continue;
-            }
-        }
-        normalized.push(segment);
-        if normalized.len() > MAX_BODY_SEGMENTS {
-            return Err(BodyOperationError::SegmentLimitExceeded {
-                limit: MAX_BODY_SEGMENTS,
-            });
-        }
+        push_normalized_segment(&mut normalized, segment)?;
     }
     Ok(normalized)
+}
+
+fn push_normalized_segment(output: &mut Vec<Segment>, segment: Segment) -> Result<(), BodyOperationError> {
+    if segment.len()? == 0 {
+        return Ok(());
+    }
+    if let (
+        Some(Segment::SourceRange {
+            source: previous_source,
+            offset: previous_offset,
+            len: previous_len,
+        }),
+        Segment::SourceRange { source, offset, len },
+    ) = (output.last_mut(), &segment)
+    {
+        let previous_end = previous_offset
+            .checked_add(*previous_len)
+            .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
+        if Arc::ptr_eq(previous_source, source) && previous_end == *offset {
+            *previous_len = previous_len
+                .checked_add(*len)
+                .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
+            return Ok(());
+        }
+    }
+    if output.len() == MAX_BODY_SEGMENTS {
+        return Err(BodyOperationError::SegmentLimitExceeded {
+            limit: MAX_BODY_SEGMENTS,
+        });
+    }
+    output.push(segment);
+    Ok(())
+}
+
+/// Monotonic cursor used by batched edits so each source segment is visited at
+/// most once, independent of the number of replacement ranges.
+struct SegmentSplicer<'a> {
+    snapshot: &'a BodySnapshot,
+    segment_index: usize,
+    segment_offset: u64,
+    logical_offset: u64,
+}
+
+impl<'a> SegmentSplicer<'a> {
+    fn new(snapshot: &'a BodySnapshot) -> Self {
+        Self {
+            snapshot,
+            segment_index: 0,
+            segment_offset: 0,
+            logical_offset: 0,
+        }
+    }
+
+    fn append_until(&mut self, end: u64, output: &mut Vec<Segment>) -> Result<(), BodyOperationError> {
+        self.advance_until(end, Some(output))
+    }
+
+    fn skip_until(&mut self, end: u64) -> Result<(), BodyOperationError> {
+        self.advance_until(end, None)
+    }
+
+    fn advance_until(&mut self, end: u64, mut output: Option<&mut Vec<Segment>>) -> Result<(), BodyOperationError> {
+        if end < self.logical_offset || end > self.snapshot.len {
+            return Err(BodyOperationError::InvalidRange);
+        }
+        while self.logical_offset < end {
+            let segment = self
+                .snapshot
+                .segments
+                .get(self.segment_index)
+                .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
+            let segment_len = segment.len()?;
+            if self.segment_offset >= segment_len {
+                return Err(BodyOperationError::Body(BodyReadError::Incomplete));
+            }
+            let consumed = (end - self.logical_offset).min(segment_len - self.segment_offset);
+            if let Some(output) = output.as_deref_mut() {
+                push_normalized_segment(output, slice_segment(segment, self.segment_offset, consumed)?)?;
+            }
+            self.segment_offset = self
+                .segment_offset
+                .checked_add(consumed)
+                .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
+            self.logical_offset = self
+                .logical_offset
+                .checked_add(consumed)
+                .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
+            if self.segment_offset == segment_len {
+                self.segment_index += 1;
+                self.segment_offset = 0;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -565,16 +632,14 @@ impl BodyStorageView {
             return scan_snapshot_owned(snapshot, scanner, max_scan_bytes, None);
         }
 
-        let permit = if snapshot.contains_disk() {
-            Some(
-                Arc::clone(disk_scan_limiter())
-                    .acquire_owned()
-                    .await
-                    .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?,
-            )
-        } else {
-            None
-        };
+        // Every job submitted to the blocking pool owns one scan permit for
+        // its full scanner lifetime. This bounds CPU-only memory scans as well
+        // as disk scans without conflating either with the per-operation
+        // storage-I/O deadline lane.
+        let permit = Arc::clone(scan_limiter())
+            .acquire_owned()
+            .await
+            .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
         let cancelled = Arc::new(AtomicBool::new(false));
         let task_cancelled = Arc::clone(&cancelled);
         let mut guard = CancellationGuard {
@@ -642,6 +707,12 @@ impl BodyStorageView {
         }
         let end = offset.checked_add(max_bytes).unwrap_or(u64::MAX).min(snapshot.len);
         let slice = Arc::new(BodySnapshot::from_segments(snapshot.slice(offset..end)?)?);
+        // BytesScanner must consume the complete slice. Prove its scan budget
+        // before converting or reserving the output capacity, rather than
+        // allocating a body-sized buffer for a deterministic limit failure.
+        if slice.len > max_scan_bytes {
+            return Err(BodyOperationError::ScanLimitExceeded { limit: max_scan_bytes });
+        }
         let capacity = usize::try_from(slice.len).map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
         self.scan_snapshot(slice, BytesScanner::with_capacity(capacity), max_scan_bytes)
             .await
@@ -668,7 +739,10 @@ impl BodyStorageView {
     }
 
     pub fn clear(&self) -> Result<(), BodyOperationError> {
-        let (_, generation) = self.snapshot().map_err(BodyOperationError::Body)?;
+        let (snapshot, generation) = self.snapshot().map_err(BodyOperationError::Body)?;
+        if snapshot.len == 0 {
+            return Ok(());
+        }
         self.publish(generation, BodySnapshot::empty()).map(|_| ())
     }
 
@@ -677,6 +751,11 @@ impl BodyStorageView {
             return Ok(());
         }
         let (snapshot, generation) = self.snapshot().map_err(BodyOperationError::Body)?;
+        if snapshot.segments.len() == MAX_BODY_SEGMENTS {
+            return Err(BodyOperationError::SegmentLimitExceeded {
+                limit: MAX_BODY_SEGMENTS,
+            });
+        }
         let mut segments = snapshot.segments.clone();
         segments.push(Segment::Inline(bytes));
         self.publish(generation, BodySnapshot::from_segments(segments)?)
@@ -688,6 +767,11 @@ impl BodyStorageView {
             return Ok(());
         }
         let (snapshot, generation) = self.snapshot().map_err(BodyOperationError::Body)?;
+        if snapshot.segments.len() == MAX_BODY_SEGMENTS {
+            return Err(BodyOperationError::SegmentLimitExceeded {
+                limit: MAX_BODY_SEGMENTS,
+            });
+        }
         let mut segments = Vec::with_capacity(snapshot.segments.len() + 1);
         segments.push(Segment::Inline(bytes));
         segments.extend(snapshot.segments.iter().cloned());
@@ -699,6 +783,9 @@ impl BodyStorageView {
         let (snapshot, generation) = self.snapshot().map_err(BodyOperationError::Body)?;
         if range.start > range.end || range.end > snapshot.len {
             return Err(BodyOperationError::InvalidRange);
+        }
+        if range.is_empty() {
+            return Ok(());
         }
         let mut segments = snapshot.slice(0..range.start)?;
         segments.extend(snapshot.slice(range.end..snapshot.len)?);
@@ -716,6 +803,12 @@ impl BodyStorageView {
             return Err(BodyOperationError::EmptyPattern);
         }
         let (snapshot, generation) = self.snapshot().map_err(BodyOperationError::Body)?;
+        if from == to {
+            return Ok(BodyScanResult {
+                value: (),
+                bytes_scanned: 0,
+            });
+        }
         let scan = self
             .scan_snapshot(
                 Arc::clone(&snapshot),
@@ -751,21 +844,22 @@ impl BodyStorageView {
             }));
         }
 
-        let mut segments = Vec::new();
-        let mut cursor = 0u64;
+        let mut segments = Vec::with_capacity(
+            snapshot
+                .segments
+                .len()
+                .saturating_add(scan.value.len())
+                .min(MAX_BODY_SEGMENTS),
+        );
+        let mut splicer = SegmentSplicer::new(&snapshot);
         for range in scan.value {
-            segments.extend(snapshot.slice(cursor..range.start)?);
+            splicer.append_until(range.start, &mut segments)?;
             if !to.is_empty() {
-                segments.push(Segment::Inline(to.clone()));
+                push_normalized_segment(&mut segments, Segment::Inline(to.clone()))?;
             }
-            cursor = range.end;
-            if segments.len() > MAX_BODY_SEGMENTS {
-                return Err(BodyOperationError::SegmentLimitExceeded {
-                    limit: MAX_BODY_SEGMENTS,
-                });
-            }
+            splicer.skip_until(range.end)?;
         }
-        segments.extend(snapshot.slice(cursor..snapshot.len)?);
+        splicer.append_until(snapshot.len, &mut segments)?;
         let replacement = BodySnapshot::from_segments(segments)?;
         debug_assert_eq!(replacement.len, output_len);
         self.publish(generation, replacement)?;
@@ -784,6 +878,9 @@ impl BodyStorageView {
         let (snapshot, generation) = self.snapshot()?;
         if start > end || end > snapshot.len {
             return Err(BodyReadError::Incomplete);
+        }
+        if start == end && replacement.is_empty() {
+            return self.materialize_snapshot(snapshot).await;
         }
         let mut segments = snapshot.slice(0..start).map_err(operation_to_body_error)?;
         if !replacement.is_empty() {
@@ -832,20 +929,41 @@ impl BodyStorageView {
         if edits.is_empty() {
             return Ok(generation);
         }
+        if edits.len() > MAX_BODY_SEGMENTS {
+            return Err(BodyOperationError::SegmentLimitExceeded {
+                limit: MAX_BODY_SEGMENTS,
+            });
+        }
 
-        let mut segments = Vec::new();
-        let mut cursor = 0_u64;
+        let mut segments = Vec::with_capacity(
+            snapshot
+                .segments
+                .len()
+                .saturating_add(edits.len())
+                .min(MAX_BODY_SEGMENTS),
+        );
+        let mut last_range_end = 0_u64;
+        let mut changed = false;
+        let mut splicer = SegmentSplicer::new(&snapshot);
         for (range, replacement) in edits {
-            if range.start < cursor || range.end < range.start || range.end > snapshot.len {
+            if range.start < last_range_end || range.end < range.start || range.end > snapshot.len {
                 return Err(BodyOperationError::InvalidRange);
             }
-            segments.extend(snapshot.slice(cursor..range.start)?);
-            if !replacement.is_empty() {
-                segments.push(Segment::Inline(replacement.clone()));
+            last_range_end = range.end;
+            if range.is_empty() && replacement.is_empty() {
+                continue;
             }
-            cursor = range.end;
+            splicer.append_until(range.start, &mut segments)?;
+            if !replacement.is_empty() {
+                push_normalized_segment(&mut segments, Segment::Inline(replacement.clone()))?;
+            }
+            splicer.skip_until(range.end)?;
+            changed = true;
         }
-        segments.extend(snapshot.slice(cursor..snapshot.len)?);
+        if !changed {
+            return Ok(generation);
+        }
+        splicer.append_until(snapshot.len, &mut segments)?;
 
         let next = Arc::new(BodySnapshot::from_segments(segments)?);
         self.publish_arc(expected_generation, next)
@@ -968,6 +1086,7 @@ where
     S: RawBodyScanner,
 {
     let mut bytes_scanned = 0u64;
+    let mut disk_scratch = Vec::new();
     for segment in &snapshot.segments {
         let segment_len = segment.len()?;
         let mut local_offset = 0u64;
@@ -985,19 +1104,47 @@ where
                     .min(remaining_budget),
             )
             .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
-            let chunk = read_segment_chunk(segment, local_offset, wanted)?;
-            if chunk.is_empty() {
-                return Err(BodyOperationError::Body(BodyReadError::Incomplete));
-            }
-            let chunk_len =
-                u64::try_from(chunk.len()).map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
+            let control = match segment {
+                Segment::SourceRange { source, offset, len } if matches!(source.as_ref(), BodySource::Disk { .. }) => {
+                    let end = local_offset
+                        .checked_add(wanted as u64)
+                        .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
+                    if end > *len {
+                        return Err(BodyOperationError::Body(BodyReadError::Incomplete));
+                    }
+                    let source_offset = offset
+                        .checked_add(local_offset)
+                        .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
+                    let BodySource::Disk { file, len: source_len } = source.as_ref() else {
+                        unreachable!("disk segment checked above")
+                    };
+                    if source_offset
+                        .checked_add(wanted as u64)
+                        .is_none_or(|end| end > *source_len)
+                    {
+                        return Err(BodyOperationError::Body(BodyReadError::Incomplete));
+                    }
+                    disk_scratch.resize(wanted, 0);
+                    read_exact_at_into(file, &mut disk_scratch, source_offset)
+                        .map_err(|_| BodyOperationError::Body(BodyReadError::StorageFailure))?;
+                    scanner.push(&disk_scratch)?
+                }
+                _ => {
+                    let chunk = read_segment_chunk(segment, local_offset, wanted)?;
+                    if chunk.is_empty() {
+                        return Err(BodyOperationError::Body(BodyReadError::Incomplete));
+                    }
+                    scanner.push(&chunk)?
+                }
+            };
+            let chunk_len = wanted as u64;
             bytes_scanned = bytes_scanned
                 .checked_add(chunk_len)
                 .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
             local_offset = local_offset
                 .checked_add(chunk_len)
                 .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
-            if scanner.push(&chunk)? == ScanControl::Stop {
+            if control == ScanControl::Stop {
                 return Ok(BodyScanResult {
                     value: scanner.finish()?,
                     bytes_scanned,
@@ -1042,9 +1189,9 @@ fn read_segment_chunk(segment: &Segment, local_offset: u64, wanted: usize) -> Re
                         return Err(BodyOperationError::Body(BodyReadError::Incomplete));
                     }
                     let bytes = read_at_most(file, wanted, source_offset)
-                        .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
+                        .map_err(|_| BodyOperationError::Body(BodyReadError::StorageFailure))?;
                     if bytes.len() != wanted {
-                        return Err(BodyOperationError::Body(BodyReadError::Incomplete));
+                        return Err(BodyOperationError::Body(BodyReadError::StorageFailure));
                     }
                     Ok(Bytes::from(bytes))
                 }
@@ -1117,12 +1264,12 @@ impl RawBodyScanner for LiteralMatchScanner {
             if self.matched == self.pattern.len() {
                 let pattern_len = u64::try_from(self.pattern.len())
                     .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
-                self.matches.push((self.offset - pattern_len)..self.offset);
-                if self.matches.len() > MAX_BODY_SEGMENTS {
+                if self.matches.len() == MAX_BODY_SEGMENTS {
                     return Err(BodyOperationError::SegmentLimitExceeded {
                         limit: MAX_BODY_SEGMENTS,
                     });
                 }
+                self.matches.push((self.offset - pattern_len)..self.offset);
                 self.matched = 0;
             }
         }
@@ -1149,6 +1296,8 @@ pub struct BodyStorage {
     memory_limit: usize,
     captured_len: u64,
     replay_cursor: u64,
+    replay_segment_index: usize,
+    replay_segment_offset: u64,
     replay_invalid: bool,
     replay_snapshot: Option<Arc<BodySnapshot>>,
     finished: bool,
@@ -1203,6 +1352,8 @@ impl BodyStorage {
                 memory_limit,
                 captured_len: 0,
                 replay_cursor: 0,
+                replay_segment_index: 0,
+                replay_segment_offset: 0,
                 replay_invalid: false,
                 replay_snapshot: None,
                 finished: false,
@@ -1239,6 +1390,15 @@ impl RequestBodyBuffer for BodyStorage {
     async fn write(&mut self, data: &Bytes) -> PingoraResult<()> {
         if self.finished {
             return Err(Self::replay_error("request body capture continued after finalization"));
+        }
+        if data.is_empty() {
+            return if matches!(self.storage, CaptureStorage::Poisoned) {
+                Err(Self::replay_error(
+                    "request body storage is unusable after a failed spill",
+                ))
+            } else {
+                Ok(())
+            };
         }
         let data_len = u64::try_from(data.len())
             .map_err(|_| Self::replay_error("request body chunk length does not fit in u64"))?;
@@ -1361,6 +1521,8 @@ impl RequestBodyBuffer for BodyStorage {
                 .0,
         );
         self.replay_cursor = 0;
+        self.replay_segment_index = 0;
+        self.replay_segment_offset = 0;
         self.replay_invalid = false;
         Ok(())
     }
@@ -1397,23 +1559,36 @@ impl RequestBodyBuffer for BodyStorage {
         }
         let wanted = usize::try_from((snapshot.len - self.replay_cursor).min(max_bytes as u64))
             .map_err(|_| Self::replay_error("request body replay chunk length does not fit in usize"))?;
-        let segment = locate_segment(&snapshot, self.replay_cursor)
-            .map_err(|_| Self::replay_error("request body replay snapshot is inconsistent"))?;
+        let segment = snapshot
+            .segments
+            .get(self.replay_segment_index)
+            .ok_or_else(|| Self::replay_error("request body replay snapshot is inconsistent"))?;
+        let segment_len = segment
+            .len()
+            .map_err(|_| Self::replay_error("request body replay segment length overflow"))?;
+        if self.replay_segment_offset >= segment_len {
+            return Err(Self::replay_error("request body replay segment cursor is inconsistent"));
+        }
+        let remaining = segment_len - self.replay_segment_offset;
         let wanted = wanted.min(
-            usize::try_from(segment.remaining)
+            usize::try_from(remaining)
                 .map_err(|_| Self::replay_error("request body replay segment length overflow"))?,
         );
-        let chunk = match segment.segment {
+        let chunk = match segment {
             Segment::SourceRange { source, offset, .. } => match source.as_ref() {
                 BodySource::Memory(bytes) => {
-                    let start = usize::try_from(offset + segment.local_offset)
-                        .map_err(|_| Self::replay_error("request body replay offset overflow"))?;
+                    let start = usize::try_from(
+                        offset
+                            .checked_add(self.replay_segment_offset)
+                            .ok_or_else(|| Self::replay_error("request body replay offset overflow"))?,
+                    )
+                    .map_err(|_| Self::replay_error("request body replay offset overflow"))?;
                     bytes.slice(start..start + wanted)
                 }
                 BodySource::Disk { file, .. } => {
                     let file = Arc::clone(file);
                     let offset = offset
-                        .checked_add(segment.local_offset)
+                        .checked_add(self.replay_segment_offset)
                         .ok_or_else(|| Self::replay_error("request body replay offset overflow"))?;
                     let bytes = match run_storage_io(
                         self.storage_operation_timeout,
@@ -1439,7 +1614,7 @@ impl RequestBodyBuffer for BodyStorage {
                 }
             },
             Segment::Inline(bytes) => {
-                let start = usize::try_from(segment.local_offset)
+                let start = usize::try_from(self.replay_segment_offset)
                     .map_err(|_| Self::replay_error("request body replay offset overflow"))?;
                 bytes.slice(start..start + wanted)
             }
@@ -1464,34 +1639,35 @@ impl RequestBodyBuffer for BodyStorage {
             self.replay_invalid = true;
             return;
         }
-        self.replay_cursor = next;
-    }
-}
 
-struct LocatedSegment<'a> {
-    segment: &'a Segment,
-    local_offset: u64,
-    remaining: u64,
-}
-
-fn locate_segment(snapshot: &BodySnapshot, logical_offset: u64) -> Result<LocatedSegment<'_>, BodyOperationError> {
-    let mut base = 0u64;
-    for segment in &snapshot.segments {
-        let len = segment.len()?;
-        let end = base
-            .checked_add(len)
-            .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
-        if logical_offset < end {
-            let local_offset = logical_offset - base;
-            return Ok(LocatedSegment {
-                segment,
-                local_offset,
-                remaining: len - local_offset,
-            });
+        let mut segment_index = self.replay_segment_index;
+        let mut segment_offset = self.replay_segment_offset;
+        let mut remaining = bytes;
+        while remaining > 0 {
+            let Some(segment) = snapshot.segments.get(segment_index) else {
+                self.replay_invalid = true;
+                return;
+            };
+            let Ok(segment_len) = segment.len() else {
+                self.replay_invalid = true;
+                return;
+            };
+            if segment_offset >= segment_len {
+                self.replay_invalid = true;
+                return;
+            }
+            let consumed = remaining.min(segment_len - segment_offset);
+            segment_offset += consumed;
+            remaining -= consumed;
+            if segment_offset == segment_len {
+                segment_index += 1;
+                segment_offset = 0;
+            }
         }
-        base = end;
+        self.replay_cursor = next;
+        self.replay_segment_index = segment_index;
+        self.replay_segment_offset = segment_offset;
     }
-    Err(BodyOperationError::Body(BodyReadError::Incomplete))
 }
 
 fn create_spill_file(previous: &Bytes, incoming: &Bytes) -> io::Result<Arc<File>> {
@@ -1505,36 +1681,62 @@ fn create_spill_file(previous: &Bytes, incoming: &Bytes) -> io::Result<Arc<File>
 }
 
 fn materialize_snapshot_owned(snapshot: Arc<BodySnapshot>, capacity: usize) -> io::Result<Bytes> {
-    let mut body = BytesMut::with_capacity(capacity);
+    let mut body = vec![0; capacity];
+    let mut output_offset = 0usize;
     for segment in &snapshot.segments {
         let segment_len = segment
             .len()
             .map_err(|_| io::Error::other("request body snapshot length is inconsistent"))?;
-        let mut local_offset = 0u64;
-        while local_offset < segment_len {
-            let wanted = usize::try_from((segment_len - local_offset).min(SCAN_CHUNK_SIZE as u64))
-                .map_err(|_| io::Error::other("request body snapshot chunk length overflow"))?;
-            let chunk = read_segment_chunk(segment, local_offset, wanted)
-                .map_err(|_| io::Error::other("request body snapshot read failed"))?;
-            if chunk.len() != wanted {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "request body snapshot ended before its captured length",
-                ));
-            }
-            body.extend_from_slice(&chunk);
-            local_offset = local_offset
-                .checked_add(wanted as u64)
-                .ok_or_else(|| io::Error::other("request body snapshot offset overflow"))?;
-        }
+        let segment_len = usize::try_from(segment_len)
+            .map_err(|_| io::Error::other("request body snapshot segment length overflow"))?;
+        let output_end = output_offset
+            .checked_add(segment_len)
+            .filter(|end| *end <= body.len())
+            .ok_or_else(|| io::Error::other("request body snapshot output length overflow"))?;
+        copy_segment_into(segment, &mut body[output_offset..output_end])?;
+        output_offset = output_end;
     }
-    if body.len() != capacity {
+    if output_offset != capacity {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
             "request body snapshot materialized to an unexpected length",
         ));
     }
-    Ok(body.freeze())
+    Ok(Bytes::from(body))
+}
+
+fn copy_segment_into(segment: &Segment, output: &mut [u8]) -> io::Result<()> {
+    match segment {
+        Segment::Inline(bytes) => {
+            if bytes.len() != output.len() {
+                return Err(io::Error::other("request body inline segment length is inconsistent"));
+            }
+            output.copy_from_slice(bytes);
+        }
+        Segment::SourceRange { source, offset, len } => {
+            if usize::try_from(*len).ok() != Some(output.len()) {
+                return Err(io::Error::other("request body source segment length is inconsistent"));
+            }
+            match source.as_ref() {
+                BodySource::Memory(bytes) => {
+                    let start = usize::try_from(*offset)
+                        .map_err(|_| io::Error::other("request body source offset overflow"))?;
+                    let end = start
+                        .checked_add(output.len())
+                        .filter(|end| *end <= bytes.len())
+                        .ok_or_else(|| io::Error::other("request body source range is inconsistent"))?;
+                    output.copy_from_slice(&bytes[start..end]);
+                }
+                BodySource::Disk { file, len: source_len } => {
+                    if offset.checked_add(*len).is_none_or(|end| end > *source_len) {
+                        return Err(io::Error::other("request body source range is inconsistent"));
+                    }
+                    read_exact_at_into(file, output, *offset)?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn write_all_at(file: &File, mut data: &[u8], mut offset: u64) -> io::Result<()> {
@@ -1556,6 +1758,23 @@ fn write_all_at(file: &File, mut data: &[u8], mut offset: u64) -> io::Result<()>
 
 fn read_at_most(file: &File, len: usize, offset: u64) -> io::Result<Vec<u8>> {
     read_at_most_with(len, offset, |buf, position| file.read_at(buf, position))
+}
+
+fn read_exact_at_into(file: &File, mut output: &mut [u8], mut offset: u64) -> io::Result<()> {
+    while !output.is_empty() {
+        let read = file.read_at(output, offset)?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "request body spill file ended before captured length",
+            ));
+        }
+        offset = offset
+            .checked_add(read as u64)
+            .ok_or_else(|| io::Error::other("request body read offset overflow"))?;
+        output = &mut output[read..];
+    }
+    Ok(())
 }
 
 fn read_at_most_with(
@@ -1589,17 +1808,7 @@ async fn read_disk_body(file: Arc<File>, len: u64, storage_operation_timeout: Du
         StorageIoOperation::MaterializeRead,
         move || {
             let mut body = vec![0; len];
-            let mut filled = 0usize;
-            while filled < body.len() {
-                let read = file.read_at(&mut body[filled..], filled as u64)?;
-                if read == 0 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "request body spill file ended before captured length",
-                    ));
-                }
-                filled += read;
-            }
+            read_exact_at_into(&file, &mut body, 0)?;
             Ok::<_, io::Error>(Bytes::from(body))
         },
     )
@@ -1735,6 +1944,8 @@ mod tests {
                 vec![edit(one.end..one.start, "\"x\"")],
                 // Past the end of the body.
                 vec![edit(0..u64::from(u32::MAX), "\"x\"")],
+                // A no-op still participates in ordering validation.
+                vec![edit(three.end..three.end, ""), edit(one.clone(), "\"x\"")],
             ] {
                 assert!(
                     view.replace_spans(generation, &bad).is_err(),
@@ -1821,6 +2032,28 @@ mod tests {
             assert!(view.replace_spans(generation, &edits).is_err());
             assert_eq!(view.generation(), generation);
             assert_eq!(replay_all(&mut storage, 4096).await.len(), filler.len());
+        }
+
+        #[tokio::test]
+        async fn many_edits_traverse_a_maximally_segmented_snapshot_monotonically() {
+            let (mut storage, view) = BodyStorage::with_limits(64, u64::MAX);
+            capture(&mut storage, &[b"x"]).await;
+            let segmented =
+                BodySnapshot::from_segments(vec![Segment::Inline(Bytes::from_static(b"x")); MAX_BODY_SEGMENTS])
+                    .unwrap();
+            let generation = view.publish(view.generation(), segmented).unwrap();
+            let edits: Vec<_> = (0..MAX_BODY_SEGMENTS)
+                .step_by(2)
+                .map(|offset| (offset as u64..offset as u64 + 1, Bytes::from_static(b"z")))
+                .collect();
+
+            view.replace_spans(generation, &edits).unwrap();
+            let replayed = replay_all(&mut storage, 1).await;
+            assert_eq!(replayed.len(), MAX_BODY_SEGMENTS);
+            assert!(replayed
+                .iter()
+                .enumerate()
+                .all(|(index, byte)| { *byte == if index % 2 == 0 { b'z' } else { b'x' } }));
         }
     }
 
@@ -2094,6 +2327,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn identity_literal_replace_does_not_scan_publish_or_materialize() {
+        for memory_limit in [64, 1] {
+            let (mut storage, view) = BodyStorage::with_memory_limit(memory_limit);
+            capture(&mut storage, &[b"same-same"]).await;
+            let generation = view.generation();
+
+            let result = view
+                .replace_literal(Bytes::from_static(b"same"), Bytes::from_static(b"same"), 0)
+                .await
+                .unwrap();
+            assert_eq!(result.bytes_scanned, 0);
+            assert_eq!(view.generation(), generation);
+            assert!(!view.is_modified());
+            assert!(!view.is_materialized());
+            assert_eq!(replay_all(&mut storage, 2).await, Bytes::from_static(b"same-same"));
+        }
+    }
+
+    #[tokio::test]
     async fn physical_cap_failure_rolls_back_without_changing_replay() {
         let (mut storage, view) = BodyStorage::with_limits(1, 6);
         capture(&mut storage, &[b"abcabc"]).await;
@@ -2106,6 +2358,74 @@ mod tests {
             BodyOperationError::Body(BodyReadError::BufferLimitExceeded { limit: 6 })
         );
         assert_eq!(replay_all(&mut storage, 2).await, Bytes::from_static(b"abcabc"));
+    }
+
+    #[tokio::test]
+    async fn range_budget_is_checked_before_output_capacity() {
+        let source = Arc::new(BodySource::Disk {
+            file: Arc::new(tempfile().unwrap()),
+            len: u64::MAX,
+        });
+        let snapshot = Arc::new(BodySnapshot::from_source(Arc::clone(&source)).unwrap());
+        let inner = Arc::new(BodyStorageViewInner {
+            initial: OnceLock::new(),
+            materialized: OnceCell::new(),
+            mutation: RwLock::new(MutationState::default()),
+            max_body_size_bytes: u64::MAX,
+            storage_operation_timeout: DEFAULT_STORAGE_OPERATION_TIMEOUT,
+        });
+        inner.initial.set(InitialBody { source, snapshot }).ok().unwrap();
+        let view = BodyStorageView::new(inner);
+
+        assert_eq!(
+            view.read_range(0, u64::MAX, 1).await,
+            Err(BodyOperationError::ScanLimitExceeded { limit: 1 })
+        );
+    }
+
+    #[tokio::test]
+    async fn byte_no_ops_do_not_publish_a_generation() {
+        let (mut empty_storage, empty_view) = BodyStorage::with_memory_limit(64);
+        capture(&mut empty_storage, &[]).await;
+        empty_view.clear().unwrap();
+        assert_eq!(empty_view.generation(), 0);
+        assert!(!empty_view.is_modified());
+
+        let (mut storage, view) = BodyStorage::with_memory_limit(64);
+        capture(&mut storage, &[b"body"]).await;
+        view.remove(2..2).unwrap();
+        let generation = view.generation();
+        assert_eq!(
+            view.replace_spans(
+                generation,
+                &[(0..0, Bytes::new()), (2..2, Bytes::new()), (4..4, Bytes::new()),],
+            )
+            .unwrap(),
+            generation
+        );
+        assert_eq!(
+            view.replace_slice(1..1, Bytes::new()).await.unwrap(),
+            Bytes::from_static(b"body")
+        );
+        assert_eq!(view.generation(), 0);
+        assert!(!view.is_modified());
+        assert_eq!(replay_all(&mut storage, 2).await, Bytes::from_static(b"body"));
+    }
+
+    #[tokio::test]
+    async fn oversized_edit_input_is_refused_without_publication() {
+        let (mut storage, view) = BodyStorage::with_memory_limit(64);
+        capture(&mut storage, &[b"body"]).await;
+        let edits = vec![(0..0, Bytes::from_static(b"x")); MAX_BODY_SEGMENTS + 1];
+
+        assert_eq!(
+            view.replace_spans(view.generation(), &edits),
+            Err(BodyOperationError::SegmentLimitExceeded {
+                limit: MAX_BODY_SEGMENTS
+            })
+        );
+        assert_eq!(view.generation(), 0);
+        assert_eq!(replay_all(&mut storage, 2).await, Bytes::from_static(b"body"));
     }
 
     #[tokio::test]
@@ -2182,13 +2502,49 @@ mod tests {
             view.append(Bytes::from_static(b"x")).unwrap();
         }
         assert_eq!(view.len().unwrap(), MAX_BODY_SEGMENTS as u64);
+        let generation = view.generation();
         assert_eq!(
             view.append(Bytes::from_static(b"x")),
             Err(BodyOperationError::SegmentLimitExceeded {
                 limit: MAX_BODY_SEGMENTS
             })
         );
+        assert_eq!(
+            view.prepend(Bytes::from_static(b"x")),
+            Err(BodyOperationError::SegmentLimitExceeded {
+                limit: MAX_BODY_SEGMENTS
+            })
+        );
+        assert_eq!(view.generation(), generation);
         assert_eq!(view.len().unwrap(), MAX_BODY_SEGMENTS as u64);
+    }
+
+    #[tokio::test]
+    async fn replay_cursor_is_segment_local_and_resets_for_retry() {
+        let (mut storage, view) = BodyStorage::with_limits(64, u64::MAX);
+        capture(&mut storage, &[b"x"]).await;
+        let segmented =
+            BodySnapshot::from_segments(vec![Segment::Inline(Bytes::from_static(b"x")); MAX_BODY_SEGMENTS]).unwrap();
+        view.publish(view.generation(), segmented).unwrap();
+
+        for _ in 0..2 {
+            assert_eq!(replay_all(&mut storage, 1).await.len(), MAX_BODY_SEGMENTS);
+            assert_eq!(storage.replay_segment_index, MAX_BODY_SEGMENTS);
+            assert_eq!(storage.replay_segment_offset, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_chunk_spill_materializes_directly_after_mutation() {
+        let body = vec![b'd'; SCAN_CHUNK_SIZE * 2 + 17];
+        let (mut storage, view) = BodyStorage::with_memory_limit(1);
+        capture(&mut storage, &[&body]).await;
+        view.append(Bytes::from_static(b"-tail")).unwrap();
+
+        let materialized = view.read_all().await.unwrap();
+        assert_eq!(&materialized[..body.len()], body.as_slice());
+        assert_eq!(&materialized[body.len()..], b"-tail");
+        assert!(!view.is_materialized());
     }
 
     struct SlowCountingScanner {
@@ -2301,10 +2657,24 @@ mod tests {
         file.set_len(4).unwrap();
         assert_eq!(
             view.sha256_scan(u64::MAX).await.unwrap_err(),
-            BodyOperationError::Body(BodyReadError::Incomplete)
+            BodyOperationError::Body(BodyReadError::StorageFailure)
         );
         storage.rewind().await.unwrap();
         assert!(storage.next_chunk(64).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn later_chunk_truncation_is_a_storage_failure() {
+        let body = vec![b'x'; SCAN_CHUNK_SIZE * 2 + 17];
+        let (mut storage, view) = BodyStorage::with_memory_limit(1);
+        capture(&mut storage, &[&body]).await;
+        disk_file(&storage).set_len(SCAN_CHUNK_SIZE as u64 + 3).unwrap();
+
+        assert_eq!(
+            view.sha256_scan(u64::MAX).await.unwrap_err(),
+            BodyOperationError::Body(BodyReadError::StorageFailure)
+        );
+        assert_eq!(view.read_all().await, Err(BodyReadError::StorageFailure));
     }
 
     #[test]
@@ -2321,6 +2691,20 @@ mod tests {
         .unwrap();
         assert_eq!(body, source);
         assert_eq!(calls, 4);
+    }
+
+    #[test]
+    fn literal_match_limit_rejects_before_growing_past_the_bound() {
+        let mut scanner = LiteralMatchScanner::new(vec![b'a']);
+        let input = vec![b'a'; MAX_BODY_SEGMENTS + 1];
+
+        assert_eq!(
+            scanner.push(&input),
+            Err(BodyOperationError::SegmentLimitExceeded {
+                limit: MAX_BODY_SEGMENTS
+            })
+        );
+        assert_eq!(scanner.matches.len(), MAX_BODY_SEGMENTS);
     }
 
     #[tokio::test]

@@ -54,6 +54,10 @@ async fn blocked_spill_creation_times_out_and_capture_stays_poisoned() {
     assert!(result.is_err());
     assert!(matches!(storage.storage, CaptureStorage::Poisoned));
     assert_eq!(storage.captured_len, 0);
+    assert!(
+        storage.write(&Bytes::new()).await.is_err(),
+        "an empty chunk must not hide poisoned capture state"
+    );
     assert!(storage.finish().await.is_err());
     gate.release.send(()).expect("release late spill creation");
 }
@@ -126,6 +130,53 @@ async fn blocked_mutated_materialization_uses_the_storage_deadline() {
         .expect("materialization task joins");
     assert_eq!(result, Err(BodyReadError::StorageFailure));
     gate.release.send(()).expect("release late materialization");
+}
+
+#[tokio::test]
+async fn blocked_snapshot_read_times_out_without_advancing_the_reader() {
+    let (mut storage, view) = BodyStorage::with_storage_timeout(1, 64, Duration::from_millis(100));
+    storage.write(&Bytes::from_static(b"snapshot-body")).await.unwrap();
+    storage.finish().await.unwrap();
+    let mut reader = view.snapshot_reader().unwrap();
+
+    let gate = blocking_hook(StorageIoOperation::SnapshotRead);
+    let task = tokio::spawn(STORAGE_IO_TEST_HOOK.scope(gate.hook, async move {
+        let result = reader.next_chunk().await;
+        (reader, result)
+    }));
+    wait_until_entered(gate.entered).await;
+
+    let (mut reader, result) = tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .expect("snapshot read returns within its deadline")
+        .expect("snapshot reader task joins");
+    assert_eq!(result, Err(BodyReadError::StorageFailure));
+    gate.release.send(()).expect("release late snapshot read");
+    assert_eq!(
+        reader.next_chunk().await.unwrap(),
+        Some(Bytes::from_static(b"snapshot-body")),
+        "a timed-out peek must leave the reader at the same offset"
+    );
+}
+
+#[tokio::test]
+async fn empty_chunk_on_healthy_spill_performs_no_storage_io() {
+    let (mut storage, _) = BodyStorage::with_storage_timeout(1, 64, Duration::from_secs(1));
+    storage.write(&Bytes::from_static(b"body")).await.unwrap();
+    let hook: Arc<dyn Fn(StorageIoOperation) + Send + Sync> = Arc::new(|operation| {
+        if operation == StorageIoOperation::SpillWrite {
+            panic!("empty capture chunk submitted spill I/O");
+        }
+    });
+
+    STORAGE_IO_TEST_HOOK
+        .scope(hook, storage.write(&Bytes::new()))
+        .await
+        .expect("empty capture chunk is a no-op");
+    assert_eq!(storage.captured_len, 4);
+    storage.finish().await.unwrap();
+    storage.rewind().await.unwrap();
+    assert_eq!(storage.next_chunk(64).await.unwrap(), Some(Bytes::from_static(b"body")));
 }
 
 #[tokio::test]
