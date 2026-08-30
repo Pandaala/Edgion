@@ -18,7 +18,8 @@ This is the single concise record of actual changes across the file-by-file audi
 
 | Batch | Date | Files | Outcome | Actual improvement | Verification | Commit | Follow-ups |
 |-------|------|-------|---------|--------------------|--------------|--------|------------|
-| [`B0033`](batches/B0033-backends-circuit-breaker.md) | 2026-08-31 | 2 | 1 changed, 1 examined-no-change | Removed the contention test's intentional permit leak and proved concurrent RAII release to zero; normalized the resumed campaign artifacts and froze existing integration-test contents | 4 focused tests; format, check, Clippy, SSA, metrics, Pingora source, no-tracing passed; 13 known external doc links remain missing | pending automatic commit | Existing [atomic Service snapshot task](../../todo/backend-traffic-policy-atomic-service-snapshot.md) retained |
+| [`B0033`](batches/B0033-backends-circuit-breaker.md) | 2026-08-31 | 2 | 1 changed, 1 examined-no-change | Removed the contention test's intentional permit leak and proved concurrent RAII release to zero; normalized the resumed campaign artifacts and froze existing integration-test contents | 4 focused tests; format, check, Clippy, SSA, metrics, Pingora source, no-tracing passed; 13 known external doc links remain missing | `770be849` | Existing [atomic Service snapshot task](../../todo/backend-traffic-policy-atomic-service-snapshot.md) retained |
+| [`B0034`](batches/B0034-backend-discovery-shared.md) | 2026-08-31 | 1 | changed | Replaced repeated removed-address snapshot scans with a first-occurrence index, reducing cleanup from O(E×R) to O(E+R) while preserving duplicate and missing-entry semantics | 2 focused tests; format, check, Clippy, SSA, metrics, Pingora source, no-tracing passed; 13 known external doc links remain missing | pending automatic commit | none |
 
 ### `UTIL-001` — `edgion-gateway/src/util/*`
 

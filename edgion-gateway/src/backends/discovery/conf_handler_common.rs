@@ -2,7 +2,7 @@ use crate::lb::compiled_selector;
 use crate::lb::runtime_state;
 use crate::lb::EdgionBackend;
 use pingora_core::protocols::l4::socket::SocketAddr;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Common trait for round-robin stores used by endpoint and endpoint_slice handlers.
@@ -49,11 +49,17 @@ pub(in crate::backends::discovery) fn cleanup_removed_backends(
             removed_count = removed.len(),
             "Cleaning stale backend runtime state"
         );
+        let mut old_backends_by_addr = HashMap::with_capacity(old_cell_snapshot.len());
+        for backend in old_cell_snapshot {
+            old_backends_by_addr
+                .entry(backend.inner().addr.clone())
+                .or_insert(backend);
+        }
         let cb_store = crate::backends::get_outlier_detection_store();
         for addr in &removed {
             // Look up the live Arc<EdgionBackend> from the pre-replace snapshot
             // to read the in-flight conn_count directly from the atomic.
-            let live = old_cell_snapshot.iter().find(|b| &b.inner().addr == addr);
+            let live = old_backends_by_addr.get(addr).copied();
             let in_flight = live.map_or(0, |b| b.conn());
             if in_flight > 0 {
                 // live.is_some() is guaranteed here: in_flight = live.map_or(0, ...) > 0
@@ -119,5 +125,52 @@ pub(in crate::backends::discovery) fn update_affected_lbs<S: RoundRobinStoreOps>
         cleanup_removed_backends(service_key, &old_addrs, &new_addrs, &old_cell_snapshot);
 
         cell.replace_backends(new_backends);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pingora_load_balancing::Backend;
+
+    fn backend(addr: &str) -> Arc<EdgionBackend> {
+        Arc::new(EdgionBackend::new(Backend::new(addr).unwrap()))
+    }
+
+    fn draining_backend(service_key: &str) -> Option<Arc<EdgionBackend>> {
+        let key_prefix = format!("{service_key}\0");
+        runtime_state::all_draining_backends()
+            .into_iter()
+            .find_map(|(key, backend)| key.starts_with(&key_prefix).then_some(backend))
+    }
+
+    #[test]
+    fn cleanup_uses_first_snapshot_backend_for_duplicate_address() {
+        let service_key = "test-cleanup-first-duplicate";
+        let first = backend("127.0.0.1:18080");
+        let second = backend("127.0.0.1:18080");
+        first.inc_conn();
+        let addr = first.inner().addr.clone();
+        let old = HashSet::from([addr]);
+
+        cleanup_removed_backends(service_key, &old, &HashSet::new(), &[first.clone(), second]);
+
+        let draining = draining_backend(service_key).expect("first duplicate with an in-flight connection must drain");
+        assert!(Arc::ptr_eq(&draining, &first));
+        runtime_state::remove_service(service_key);
+    }
+
+    #[test]
+    fn cleanup_treats_missing_snapshot_backend_as_zero_inflight() {
+        let service_key = "test-cleanup-missing-snapshot";
+        let stale = backend("127.0.0.1:18081");
+        let addr = stale.inner().addr.clone();
+        runtime_state::begin_draining(service_key, &addr, stale);
+        let old = HashSet::from([addr]);
+
+        cleanup_removed_backends(service_key, &old, &HashSet::new(), &[]);
+
+        assert!(draining_backend(service_key).is_none());
+        runtime_state::remove_service(service_key);
     }
 }

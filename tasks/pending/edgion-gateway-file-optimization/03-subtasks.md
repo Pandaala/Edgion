@@ -46,7 +46,7 @@
 | `backends-core` | 8 | 3 | 2 | 0 | pending |
 | `backends-discovery-endpoints` | 4 | 0 | 0 | 0 | pending |
 | `backends-discovery-services` | 3 | 0 | 0 | 0 | pending |
-| `backends-discovery-shared` | 3 | 0 | 0 | 0 | pending |
+| `backends-discovery-shared` | 3 | 1 | 0 | 0 | pending |
 | `backends-health` | 6 | 0 | 0 | 0 | pending |
 | `backends-outlier` | 4 | 0 | 0 | 0 | pending |
 | `backends-panic-threshold` | 1 | 1 | 0 | 0 | complete |
@@ -180,7 +180,7 @@
 | `edgion-gateway/src/api/mod.rs` | `api` | source | pending | — |
 | `edgion-gateway/src/backends/circuit_breaker/concurrency_integration_tests.rs` | `backends-circuit-breaker` | test | changed | `B0033`: concurrent winner permits now prove RAII release to zero without leaking handles |
 | `edgion-gateway/src/backends/circuit_breaker/mod.rs` | `backends-circuit-breaker` | source | examined-no-change | `B0033`: minimal production RAII wrapper retained |
-| `edgion-gateway/src/backends/discovery/conf_handler_common.rs` | `backends-discovery-shared` | source | pending | — |
+| `edgion-gateway/src/backends/discovery/conf_handler_common.rs` | `backends-discovery-shared` | source | changed | `B0034`: first-occurrence address index makes removed-backend cleanup O(E+R) |
 | `edgion-gateway/src/backends/discovery/dns_cache.rs` | `backends-discovery-shared` | source | pending | — |
 | `edgion-gateway/src/backends/discovery/endpoint_slice/conf_handler_impl.rs` | `backends-discovery-endpoints` | source | pending | — |
 | `edgion-gateway/src/backends/discovery/endpoint_slice/discovery_impl.rs` | `backends-discovery-endpoints` | source | pending | — |

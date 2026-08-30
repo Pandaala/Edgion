@@ -11,8 +11,8 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress |
-| Coverage | 530 tracked files: 45 changed, 53 examined-no-change, 432 pending |
-| Active batch | [`B0033-backends-circuit-breaker`](batches/B0033-backends-circuit-breaker.md) |
+| Coverage | 530 tracked files: 46 changed, 53 examined-no-change, 431 pending |
+| Active batch | [`B0034-backend-discovery-shared`](batches/B0034-backend-discovery-shared.md) |
 
 ## AI guide summary
 
