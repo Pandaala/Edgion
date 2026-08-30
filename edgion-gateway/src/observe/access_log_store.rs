@@ -4,12 +4,14 @@
 //! Only active when `--integration-testing-mode` is enabled.
 //!
 //! Design:
-//! - Uses DashMap for lock-free concurrent access from multiple worker threads
+//! - Uses DashMap for concurrent access from multiple worker threads
+//! - Serializes new-key admission so the capacity remains a strict bound
 //! - Keyed by request trace_id for precise lookup
 //! - TTL-based expiration to prevent unbounded memory growth
-//! - Capacity limit with oldest-entry eviction
+//! - Rejects new trace IDs when TTL cleanup cannot free capacity
 
 use dashmap::{mapref::entry::Entry, DashMap};
+use parking_lot::Mutex;
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
@@ -42,7 +44,9 @@ pub struct AccessLogStore {
     ttl: Duration,
     /// Maximum capacity
     max_capacity: usize,
-    /// Total entries ever stored (monotonically increasing)
+    /// Serializes capacity checks with new-key insertion.
+    insertion_lock: Mutex<()>,
+    /// Total successful store calls (monotonically increasing)
     total_stored: AtomicU64,
 }
 
@@ -85,10 +89,15 @@ pub struct AccessLogStoreStatus {
 impl AccessLogStore {
     /// Create a new AccessLogStore with default settings
     pub fn new() -> Self {
+        Self::with_limits(DEFAULT_TTL, DEFAULT_MAX_CAPACITY)
+    }
+
+    fn with_limits(ttl: Duration, max_capacity: usize) -> Self {
         Self {
             entries: DashMap::new(),
-            ttl: DEFAULT_TTL,
-            max_capacity: DEFAULT_MAX_CAPACITY,
+            ttl,
+            max_capacity,
+            insertion_lock: Mutex::new(()),
             total_stored: AtomicU64::new(0),
         }
     }
@@ -96,29 +105,30 @@ impl AccessLogStore {
     /// Store an access log entry
     ///
     /// If the store is at capacity, expired entries are cleaned first.
-    /// If still at capacity after cleaning, the store accepts the new entry
-    /// (DashMap doesn't support ordered eviction, so we rely on TTL cleanup).
+    /// If still at capacity after cleaning, a new trace ID is rejected. Updates
+    /// to an existing trace ID remain accepted because they do not grow the map.
     pub fn store(&self, trace_id: String, json: String) -> Result<(), String> {
-        // Periodic cleanup once per 100 stores: fires at the 1st, 101st, 201st, ... call
-        // (predicate is on the pre-increment value, so 0/100/200/... all match).
-        // The first cleanup runs on an empty map and is a no-op.
-        let count = self.total_stored.fetch_add(1, Ordering::Relaxed);
-        if count.is_multiple_of(100) {
-            self.cleanup_expired();
-        }
-
         if let Some(mut entry) = self.entries.get_mut(&trace_id) {
             Self::update_entry(&mut entry, json);
+            drop(entry);
+            self.record_successful_store();
             return Ok(());
         }
 
-        // Check capacity
+        // DashMap's len() and vacant-entry insertion are not atomic across
+        // shards. Serialize only the new-key path, then recheck the key because
+        // another writer may have inserted it while this writer waited.
+        let insertion_guard = self.insertion_lock.lock();
+        if let Some(mut entry) = self.entries.get_mut(&trace_id) {
+            Self::update_entry(&mut entry, json);
+            drop(entry);
+            drop(insertion_guard);
+            self.record_successful_store();
+            return Ok(());
+        }
+
         if self.entries.len() >= self.max_capacity {
             self.cleanup_expired();
-            if let Some(mut entry) = self.entries.get_mut(&trace_id) {
-                Self::update_entry(&mut entry, json);
-                return Ok(());
-            }
             if self.entries.len() >= self.max_capacity {
                 return Err("Access log store at capacity".to_string());
             }
@@ -135,7 +145,18 @@ impl AccessLogStore {
             }
         }
 
+        drop(insertion_guard);
+        self.record_successful_store();
         Ok(())
+    }
+
+    fn record_successful_store(&self) {
+        // Periodic cleanup once per 100 successful stores: fires at the 1st,
+        // 101st, 201st, ... call. The first cleanup retains the just-stored item.
+        let count = self.total_stored.fetch_add(1, Ordering::Relaxed);
+        if count.is_multiple_of(100) {
+            self.cleanup_expired();
+        }
     }
 
     fn update_entry(entry: &mut StoredEntry, json: String) {
@@ -199,8 +220,9 @@ impl AccessLogStore {
 
     /// Remove expired entries
     fn cleanup_expired(&self) {
+        let now = Instant::now();
         self.entries
-            .retain(|_, entry| Instant::now().saturating_duration_since(entry.stored_at) < self.ttl);
+            .retain(|_, entry| now.saturating_duration_since(entry.stored_at) < self.ttl);
     }
 }
 
@@ -279,6 +301,22 @@ mod tests {
     }
 
     #[test]
+    fn repeated_trace_crosses_cleanup_cadence_without_self_deadlock() {
+        const WRITES: usize = 101;
+        let store = AccessLogStore::new();
+        for write in 0..WRITES {
+            store
+                .store("trace-001".to_string(), format!(r#"{{"write":{write}}}"#))
+                .unwrap();
+        }
+
+        let list = store.list();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].store_count, WRITES as u64);
+        assert_eq!(store.status().total_stored, WRITES as u64);
+    }
+
+    #[test]
     fn concurrent_first_writes_are_all_counted() {
         const WRITERS: usize = 32;
         let store = AccessLogStore::new();
@@ -300,6 +338,60 @@ mod tests {
         let list = store.list();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].store_count, WRITERS as u64);
+    }
+
+    #[test]
+    fn concurrent_distinct_writes_cannot_exceed_capacity() {
+        const WRITERS: usize = 32;
+        let store = AccessLogStore::with_limits(DEFAULT_TTL, 1);
+        let barrier = Arc::new(Barrier::new(WRITERS));
+
+        let accepted = std::thread::scope(|scope| {
+            let handles = (0..WRITERS)
+                .map(|writer| {
+                    let barrier = Arc::clone(&barrier);
+                    let store = &store;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        store.store(format!("trace-{writer}"), "{}".to_string()).is_ok()
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .filter(|accepted| *accepted)
+                .count()
+        });
+
+        assert_eq!(accepted, 1);
+        let status = store.status();
+        assert_eq!(status.entry_count, 1);
+        assert_eq!(status.total_stored, 1);
+    }
+
+    #[test]
+    fn rejected_write_does_not_increment_total_stored() {
+        let store = AccessLogStore::with_limits(DEFAULT_TTL, 1);
+        store.store("trace-1".to_string(), "{}".to_string()).unwrap();
+        assert!(store.store("trace-2".to_string(), "{}".to_string()).is_err());
+
+        assert_eq!(store.status().total_stored, 1);
+    }
+
+    #[test]
+    fn read_paths_remove_expired_entries() {
+        let ttl = Duration::from_secs(1);
+        let store = AccessLogStore::with_limits(ttl, 2);
+
+        store.store("trace-1".to_string(), "{}".to_string()).unwrap();
+        store.entries.get_mut("trace-1").unwrap().stored_at = Instant::now().checked_sub(ttl).unwrap();
+        assert!(store.list().is_empty());
+
+        store.store("trace-2".to_string(), "{}".to_string()).unwrap();
+        store.entries.get_mut("trace-2").unwrap().stored_at = Instant::now().checked_sub(ttl).unwrap();
+        assert_eq!(store.status().entry_count, 0);
     }
 
     #[test]

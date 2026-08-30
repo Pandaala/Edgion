@@ -142,14 +142,15 @@ pub struct AccessLogStore {
     entries: DashMap<String, StoredEntry>,  // trace_id -> JSON
     ttl: Duration,                          // default 5 minutes
     max_capacity: usize,                    // default 10,000 entries
-    total_stored: AtomicU64,
+    insertion_lock: Mutex<()>,              // strict new-key admission bound
+    total_stored: AtomicU64,                // successful store calls
 }
 ```
 
 - Indexed by `trace_id` for exact lookup.
-- DashMap provides lock-free concurrent access.
-- TTL-expired entries are cleaned automatically (triggered every 100 stores).
-- When at capacity, expired entries are cleaned first.
+- DashMap provides concurrent access; only new-key admission is serialized so distinct concurrent inserts cannot exceed the capacity.
+- TTL-expired entries are cleaned every 100 successful stores and on `list()` / `status()` reads.
+- At capacity, expired entries are cleaned first; if none can be reclaimed, a new trace ID is rejected while an existing trace ID can still be updated.
 - API: `store()`, `get()`, `delete()`, `list()`, `clear()`, `status()`.
 - Global singleton accessed via `get_access_log_store()`.
 
