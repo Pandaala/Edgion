@@ -80,7 +80,7 @@
 | `link-sys-template` | 2 | 0 | 0 | 0 | pending |
 | `observe-access-log` | 5 | 2 | 3 | 0 | complete |
 | `observe-core` | 3 | 1 | 2 | 0 | complete |
-| `observe-metrics` | 5 | 0 | 0 | 0 | pending |
+| `observe-metrics` | 5 | 3 | 2 | 0 | complete |
 | `observe-protocol-logs` | 7 | 4 | 3 | 0 | complete |
 | `plugins-common` | 3 | 0 | 0 | 0 | pending |
 | `plugins-http-ai-guard` | 5 | 0 | 0 | 0 | pending |
@@ -133,7 +133,7 @@
 | `plugins-runtime` | 33 | 0 | 0 | 0 | pending |
 | `plugins-stream` | 18 | 0 | 0 | 0 | pending |
 | `request-body` | 9 | 0 | 0 | 0 | pending |
-| `routes-shared` | 65 | 0 | 0 | 0 | pending |
+| `routes-shared` | 65 | 1 | 1 | 0 | pending |
 | `runtime` | 15 | 0 | 0 | 0 | pending |
 | `services` | 4 | 0 | 0 | 0 | pending |
 | `sse` | 3 | 0 | 0 | 0 | pending |
@@ -237,7 +237,7 @@
 | `edgion-gateway/src/config/gateway_class/conf_handler_impl.rs` | `config-gateway-class` | source | pending | — |
 | `edgion-gateway/src/config/gateway_class/mod.rs` | `config-gateway-class` | source | pending | — |
 | `edgion-gateway/src/config/mod.rs` | `config-root` | source | pending | — |
-| `edgion-gateway/src/ctx.rs` | `http-context` | source | pending | OBS-LOG-001 follow-up: verify `TlsConnMeta.sni` masking |
+| `edgion-gateway/src/ctx.rs` | `http-context` | source | pending | OBS-LOG-001 follow-up: verify `TlsConnMeta.sni` masking; OBS-METRICS-001 baseline: arm64 Rust 1.96.1 reports 1120 bytes against the committed 1104-byte lock |
 | `edgion-gateway/src/geoip/config.rs` | `geoip` | source | pending | — |
 | `edgion-gateway/src/geoip/info.rs` | `geoip` | source | pending | — |
 | `edgion-gateway/src/geoip/mod.rs` | `geoip` | source | pending | — |
@@ -306,11 +306,11 @@
 | `edgion-gateway/src/observe/logs/tcp_log.rs` | `observe-protocol-logs` | source | reviewed-no-change | OBS-LOG-001 / `11d3e79c` |
 | `edgion-gateway/src/observe/logs/tls_log.rs` | `observe-protocol-logs` | source | reviewed-no-change | OBS-LOG-001 / `11d3e79c` |
 | `edgion-gateway/src/observe/logs/udp_log.rs` | `observe-protocol-logs` | source | optimized | OBS-LOG-001 / `11d3e79c` |
-| `edgion-gateway/src/observe/metrics/api.rs` | `observe-metrics` | source | pending | — |
-| `edgion-gateway/src/observe/metrics/mod.rs` | `observe-metrics` | source | pending | — |
-| `edgion-gateway/src/observe/metrics/registry.rs` | `observe-metrics` | source | pending | — |
-| `edgion-gateway/src/observe/metrics/route_handles.rs` | `observe-metrics` | source | pending | — |
-| `edgion-gateway/src/observe/metrics/test_metrics.rs` | `observe-metrics` | source | pending | — |
+| `edgion-gateway/src/observe/metrics/api.rs` | `observe-metrics` | source | reviewed-no-change | OBS-METRICS-001 / `96f8ac6a` |
+| `edgion-gateway/src/observe/metrics/mod.rs` | `observe-metrics` | source | reviewed-no-change | OBS-METRICS-001 / `96f8ac6a` |
+| `edgion-gateway/src/observe/metrics/registry.rs` | `observe-metrics` | source | optimized | OBS-METRICS-001 / `96f8ac6a` |
+| `edgion-gateway/src/observe/metrics/route_handles.rs` | `observe-metrics` | source | optimized | OBS-METRICS-001 / `96f8ac6a` |
+| `edgion-gateway/src/observe/metrics/test_metrics.rs` | `observe-metrics` | source | optimized | OBS-METRICS-001 / `96f8ac6a` |
 | `edgion-gateway/src/observe/mod.rs` | `observe-core` | source | reviewed-no-change | OBS-CORE-001 / `4b1d27d5` |
 | `edgion-gateway/src/observe/request_diagnostics.rs` | `observe-core` | source | reviewed-no-change | OBS-CORE-001 / `4b1d27d5` |
 | `edgion-gateway/src/plugins/common/mod.rs` | `plugins-common` | source | pending | — |
@@ -589,8 +589,8 @@
 | `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_connect.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_proxy.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_init_downstream_modules.rs` | `routes-shared` | source | pending | — |
-| `edgion-gateway/src/routes/http/proxy_http/pg_logging.rs` | `routes-shared` | source | pending | — |
-| `edgion-gateway/src/routes/http/proxy_http/pg_new_ctx.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/http/proxy_http/pg_logging.rs` | `routes-shared` | source | optimized | OBS-METRICS-001 / `96f8ac6a` |
+| `edgion-gateway/src/routes/http/proxy_http/pg_new_ctx.rs` | `routes-shared` | source | reviewed-no-change | OBS-METRICS-001 / `96f8ac6a` |
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter_action.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs` | `routes-shared` | source | pending | — |

@@ -65,3 +65,13 @@ This is the single concise record of actual changes across the file-by-file audi
 - Verification: access-log-store tests 12/12; request-diagnostics tests 2/2; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing missing external Pingora-link failures.
 - Integration-test guard: baseline `edgion-tests` tree unchanged
 - Commit: `4b1d27d5`
+
+### `OBS-METRICS-001` — metrics registry, route handles, and lifecycle accounting
+
+- Outcome: mixed (4 optimized, 3 reviewed-no-change)
+- Files reviewed: all 5 files under `edgion-gateway/src/observe/metrics/`, plus the complete `pg_new_ctx.rs` and terminal `pg_logging.rs` lifecycle call sites
+- Changes: balanced `edgion_ctx_active` through a release guard held across Pingora's exactly-once terminal logging hook; made malformed precomputed route-metric matrices fall back without panics, partial recording, or double-counting; removed test-metric type parsing allocation; added gauge-lifecycle and malformed-matrix regressions.
+- Generality and architecture review: independent review rejected context fields and a context destructor because each disturbed the locked hot-context layout, then verified the zero-context-state design against the pinned Pingora `finish` → `logging` contract. Final verdict: approved with no findings. Metric names, labels, buckets, cardinality, initialization policy, access model, and test-mode gating remain unchanged. `ctx.rs` has no batch diff; its existing arm64 Rust 1.96.1 size-lock mismatch (1120 observed versus 1104 committed) is recorded for the pending context audit.
+- Verification: metrics tests 29/29; terminal-logging tests 19/19; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
+- Integration-test guard: baseline `edgion-tests` tree unchanged
+- Commit: `96f8ac6a`
