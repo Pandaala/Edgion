@@ -3662,6 +3662,16 @@ mod ai_context_claim_tests {
             "EdgionHttpContext grew beyond the ordinary-request hot-path size budget"
         );
     }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn ordinary_context_baseline_tracks_layout_and_constructor_allocation() {
+        let (ctx, allocations) = crate::test_allocation_counter::count_allocation_stats(EdgionHttpContext::new);
+
+        assert_eq!(std::mem::size_of_val(&ctx), 2672);
+        assert_eq!(allocations.calls, 1);
+        assert_eq!(allocations.requested_bytes, 192);
+    }
 }
 
 #[cfg(test)]
