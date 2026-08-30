@@ -175,3 +175,13 @@ This is the single concise record of actual changes across the file-by-file audi
 - Verification: static call-site review; adjacent conf-sync cache-client tests 40/40 and conf-client tests 21/21; current workspace check, workspace clippy, SSA, metrics inventory, Pingora source, and gateway no-tracing guards passed. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
 - Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
 - Commit: no code commit; tracker-only closure
+
+### `TLS-CORE-001` — host FIPS detection and downstream approved profile
+
+- Outcome: mixed (1 optimized, 2 reviewed-no-change)
+- Files reviewed: `tls/fips_host.rs`, `tls/fips_profile.rs`, and `tls/mod.rs`
+- Changes: replaced the two runtime `CString` constructions used for the approved cipher and curve lists with compile-time NUL-checked static C strings, removing two heap allocations from every downstream TLS handshake when the FIPS policy is active; retained the public profile strings and added an exact parity regression so the Rust and FFI representations cannot drift.
+- Generality and architecture review: independent review approved the one-file change with no findings. FFI pointers have static lifetime, non-success returns remain strict fail-close, and only impossible interior-NUL error branches were removed. Genuine BoringSSL FIPS state, host-kernel detection, tri-state policy precedence, explicit operator cipher override, approved TLS 1.2 values, curve enforcement, metrics/logging, TLS 1.3 limitations, upstream limitations, and compliance wording remain unchanged. Unsupported Gateway rustls parity was deliberately excluded.
+- Verification: TLS/FIPS tests 20/20, including live FFI profile application and TLS 1.2 approved/ChaCha20 negotiation coverage; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
+- Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
+- Commit: `9ab98fd0`

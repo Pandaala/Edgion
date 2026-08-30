@@ -138,7 +138,7 @@
 | `services` | 4 | 0 | 0 | 0 | pending |
 | `sse` | 3 | 1 | 2 | 0 | complete |
 | `tls-boringssl` | 2 | 0 | 0 | 0 | pending |
-| `tls-core` | 3 | 0 | 0 | 0 | pending |
+| `tls-core` | 3 | 1 | 2 | 0 | complete |
 | `tls-runtime` | 6 | 0 | 0 | 0 | pending |
 | `tls-store` | 4 | 0 | 0 | 0 | pending |
 | `tls-validation` | 5 | 0 | 0 | 0 | pending |
@@ -653,9 +653,9 @@
 | `edgion-gateway/src/sse/window.rs` | `sse` | source | reviewed-no-change | SSE-WINDOW-001: confirmed complex findings deferred to `tasks/todo/sse-window-strict-residency-and-continuity.md`; no window code landed |
 | `edgion-gateway/src/tls/boringssl/mod.rs` | `tls-boringssl` | source | pending | — |
 | `edgion-gateway/src/tls/boringssl/mtls_verify_callback.rs` | `tls-boringssl` | source | pending | — |
-| `edgion-gateway/src/tls/fips_host.rs` | `tls-core` | source | pending | — |
-| `edgion-gateway/src/tls/fips_profile.rs` | `tls-core` | source | pending | — |
-| `edgion-gateway/src/tls/mod.rs` | `tls-core` | source | pending | — |
+| `edgion-gateway/src/tls/fips_host.rs` | `tls-core` | source | reviewed-no-change | TLS-CORE-001 / `9ab98fd0` |
+| `edgion-gateway/src/tls/fips_profile.rs` | `tls-core` | source | optimized | TLS-CORE-001 / `9ab98fd0` |
+| `edgion-gateway/src/tls/mod.rs` | `tls-core` | source | reviewed-no-change | TLS-CORE-001 / `9ab98fd0` |
 | `edgion-gateway/src/tls/runtime/backend/backend_api.rs` | `tls-runtime` | source | pending | — |
 | `edgion-gateway/src/tls/runtime/backend/cert_extractor.rs` | `tls-runtime` | source | pending | — |
 | `edgion-gateway/src/tls/runtime/backend/mod.rs` | `tls-runtime` | source | pending | — |
