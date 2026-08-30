@@ -53,4 +53,4 @@
 
 - Ledger/changelog updated: yes
 - Deferred finding: [`D0001`](../deferred/D0001-external-name-dns-cache-identity-lifecycle.md)
-- Commit: pending automatic commit
+- Commit: `16d39e25`

@@ -46,7 +46,7 @@
 | `backends-core` | 8 | 3 | 2 | 0 | pending |
 | `backends-discovery-endpoints` | 4 | 0 | 0 | 0 | pending |
 | `backends-discovery-services` | 3 | 0 | 0 | 0 | pending |
-| `backends-discovery-shared` | 3 | 1 | 0 | 1 | pending |
+| `backends-discovery-shared` | 3 | 1 | 1 | 1 | complete |
 | `backends-health` | 6 | 0 | 0 | 0 | pending |
 | `backends-outlier` | 4 | 0 | 0 | 0 | pending |
 | `backends-panic-threshold` | 1 | 1 | 0 | 0 | complete |
@@ -186,7 +186,7 @@
 | `edgion-gateway/src/backends/discovery/endpoint_slice/discovery_impl.rs` | `backends-discovery-endpoints` | source | pending | — |
 | `edgion-gateway/src/backends/discovery/endpoint_slice/ep_slice_store.rs` | `backends-discovery-endpoints` | source | pending | — |
 | `edgion-gateway/src/backends/discovery/endpoint_slice/mod.rs` | `backends-discovery-endpoints` | source | pending | — |
-| `edgion-gateway/src/backends/discovery/mod.rs` | `backends-discovery-shared` | source | pending | — |
+| `edgion-gateway/src/backends/discovery/mod.rs` | `backends-discovery-shared` | source | examined-no-change | `B0036`: minimal discovery façade and public re-exports retained |
 | `edgion-gateway/src/backends/discovery/services/conf_handler_impl.rs` | `backends-discovery-services` | source | pending | — |
 | `edgion-gateway/src/backends/discovery/services/mod.rs` | `backends-discovery-services` | source | pending | — |
 | `edgion-gateway/src/backends/discovery/services/service_store.rs` | `backends-discovery-services` | source | pending | — |
