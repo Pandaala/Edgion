@@ -78,7 +78,7 @@
 | `link-sys-root` | 2 | 0 | 0 | 0 | pending |
 | `link-sys-runtime` | 5 | 0 | 0 | 0 | pending |
 | `link-sys-template` | 2 | 0 | 0 | 0 | pending |
-| `observe-access-log` | 5 | 0 | 0 | 0 | pending |
+| `observe-access-log` | 5 | 2 | 3 | 0 | complete |
 | `observe-core` | 3 | 0 | 0 | 0 | pending |
 | `observe-metrics` | 5 | 0 | 0 | 0 | pending |
 | `observe-protocol-logs` | 7 | 4 | 3 | 0 | complete |
@@ -293,11 +293,11 @@
 | `edgion-gateway/src/link_sys/runtime/store.rs` | `link-sys-runtime` | source | pending | — |
 | `edgion-gateway/src/link_sys/template/engine.rs` | `link-sys-template` | source | pending | — |
 | `edgion-gateway/src/link_sys/template/mod.rs` | `link-sys-template` | source | pending | — |
-| `edgion-gateway/src/observe/access_log/backfill.rs` | `observe-access-log` | source | pending | — |
-| `edgion-gateway/src/observe/access_log/entry.rs` | `observe-access-log` | source | pending | — |
-| `edgion-gateway/src/observe/access_log/log_ext.rs` | `observe-access-log` | source | pending | — |
-| `edgion-gateway/src/observe/access_log/logger.rs` | `observe-access-log` | source | pending | — |
-| `edgion-gateway/src/observe/access_log/mod.rs` | `observe-access-log` | source | pending | — |
+| `edgion-gateway/src/observe/access_log/backfill.rs` | `observe-access-log` | source | optimized | OBS-ACCESS-001 / `9d99d213` |
+| `edgion-gateway/src/observe/access_log/entry.rs` | `observe-access-log` | source | reviewed-no-change | OBS-ACCESS-001 / `9d99d213` |
+| `edgion-gateway/src/observe/access_log/log_ext.rs` | `observe-access-log` | source | optimized | OBS-ACCESS-001 / `9d99d213` |
+| `edgion-gateway/src/observe/access_log/logger.rs` | `observe-access-log` | source | reviewed-no-change | OBS-ACCESS-001 / `9d99d213` |
+| `edgion-gateway/src/observe/access_log/mod.rs` | `observe-access-log` | source | reviewed-no-change | OBS-ACCESS-001 / `9d99d213` |
 | `edgion-gateway/src/observe/access_log_store.rs` | `observe-core` | source | pending | — |
 | `edgion-gateway/src/observe/logs/buffer.rs` | `observe-protocol-logs` | source | optimized | OBS-LOG-001 / `11d3e79c` |
 | `edgion-gateway/src/observe/logs/logger_factory.rs` | `observe-protocol-logs` | source | optimized | OBS-LOG-001 / `11d3e79c` |

@@ -45,3 +45,13 @@ This is the single concise record of actual changes across the file-by-file audi
 - Verification: protocol-log tests 16/16; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains its pre-existing missing external Pingora-link failures and found no task-local error.
 - Integration-test guard: baseline `edgion-tests` tree unchanged
 - Commit: `11d3e79c`
+
+### `OBS-ACCESS-001` — access-log entry, projection, routing, and backfill
+
+- Outcome: mixed (2 optimized, 3 reviewed-no-change)
+- Files reviewed: all 5 files under `edgion-gateway/src/observe/access_log/`
+- Changes: moved resolved AccessLogExtern values into the bounded `LogExt` store instead of copying them, while compacting oversized attacker-influenced allocations after UTF-8-safe truncation; isolated backfill tests with temporary directories; added allocation reuse and retained-capacity regression coverage.
+- Generality and architecture review: independent review found that plain `String::truncate` retained oversized input capacity and fixed it. Final verdict: approved with no remaining findings. Access-log schema/order/omission/masking, diagnostic ordering and limits, AccessLogExtern overwrite-at-cap behavior, first-healthy/no-fallthrough routing, backfill at-least-once and queue-entry marking, and OnceLock initialization remain unchanged. Binding decisions against deferred serialization, raw-URI caching, transient-pressure fallback, and exactly-once backfill were preserved.
+- Verification: access-log tests 44/44; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains its pre-existing missing external Pingora-link failures and found no task-local error.
+- Integration-test guard: baseline `edgion-tests` tree unchanged
+- Commit: `9d99d213`
