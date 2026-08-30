@@ -295,12 +295,12 @@ pub(crate) async fn try_get_peer(
             // default "controller"). `controller` prefers a controller-published
             // EndpointSlice and bridges to self-resolution when it has no ready
             // backend; `gateway`/`per-request` always self-resolve (cached / not).
-            let svc_annotations = service.metadata.annotations.clone().unwrap_or_default();
-            let mode = DnsResolutionMode::parse(
-                svc_annotations
+            let svc_annotations = service.metadata.annotations.as_ref();
+            let mode = DnsResolutionMode::parse(svc_annotations.and_then(|annotations| {
+                annotations
                     .get(edgion_annotations::DNS_RESOLUTION_MODE)
-                    .map(String::as_str),
-            );
+                    .map(String::as_str)
+            }));
             // The controller EndpointSlice is only consulted in `controller` mode,
             // so skip the (lock-taking, string-allocating) readiness scan otherwise.
             let slice_has_ready = mode == DnsResolutionMode::Controller
@@ -347,7 +347,7 @@ pub(crate) async fn try_get_peer(
 
                     // Compute the effective resolver from the data-plane precedence
                     // (Service annotation → Gateway annotation → EGC default → system).
-                    let spec = compute_external_name_resolver(&svc_annotations, ctx, egc_default.as_ref());
+                    let spec = compute_external_name_resolver(svc_annotations, ctx, egc_default.as_ref());
 
                     let ips = resolve_external_ips(&external_name, &spec, &service_key, cache, cache_ttl)
                         .await
@@ -427,11 +427,11 @@ pub(crate) async fn try_get_peer(
 /// `egc_default` is the EGC data-plane default, read once by the caller so this
 /// stays free of the store access.
 fn compute_external_name_resolver(
-    svc_annotations: &std::collections::BTreeMap<String, String>,
+    svc_annotations: Option<&std::collections::BTreeMap<String, String>>,
     ctx: &EdgionHttpContext,
     egc_default: Option<&edgion_resources::resources::edgion_gateway_config::DnsResolverConfig>,
 ) -> ResolverSpec {
-    let service_layer = candidate_from_annotations(svc_annotations);
+    let service_layer = svc_annotations.and_then(candidate_from_annotations);
     let gateway_layer = ctx
         .gateway_info
         .as_deref()

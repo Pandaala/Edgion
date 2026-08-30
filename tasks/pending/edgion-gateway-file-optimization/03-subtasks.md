@@ -43,7 +43,7 @@
 | `ai-quota` | 2 | 0 | 0 | 0 | pending |
 | `api` | 2 | 0 | 0 | 0 | pending |
 | `backends-circuit-breaker` | 2 | 1 | 1 | 0 | complete |
-| `backends-core` | 8 | 3 | 2 | 1 | pending |
+| `backends-core` | 8 | 4 | 2 | 1 | pending |
 | `backends-discovery-endpoints` | 4 | 1 | 1 | 2 | complete |
 | `backends-discovery-services` | 3 | 0 | 3 | 0 | complete |
 | `backends-discovery-shared` | 3 | 1 | 1 | 1 | complete |
@@ -197,7 +197,7 @@
 | `edgion-gateway/src/backends/health/check/probes.rs` | `backends-health` | source | changed | `B0040`: HTTP redirects denied and fixed error classes added; TLS contract deferred to D0005 |
 | `edgion-gateway/src/backends/health/check/status_store.rs` | `backends-health` | source | deferred | `B0040`: D0004 cancellation-safe task/status generation ownership |
 | `edgion-gateway/src/backends/health/mod.rs` | `backends-health` | source | examined-no-change | `B0040`: minimal health façade retained |
-| `edgion-gateway/src/backends/mod.rs` | `backends-core` | source | pending | — |
+| `edgion-gateway/src/backends/mod.rs` | `backends-core` | source | changed | `B0041`: borrowed ExternalName annotations remove a full hot-path map clone |
 | `edgion-gateway/src/backends/outlier_detection/config.rs` | `backends-outlier` | source | pending | — |
 | `edgion-gateway/src/backends/outlier_detection/mod.rs` | `backends-outlier` | source | pending | — |
 | `edgion-gateway/src/backends/outlier_detection/state.rs` | `backends-outlier` | source | pending | — |

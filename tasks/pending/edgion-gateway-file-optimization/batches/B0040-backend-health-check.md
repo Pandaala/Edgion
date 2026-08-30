@@ -52,4 +52,4 @@
 
 - Ledger/changelog updated: yes
 - Deferred findings: [`D0004`](../deferred/D0004-health-task-status-generation-ownership.md), [`D0005`](../deferred/D0005-active-health-check-tls-contract.md)
-- Commit: pending automatic commit
+- Commit: `31d8bcdd`

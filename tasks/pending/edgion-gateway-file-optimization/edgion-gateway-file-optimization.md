@@ -11,8 +11,8 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress |
-| Coverage | 530 tracked files: 49 changed, 61 examined-no-change, 5 deferred, 415 pending |
-| Active batch | [`B0040-backend-health-check`](batches/B0040-backend-health-check.md) |
+| Coverage | 530 tracked files: 50 changed, 61 examined-no-change, 5 deferred, 414 pending |
+| Active batch | [`B0041-backends-module`](batches/B0041-backends-module.md) |
 
 ## AI guide summary
 
