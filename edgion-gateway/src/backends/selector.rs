@@ -1,7 +1,7 @@
 use crate::backends::discovery::get_roundrobin_store;
 use crate::backends::health;
 use crate::backends::health::get_health_status_store;
-use crate::backends::outlier_detection::get_outlier_detection_store;
+use crate::backends::outlier_detection::{get_outlier_detection_store, OutlierDetectionStore};
 use crate::lb::{compiled_selector, EdgionBackend, PolicyKind};
 use edgion_resources::resources::lb_policy::{ConsistentHashOn, ParsedLBPolicy};
 use edgion_resources::uri_utils;
@@ -25,21 +25,21 @@ fn hydrate_cell_if_empty(cell: &compiled_selector::ServiceSelectorCell, service_
     cell.hydrate_if_empty(|| get_roundrobin_store().get_backends_for_service(service_key))
 }
 
-/// Side-effect-free health predicate: active health check + outlier-detection
-/// ejection, with NO metric recording. Used by the panic-threshold counting
-/// pass so it does not double-count outlier-detection rejections.
+/// Health predicate without rejection accounting. Used by the panic-threshold
+/// counting pass so it does not double-count outlier-detection rejections.
+/// Lazy outlier recovery may still decrement the ejected-endpoint gauge.
 #[inline]
 pub(crate) fn is_backend_healthy_quiet(
     service_key: &str,
     backend: &pingora_load_balancing::Backend,
     health_store: &health::check::HealthStatusStore,
+    outlier_store: &OutlierDetectionStore,
 ) -> bool {
-    if health_store.has_service(service_key)
-        && !health_store.is_healthy(service_key, health::check::backend_hash(backend))
-    {
+    let backend_hash = health::check::backend_hash(backend);
+    if !health_store.is_healthy(service_key, backend_hash) {
         return false;
     }
-    !get_outlier_detection_store().is_ejected(service_key, health::check::backend_hash(backend))
+    !outlier_store.is_ejected(service_key, backend_hash)
 }
 
 /// Health predicate for the selection walk. Same logic as
@@ -50,15 +50,15 @@ pub(crate) fn is_backend_healthy(
     service_key: &str,
     backend: &pingora_load_balancing::Backend,
     health_store: &health::check::HealthStatusStore,
+    outlier_store: &OutlierDetectionStore,
 ) -> bool {
+    let backend_hash = health::check::backend_hash(backend);
     // 1. Active health check filter
-    if health_store.has_service(service_key)
-        && !health_store.is_healthy(service_key, health::check::backend_hash(backend))
-    {
+    if !health_store.is_healthy(service_key, backend_hash) {
         return false;
     }
     // 2. Outlier detection filter (records the rejection metric)
-    if get_outlier_detection_store().is_ejected(service_key, health::check::backend_hash(backend)) {
+    if outlier_store.is_ejected(service_key, backend_hash) {
         crate::observe::metrics::record_cb_rejection(service_key);
         return false;
     }
@@ -73,9 +73,9 @@ fn panic_engaged(
     service_key: &str,
     selector: &compiled_selector::CompiledSelector,
     health_store: &health::check::HealthStatusStore,
+    outlier_store: &OutlierDetectionStore,
 ) -> bool {
-    let cb_store = get_outlier_detection_store();
-    if !health_store.has_service(service_key) && !cb_store.has_service(service_key) {
+    if !health_store.has_service(service_key) && !outlier_store.has_service(service_key) {
         return false;
     }
     let threshold = crate::backends::panic_threshold::resolve_panic_threshold(service_key);
@@ -88,7 +88,7 @@ fn panic_engaged(
     }
     let floor = crate::backends::panic_threshold::panic_floor(threshold, total);
     let engaged = selector.panic_should_engage(floor, |b| {
-        is_backend_healthy_quiet(service_key, b.inner(), health_store)
+        is_backend_healthy_quiet(service_key, b.inner(), health_store, outlier_store)
     });
     crate::observe::metrics::record_lb_panic_mode(service_key, engaged);
     engaged
@@ -117,10 +117,13 @@ pub fn select_roundrobin_backend_key(service_key: &str) -> Option<Arc<EdgionBack
     }
     let selector = cell.get_or_build(PolicyKind::RoundRobin);
     let health_store = get_health_status_store();
-    if panic_engaged(service_key, &selector, &health_store) {
+    let outlier_store = get_outlier_detection_store();
+    if panic_engaged(service_key, &selector, &health_store, &outlier_store) {
         return selector.select(None, |_| true);
     }
-    selector.select(None, |b| is_backend_healthy(service_key, b.inner(), &health_store))
+    selector.select(None, |b| {
+        is_backend_healthy(service_key, b.inner(), &health_store, &outlier_store)
+    })
 }
 
 /// Get the current backend list for `service_key`.
@@ -139,9 +142,14 @@ pub fn get_backends_for_service_key(service_key: &str) -> Arc<Vec<Arc<EdgionBack
 ///
 /// `remote_ip` is the RealIp-normalized client source IP (`ctx.request_info.remote_ip`),
 /// used only by the `SourceIp` mode; the other modes read from the request headers/URI.
-pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>, remote_ip: &str) -> Vec<u8> {
+pub(crate) fn extract_hash_key<'a>(
+    session: &'a Session,
+    lb_policy: &Option<ParsedLBPolicy>,
+    remote_ip: &'a str,
+    query: Option<&'a str>,
+) -> &'a [u8] {
     let Some(ParsedLBPolicy::ConsistentHash(hash_on)) = lb_policy else {
-        return Vec::new();
+        return &[];
     };
 
     let req_header = session.req_header();
@@ -151,7 +159,7 @@ pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPol
             .headers
             .get(header_name.as_str())
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.as_bytes().to_vec())
+            .map(str::as_bytes)
             .unwrap_or_default(),
         ConsistentHashOn::Cookie(cookie_name) => req_header
             .headers
@@ -161,16 +169,14 @@ pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPol
                 cookies.split(';').map(|s| s.trim()).find_map(|cookie| {
                     let (name, value) = cookie.split_once('=')?;
                     if name == cookie_name {
-                        Some(value.as_bytes().to_vec())
+                        Some(value.as_bytes())
                     } else {
                         None
                     }
                 })
             })
             .unwrap_or_default(),
-        ConsistentHashOn::Arg(arg_name) => req_header
-            .uri
-            .query()
+        ConsistentHashOn::Arg(arg_name) => query
             .and_then(|query| {
                 query.split('&').find_map(|param| {
                     let (name, value) = param.split_once('=')?;
@@ -183,14 +189,14 @@ pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPol
                     // key of existing deployments.
                     let matched =
                         name == arg_name || (name.contains(['%', '+']) && uri_utils::url_decode(name) == *arg_name);
-                    matched.then(|| value.as_bytes().to_vec())
+                    matched.then(|| value.as_bytes())
                 })
             })
             .unwrap_or_default(),
         // SourceIp hashes on the normalized client IP; an empty IP yields an
         // empty key, driving the internal RR fallback like the other modes when
         // their value is missing.
-        ConsistentHashOn::SourceIp => remote_ip.as_bytes().to_vec(),
+        ConsistentHashOn::SourceIp => remote_ip.as_bytes(),
     }
 }
 
@@ -228,6 +234,7 @@ fn pick(
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
     remote_ip: &str,
+    query: Option<&str>,
     not_found: NotFoundMap,
 ) -> Result<Arc<EdgionBackend>, EdgionErrorCode> {
     let cell = compiled_selector::get_or_create_cell(service_key);
@@ -241,7 +248,7 @@ fn pick(
     // Build the hash key only for ConsistentHash; an empty key triggers the
     // internal RR fallback inside `CompiledSelector::ConsistentHash::select`.
     let (hash_key, hash_key_used) = if matches!(kind, PolicyKind::ConsistentHash) {
-        let key = extract_hash_key(session, lb_policy, remote_ip);
+        let key = extract_hash_key(session, lb_policy, remote_ip, query);
         let used = !key.is_empty();
         (Some(key), used)
     } else {
@@ -249,11 +256,12 @@ fn pick(
     };
 
     let health_store = get_health_status_store();
-    let result = if panic_engaged(service_key, &selector, &health_store) {
-        selector.select(hash_key.as_deref(), |_| true)
+    let outlier_store = get_outlier_detection_store();
+    let result = if panic_engaged(service_key, &selector, &health_store, &outlier_store) {
+        selector.select(hash_key, |_| true)
     } else {
-        selector.select(hash_key.as_deref(), |b| {
-            is_backend_healthy(service_key, b.inner(), &health_store)
+        selector.select(hash_key, |b| {
+            is_backend_healthy(service_key, b.inner(), &health_store, &outlier_store)
         })
     };
     result.ok_or(not_found.for_kind(kind, hash_key_used))
@@ -264,12 +272,14 @@ pub(crate) fn select_from_endpoint_slice(
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
     remote_ip: &str,
+    query: Option<&str>,
 ) -> Result<Arc<EdgionBackend>, EdgionErrorCode> {
     pick(
         service_key,
         lb_policy,
         session,
         remote_ip,
+        query,
         NotFoundMap {
             empty: EdgionErrorCode::BackendEndpointSliceNotFoundByRoundRobinDefault,
             rr: EdgionErrorCode::BackendEndpointSliceNotFoundByRoundRobin,
@@ -318,10 +328,16 @@ mod panic_tests {
     #[test]
     fn quiet_and_metric_predicates_agree_with_no_config() {
         let hs = get_health_status_store();
+        let outlier_store = get_outlier_detection_store();
         let b = backend(1);
         // No HC/CB config for this service key → both predicates return true.
-        assert!(is_backend_healthy_quiet("default/unconfigured-svc", &b, &hs));
-        assert!(is_backend_healthy("default/unconfigured-svc", &b, &hs));
+        assert!(is_backend_healthy_quiet(
+            "default/unconfigured-svc",
+            &b,
+            &hs,
+            &outlier_store
+        ));
+        assert!(is_backend_healthy("default/unconfigured-svc", &b, &hs, &outlier_store));
     }
 
     #[test]

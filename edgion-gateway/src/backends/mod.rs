@@ -203,8 +203,9 @@ pub(crate) async fn try_get_peer(
             } else {
                 String::new()
             };
+            let query = ctx.query(session.req_header());
             let backend = take_sp_target_or_select(ctx, &service_key, || {
-                select_from_endpoint_slice(&service_key, &lb_policy, session, &remote_ip)
+                select_from_endpoint_slice(&service_key, &lb_policy, session, &remote_ip, query)
             })?;
 
             build_peer_from_lb_selection(
@@ -318,8 +319,9 @@ pub(crate) async fn try_get_peer(
                     } else {
                         String::new()
                     };
+                    let query = ctx.query(session.req_header());
                     let backend = take_sp_target_or_select(ctx, &service_key, || {
-                        select_from_endpoint_slice(&service_key, &lb_policy, session, &remote_ip)
+                        select_from_endpoint_slice(&service_key, &lb_policy, session, &remote_ip, query)
                     })?;
                     build_peer_from_lb_selection(
                         ctx,
@@ -398,8 +400,9 @@ pub(crate) async fn try_get_peer(
             } else {
                 String::new()
             };
+            let query = ctx.query(session.req_header());
             let backend = take_sp_target_or_select(ctx, &service_key, || {
-                select_from_endpoint_slice(&service_key, &lb_policy, session, &remote_ip)
+                select_from_endpoint_slice(&service_key, &lb_policy, session, &remote_ip, query)
             })?;
             build_peer_from_lb_selection(
                 ctx,
@@ -535,7 +538,8 @@ where
         match live {
             Some(arc) => {
                 let health_store = get_health_status_store();
-                if is_backend_healthy(service_key, arc.inner(), &health_store) {
+                let outlier_store = get_outlier_detection_store();
+                if is_backend_healthy(service_key, arc.inner(), &health_store, &outlier_store) {
                     return Ok(arc);
                 }
                 return Err(EdgionErrorCode::StickyBackendUnhealthy);
@@ -586,8 +590,9 @@ fn build_peer_from_lb_selection(
         && matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_)))
     {
         let remote_ip = ctx.request_info.remote_ip.clone();
-        let hash_key_bytes = extract_hash_key(session, lb_policy, &remote_ip);
-        ctx.hash_key = String::from_utf8(hash_key_bytes).ok();
+        let query = ctx.query(session.req_header());
+        let hash_key_bytes = extract_hash_key(session, lb_policy, &remote_ip, query);
+        ctx.hash_key = std::str::from_utf8(hash_key_bytes).ok().map(str::to_owned);
     }
 
     if let Some(upstream) = ctx.get_current_upstream_mut() {
