@@ -125,3 +125,13 @@ This is the single concise record of actual changes across the file-by-file audi
 - Verification: canonical-admission, known-empty, owned-input, and DSL regressions passed; body-scanner tests 29/29; request-body tests 116/116; JSON-get tests 6/6; independent broader request-body tests 173/173; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
 - Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
 - Commit: `1eb48138`
+
+### `SSE-CHAIN-001` — canonical SSE framing, retained slices, and semantic window audit
+
+- Outcome: mixed (1 optimized, 2 reviewed-no-change with one separately tracked complex follow-up)
+- Files reviewed: complete audit of `sse/chain.rs`, `sse/mod.rs`, and `sse/window.rs`; targeted guardrail semantic-window lifecycle review
+- Changes: marked normalized retained-slice prefixes so later decoder callbacks normalize only newly retained handles instead of cloning and recopying every prior `Bytes`; preserved pointer identity and atomic failure; added near-handle-cap, failed-suffix, no-op, coalesce, and reset regressions. `sse/mod.rs` framing, malformed-input degradation, borrowed event view, raw identity, split handling, and EOS behavior required no change.
+- Generality and architecture review: independent review approved the chain fix and confirmed it removes quadratic prefix copying without changing the canonical wire or bound contracts. The same audit found six coupled `RawWindow` continuity/residency/planning defects. Two attempted candidates were rejected or stopped because strict pre-allocation accounting remained incomplete and the change became disproportionately complex. Per the complexity policy, all window/guardrail edits were reverted and the complete design/test contract was recorded in `tasks/todo/sse-window-strict-residency-and-continuity.md` instead of landing a partial fix.
+- Verification: SSE tests 62/62; gateway all-target check; `cargo fmt --all -- --check`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
+- Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
+- Commit: `4327da2b`
