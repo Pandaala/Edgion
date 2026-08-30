@@ -105,3 +105,23 @@ This is the single concise record of actual changes across the file-by-file audi
 - Verification: storage tests 51/51; all request-body tests 104/104; independent request-body-filtered tests 161/161 and body-framing test 1/1; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
 - Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
 - Commit: `ae283e46`
+
+### `REQ-BODY-OPS-001` — streaming request-body text and JSON scanners
+
+- Outcome: optimized (2 files)
+- Files reviewed: complete audit of `request_body/operation.rs` and `request_body/body_scanners.rs`
+- Changes: replaced lossy-text full-chunk copying with a fixed four-byte UTF-8 carry; represented text predicates as bytes and returned known-empty constants directly; borrowed JSON object keys; bounded JSON serialization while it is produced instead of materializing an unbounded intermediate; transferred capture values without cloning; continued draining after an over-limit capture; corrected the maximum-index boundary; and added malformed/split UTF-8, predicate, and JSON regressions.
+- Generality and architecture review: independent review approved the final scanner semantics and bounds with no blocking findings. Invalid JSON remains `Missing`, duplicate selected keys remain last-wins, body scan limits remain exact, and no response aggregation or new hot-path tracing was added. A nonblocking architectural follow-up remains: selected JSON objects use a `BTreeMap`, whose per-entry metadata can amplify resident memory for many tiny fields even though retained payload and string length are bounded; changing that representation requires a separately reviewed semantic-preserving design.
+- Verification: request-body tests 113/113; independent broader request-body tests 170/170; JSON-select tests 10/10; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
+- Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
+- Commit: `f36d7576`
+
+### `REQ-BODY-BLOCKING-001` — canonical blocking-scan admission and owned JSON input
+
+- Outcome: optimized follow-up (4 files; one DSL file remains pending for its full batch)
+- Files reviewed: focused cross-file review of `request_body/storage.rs`, `request_body/state/enabled.rs`, `request_body/body_scanners.rs`, and the DSL `json_get` string-input call site in `plugins/http/dsl/lang/vm.rs`
+- Changes: centralized blocking scanner execution behind the existing 32-lane scan semaphore; kept the permit for the full blocking closure; moved known-empty blocking `finish` work off the async runtime; parsed owned DSL string input directly on the shared blocking pool without a channel, dedicated OS thread, or body copy; and removed the unused alternate selected-duplicate rejection machinery while retaining the production last-wins contract.
+- Generality and architecture review: independent review approved the final diff with no findings. Admission occurs before blocking work starts, join failures remain the existing generic incomplete-body error, JSON admission remains independently bounded, exact invalid/limit/last-wins semantics are preserved, and the DSL builtin's established error shape is unchanged.
+- Verification: canonical-admission, known-empty, owned-input, and DSL regressions passed; body-scanner tests 29/29; request-body tests 116/116; JSON-get tests 6/6; independent broader request-body tests 173/173; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
+- Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
+- Commit: `1eb48138`

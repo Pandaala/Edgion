@@ -132,7 +132,7 @@
 | `plugins-root` | 1 | 0 | 0 | 0 | pending |
 | `plugins-runtime` | 33 | 0 | 0 | 0 | pending |
 | `plugins-stream` | 18 | 0 | 0 | 0 | pending |
-| `request-body` | 9 | 6 | 1 | 0 | pending |
+| `request-body` | 9 | 8 | 1 | 0 | complete |
 | `routes-shared` | 65 | 1 | 1 | 0 | pending |
 | `runtime` | 15 | 0 | 0 | 0 | pending |
 | `services` | 4 | 0 | 0 | 0 | pending |
@@ -360,7 +360,7 @@
 | `edgion-gateway/src/plugins/http/dsl/config.rs` | `plugins-http-dsl` | source | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | `plugins-http-dsl` | source | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/lang/mod.rs` | `plugins-http-dsl` | source | pending | — |
-| `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | `plugins-http-dsl` | source | pending | — |
+| `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | `plugins-http-dsl` | source | pending | REQ-BODY-BLOCKING-001 targeted owned-input JSON scan / `1eb48138`; full DSL audit pending |
 | `edgion-gateway/src/plugins/http/dsl/mod.rs` | `plugins-http-dsl` | source | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/plugin.rs` | `plugins-http-dsl` | source | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/runtime.rs` | `plugins-http-dsl` | source | pending | — |
@@ -555,14 +555,14 @@
 | `edgion-gateway/src/plugins/stream/tls_route/mod.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_runtime.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_trait.rs` | `plugins-stream` | source | pending | — |
-| `edgion-gateway/src/request_body/body_scanners.rs` | `request-body` | source | pending | — |
+| `edgion-gateway/src/request_body/body_scanners.rs` | `request-body` | source | optimized | REQ-BODY-OPS-001 / `f36d7576`; REQ-BODY-BLOCKING-001 / `1eb48138` |
 | `edgion-gateway/src/request_body/config.rs` | `request-body` | source | reviewed-no-change | REQ-BODY-CORE-001 / `a408d7fd` |
 | `edgion-gateway/src/request_body/mod.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd` |
 | `edgion-gateway/src/request_body/observer.rs` | `request-body` | source | optimized | REQ-BODY-OBSERVER-001 / `be461374` |
-| `edgion-gateway/src/request_body/operation.rs` | `request-body` | source | pending | — |
+| `edgion-gateway/src/request_body/operation.rs` | `request-body` | source | optimized | REQ-BODY-OPS-001 / `f36d7576` |
 | `edgion-gateway/src/request_body/state.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd` |
-| `edgion-gateway/src/request_body/state/enabled.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd` |
-| `edgion-gateway/src/request_body/storage.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd`; full audit REQ-BODY-STORAGE-001 / `ae283e46` |
+| `edgion-gateway/src/request_body/state/enabled.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd`; REQ-BODY-BLOCKING-001 / `1eb48138` |
+| `edgion-gateway/src/request_body/storage.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd`; full audit REQ-BODY-STORAGE-001 / `ae283e46`; REQ-BODY-BLOCKING-001 / `1eb48138` |
 | `edgion-gateway/src/request_body/storage_io_tests.rs` | `request-body` | test | optimized | REQ-BODY-STORAGE-001 / `ae283e46` |
 | `edgion-gateway/src/routes/common.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/grpc/conf_handler_impl.rs` | `routes-shared` | source | pending | — |
