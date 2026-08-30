@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
 use std::rc::Rc;
 use std::sync::OnceLock;
 use std::sync::{mpsc, Arc};
@@ -243,10 +243,10 @@ impl MutableJsonSelectNode {
     }
 
     fn freeze(self) -> Arc<JsonSelectNode> {
-        let members: BTreeMap<String, Arc<JsonSelectNode>> = self
+        let members: BTreeMap<Arc<str>, Arc<JsonSelectNode>> = self
             .members
             .into_iter()
-            .map(|(member, node)| (member, node.freeze()))
+            .map(|(member, node)| (Arc::from(member), node.freeze()))
             .collect();
         let indices: BTreeMap<u64, Arc<JsonSelectNode>> = self
             .indices
@@ -272,7 +272,7 @@ impl MutableJsonSelectNode {
 #[derive(Debug)]
 struct JsonSelectNode {
     capture: Option<usize>,
-    members: BTreeMap<String, Arc<JsonSelectNode>>,
+    members: BTreeMap<Arc<str>, Arc<JsonSelectNode>>,
     indices: BTreeMap<u64, Arc<JsonSelectNode>>,
     descendant_captures: Arc<[usize]>,
 }
@@ -495,8 +495,8 @@ impl<'de> Visitor<'de> for SelectVisitor<'_> {
             return Ok(JsonScanValue::Missing);
         };
         let mut selected = JsonScanValue::Missing;
-        while let Some(key) = map.next_key::<String>()? {
-            if key == *expected {
+        while let Some(matches) = map.next_key_seed(ExpectedKeySeed { expected })? {
+            if matches {
                 selected = map.next_value_seed(SelectSeed {
                     index: self.seed.index + 1,
                     ..self.seed
@@ -516,22 +516,20 @@ impl<'de> Visitor<'de> for SelectVisitor<'_> {
             while seq.next_element::<IgnoredAny>()?.is_some() {}
             return Ok(JsonScanValue::Missing);
         };
-        let mut selected = JsonScanValue::Missing;
         let mut index = 0u64;
-        while index <= expected {
-            if index == expected {
-                selected = match seq.next_element_seed(SelectSeed {
-                    index: self.seed.index + 1,
-                    ..self.seed
-                })? {
-                    Some(value) => value,
-                    None => return Ok(JsonScanValue::Missing),
-                };
-            } else if seq.next_element::<IgnoredAny>()?.is_none() {
+        while index < expected {
+            if seq.next_element::<IgnoredAny>()?.is_none() {
                 return Ok(JsonScanValue::Missing);
             }
             index += 1;
         }
+        let selected = match seq.next_element_seed(SelectSeed {
+            index: self.seed.index + 1,
+            ..self.seed
+        })? {
+            Some(value) => value,
+            None => return Ok(JsonScanValue::Missing),
+        };
         while seq.next_element::<IgnoredAny>()?.is_some() {}
         Ok(selected)
     }
@@ -556,6 +554,113 @@ impl<'de> Visitor<'de> for SelectVisitor<'_> {
     }
     fn visit_unit<E>(self) -> Result<Self::Value, E> {
         Ok(JsonScanValue::Missing)
+    }
+}
+
+struct ExpectedKeySeed<'a> {
+    expected: &'a str,
+}
+
+impl<'de> DeserializeSeed<'de> for ExpectedKeySeed<'_> {
+    type Value = bool;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_str(ExpectedKeyVisitor {
+            expected: self.expected,
+        })
+    }
+}
+
+struct ExpectedKeyVisitor<'a> {
+    expected: &'a str,
+}
+
+struct SelectedMapKey {
+    selected: Option<(Arc<str>, Arc<JsonSelectNode>)>,
+    retained: Option<Arc<str>>,
+    overlong_for_parent: bool,
+}
+
+struct SelectedMapKeySeed<'a> {
+    node: &'a JsonSelectNode,
+    retain_for_parent: bool,
+    limit: usize,
+}
+
+impl<'de> DeserializeSeed<'de> for SelectedMapKeySeed<'_> {
+    type Value = SelectedMapKey;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_str(SelectedMapKeyVisitor {
+            node: self.node,
+            retain_for_parent: self.retain_for_parent,
+            limit: self.limit,
+        })
+    }
+}
+
+struct SelectedMapKeyVisitor<'a> {
+    node: &'a JsonSelectNode,
+    retain_for_parent: bool,
+    limit: usize,
+}
+
+impl Visitor<'_> for SelectedMapKeyVisitor<'_> {
+    type Value = SelectedMapKey;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON object key")
+    }
+
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+        let selected = self
+            .node
+            .members
+            .get_key_value(value)
+            .map(|(key, node)| (Arc::clone(key), Arc::clone(node)));
+        let (retained, overlong_for_parent) = if self.retain_for_parent {
+            if !encoded_string_fits(value, self.limit).map_err(E::custom)? {
+                (None, true)
+            } else {
+                let key = selected
+                    .as_ref()
+                    .map_or_else(|| Arc::from(value), |(key, _)| Arc::clone(key));
+                (Some(key), false)
+            }
+        } else {
+            (None, false)
+        };
+        Ok(SelectedMapKey {
+            selected,
+            retained,
+            overlong_for_parent,
+        })
+    }
+
+    fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
+        self.visit_str(&value)
+    }
+}
+
+impl Visitor<'_> for ExpectedKeyVisitor<'_> {
+    type Value = bool;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON object key")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(value == self.expected)
+    }
+
+    fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
+        self.visit_str(&value)
     }
 }
 
@@ -673,12 +778,12 @@ impl<'de> DeserializeSeed<'de> for JsonSelectSeed {
     where
         D: serde::Deserializer<'de>,
     {
-        let encode_current = self.emit_to_parent || self.node.capture.is_some();
         let capture = self.node.capture;
         let value = deserializer.deserialize_any(JsonSelectVisitor {
             node: self.node,
             state: Rc::clone(&self.state),
-            encode_current,
+            capture_current: capture.is_some(),
+            emit_to_parent: self.emit_to_parent,
             limit: self.limit,
         })?;
         if let Some(capture) = capture {
@@ -700,14 +805,15 @@ struct JsonSelectValue {
 struct JsonSelectVisitor {
     node: Arc<JsonSelectNode>,
     state: Rc<RefCell<JsonSelectState>>,
-    encode_current: bool,
+    capture_current: bool,
+    emit_to_parent: bool,
     limit: usize,
 }
 
 impl JsonSelectVisitor {
     fn scalar(self, captured: JsonScanValue, encoded: &[u8]) -> JsonSelectValue {
         JsonSelectValue {
-            encoded: if self.encode_current {
+            encoded: if self.emit_to_parent {
                 BoundedJson::from_bytes(self.limit, encoded)
             } else {
                 BoundedJson::new(self.limit)
@@ -716,9 +822,13 @@ impl JsonSelectVisitor {
         }
     }
 
-    fn finish_container(self, encoded: BoundedJson) -> JsonSelectValue {
-        let captured = if self.node.capture.is_some() {
-            encoded.to_scan_value()
+    fn finish_container(self, mut encoded: BoundedJson) -> JsonSelectValue {
+        let captured = if self.capture_current {
+            if self.emit_to_parent {
+                encoded.to_scan_value()
+            } else {
+                std::mem::replace(&mut encoded, BoundedJson::new(self.limit)).into_scan_value()
+            }
         } else {
             JsonScanValue::Missing
         };
@@ -764,20 +874,18 @@ impl<'de> Visitor<'de> for JsonSelectVisitor {
     }
 
     fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
-        let captured = if value.len() > self.limit {
+        let captured = if !self.capture_current {
+            JsonScanValue::Missing
+        } else if value.len() > self.limit {
             JsonScanValue::TooLong
         } else {
             JsonScanValue::Value(Value::Str(Arc::from(value)))
         };
-        let encoded = if self.encode_current {
-            serde_json::to_vec(value).map_err(E::custom)?
-        } else {
-            Vec::new()
-        };
-        Ok(JsonSelectValue {
-            encoded: BoundedJson::from_bytes(self.limit, &encoded),
-            captured,
-        })
+        let mut encoded = BoundedJson::new(self.limit);
+        if self.emit_to_parent {
+            serde_json::to_writer(&mut encoded, &value).map_err(E::custom)?;
+        }
+        Ok(JsonSelectValue { encoded, captured })
     }
 
     fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
@@ -797,24 +905,26 @@ impl<'de> Visitor<'de> for JsonSelectVisitor {
         A: SeqAccess<'de>,
     {
         let mut output = BoundedJson::new(self.limit);
-        if self.encode_current {
+        let encode_current = self.emit_to_parent || self.capture_current;
+        if encode_current {
             output.push(b"[");
         }
         let mut index = 0u64;
         let mut first = true;
         loop {
             let selected = self.node.indices.get(&index).cloned();
+            let retain_for_parent = encode_current && !output.oversized;
             let value = match selected {
                 Some(node) => {
                     self.state.borrow_mut().reset(&node.descendant_captures);
                     seq.next_element_seed(JsonSelectSeed {
                         node,
                         state: Rc::clone(&self.state),
-                        emit_to_parent: self.encode_current,
+                        emit_to_parent: retain_for_parent,
                         limit: self.limit,
                     })?
                 }
-                None if self.encode_current => seq.next_element_seed(BoundedSeed { limit: self.limit })?,
+                None if retain_for_parent => seq.next_element_seed(BoundedSeed { limit: self.limit })?,
                 None => {
                     if seq.next_element::<IgnoredAny>()?.is_some() {
                         Some(BoundedJson::new(self.limit))
@@ -826,7 +936,7 @@ impl<'de> Visitor<'de> for JsonSelectVisitor {
             let Some(value) = value else {
                 break;
             };
-            if self.encode_current {
+            if retain_for_parent {
                 if !first {
                     output.push(b",");
                 }
@@ -835,7 +945,7 @@ impl<'de> Visitor<'de> for JsonSelectVisitor {
             }
             index = index.saturating_add(1);
         }
-        if self.encode_current {
+        if encode_current {
             output.push(b"]");
         }
         Ok(self.finish_container(output))
@@ -845,17 +955,24 @@ impl<'de> Visitor<'de> for JsonSelectVisitor {
     where
         A: MapAccess<'de>,
     {
+        let encode_current = self.emit_to_parent || self.capture_current;
         let mut output = BoundedMapAccumulator::new(self.limit);
         let reject_duplicates = self.state.borrow().duplicate_policy == JsonDuplicatePolicy::RejectSelected;
         let mut selected_keys = reject_duplicates.then(std::collections::HashSet::new);
-        while let Some(key) = map.next_key::<String>()? {
-            let selected = self.node.members.get(&key).cloned();
-            let retain_for_parent = self.encode_current && output.accepts_candidates();
-            let value = match selected {
-                Some(node) => {
+        while let Some(key) = map.next_key_seed(SelectedMapKeySeed {
+            node: &self.node,
+            retain_for_parent: encode_current && output.accepts_candidates(),
+            limit: self.limit,
+        })? {
+            if key.overlong_for_parent {
+                output.mark_irreversible();
+            }
+            let retain_for_parent = key.retained.is_some();
+            let value = match key.selected {
+                Some((selected_key, node)) => {
                     if selected_keys
                         .as_mut()
-                        .is_some_and(|selected_keys| !selected_keys.insert(key.clone()))
+                        .is_some_and(|selected_keys| !selected_keys.insert(selected_key))
                     {
                         self.state.borrow_mut().reject(&node.descendant_captures);
                         map.next_value::<IgnoredAny>()?;
@@ -876,12 +993,12 @@ impl<'de> Visitor<'de> for JsonSelectVisitor {
                     BoundedJson::new(self.limit)
                 }
             };
-            if retain_for_parent {
+            if let Some(key) = key.retained {
                 output.insert(key, value).map_err(A::Error::custom)?;
             }
         }
 
-        let encoded = if self.encode_current {
+        let encoded = if encode_current {
             output.finish().map_err(A::Error::custom)?
         } else {
             BoundedJson::new(self.limit)
@@ -978,7 +1095,14 @@ impl<'de> Visitor<'de> for CaptureVisitor {
         let mut output = BoundedJson::new(self.limit);
         output.push(b"[");
         let mut first = true;
-        while let Some(value) = seq.next_element_seed(BoundedSeed { limit: self.limit })? {
+        loop {
+            if output.oversized {
+                while seq.next_element::<IgnoredAny>()?.is_some() {}
+                break;
+            }
+            let Some(value) = seq.next_element_seed(BoundedSeed { limit: self.limit })? else {
+                break;
+            };
             if !first {
                 output.push(b",");
             }
@@ -1042,10 +1166,9 @@ impl<'de> Visitor<'de> for BoundedVisitor {
         if value.len() > self.limit {
             return Ok(BoundedJson::oversized(self.limit));
         }
-        Ok(BoundedJson::from_bytes(
-            self.limit,
-            &serde_json::to_vec(value).map_err(E::custom)?,
-        ))
+        let mut encoded = BoundedJson::new(self.limit);
+        serde_json::to_writer(&mut encoded, &value).map_err(E::custom)?;
+        Ok(encoded)
     }
     fn visit_none<E>(self) -> Result<Self::Value, E> {
         Ok(BoundedJson::from_bytes(self.limit, b"null"))
@@ -1060,7 +1183,14 @@ impl<'de> Visitor<'de> for BoundedVisitor {
         let mut output = BoundedJson::new(self.limit);
         output.push(b"[");
         let mut first = true;
-        while let Some(value) = seq.next_element_seed(BoundedSeed { limit: self.limit })? {
+        loop {
+            if output.oversized {
+                while seq.next_element::<IgnoredAny>()?.is_some() {}
+                break;
+            }
+            let Some(value) = seq.next_element_seed(BoundedSeed { limit: self.limit })? else {
+                break;
+            };
             if !first {
                 output.push(b",");
             }
@@ -1083,22 +1213,72 @@ where
     A: MapAccess<'de>,
 {
     let mut output = BoundedMapAccumulator::new(limit);
-    while let Some(key) = map.next_key::<String>()? {
+    loop {
         if !output.accepts_candidates() {
+            if map.next_key::<IgnoredAny>()?.is_none() {
+                break;
+            }
             map.next_value::<IgnoredAny>()?;
             continue;
         }
+        let Some(key) = map.next_key_seed(BoundedMapKeySeed { limit })? else {
+            break;
+        };
+        let Some(key) = key else {
+            output.mark_irreversible();
+            map.next_value::<IgnoredAny>()?;
+            continue;
+        };
         let value = map.next_value_seed(BoundedSeed { limit })?;
         output.insert(key, value).map_err(A::Error::custom)?;
     }
     output.finish().map_err(A::Error::custom)
 }
 
+struct BoundedMapKeySeed {
+    limit: usize,
+}
+
+impl<'de> DeserializeSeed<'de> for BoundedMapKeySeed {
+    type Value = Option<Arc<str>>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_str(BoundedMapKeyVisitor { limit: self.limit })
+    }
+}
+
+struct BoundedMapKeyVisitor {
+    limit: usize,
+}
+
+impl Visitor<'_> for BoundedMapKeyVisitor {
+    type Value = Option<Arc<str>>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON object key")
+    }
+
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+        if !encoded_string_fits(value, self.limit).map_err(E::custom)? {
+            Ok(None)
+        } else {
+            Ok(Some(Arc::from(value)))
+        }
+    }
+
+    fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
+        self.visit_str(&value)
+    }
+}
+
 struct BoundedMapAccumulator {
-    entries: BTreeMap<String, BoundedJson>,
+    entries: BTreeMap<Arc<str>, BoundedJson>,
     rendered_len: usize,
     limit: usize,
-    overflow_key: Option<String>,
+    overflow_key: Option<Arc<str>>,
     irreversible_oversize: bool,
 }
 
@@ -1121,13 +1301,16 @@ impl BoundedMapAccumulator {
         !self.irreversible_oversize
     }
 
-    fn insert(&mut self, key: String, value: BoundedJson) -> Result<(), serde_json::Error> {
+    fn insert(&mut self, key: impl Into<Arc<str>>, value: BoundedJson) -> Result<(), serde_json::Error> {
+        let key = key.into();
         if self.irreversible_oversize {
             return Ok(());
         }
 
-        let encoded_key_len = serde_json::to_vec(&key)?.len();
-        if self.overflow_key.as_deref() == Some(key.as_str()) {
+        let mut encoded_key_len = CountingWriter::default();
+        serde_json::to_writer(&mut encoded_key_len, &key.as_ref())?;
+        let encoded_key_len = encoded_key_len.len;
+        if self.overflow_key.as_deref() == Some(key.as_ref()) {
             self.overflow_key = None;
         }
         if let Some(old) = self.entries.remove(&key) {
@@ -1157,12 +1340,12 @@ impl BoundedMapAccumulator {
         Ok(())
     }
 
-    fn record_overflow(&mut self, key: String, encoded_key_len: usize) {
+    fn record_overflow(&mut self, key: Arc<str>, encoded_key_len: usize) {
         if encoded_key_len > self.limit
             || self
                 .overflow_key
                 .as_deref()
-                .is_some_and(|overflow_key| overflow_key != key)
+                .is_some_and(|overflow_key| overflow_key != key.as_ref())
         {
             self.mark_irreversible();
         } else {
@@ -1187,7 +1370,7 @@ impl BoundedMapAccumulator {
             if index != 0 {
                 output.push(b",");
             }
-            output.push(&serde_json::to_vec(&key)?);
+            serde_json::to_writer(&mut output, &key.as_ref())?;
             output.push(b":");
             output.push_value(value);
         }
@@ -1201,6 +1384,35 @@ struct BoundedJson {
     bytes: Vec<u8>,
     limit: usize,
     oversized: bool,
+}
+
+#[derive(Default)]
+struct CountingWriter {
+    len: usize,
+}
+
+impl Write for CountingWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.len = self.len.saturating_add(bytes.len());
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn encoded_string_len(value: &str) -> Result<usize, serde_json::Error> {
+    let mut count = CountingWriter::default();
+    serde_json::to_writer(&mut count, &value)?;
+    Ok(count.len)
+}
+
+fn encoded_string_fits(value: &str, limit: usize) -> Result<bool, serde_json::Error> {
+    if value.len().checked_add(2).is_none_or(|minimum| minimum > limit) {
+        return Ok(false);
+    }
+    Ok(encoded_string_len(value)? <= limit)
 }
 
 impl BoundedJson {
@@ -1243,12 +1455,25 @@ impl BoundedJson {
         }
     }
 
-    fn push_value(&mut self, value: Self) {
+    fn push_value(&mut self, mut value: Self) {
+        if self.oversized {
+            return;
+        }
         if value.oversized {
             self.bytes.clear();
             self.oversized = true;
+            return;
+        }
+        if self
+            .bytes
+            .len()
+            .checked_add(value.bytes.len())
+            .is_none_or(|len| len > self.limit)
+        {
+            self.bytes.clear();
+            self.oversized = true;
         } else {
-            self.push(&value.bytes);
+            self.bytes.append(&mut value.bytes);
         }
     }
 
@@ -1272,6 +1497,17 @@ impl BoundedJson {
                 Err(_) => JsonScanValue::Missing,
             }
         }
+    }
+}
+
+impl Write for BoundedJson {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.push(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -1573,6 +1809,74 @@ mod tests {
             .unwrap();
         assert!(output.irreversible_oversize);
         assert!(output.entries.is_empty());
+    }
+
+    #[test]
+    fn json_encoding_is_counted_and_written_without_expanded_temporaries() {
+        let key = "quote\" slash\\ control\u{0001} café";
+        let expected = serde_json::to_vec(key).unwrap();
+        let mut count = CountingWriter::default();
+        serde_json::to_writer(&mut count, &key).unwrap();
+        assert_eq!(count.len, expected.len());
+
+        let raw = "\0".repeat(32);
+        let mut bounded = BoundedJson::new(16);
+        serde_json::to_writer(&mut bounded, &raw.as_str()).unwrap();
+        assert!(bounded.oversized);
+        assert!(bounded.bytes.is_empty());
+        assert!(bounded.bytes.capacity() <= bounded.limit);
+
+        let mut map = BoundedMapAccumulator::new(16);
+        map.insert(raw, BoundedJson::from_bytes(16, b"1")).unwrap();
+        assert!(map.irreversible_oversize);
+        assert!(map.entries.is_empty());
+    }
+
+    #[test]
+    fn selected_map_keys_reuse_the_bounded_plan_key() {
+        let plan = JsonSelectPlan::new([("value".to_string(), DefiniteJsonPath::parse("$.selected").unwrap())]);
+        let (canonical, _) = plan.root.members.get_key_value("selected").unwrap();
+        let mut deserializer = serde_json::Deserializer::from_str(r#""selected""#);
+        let key = SelectedMapKeySeed {
+            node: &plan.root,
+            retain_for_parent: true,
+            limit: 32,
+        }
+        .deserialize(&mut deserializer)
+        .unwrap();
+
+        let (selected, _) = key.selected.unwrap();
+        let retained = key.retained.unwrap();
+        assert!(Arc::ptr_eq(canonical, &selected));
+        assert!(Arc::ptr_eq(canonical, &retained));
+
+        let mut deserializer = serde_json::Deserializer::from_str(r#""body-sized-irrelevant-key""#);
+        let key = SelectedMapKeySeed {
+            node: &plan.root,
+            retain_for_parent: true,
+            limit: 8,
+        }
+        .deserialize(&mut deserializer)
+        .unwrap();
+        assert!(key.selected.is_none());
+        assert!(key.retained.is_none());
+        assert!(key.overlong_for_parent);
+    }
+
+    #[tokio::test]
+    async fn oversized_selected_array_still_scans_later_selected_indices() {
+        let (plan, values) = scan_json_select(
+            &[br#"["far too large",{"nested":"also too large"},7]"#],
+            &[("root", "$"), ("third", "$[2]")],
+            8,
+        )
+        .await;
+
+        assert!(matches!(selected(&plan, &values, "root"), JsonScanValue::TooLong));
+        assert!(matches!(
+            selected(&plan, &values, "third"),
+            JsonScanValue::Value(Value::Int(7))
+        ));
     }
 
     #[tokio::test]

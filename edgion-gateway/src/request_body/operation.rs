@@ -82,7 +82,8 @@ pub trait TextBodyScanner: Send + 'static {
 /// Adapts a text scanner to raw body chunks without materializing the body.
 pub struct LossyTextScanner<S> {
     inner: S,
-    pending: Vec<u8>,
+    pending: [u8; 4],
+    pending_len: usize,
     stopped: bool,
 }
 
@@ -90,36 +91,90 @@ impl<S> LossyTextScanner<S> {
     pub fn new(inner: S) -> Self {
         Self {
             inner,
-            pending: Vec::with_capacity(4),
+            pending: [0; 4],
+            pending_len: 0,
             stopped: false,
         }
     }
 
-    fn feed_lossy(&mut self, bytes: &[u8], final_chunk: bool) -> Result<ScanControl, BodyOperationError>
+    fn feed_lossy(&mut self, mut bytes: &[u8], final_chunk: bool) -> Result<ScanControl, BodyOperationError>
     where
         S: TextBodyScanner,
     {
         if self.stopped {
             return Ok(ScanControl::Stop);
         }
-        self.pending.extend_from_slice(bytes);
-        let mut consumed = 0usize;
-        while consumed < self.pending.len() {
-            match std::str::from_utf8(&self.pending[consumed..]) {
+
+        // Resolve the incomplete scalar retained from the prior chunk by
+        // adding at most the bytes needed to make one UTF-8 decision. The
+        // remaining chunk is scanned directly and is never copied here.
+        while self.pending_len > 0 {
+            match std::str::from_utf8(&self.pending[..self.pending_len]) {
                 Ok(valid) => {
                     if !valid.is_empty() && self.inner.push(valid)? == ScanControl::Stop {
                         self.stopped = true;
                     }
-                    consumed = self.pending.len();
+                    self.pending_len = 0;
                 }
                 Err(error) => {
-                    let valid_end = consumed + error.valid_up_to();
-                    if valid_end > consumed {
-                        let valid = std::str::from_utf8(&self.pending[consumed..valid_end])
+                    let valid_end = error.valid_up_to();
+                    if valid_end > 0 {
+                        let valid = std::str::from_utf8(&self.pending[..valid_end])
                             .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
                         if self.inner.push(valid)? == ScanControl::Stop {
                             self.stopped = true;
-                            consumed = valid_end;
+                        }
+                    }
+                    match error.error_len() {
+                        Some(invalid_len) => {
+                            if !self.stopped && self.inner.push("\u{FFFD}")? == ScanControl::Stop {
+                                self.stopped = true;
+                            }
+                            let consumed = valid_end + invalid_len;
+                            self.pending.copy_within(consumed..self.pending_len, 0);
+                            self.pending_len -= consumed;
+                        }
+                        None if final_chunk => {
+                            if !self.stopped && self.inner.push("\u{FFFD}")? == ScanControl::Stop {
+                                self.stopped = true;
+                            }
+                            self.pending_len = 0;
+                        }
+                        None => {
+                            if let Some((&next, remaining)) = bytes.split_first() {
+                                if self.pending_len == self.pending.len() {
+                                    return Err(BodyOperationError::Body(BodyReadError::Incomplete));
+                                }
+                                self.pending[self.pending_len] = next;
+                                self.pending_len += 1;
+                                bytes = remaining;
+                            } else {
+                                return Ok(ScanControl::Continue);
+                            }
+                        }
+                    }
+                }
+            }
+            if self.stopped {
+                return Ok(ScanControl::Stop);
+            }
+        }
+
+        while !bytes.is_empty() {
+            match std::str::from_utf8(bytes) {
+                Ok(valid) => {
+                    if !valid.is_empty() && self.inner.push(valid)? == ScanControl::Stop {
+                        self.stopped = true;
+                    }
+                    break;
+                }
+                Err(error) => {
+                    let valid_end = error.valid_up_to();
+                    if valid_end > 0 {
+                        let valid = std::str::from_utf8(&bytes[..valid_end])
+                            .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
+                        if self.inner.push(valid)? == ScanControl::Stop {
+                            self.stopped = true;
                             break;
                         }
                     }
@@ -127,30 +182,28 @@ impl<S> LossyTextScanner<S> {
                         Some(invalid_len) => {
                             if self.inner.push("\u{FFFD}")? == ScanControl::Stop {
                                 self.stopped = true;
-                                consumed = valid_end + invalid_len;
                                 break;
                             }
-                            consumed = valid_end + invalid_len;
+                            bytes = &bytes[valid_end + invalid_len..];
                         }
                         None if final_chunk => {
                             if self.inner.push("\u{FFFD}")? == ScanControl::Stop {
                                 self.stopped = true;
                             }
-                            consumed = self.pending.len();
+                            break;
                         }
                         None => {
-                            consumed = valid_end;
+                            let incomplete = &bytes[valid_end..];
+                            if incomplete.len() >= self.pending.len() {
+                                return Err(BodyOperationError::Body(BodyReadError::Incomplete));
+                            }
+                            self.pending[..incomplete.len()].copy_from_slice(incomplete);
+                            self.pending_len = incomplete.len();
                             break;
                         }
                     }
                 }
             }
-            if self.stopped {
-                break;
-            }
-        }
-        if consumed > 0 {
-            self.pending.drain(..consumed);
         }
         Ok(if self.stopped {
             ScanControl::Stop
@@ -196,22 +249,22 @@ pub(crate) enum TextOperationScanner {
         count: u64,
     },
     StartsWith {
-        pattern: Vec<char>,
+        pattern: Vec<u8>,
         matched: usize,
         failed: bool,
     },
     EndsWith {
-        pattern: Vec<char>,
-        tail: VecDeque<char>,
+        pattern: Vec<u8>,
+        tail: VecDeque<u8>,
     },
     Contains {
-        pattern: Vec<char>,
+        pattern: Vec<u8>,
         failure: Vec<usize>,
         matched: usize,
         found: bool,
     },
     Equals {
-        pattern: Vec<char>,
+        pattern: Vec<u8>,
         matched: usize,
         failed: bool,
     },
@@ -227,16 +280,16 @@ impl TextOperationScanner {
                 failed: false,
             },
             BodyTextOperation::StartsWith(pattern) => Self::StartsWith {
-                pattern: pattern.chars().collect(),
+                pattern: pattern.into_bytes(),
                 matched: 0,
                 failed: false,
             },
             BodyTextOperation::EndsWith(pattern) => Self::EndsWith {
-                pattern: pattern.chars().collect(),
+                pattern: pattern.into_bytes(),
                 tail: VecDeque::new(),
             },
             BodyTextOperation::Contains(pattern) => {
-                let pattern: Vec<char> = pattern.chars().collect();
+                let pattern = pattern.into_bytes();
                 let failure = kmp_failure(&pattern);
                 Self::Contains {
                     pattern,
@@ -246,7 +299,7 @@ impl TextOperationScanner {
                 }
             }
             BodyTextOperation::Equals(pattern) => Self::Equals {
-                pattern: pattern.chars().collect(),
+                pattern: pattern.into_bytes(),
                 matched: 0,
                 failed: false,
             },
@@ -257,8 +310,16 @@ impl TextOperationScanner {
 pub(crate) fn empty_text_operation(
     operation: BodyTextOperation,
 ) -> Result<BodyScanResult<BodyTextResult>, BodyOperationError> {
+    let value = match operation {
+        BodyTextOperation::CharLen => BodyTextResult::CharLen(0),
+        BodyTextOperation::IsEmpty => BodyTextResult::Bool(true),
+        BodyTextOperation::StartsWith(pattern)
+        | BodyTextOperation::EndsWith(pattern)
+        | BodyTextOperation::Contains(pattern)
+        | BodyTextOperation::Equals(pattern) => BodyTextResult::Bool(pattern.is_empty()),
+    };
     Ok(BodyScanResult {
-        value: TextOperationScanner::new(operation).finish()?,
+        value,
         bytes_scanned: 0,
     })
 }
@@ -283,7 +344,7 @@ impl TextBodyScanner for TextOperationScanner {
                 if pattern.is_empty() {
                     return Ok(ScanControl::Stop);
                 }
-                for value in chunk.chars() {
+                for &value in chunk.as_bytes() {
                     if *matched == pattern.len() {
                         return Ok(ScanControl::Stop);
                     }
@@ -301,7 +362,7 @@ impl TextBodyScanner for TextOperationScanner {
                 if pattern.is_empty() {
                     return Ok(ScanControl::Stop);
                 }
-                for value in chunk.chars() {
+                for &value in chunk.as_bytes() {
                     if tail.len() == pattern.len() {
                         tail.pop_front();
                     }
@@ -318,7 +379,7 @@ impl TextBodyScanner for TextOperationScanner {
                     *found = true;
                     return Ok(ScanControl::Stop);
                 }
-                for value in chunk.chars() {
+                for &value in chunk.as_bytes() {
                     while *matched > 0 && pattern[*matched] != value {
                         *matched = failure[*matched - 1];
                     }
@@ -336,7 +397,7 @@ impl TextBodyScanner for TextOperationScanner {
                 matched,
                 failed,
             } => {
-                for value in chunk.chars() {
+                for &value in chunk.as_bytes() {
                     if *matched >= pattern.len() || pattern[*matched] != value {
                         *failed = true;
                         return Ok(ScanControl::Stop);
@@ -369,7 +430,7 @@ impl TextBodyScanner for TextOperationScanner {
     }
 }
 
-fn kmp_failure(pattern: &[char]) -> Vec<usize> {
+fn kmp_failure(pattern: &[u8]) -> Vec<usize> {
     let mut failure = vec![0; pattern.len()];
     let mut matched = 0usize;
     for index in 1..pattern.len() {
@@ -406,5 +467,165 @@ impl RawBodyScanner for BytesScanner {
 
     fn finish(self) -> Result<Self::Output, BodyOperationError> {
         Ok(Bytes::from(self.bytes))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct CollectText(String);
+
+    impl TextBodyScanner for CollectText {
+        type Output = String;
+
+        fn push(&mut self, chunk: &str) -> Result<ScanControl, BodyOperationError> {
+            self.0.push_str(chunk);
+            Ok(ScanControl::Continue)
+        }
+
+        fn finish(self) -> Result<Self::Output, BodyOperationError> {
+            Ok(self.0)
+        }
+    }
+
+    #[test]
+    fn lossy_utf8_matches_whole_document_semantics_at_every_two_way_split() {
+        let input = [b'a', 0xe2, 0x82, 0xac, 0xf0, 0x90, 0x80, b'b', 0xff, 0xe2, 0x82];
+        let expected = String::from_utf8_lossy(&input);
+
+        for first in 0..=input.len() {
+            for second in first..=input.len() {
+                let mut scanner = LossyTextScanner::new(CollectText(String::new()));
+                for chunk in [&input[..first], &input[first..second], &input[second..]] {
+                    assert_eq!(scanner.push(chunk).unwrap(), ScanControl::Continue);
+                    assert!(scanner.pending_len < scanner.pending.len());
+                }
+                assert_eq!(scanner.finish().unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn lossy_utf8_carry_never_retains_the_complete_chunk() {
+        let mut input = vec![b'x'; 64 * 1024];
+        input.extend_from_slice(&[0xf0, 0x90]);
+        let mut scanner = LossyTextScanner::new(CollectText(String::new()));
+
+        assert_eq!(scanner.push(&input).unwrap(), ScanControl::Continue);
+        assert_eq!(scanner.pending_len, 2);
+        let output = scanner.finish().unwrap();
+        assert_eq!(output, String::from_utf8_lossy(&input));
+    }
+
+    #[test]
+    fn lossy_utf8_matches_whole_document_for_malformed_sequences_at_every_split() {
+        let corpus: &[&[u8]] = &[
+            &[0xe2, 0x28, 0xa1],
+            &[0xf0, 0x90, 0x28, 0xbc],
+            &[0xc0, 0xaf],
+            &[0xed, 0xa0, 0x80],
+            &[0xf4, 0x90, 0x80, 0x80],
+            &[0x80, 0x81, 0xbf],
+        ];
+        for input in corpus {
+            let expected = String::from_utf8_lossy(input);
+            for first in 0..=input.len() {
+                for second in first..=input.len() {
+                    let mut scanner = LossyTextScanner::new(CollectText(String::new()));
+                    for chunk in [&input[..first], &input[first..second], &input[second..]] {
+                        assert_eq!(scanner.push(chunk).unwrap(), ScanControl::Continue);
+                    }
+                    assert_eq!(
+                        scanner.finish().unwrap(),
+                        expected,
+                        "input={input:?}, splits={first}/{second}"
+                    );
+                }
+            }
+        }
+    }
+
+    fn scan_text_operation(operation: BodyTextOperation, chunks: &[&[u8]]) -> BodyTextResult {
+        let mut scanner = LossyTextScanner::new(TextOperationScanner::new(operation));
+        for chunk in chunks {
+            if scanner.push(chunk).unwrap() == ScanControl::Stop {
+                break;
+            }
+        }
+        scanner.finish().unwrap()
+    }
+
+    #[test]
+    fn byte_predicates_preserve_multibyte_semantics_across_every_raw_split() {
+        let text = "a€b€";
+        let bytes = text.as_bytes();
+        for split in 0..=bytes.len() {
+            let chunks = [&bytes[..split], &bytes[split..]];
+            for (operation, expected) in [
+                (BodyTextOperation::StartsWith("a€".to_string()), true),
+                (BodyTextOperation::EndsWith("b€".to_string()), true),
+                (BodyTextOperation::Contains("€b".to_string()), true),
+                (BodyTextOperation::Equals(text.to_string()), true),
+                (BodyTextOperation::Contains("€a".to_string()), false),
+            ] {
+                assert_eq!(scan_text_operation(operation, &chunks), BodyTextResult::Bool(expected));
+            }
+            assert_eq!(
+                scan_text_operation(BodyTextOperation::CharLen, &chunks),
+                BodyTextResult::CharLen(4)
+            );
+        }
+    }
+
+    #[test]
+    fn predicate_patterns_retain_utf8_bytes_instead_of_expanded_chars() {
+        let pattern = "€".repeat(1024);
+        let expected_bytes = pattern.len();
+
+        let TextOperationScanner::StartsWith { pattern, .. } =
+            TextOperationScanner::new(BodyTextOperation::StartsWith(pattern))
+        else {
+            unreachable!()
+        };
+        assert_eq!(pattern.len(), expected_bytes);
+        assert_eq!(pattern.len(), 3 * 1024);
+    }
+
+    #[test]
+    fn known_empty_operations_resolve_without_building_scanner_state() {
+        assert_eq!(
+            empty_text_operation(BodyTextOperation::CharLen).unwrap(),
+            BodyScanResult {
+                value: BodyTextResult::CharLen(0),
+                bytes_scanned: 0
+            }
+        );
+        assert_eq!(
+            empty_text_operation(BodyTextOperation::IsEmpty).unwrap().value,
+            BodyTextResult::Bool(true)
+        );
+        for operation in [
+            BodyTextOperation::StartsWith("large-pattern".repeat(1024)),
+            BodyTextOperation::EndsWith("large-pattern".repeat(1024)),
+            BodyTextOperation::Contains("large-pattern".repeat(1024)),
+            BodyTextOperation::Equals("large-pattern".repeat(1024)),
+        ] {
+            assert_eq!(
+                empty_text_operation(operation).unwrap().value,
+                BodyTextResult::Bool(false)
+            );
+        }
+        for operation in [
+            BodyTextOperation::StartsWith(String::new()),
+            BodyTextOperation::EndsWith(String::new()),
+            BodyTextOperation::Contains(String::new()),
+            BodyTextOperation::Equals(String::new()),
+        ] {
+            assert_eq!(
+                empty_text_operation(operation).unwrap().value,
+                BodyTextResult::Bool(true)
+            );
+        }
     }
 }
