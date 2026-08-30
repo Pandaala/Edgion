@@ -85,3 +85,13 @@ This is the single concise record of actual changes across the file-by-file audi
 - Verification: request-body tests 91/91; focused bodyless digest, request/retry framing, and response release tests; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
 - Integration-test guard: baseline `edgion-tests` tree unchanged
 - Commit: `a408d7fd`
+
+### `REQ-BODY-OBSERVER-001` — bounded synchronous request-body observer seam
+
+- Outcome: optimized (1 file)
+- Files reviewed: complete audit of `request_body/observer.rs`; targeted lifecycle review of its context slot, runtime installation, post-mutation dispatch, mirror ordering, and terminal logging consumers
+- Changes: made observer budget exhaustion monotonic by atomically latching and zeroing every request-wide counter after an oversized or post-exhaustion semantic/callback charge; added oversized-to-smaller/zero re-entry and active-registry destructor-panic regressions.
+- Generality and architecture review: independent review found the non-monotonic semantic-work budget defect and approved the frozen one-file fix with no remaining findings. Slot, byte, event, work, and scratch caps remain hard; retry resets semantic state without replenishing request-wide work; observation stays synchronous, borrowed, post-mutation, pre-mirror, failure-open, and allocation-free in the host chunk path; factory/callback/query/reset/finalize/drop panics remain redacted and isolated; one static payload-free outcome is drained idempotently during terminal logging.
+- Verification: observer tests 19/19; all request-body tests 93/93; independent broader observer/install/context tests 11/11; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
+- Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
+- Commit: `be461374`

@@ -132,7 +132,7 @@
 | `plugins-root` | 1 | 0 | 0 | 0 | pending |
 | `plugins-runtime` | 33 | 0 | 0 | 0 | pending |
 | `plugins-stream` | 18 | 0 | 0 | 0 | pending |
-| `request-body` | 9 | 3 | 1 | 0 | pending |
+| `request-body` | 9 | 4 | 1 | 0 | pending |
 | `routes-shared` | 65 | 1 | 1 | 0 | pending |
 | `runtime` | 15 | 0 | 0 | 0 | pending |
 | `services` | 4 | 0 | 0 | 0 | pending |
@@ -558,7 +558,7 @@
 | `edgion-gateway/src/request_body/body_scanners.rs` | `request-body` | source | pending | — |
 | `edgion-gateway/src/request_body/config.rs` | `request-body` | source | reviewed-no-change | REQ-BODY-CORE-001 / `a408d7fd` |
 | `edgion-gateway/src/request_body/mod.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd` |
-| `edgion-gateway/src/request_body/observer.rs` | `request-body` | source | pending | — |
+| `edgion-gateway/src/request_body/observer.rs` | `request-body` | source | optimized | REQ-BODY-OBSERVER-001 / `be461374` |
 | `edgion-gateway/src/request_body/operation.rs` | `request-body` | source | pending | — |
 | `edgion-gateway/src/request_body/state.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd` |
 | `edgion-gateway/src/request_body/state/enabled.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd` |
