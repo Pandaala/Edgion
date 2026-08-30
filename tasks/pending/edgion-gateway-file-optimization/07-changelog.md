@@ -165,3 +165,13 @@ This is the single concise record of actual changes across the file-by-file audi
 - Verification: conf-sync conf-client tests 21/21; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
 - Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
 - Commit: `9ca73353`
+
+### `CONF-SYNC-ROOT-001` — conf-sync module exports and global client publication
+
+- Outcome: reviewed-no-change (1 file)
+- Files reviewed: `edgion-gateway/src/conf_sync/mod.rs`
+- Changes: none. The process-global `OnceLock<Arc<ConfigClient>>` already provides atomic one-time publication, rejects duplicate initialization without replacing the live client, and returns shared ownership without exposing mutable global state.
+- Generality and architecture review: implementation and independent reviews approved the file with no findings. Module exports remain narrow, and the file has no logging, secret-bearing data, schema, serialization, task, or request-hot-path behavior. Supporting replacement would require a separately justified global lifecycle/task-ownership design; no current defect requires one.
+- Verification: static call-site review; adjacent conf-sync cache-client tests 40/40 and conf-client tests 21/21; current workspace check, workspace clippy, SSA, metrics inventory, Pingora source, and gateway no-tracing guards passed. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
+- Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
+- Commit: no code commit; tracker-only closure
