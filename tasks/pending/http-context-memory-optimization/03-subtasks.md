@@ -4,8 +4,9 @@
 |------:|--------|-------------|--------|--------|
 | -1 | completed | Unified request-owned WAF state | completed; one selection-terminal regression fixed | `e55009ee` |
 | 0 | completed | Task plan and layout/allocation baseline | completed; nested measurement and lifecycle findings fixed | `ae423041` |
-| 1 | completed | Allocation-free default Context and lazy stage logs | completed; no blocking findings | this commit |
-| 2 | pending | Shared GatewayInfo and compact HTTP/gRPC backend handles | pending | pending |
+| 1 | completed | Allocation-free default Context and lazy stage logs | completed; no blocking findings | `f9e377c9` |
+| 2a | completed | Shared request-stable GatewayInfo generation | completed; no blocking findings | this commit |
+| 2b | pending | Compact HTTP/gRPC backend handles | pending | pending |
 | 3 | pending | Common/TLS/gRPC RequestInfo split | pending | pending |
 | 4 | pending | Optional boxed plugin request state | pending | pending |
 | 5 | pending | Optional request-body-plugin and response-processing state | pending | pending |

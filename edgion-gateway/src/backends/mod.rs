@@ -42,7 +42,7 @@ pub use validation::validate_endpoint_in_route;
 
 use crate::link_sys::get_global_link_sys_store;
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
-use crate::runtime::ServerHeaderOpts;
+use crate::runtime::{GatewayInfo, ServerHeaderOpts};
 use crate::EdgionHttpContext;
 use crate::{end_response_500, end_response_503};
 use edgion_common::dns::resolver_select::{
@@ -118,8 +118,8 @@ pub(crate) async fn try_get_peer(
     is_grpc: bool,
     selected_http: Option<&SelectedLogicalBackend>,
 ) -> Result<Box<HttpPeer>, EdgionErrorCode> {
-    let gateway_key = ctx.gateway_info.gateway_key();
-    let gateway_key_ref = Some(gateway_key.as_str());
+    let gateway_key = ctx.gateway_info.as_deref().map(GatewayInfo::gateway_key);
+    let gateway_key_ref = gateway_key.as_deref();
 
     // HTTP routed Service identity comes exclusively from the selected proof.
     // gRPC and Invalid retain their existing context compatibility input.
@@ -426,7 +426,10 @@ fn compute_external_name_resolver(
     egc_default: Option<&edgion_resources::resources::edgion_gateway_config::DnsResolverConfig>,
 ) -> ResolverSpec {
     let service_layer = candidate_from_annotations(svc_annotations);
-    let gateway_layer = ctx.gateway_info.dns_resolver_candidate.clone();
+    let gateway_layer = ctx
+        .gateway_info
+        .as_deref()
+        .and_then(|info| info.dns_resolver_candidate.clone());
     let egc_layer = egc_default.and_then(candidate_from_egc_default);
 
     resolve_effective_spec(&[service_layer, gateway_layer, egc_layer], |key: &LinkSysKey| {
@@ -437,7 +440,10 @@ fn compute_external_name_resolver(
 /// Resolve the request's Gateway-scoped DNS policy for a routed external
 /// EdgionBackend. Unlike ExternalName there is no Service annotation layer.
 pub(crate) fn compute_routed_external_resolver(ctx: &EdgionHttpContext) -> ResolverSpec {
-    let gateway_layer = ctx.gateway_info.dns_resolver_candidate.clone();
+    let gateway_layer = ctx
+        .gateway_info
+        .as_deref()
+        .and_then(|info| info.dns_resolver_candidate.clone());
     let egc_default = crate::config::get_egc_dns_resolver_default();
     let egc_layer = egc_default.as_ref().and_then(candidate_from_egc_default);
     resolve_effective_spec(&[gateway_layer, egc_layer], |key: &LinkSysKey| {
@@ -570,7 +576,12 @@ fn build_peer_from_lb_selection(
     let (use_tls, sni) = extract_tls_config(backend_tls_policy);
     let lb_policy_clone = lb_policy.clone();
 
-    if ctx.gateway_info.metrics_test_type.is_some() && matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_))) {
+    if ctx
+        .gateway_info
+        .as_deref()
+        .is_some_and(|info| info.metrics_test_type.is_some())
+        && matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_)))
+    {
         let remote_ip = ctx.request_info.remote_ip.clone();
         let hash_key_bytes = extract_hash_key(session, lb_policy, &remote_ip);
         ctx.hash_key = String::from_utf8(hash_key_bytes).ok();

@@ -356,7 +356,7 @@ impl GrpcRouteRuleUnit {
         session: &Session,
         index: &GatewayInfoIndex,
         hostname: &str,
-    ) -> Result<Option<GatewayInfo>, EdError> {
+    ) -> Result<Option<Arc<GatewayInfo>>, EdError> {
         let req_header = session.req_header();
 
         // Check route-level hostname constraint: gRPC routes are NOT bucketed

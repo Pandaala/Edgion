@@ -149,7 +149,11 @@ pub fn collect(edgion_http: &EdgionHttpProxy, session: &Session, ctx: &EdgionHtt
     }
 
     let global_refs = edgion_http.edgion_gateway_config.spec.global_plugins_ref.as_deref();
-    let gateway_keys = ctx.gateway_info.plugin_store_keys.as_slice();
+    let gateway_keys = ctx
+        .gateway_info
+        .as_deref()
+        .map(|info| info.plugin_store_keys.as_slice())
+        .unwrap_or_default();
     let route_keys: &[(String, String)] = match (&ctx.route_unit, &ctx.grpc_route_unit) {
         (Some(u), _) => u.plugin_runtime.ext_ref_keys(),
         (_, Some(u)) => u.plugin_runtime.ext_ref_keys(),
@@ -158,7 +162,7 @@ pub fn collect(edgion_http: &EdgionHttpProxy, session: &Session, ctx: &EdgionHtt
 
     // No ref from this request into any EdgionPlugins at all: nothing to resolve
     // regardless of what the fleet-wide flag above says.
-    if global_refs.map_or(true, |r| r.is_empty()) && gateway_keys.is_empty() && route_keys.is_empty() {
+    if global_refs.is_none_or(|r| r.is_empty()) && gateway_keys.is_empty() && route_keys.is_empty() {
         return ext;
     }
 

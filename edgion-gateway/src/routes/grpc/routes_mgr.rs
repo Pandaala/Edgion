@@ -61,7 +61,7 @@ impl GrpcRouteRules {
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
         hostname: &str,
-    ) -> Result<(Arc<GrpcRouteRuleUnit>, GatewayInfo), EdError> {
+    ) -> Result<(Arc<GrpcRouteRuleUnit>, Arc<GatewayInfo>), EdError> {
         if let Some(ref engine) = self.match_engine {
             engine.match_route(session, ctx, index, hostname)
         } else {
@@ -95,7 +95,7 @@ impl DomainGrpcRouteRules {
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
         hostname: &str,
-    ) -> Result<(Arc<GrpcRouteRuleUnit>, GatewayInfo), EdError> {
+    ) -> Result<(Arc<GrpcRouteRuleUnit>, Arc<GatewayInfo>), EdError> {
         let grpc_routes = self.grpc_routes.load();
         grpc_routes.match_route(session, ctx, index, hostname)
     }

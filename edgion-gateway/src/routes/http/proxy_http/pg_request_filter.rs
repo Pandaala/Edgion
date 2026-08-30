@@ -115,7 +115,7 @@ pub async fn request_filter(
         let port_routes = edgion_http.http_route_manager.load_route_table();
         match port_routes.match_route(session, ctx, &gateway_index) {
             Ok(result) => {
-                ctx.gateway_info = result.matched_gateway;
+                ctx.gateway_info = Some(result.matched_gateway);
                 ctx.route_unit = Some(result.route_unit);
             }
             Err(_) => {
@@ -214,7 +214,12 @@ pub async fn request_filter(
         }
 
         if ctx.resolved_gateway_plugins.is_none() {
-            let resolved = resolve_gateway_plugins(&plugin_store, &ctx.gateway_info.plugin_store_keys);
+            let gateway_plugin_keys = ctx
+                .gateway_info
+                .as_deref()
+                .map(|info| info.plugin_store_keys.as_slice())
+                .unwrap_or_default();
+            let resolved = resolve_gateway_plugins(&plugin_store, gateway_plugin_keys);
             ctx.resolved_gateway_plugins = Some(Arc::new(resolved));
         }
     }

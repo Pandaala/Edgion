@@ -71,7 +71,7 @@ impl MatchSpecificity {
 /// gateway/listener context that satisfied the parentRef constraints.
 pub struct RouteMatchResult {
     pub route_unit: Arc<HttpRouteRuleUnit>,
-    pub matched_gateway: GatewayInfo,
+    pub matched_gateway: Arc<GatewayInfo>,
 }
 
 /// A backend ref paired with its compiled plugin runtime — the unit the LB
@@ -376,7 +376,7 @@ impl HttpRouteRuleUnit {
         session: &Session,
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
-    ) -> Result<Option<GatewayInfo>, EdError> {
+    ) -> Result<Option<Arc<GatewayInfo>>, EdError> {
         let req_header = session.req_header();
         Self::deep_match_common(
             &self.matched_info,
@@ -451,7 +451,7 @@ impl HttpRouteRuleUnit {
         compiled_header_regexes: &[Option<Regex>],
         compiled_query_regexes: &[Option<Regex>],
         has_query_matchers: bool,
-    ) -> Result<Option<GatewayInfo>, EdError> {
+    ) -> Result<Option<Arc<GatewayInfo>>, EdError> {
         let method = req_header.method.as_str();
         let match_item = &matched_info.m;
 

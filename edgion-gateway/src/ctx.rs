@@ -1672,8 +1672,9 @@ pub struct EdgionHttpContext {
     /// Request start time for latency calculation
     pub start_time: Instant,
 
-    /// Gateway information (copied from EdgionHttp for easy access)
-    pub gateway_info: GatewayInfo,
+    /// Request-stable Gateway/listener generation selected during route match.
+    /// Route misses retain only the empty pointer-sized option.
+    pub gateway_info: Option<Arc<GatewayInfo>>,
 
     /// Request information (hostname, path, x-trace-id)
     pub request_info: RequestInfo,
@@ -2242,7 +2243,7 @@ impl EdgionHttpContext {
     pub fn new() -> Self {
         Self {
             start_time: Instant::now(),
-            gateway_info: GatewayInfo::default(),
+            gateway_info: None,
             request_info: RequestInfo::default(),
             diagnostics: RequestDiagnostics::default(),
             route_unit: None,
@@ -3658,7 +3659,7 @@ mod ai_context_claim_tests {
     #[test]
     fn ordinary_context_size_stays_within_budget() {
         assert!(
-            std::mem::size_of::<EdgionHttpContext>() <= 2752,
+            std::mem::size_of::<EdgionHttpContext>() <= 2560,
             "EdgionHttpContext grew beyond the ordinary-request hot-path size budget"
         );
     }
@@ -3668,7 +3669,8 @@ mod ai_context_claim_tests {
     fn ordinary_context_construction_is_allocation_free() {
         let (ctx, allocations) = crate::test_allocation_counter::count_allocation_stats(EdgionHttpContext::new);
 
-        assert_eq!(std::mem::size_of_val(&ctx), 2672);
+        assert_eq!(std::mem::size_of_val(&ctx), 2504);
+        assert!(ctx.gateway_info.is_none());
         assert_eq!(allocations.calls, 0);
         assert_eq!(allocations.requested_bytes, 0);
     }

@@ -9,6 +9,7 @@ use crate::observe::metrics::{
     GenAiUsageSource, TestData, TestType,
 };
 use crate::observe::AccessLogEntry;
+use crate::runtime::GatewayInfo;
 use crate::EdgionHttpContext;
 use pingora_core::{Error as PingoraError, ErrorSource};
 use pingora_proxy::Session;
@@ -323,7 +324,11 @@ fn try_record_via_handles(ctx: &EdgionHttpContext, duration_ms: f64) -> bool {
         (None, None) => return false,
     };
 
-    let entry = match handles.lookup(ctx.gateway_info.gateway_namespace(), ctx.gateway_info.gateway_name()) {
+    let Some(gateway_info) = ctx.gateway_info.as_deref() else {
+        return false;
+    };
+
+    let entry = match handles.lookup(gateway_info.gateway_namespace(), gateway_info.gateway_name()) {
         Some(e) => e,
         None => return false,
     };
@@ -356,13 +361,13 @@ fn try_record_via_handles(ctx: &EdgionHttpContext, duration_ms: f64) -> bool {
 /// requests continue to emit the same time series.
 #[inline]
 fn record_request_metrics_fallback(ctx: &EdgionHttpContext, error: Option<&PingoraError>, duration_ms: f64) {
-    let gateway_ns = match ctx.gateway_info.gateway_namespace() {
-        "" => "unknown",
-        ns => ns,
+    let gateway_ns = match ctx.gateway_info.as_deref().map(GatewayInfo::gateway_namespace) {
+        None | Some("") => "unknown",
+        Some(ns) => ns,
     };
-    let gateway_name = match ctx.gateway_info.gateway_name() {
-        "" => "unknown",
-        name => name,
+    let gateway_name = match ctx.gateway_info.as_deref().map(GatewayInfo::gateway_name) {
+        None | Some("") => "unknown",
+        Some(name) => name,
     };
 
     let (route_ns, route_name) = if let Some(ref route_unit) = ctx.route_unit {
@@ -389,7 +394,11 @@ fn record_request_metrics_fallback(ctx: &EdgionHttpContext, error: Option<&Pingo
     let protocol = ctx.request_info.discover_protocol.as_deref().unwrap_or("http");
 
     let (test_key, test_data) = if edgion_common::test_mode::is_integration_testing_mode() {
-        let key = ctx.gateway_info.metrics_test_key.as_deref().unwrap_or("");
+        let key = ctx
+            .gateway_info
+            .as_deref()
+            .and_then(|info| info.metrics_test_key.as_deref())
+            .unwrap_or("");
         let data = build_test_data(ctx, error);
         (key, data)
     } else {
@@ -442,7 +451,11 @@ fn lb_runtime_cleanup(ctx: &mut EdgionHttpContext) {
 /// All data is collected from ctx at logging stage.
 #[inline]
 fn build_test_data(ctx: &EdgionHttpContext, error: Option<&PingoraError>) -> String {
-    let Some(test_type) = &ctx.gateway_info.metrics_test_type else {
+    let Some(test_type) = ctx
+        .gateway_info
+        .as_deref()
+        .and_then(|info| info.metrics_test_type.as_ref())
+    else {
         return String::new();
     };
 

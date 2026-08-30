@@ -220,7 +220,7 @@ impl GrpcMatchEngine {
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
         hostname: &str,
-    ) -> Result<(Arc<GrpcRouteRuleUnit>, GatewayInfo), EdError> {
+    ) -> Result<(Arc<GrpcRouteRuleUnit>, Arc<GatewayInfo>), EdError> {
         let path = ctx.path();
         let (service, method) = parse_grpc_path(path)?;
 
@@ -356,7 +356,7 @@ fn try_route_deep_match_unit(
     session: &Session,
     index: &GatewayInfoIndex,
     hostname: &str,
-) -> Option<GatewayInfo> {
+) -> Option<Arc<GatewayInfo>> {
     match route_unit.deep_match(session, index, hostname) {
         Ok(Some(gi)) => Some(gi),
         Ok(None) | Err(_) => None,
@@ -374,7 +374,7 @@ fn try_match_linear<F>(
     index: &GatewayInfoIndex,
     hostname: &str,
     predicate: F,
-) -> Option<(Arc<GrpcRouteRuleUnit>, GatewayInfo)>
+) -> Option<(Arc<GrpcRouteRuleUnit>, Arc<GatewayInfo>)>
 where
     F: Fn(&GrpcRouteRuleUnit) -> bool,
 {

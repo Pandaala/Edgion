@@ -12,13 +12,13 @@ use edgion_common::dns::resolver_select::ResolverCandidate;
 /// Used to pass gateway context during route matching to support
 /// both sectionName-based and hostname-based lookup strategies.
 ///
-/// This struct should be created once when the HTTP proxy listener is constructed,
-/// not per-request, to avoid allocation overhead.
+/// Each Gateway/listener generation creates this struct once and shares it with
+/// matched requests through `Arc`; request paths must not deep-clone it.
 ///
 /// Note: Listener configuration (hostname, allowedRoutes) is resolved through
 /// `ListenerGatewayInfoStore::GatewayInfoIndex`, which is rebuilt on every
 /// Gateway change to support hot-reload.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct GatewayInfo {
     /// Gateway namespace (None for cluster-scoped or default namespace)
     pub namespace: Option<String>,
