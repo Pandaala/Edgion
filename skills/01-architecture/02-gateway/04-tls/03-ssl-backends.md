@@ -50,9 +50,10 @@ TLS 1.3 cipher suites cannot be restricted through BoringSSL's TLS 1.2 cipher-li
 
 `fips` is an explicit image-build feature, not a runtime Cargo default and not
 part of the ordinary release workflow. Boring 5 builds its bundled FIPS module
-source in the dedicated Linux amd64 builder, which then runs the isolated module
-and TLS-profile verification. The canonical source FIPS path rejects arm64
-before compilation; ordinary non-FIPS arm64 builds remain supported. At startup:
+source in dedicated Linux amd64 and arm64 builders, which then run the isolated
+module and TLS-profile verification. The FIPS-only source override pins Boring
+5.2.0's BoringSSL revision plus the upstream arm64 integrity-relocation fix;
+ordinary builders do not fetch or use that override. At startup:
 
 - `require_fips: true` fails startup when BoringSSL FIPS mode is not present;
 - `fips_policy` is `auto | on | off` and resolves with environment (`EDGION_FIPS_POLICY`) over

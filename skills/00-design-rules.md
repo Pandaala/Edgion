@@ -248,7 +248,7 @@ Each entry: **rule** — *consequence if violated* → `deep-dive pointer`.
 - 🔴 **Agent-doc consistency** — `skills/`/`AGENTS.md` cross-references, frontmatter, indexes must stay consistent. Guard: `cicd/checks/validate_agent_docs.py`.
 - 🔴 **Supply-chain: `cargo deny` (license allowlist / banned-crate / source pinning via `deny.toml`)** + daily advisory-only cron; triage recorded as commented `ignore` entries, never silently bypassed. New/upgraded deps also run `cargo audit`. Don't run with `--all-features` (TLS/allocator features are mutually exclusive). → `skills/09-misc/cicd/02-github-workflow.md`.
 - 🔴 **Bash under `set -e` never uses bare `((x++))`** — `((expr))` returns exit 1 when `expr==0`, silently killing the script on bash 5 (CI) while passing on bash 3.2 (macOS). Use `x=$((x + 1))`; route OS-specific behavior through `shell_compat.sh`. Guard: `cicd/checks/check_bash_set_e_increment.sh`.
-- 🟡 **`fips` is an opt-in build-time Cargo feature** (implies `boringssl`; the canonical Boring 5 source path is amd64-only and verifies the built module), NOT a runtime toggle and NOT part of the ordinary release workflow — never conflate it with the runtime `require_fips`/`fips_policy` knobs, never enable alongside `rustls`. → `skills/09-misc/SKILL.md`.
+- 🟡 **`fips` is an opt-in build-time Cargo feature** (implies `boringssl`; the canonical amd64/arm64 Boring 5 source path verifies the built module), NOT a runtime toggle and NOT part of the ordinary release workflow — never conflate it with the runtime `require_fips`/`fips_policy` knobs, never enable alongside `rustls`. → `skills/09-misc/SKILL.md`.
 
 ## S. conf_sync incremental update & hot reload
 

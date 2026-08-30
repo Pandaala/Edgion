@@ -47,17 +47,20 @@ repository's Linux multi-architecture builder:
 
 ```bash
 FEATURES="allocator-jemalloc,fips" \
-  ./cicd/build-image.sh --arch amd64 --compile-only
+  ./cicd/build-image.sh --arch amd64,arm64 --compile-only
 ```
 
-The canonical source FIPS build currently supports `amd64` only; the script rejects `arm64` before
-compilation because BoringSSL's upstream runtime integrity self-test fails for that source build.
-Ordinary non-FIPS `arm64` builds are unchanged. Omit `--compile-only` to package the amd64 image.
-Boring 5 builds its bundled FIPS module source by default. Its `BORING_BSSL_FIPS_PATH`
-prebuilt-tree input is an upstream escape hatch, not part of the canonical Edgion script contract.
+The canonical source FIPS build supports `amd64` and `arm64`. Boring 5.2.0's bundled BoringSSL
+revision has an arm64 integrity-hash relocation defect. For explicit FIPS builds, Edgion pins that
+same revision and applies the exact upstream fix from commit
+`4d6b2f971e456962b70e4e91768caffdb36fe016`; the builder verifies the downloaded patch checksum and
+runs its upstream `delocate` tests. Ordinary builders do not fetch or use this override, so ordinary
+non-FIPS builds and the release workflow are unchanged. Omit `--compile-only` to package the images.
+`BORING_BSSL_FIPS_PATH` remains an upstream prebuilt-tree escape hatch, not part of the canonical
+Edgion script contract.
 
-When `fips` is selected, the script automatically runs an isolated verification on the amd64
-release binary. The Gateway must start with `EDGION_REQUIRE_FIPS=1`, report
+When `fips` is selected, the script automatically runs an isolated verification on each release
+binary. The Gateway must start with `EDGION_REQUIRE_FIPS=1`, report
 `edgion_gateway_fips_module_enabled 1`, reject a ChaCha20-only TLS 1.2 client, and accept an
 approved AES-GCM client before the build succeeds. The general integration suite stays on the
 ordinary BoringSSL build because its weak-cipher compatibility cases intentionally exercise a

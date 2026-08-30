@@ -41,15 +41,17 @@ FIPS 在**镜像构建期**启用，而非运行时。普通发布 workflow、�
 
 ```bash
 FEATURES="allocator-jemalloc,fips" \
-  ./cicd/build-image.sh --arch amd64 --compile-only
+  ./cicd/build-image.sh --arch amd64,arm64 --compile-only
 ```
 
-规范的 FIPS 源码构建当前仅支持 `amd64`；由于 BoringSSL 上游运行时完整性自检在该源码的 `arm64` 构建上
-失败，脚本会在编译前拒绝该组合。普通非 FIPS 的 `arm64` 构建不受影响。去掉 `--compile-only` 即会继续
-打包 amd64 镜像。Boring 5 默认从其随 crate 提供的 FIPS 模块源码构建。`BORING_BSSL_FIPS_PATH` 是上游
-提供的预构建目录逃生口，不属于 Edgion 规范脚本的支持契约。
+规范的 FIPS 源码构建支持 `amd64` 与 `arm64`。Boring 5.2.0 随附的 BoringSSL 版本存在 arm64 完整性
+哈希重定位缺陷；显式 FIPS 构建会固定同一个源码版本，并应用上游提交
+`4d6b2f971e456962b70e4e91768caffdb36fe016` 的精确修复。builder 会校验下载补丁的 checksum，并运行
+上游 `delocate` 测试。普通 builder 不下载也不使用该覆盖，因此普通非 FIPS 构建与发布 workflow 均不受
+影响。去掉 `--compile-only` 即会继续打包镜像。`BORING_BSSL_FIPS_PATH` 仍是上游提供的预构建目录
+逃生口，不属于 Edgion 规范脚本的支持契约。
 
-选择 `fips` 后，脚本会对 amd64 release 二进制自动执行隔离验证。Gateway 必须能以
+选择 `fips` 后，脚本会对每个 release 二进制自动执行隔离验证。Gateway 必须能以
 `EDGION_REQUIRE_FIPS=1` 启动，报告 `edgion_gateway_fips_module_enabled 1`，拒绝仅提供 ChaCha20 的
 TLS 1.2 客户端，并接受批准的 AES-GCM 客户端，构建才会成功。通用集成套件继续使用普通 BoringSSL
 构建，因为其中的弱密码兼容性用例有意验证另一种安全姿态。

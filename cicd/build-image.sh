@@ -48,6 +48,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
 BUILDER_IMAGE="edgion-builder"
 BUILDER_IMAGES_READY=""
+BORINGSSL_FIPS_BASE_REV="e2a57cfb4d915b4ba820585aef9fdee7bca13fe5"
+BORINGSSL_FIPS_ARM64_FIX_REV="4d6b2f971e456962b70e4e91768caffdb36fe016"
+BORINGSSL_FIPS_ARM64_FIX_SHA256="f590a84b210b9e5c32d5d24a4d3f76e618875ee6f3a2bcc31e0a54371670f81f"
+BORINGSSL_FIPS_SOURCE_PATH="/opt/boringssl-fips-${BORINGSSL_FIPS_BASE_REV}-${BORINGSSL_FIPS_ARM64_FIX_REV}-${BORINGSSL_FIPS_ARM64_FIX_SHA256}"
 
 # Docker image name for the standalone controller-gateway bundle.
 CONTROLLER_GATEWAY_IMAGE="edgion-controller-gateway"
@@ -81,18 +85,6 @@ gateway_features_include() {
         fi
     done
     return 1
-}
-
-validate_fips_architectures() {
-    local arch
-    for arch in "$@"; do
-        if [[ "${arch}" != "amd64" ]]; then
-            log_error "The canonical Boring 5 source FIPS build supports amd64 only."
-            log_error "arm64 currently fails BoringSSL's upstream runtime integrity self-test."
-            log_info "Build arm64 without the fips feature, or select --arch amd64 for FIPS."
-            return 1
-        fi
-    done
 }
 
 # Ensure Docker Buildx builder exists and is selected
@@ -309,9 +301,22 @@ detect_host_arch() {
 # Stage 1: Ensure builder image exists
 # =============================================================================
 
+builder_image_tag() {
+    local platform=$1
+    local include_fips_source=${2:-false}
+    local tag="${BUILDER_IMAGE}:${platform//\//-}"
+
+    if [[ "${include_fips_source}" == "true" ]]; then
+        tag="${tag}-fips"
+    fi
+    echo "${tag}"
+}
+
 ensure_builder_image() {
     local platform=$1
-    local tag="${BUILDER_IMAGE}:${platform//\//-}"
+    local include_fips_source=${2:-false}
+    local tag
+    tag=$(builder_image_tag "${platform}" "${include_fips_source}")
 
     case " ${BUILDER_IMAGES_READY} " in
         *" ${tag} "*) return 0 ;;
@@ -325,6 +330,10 @@ ensure_builder_image() {
     docker build \
         --platform "${platform}" \
         --build-arg "RUST_VERSION=${RUST_VERSION}" \
+        --build-arg "INCLUDE_BORINGSSL_FIPS_SOURCE=${include_fips_source}" \
+        --build-arg "BORINGSSL_FIPS_BASE_REV=${BORINGSSL_FIPS_BASE_REV}" \
+        --build-arg "BORINGSSL_FIPS_ARM64_FIX_REV=${BORINGSSL_FIPS_ARM64_FIX_REV}" \
+        --build-arg "BORINGSSL_FIPS_ARM64_FIX_SHA256=${BORINGSSL_FIPS_ARM64_FIX_SHA256}" \
         -t "${tag}" \
         -f "${PROJECT_DIR}/cicd/docker/Dockerfile.builder" \
         "${PROJECT_DIR}"
@@ -338,7 +347,8 @@ verify_fips_binary() {
     local arch_info
     arch_info=$(get_arch_info "${arch}")
     IFS=':' read -r platform target suffix <<< "${arch_info}"
-    local builder_tag="${BUILDER_IMAGE}:${platform//\//-}"
+    local builder_tag
+    builder_tag=$(builder_image_tag "${platform}" true)
 
     log_info "Verifying BoringSSL FIPS mode and the approved TLS profile for ${arch}..."
     docker run --rm \
@@ -369,13 +379,18 @@ compile_binaries() {
     local arch_info
     arch_info=$(get_arch_info "${arch}")
     IFS=':' read -r platform target suffix <<< "${arch_info}"
-    local builder_tag="${BUILDER_IMAGE}:${platform//\//-}"
+    local include_fips_source=false
+    if gateway_features_include "fips"; then
+        include_fips_source=true
+    fi
+    local builder_tag
+    builder_tag=$(builder_image_tag "${platform}" "${include_fips_source}")
 
     log_info "Compiling binaries for ${arch} (${target})..."
     log_info "This may take several minutes on first build..."
 
     # Ensure builder image exists
-    ensure_builder_image "${platform}"
+    ensure_builder_image "${platform}" "${include_fips_source}"
 
     local gateway_feature_args=""
     if [[ "${GATEWAY_NO_DEFAULT_FEATURES}" == "true" ]]; then
@@ -394,6 +409,19 @@ compile_binaries() {
             --bin \"${GATEWAY_BINARY}\" \
             ${gateway_feature_args}"
 
+    local docker_args=(
+        run --rm
+        --platform "${platform}"
+        -v "${PROJECT_DIR}":/project
+        -v "${HOME}/.cargo/registry":/usr/local/cargo/registry
+        -v "${HOME}/.cargo/git":/usr/local/cargo/git
+        -v "edgion-rustup-${suffix}":/usr/local/rustup
+        -w /project
+    )
+    if [[ "${include_fips_source}" == "true" ]]; then
+        docker_args+=(-e "BORING_BSSL_FIPS_SOURCE_PATH=${BORINGSSL_FIPS_SOURCE_PATH}")
+    fi
+
     if [[ "${force_rebuild}" == "true" ]]; then
         log_info "Force rebuild requested for ${arch}: cleaning target ${target} first"
         build_cmd="cargo clean --target \"${target}\" && ${build_cmd}"
@@ -401,15 +429,8 @@ compile_binaries() {
 
     # Run compilation in Docker
     # Use named volume for rustup to persist toolchain downloads across runs
-    docker run --rm \
-        --platform "${platform}" \
-        -v "${PROJECT_DIR}":/project \
-        -v "${HOME}/.cargo/registry":/usr/local/cargo/registry \
-        -v "${HOME}/.cargo/git":/usr/local/cargo/git \
-        -v "edgion-rustup-${suffix}":/usr/local/rustup \
-        -w /project \
-        "${builder_tag}" \
-        bash -c "${build_cmd}"
+    docker_args+=("${builder_tag}" bash -c "${build_cmd}")
+    docker "${docker_args[@]}"
 
     if [[ $? -ne 0 ]]; then
         log_error "Compilation failed for ${arch}"
@@ -434,7 +455,8 @@ compile_test_binaries() {
     local arch_info
     arch_info=$(get_arch_info "${arch}")
     IFS=':' read -r platform target suffix <<< "${arch_info}"
-    local builder_tag="${BUILDER_IMAGE}:${platform//\//-}"
+    local builder_tag
+    builder_tag=$(builder_image_tag "${platform}")
 
     log_info "Compiling test binaries for ${arch} (${target})..."
 
@@ -739,12 +761,17 @@ compile_controller_gateway_binaries() {
     local arch_info
     arch_info=$(get_arch_info "${arch}")
     IFS=':' read -r platform target suffix <<< "${arch_info}"
-    local builder_tag="${BUILDER_IMAGE}:${platform//\//-}"
+    local include_fips_source=false
+    if gateway_features_include "fips"; then
+        include_fips_source=true
+    fi
+    local builder_tag
+    builder_tag=$(builder_image_tag "${platform}" "${include_fips_source}")
 
     log_info "Compiling controller-gateway binaries for ${arch} (${target})..."
     log_info "This may take several minutes on first build..."
 
-    ensure_builder_image "${platform}"
+    ensure_builder_image "${platform}" "${include_fips_source}"
 
     local gateway_feature_args=""
     if [[ "${GATEWAY_NO_DEFAULT_FEATURES}" == "true" ]]; then
@@ -763,20 +790,26 @@ compile_controller_gateway_binaries() {
             --bin \"${GATEWAY_BINARY}\" \
             ${gateway_feature_args}"
 
+    local docker_args=(
+        run --rm
+        --platform "${platform}"
+        -v "${PROJECT_DIR}":/project
+        -v "${HOME}/.cargo/registry":/usr/local/cargo/registry
+        -v "${HOME}/.cargo/git":/usr/local/cargo/git
+        -v "edgion-rustup-${suffix}":/usr/local/rustup
+        -w /project
+    )
+    if [[ "${include_fips_source}" == "true" ]]; then
+        docker_args+=(-e "BORING_BSSL_FIPS_SOURCE_PATH=${BORINGSSL_FIPS_SOURCE_PATH}")
+    fi
+
     if [[ "${force_rebuild}" == "true" ]]; then
         log_info "Force rebuild requested for ${arch}: cleaning target ${target} first"
         build_cmd="cargo clean --target \"${target}\" && ${build_cmd}"
     fi
 
-    docker run --rm \
-        --platform "${platform}" \
-        -v "${PROJECT_DIR}":/project \
-        -v "${HOME}/.cargo/registry":/usr/local/cargo/registry \
-        -v "${HOME}/.cargo/git":/usr/local/cargo/git \
-        -v "edgion-rustup-${suffix}":/usr/local/rustup \
-        -w /project \
-        "${builder_tag}" \
-        bash -c "${build_cmd}"
+    docker_args+=("${builder_tag}" bash -c "${build_cmd}")
+    docker "${docker_args[@]}"
 
     if [[ $? -ne 0 ]]; then
         log_error "Controller-gateway compilation failed for ${arch}"
@@ -1055,10 +1088,6 @@ main() {
             exit 1
         fi
     done
-
-    if [[ "${test_images}" != "true" ]] && gateway_features_include "fips"; then
-        validate_fips_architectures "${archs[@]}"
-    fi
 
     # Header
     echo ""

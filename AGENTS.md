@@ -62,9 +62,10 @@ that do NOT resolve bare are the ones in `edgion-tests` (`test_server`,
 **BoringSSL FIPS (opt-in image build)**: `fips` is a gateway cargo feature enabled explicitly
 through `cicd/build-image.sh` (requires `boringssl`; not a default, not enabled by the ordinary
 release workflow, and not toggled at runtime). Boring 5 builds its bundled FIPS module source by
-default on the canonical amd64 path; arm64 FIPS is rejected before compilation because its upstream
-runtime integrity self-test currently fails, while ordinary arm64 builds remain supported. The
-upstream `BORING_BSSL_FIPS_PATH` prebuilt-tree escape hatch is outside the canonical script contract.
+default. The canonical amd64/arm64 builder pins that same source revision and backports BoringSSL
+commit `4d6b2f971e456962b70e4e91768caffdb36fe016`, which fixes the arm64 integrity-hash relocation;
+the override is isolated to explicit FIPS builders and ordinary builds do not fetch it. The upstream
+`BORING_BSSL_FIPS_PATH` prebuilt-tree escape hatch is outside the canonical script contract.
 On a FIPS build,
 downstream server TLS defaults to the FIPS-approved TLS 1.2 cipher set
 (`ECDHE-{ECDSA,RSA}-AES{128,256}-GCM-SHA{256,384}`) and ECDH curves (`P-256`/`P-384`/`P-521`)

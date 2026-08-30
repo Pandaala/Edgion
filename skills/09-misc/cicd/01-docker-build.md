@@ -147,16 +147,17 @@ profile test before packaging an image:
 
 ```bash
 FEATURES="allocator-jemalloc,fips" \
-  ./cicd/build-image.sh --arch amd64 --compile-only
+  ./cicd/build-image.sh --arch amd64,arm64 --compile-only
 ```
 
-The canonical source FIPS build currently supports amd64 only. The script
-rejects `fips` with arm64 before compilation because the upstream BoringSSL
-runtime integrity self-test fails for that source build. Ordinary non-FIPS
-arm64 builds are unchanged. The ordinary release workflow and a default
-invocation of `build-image.sh` stay non-FIPS. Boring 5 builds its bundled FIPS
-module source by default. The upstream `BORING_BSSL_FIPS_PATH` prebuilt-tree
-escape hatch is outside the canonical script contract.
+The canonical source FIPS build supports amd64 and arm64. Boring 5.2.0's bundled
+BoringSSL revision has an arm64 integrity-hash relocation defect, so the
+FIPS-only builder pins that revision and applies the exact upstream fix from
+commit `4d6b2f971e456962b70e4e91768caffdb36fe016`; its patch bytes are checksum
+verified. Ordinary builders do not fetch or use the override, and the ordinary
+release workflow plus a default invocation of `build-image.sh` stay non-FIPS.
+The upstream `BORING_BSSL_FIPS_PATH` prebuilt-tree escape hatch is outside the
+canonical script contract.
 
 The verification reuses
 `edgion-tests/integration/scripts/integration/test_fips_policy.sh` in its real

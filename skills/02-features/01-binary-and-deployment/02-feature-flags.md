@@ -34,10 +34,11 @@ Use `boringssl` for the normal Gateway build.
 The `fips` feature is a build-time property, not a runtime toggle. The ordinary
 release workflow does not enable it. Use the dedicated Linux builder in
 `cicd/build-image.sh`; Boring 5 builds its bundled FIPS module source by default
-on the canonical amd64 path. The script rejects arm64 FIPS builds before
-compilation because the upstream runtime integrity self-test fails there;
-ordinary arm64 builds are unchanged. `BORING_BSSL_FIPS_PATH` is an upstream
-prebuilt-tree escape hatch outside the canonical script contract. Runtime
+on amd64 and arm64. For explicit FIPS builds, Edgion pins the same BoringSSL
+revision and applies upstream commit `4d6b2f971e456962b70e4e91768caffdb36fe016`
+to fix arm64 integrity-hash relocation; ordinary builds do not use that source
+override. `BORING_BSSL_FIPS_PATH` is an upstream prebuilt-tree escape hatch
+outside the canonical script contract. Runtime
 `require_fips` and `fips_policy` are documented in
 `../02-config/01-gateway-config.md`.
 

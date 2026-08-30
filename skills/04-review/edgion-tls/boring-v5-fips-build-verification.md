@@ -5,7 +5,7 @@ description: Use when reviewing Edgion's Boring 5 FIPS build contract. FIPS is a
 
 # Boring 5 FIPS opt-in build and verification
 
-**Status:** fixed · 2026-08-29
+**Status:** fixed · 2026-08-30
 
 ## Conclusion
 
@@ -15,7 +15,7 @@ entry point is:
 
 ```bash
 FEATURES="allocator-jemalloc,fips" \
-  ./cicd/build-image.sh --arch amd64 --compile-only
+  ./cicd/build-image.sh --arch amd64,arm64 --compile-only
 ```
 
 The original finding assumed the ordinary release workflow promised a FIPS
@@ -24,15 +24,27 @@ contract. That is not the product boundary: FIPS is an explicitly requested
 Edgion build, and the ordinary release remains non-FIPS.
 
 Boring 5 builds its bundled FIPS module source when the `fips` feature is
-selected. The canonical Edgion path supports amd64 only. It rejects arm64
-before compilation because BoringSSL's own runtime integrity self-test fails
-for that source build. `BORING_BSSL_FIPS_PATH` is an upstream prebuilt-tree
-escape hatch outside this script contract; Edgion does not impose a separate
-artifact format.
+selected. Boring 5.2.0 vendors BoringSSL revision
+`e2a57cfb4d915b4ba820585aef9fdee7bca13fe5`, whose AArch64 `delocate` pass omits
+`BORINGSSL_bcm_text_hash` from its synthesized-symbol set. A GOT relocation can
+then point at the module start rather than the hash object, so the constructor
+compares the module's first 32 bytes with its calculated integrity HMAC and
+aborts before Rust `main`.
+
+The canonical Edgion FIPS builders support amd64 and arm64. They pin that same
+BoringSSL revision and checksum-verify the exact patch from upstream commit
+`4d6b2f971e456962b70e4e91768caffdb36fe016`, which synthesizes the hash symbol's
+local target. The override has a separate builder tag and is only supplied via
+`BORING_BSSL_FIPS_SOURCE_PATH` when the exact `fips` feature is selected.
+The base revision, fix revision, and patch checksum are encoded into that path,
+so changing any source input also changes Cargo's build-script environment
+cache key and forces `boring-sys` to rebuild. Ordinary builders do not fetch
+it. `BORING_BSSL_FIPS_PATH` remains an upstream prebuilt-tree escape hatch
+outside this script contract.
 
 ## Verification contract
 
-For amd64, `cicd/build-image.sh` runs the existing isolated
+For each selected architecture, `cicd/build-image.sh` runs the existing isolated
 `test_fips_policy.sh` scenario against the release binary before
 packaging succeeds. The scenario:
 
@@ -49,8 +61,8 @@ runtime utilities used by the isolated scenario.
 ## Intentional boundaries
 
 - The ordinary release workflow does not enable `fips`.
-- Ordinary non-FIPS arm64 builds remain supported; only the canonical source
-  FIPS build is amd64-only.
+- The source override is FIPS-only; ordinary amd64 and arm64 builds remain on
+  Boring's bundled source and ordinary release builds remain non-FIPS.
 - The full compatibility integration suite does not run under the FIPS binary.
   Several cases intentionally require weak protocol or cipher support; turning
   that run into a skip list would weaken both signals. The isolated scenario is
@@ -66,7 +78,9 @@ runtime utilities used by the isolated scenario.
 ## Re-evaluation triggers
 
 - Boring changes the `fips` feature or its source-build prerequisites.
-- BoringSSL's arm64 source FIPS integrity self-test becomes supported upstream.
+- A released `boring-sys` vendors upstream commit
+  `4d6b2f971e456962b70e4e91768caffdb36fe016` or a descendant, allowing the
+  FIPS-only source override to be removed.
 - Edgion decides to publish a dedicated FIPS image in the release workflow.
 - The integration suite gains a separate FIPS-compatible compatibility profile.
 
@@ -74,5 +88,6 @@ runtime utilities used by the isolated scenario.
 
 - `cicd/build-image.sh`
 - `cicd/docker/Dockerfile.builder`
+- `tasks/todo/boring-upstream-arm64-fips-source-override-removal.md`
 - `edgion-tests/integration/scripts/integration/test_fips_policy.sh`
 - `docs/en/ops-guide/gateway/tls/fips.md`
