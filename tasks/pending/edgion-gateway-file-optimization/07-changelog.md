@@ -277,3 +277,11 @@ This is the single concise record of actual changes across the file-by-file audi
 - Review: retained denied-reference filtering, typed Service backend selection, fail-close absence behavior, and the final canonical loopback/link-local guard. Independent review confirmed that the fallback path incorrectly compares a `backendRef.port` Service port directly with an EndpointSlice serving port, so a valid `443 -> 8443` mapping is rejected; an explicit endpoint port can instead match an unrelated sibling port on the same multi-port slice without proving that the selected backendRef authorized it. The request path also takes two blocking EndpointSlice read locks, deep-clones every slice, scans all endpoints, truncates `i32` with `as u16`, and compares IPv6 addresses textually. A safe fix requires one immutable route-membership and port-resolution proof shared with every protocol consumer, so no isolated cast, allocation, or string-comparison patch was made. DirectEndpoint requirements, numeric address matching, ready/unready semantics, and endpoint-derived Unix-address rejection are now recorded in `tasks/todo/backend-port-resolution-precompiled-fail-closed.md`.
 - Verification: existing endpoint validation tests 2/2; two independent static reviews approved the no-change disposition and TODO scope. No runtime code changed in this batch.
 - Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
+
+### `BACKENDS-SERVICE-KIND-001` — canonical backend kind export
+
+- Outcome: reviewed-no-change (1 file)
+- Files reviewed: `backends/service_kind.rs`, the resources-layer `ServiceBackendKind` definition, and its direct Gateway consumers
+- Review: retained the narrow re-export of the single canonical resources-layer type. Known kinds use exact case-sensitive matching without allocation, omitted or empty kind follows the Gateway API Service default, and unknown values preserve their spelling in `Unsupported` so request and outbound callers fail closed. No duplicate parser, semantic drift, sensitive logging, or meaningful hot-path cost was found.
+- Verification: static source and caller review; independent review approved the no-change disposition. No runtime code changed in this batch.
+- Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
