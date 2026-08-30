@@ -269,3 +269,11 @@ This is the single concise record of actual changes across the file-by-file audi
 - Verification: panic-threshold tests 3/3; selector panic tests 3/3; `cargo fmt --all`; workspace check; workspace clippy (exit 0, 929 pre-existing gateway warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
 - Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
 - Commit: `cd048aa9`
+
+### `BACKENDS-VALIDATION-001` — DirectEndpoint route membership validation
+
+- Outcome: reviewed-no-change (1 file; complex cross-consumer fix included in the existing backend-port task)
+- Files reviewed: `backends/validation.rs`, its DirectEndpoint caller, EndpointSlice store reads, route backend filtering, and the final shared unsafe-address validator
+- Review: retained denied-reference filtering, typed Service backend selection, fail-close absence behavior, and the final canonical loopback/link-local guard. Independent review confirmed that the fallback path incorrectly compares a `backendRef.port` Service port directly with an EndpointSlice serving port, so a valid `443 -> 8443` mapping is rejected; an explicit endpoint port can instead match an unrelated sibling port on the same multi-port slice without proving that the selected backendRef authorized it. The request path also takes two blocking EndpointSlice read locks, deep-clones every slice, scans all endpoints, truncates `i32` with `as u16`, and compares IPv6 addresses textually. A safe fix requires one immutable route-membership and port-resolution proof shared with every protocol consumer, so no isolated cast, allocation, or string-comparison patch was made. DirectEndpoint requirements, numeric address matching, ready/unready semantics, and endpoint-derived Unix-address rejection are now recorded in `tasks/todo/backend-port-resolution-precompiled-fail-closed.md`.
+- Verification: existing endpoint validation tests 2/2; two independent static reviews approved the no-change disposition and TODO scope. No runtime code changed in this batch.
+- Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`

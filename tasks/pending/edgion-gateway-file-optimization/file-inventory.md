@@ -213,7 +213,7 @@
 | `edgion-gateway/src/backends/runtime.rs` | `backends-core` | source | pending | — |
 | `edgion-gateway/src/backends/selector.rs` | `backends-core` | source | pending | — |
 | `edgion-gateway/src/backends/service_kind.rs` | `backends-core` | source | pending | — |
-| `edgion-gateway/src/backends/validation.rs` | `backends-core` | source | pending | — |
+| `edgion-gateway/src/backends/validation.rs` | `backends-core` | source | reviewed-no-change | BACKENDS-VALIDATION-001: DirectEndpoint membership/port proof redesign deferred to the shared backend-port TODO |
 | `edgion-gateway/src/bin/edgion_gateway.rs` | `crate-entry` | source | pending | — |
 | `edgion-gateway/src/cache/lru.rs` | `cache` | source | optimized | CACHE-001 / `40f7eb74` |
 | `edgion-gateway/src/cache/mod.rs` | `cache` | source | reviewed-no-change | CACHE-001 / `40f7eb74` |
