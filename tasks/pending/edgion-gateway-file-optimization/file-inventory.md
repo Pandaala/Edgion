@@ -137,7 +137,7 @@
 | `runtime` | 15 | 0 | 0 | 0 | pending |
 | `services` | 4 | 0 | 0 | 0 | pending |
 | `sse` | 3 | 1 | 2 | 0 | complete |
-| `tls-boringssl` | 2 | 0 | 0 | 0 | pending |
+| `tls-boringssl` | 2 | 1 | 1 | 0 | complete |
 | `tls-core` | 3 | 1 | 2 | 0 | complete |
 | `tls-runtime` | 6 | 0 | 0 | 0 | pending |
 | `tls-store` | 4 | 0 | 0 | 0 | pending |
@@ -651,8 +651,8 @@
 | `edgion-gateway/src/sse/chain.rs` | `sse` | source | optimized | SSE-CHAIN-001 / `4327da2b` |
 | `edgion-gateway/src/sse/mod.rs` | `sse` | source | reviewed-no-change | SSE-CHAIN-001 decoder/framing audit; 62-test baseline preserved |
 | `edgion-gateway/src/sse/window.rs` | `sse` | source | reviewed-no-change | SSE-WINDOW-001: confirmed complex findings deferred to `tasks/todo/sse-window-strict-residency-and-continuity.md`; no window code landed |
-| `edgion-gateway/src/tls/boringssl/mod.rs` | `tls-boringssl` | source | pending | — |
-| `edgion-gateway/src/tls/boringssl/mtls_verify_callback.rs` | `tls-boringssl` | source | pending | — |
+| `edgion-gateway/src/tls/boringssl/mod.rs` | `tls-boringssl` | source | reviewed-no-change | TLS-BORINGSSL-001 / `f33146ef` |
+| `edgion-gateway/src/tls/boringssl/mtls_verify_callback.rs` | `tls-boringssl` | source | optimized | TLS-BORINGSSL-001 / `f33146ef` |
 | `edgion-gateway/src/tls/fips_host.rs` | `tls-core` | source | reviewed-no-change | TLS-CORE-001 / `9ab98fd0` |
 | `edgion-gateway/src/tls/fips_profile.rs` | `tls-core` | source | optimized | TLS-CORE-001 / `9ab98fd0` |
 | `edgion-gateway/src/tls/mod.rs` | `tls-core` | source | reviewed-no-change | TLS-CORE-001 / `9ab98fd0` |

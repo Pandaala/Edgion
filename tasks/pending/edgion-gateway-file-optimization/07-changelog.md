@@ -185,3 +185,13 @@ This is the single concise record of actual changes across the file-by-file audi
 - Verification: TLS/FIPS tests 20/20, including live FFI profile application and TLS 1.2 approved/ChaCha20 negotiation coverage; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
 - Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
 - Commit: `9ab98fd0`
+
+### `TLS-BORINGSSL-001` — downstream mTLS verification callback safety
+
+- Outcome: mixed (1 optimized, 1 reviewed-no-change)
+- Files reviewed: `tls/boringssl/mod.rs` and `tls/boringssl/mtls_verify_callback.rs`
+- Changes: moved both BoringSSL callback boundaries to the shared redacted panic catcher; made missing callback index/context fail closed; and made repeated ex-data replacement transactional so a failed `SSL_set_ex_data` preserves the live old allocation instead of leaving a dangling slot.
+- Generality and architecture review: independent review approved the final diff. Panic hooks and nested panic-payload destructors cannot expose dynamic certificate/dependency detail or unwind across C; callback panics and impossible missing-state cases reject the handshake; successful and failed ex-data replacement have single, explicit ownership. SAN/CN values remain comparison inputs with the existing sensitive-mode rendering, normal certificate-chain and allowlist semantics are unchanged, and the module export remains narrow. The analogous `SslCtx` lifecycle is intentionally left for the immediately following `tls-runtime` batch so its complete state machine can be audited together.
+- Verification: mTLS validation tests 6/6; BoringSSL module compiled through the gateway library test target; `cargo fmt --all`; workspace check; workspace clippy (exit 0, 929 pre-existing gateway warnings); SSA, metrics inventory, and Pingora source guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
+- Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
+- Commit: `f33146ef`
