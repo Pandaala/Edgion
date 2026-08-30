@@ -72,6 +72,10 @@ impl RequestFilter for ConditionalRequestFilter {
         self.dye_plan.as_ref()
     }
 
+    fn suppress_automatic_log(&self) -> bool {
+        self.inner.suppress_automatic_log()
+    }
+
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
@@ -138,6 +142,10 @@ impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
 
     fn dye_plan(&self) -> Option<&Arc<CompiledDyePlan>> {
         self.dye_plan.as_ref()
+    }
+
+    fn suppress_automatic_log(&self) -> bool {
+        self.inner.suppress_automatic_log()
     }
 
     fn run_upstream_response_filter(

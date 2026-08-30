@@ -183,7 +183,7 @@ impl ProxyRewrite {
                 .to_string();
         }
 
-        // 4. Replace path parameters $<name> (lazy extraction from route pattern).
+        // 4. Replace path parameters $<name> captured at route match.
         // This must be done last, after $uri, $arg_xxx, and $1-$9 are replaced.
         // Skip if the matched name is "uri" (already handled) or starts with "arg_".
         if result.contains('$') {

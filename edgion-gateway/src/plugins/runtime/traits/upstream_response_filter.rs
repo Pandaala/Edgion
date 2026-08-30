@@ -33,6 +33,12 @@ pub trait UpstreamResponseFilter: Send + Sync {
         None
     }
 
+    /// Plugins with a dedicated top-level access-log block may suppress the
+    /// generic per-stage entry.
+    fn suppress_automatic_log(&self) -> bool {
+        false
+    }
+
     /// Run the upstream response filter (sync)
     /// This is called during the upstream_response_filter stage (sync context only)
     fn run_upstream_response_filter(&self, session: &mut dyn PluginSession, log: &mut PluginLog)

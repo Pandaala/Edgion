@@ -186,6 +186,23 @@ impl Serialize for MergedLog<'_> {
 }
 
 impl PluginLog {
+    /// Allocation-free scratch value for plugins that own a dedicated
+    /// top-level access-log block and suppress the generic stage entry.
+    #[inline]
+    pub(crate) const fn disabled() -> Self {
+        Self {
+            name: String::new(),
+            alias: None,
+            time_cost: None,
+            cond_skip: None,
+            log: None,
+            ulog: None,
+            log_full: None,
+            refer_to: None,
+            internal_token: None,
+        }
+    }
+
     #[inline]
     pub fn new(name: &str) -> Self {
         let mut n = String::with_capacity(NAME_CAPACITY);

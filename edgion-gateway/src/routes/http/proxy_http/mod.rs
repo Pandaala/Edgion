@@ -157,7 +157,7 @@ impl ProxyHttp for EdgionHttpProxy {
         // The proxy coerces back to Ordinary where Streamed is unsafe
         // (upgrade/CONNECT, empty-and-done body, H1.0 upstream). Keyed on the
         // monotonic latch, not the handler vector (see the ctx field docs).
-        if ctx.request_body_stream_active {
+        if ctx.request_body_stream_active() {
             pingora_proxy::UpstreamRequestBodyDisposition::Streamed
         } else {
             pingora_proxy::UpstreamRequestBodyDisposition::Ordinary
@@ -170,7 +170,7 @@ impl ProxyHttp for EdgionHttpProxy {
         // The latch is monotonic by construction (set once, never cleared),
         // as the contract requires — the handler vector is not, because the
         // hook takes it across await points and the future may be dropped.
-        !ctx.request_body_stream_active
+        !ctx.request_body_stream_active()
     }
 
     async fn upstream_request_filter(

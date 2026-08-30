@@ -178,6 +178,11 @@ mod tests {
         let (state, cancel_rx, _reason) = streaming_state();
         let mut ctx = EdgionHttpContext::default();
         ctx.set_mirror_state(state);
+        assert!(ctx.has_request_body_plugins());
+        assert!(
+            !ctx.request_body_stream_active(),
+            "mirror observation does not consume replayability"
+        );
         let mut body = None;
 
         mirror_body_tee(&mut body, RequestBodyEvent::Abandoned, &mut ctx).await;

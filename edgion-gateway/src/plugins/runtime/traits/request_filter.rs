@@ -45,6 +45,13 @@ pub trait RequestFilter: Send + Sync {
         true
     }
 
+    /// Plugins with a dedicated top-level access-log block may suppress the
+    /// generic per-stage entry. The runner still supplies a writable scratch
+    /// log so shared failure helpers keep one interface.
+    fn suppress_automatic_log(&self) -> bool {
+        false
+    }
+
     /// Run the request filter (async)
     /// This is called during the request_filter stage before forwarding to upstream
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult;

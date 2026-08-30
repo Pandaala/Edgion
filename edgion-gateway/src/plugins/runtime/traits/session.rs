@@ -196,7 +196,7 @@ pub trait PluginSession: Send + Sync {
     /// Remove a context variable
     fn remove_ctx_var(&mut self, key: &str) -> PluginSessionResult<()>;
 
-    /// Get a path parameter by name (lazy extraction from route pattern)
+    /// Get a path parameter captured from the matched route.
     ///
     /// For route pattern "/api/:uid/profile" and request path "/api/123/profile",
     /// `get_path_param("uid")` returns `Some("123")`.
@@ -400,6 +400,26 @@ pub trait PluginSession: Send + Sync {
     /// and alternate adapters that do not own an Edgion request context.
     fn claim_waf_phase(&mut self, _owner: &Arc<()>, _phase: crate::ctx::WafPhase) -> crate::ctx::WafPhaseClaim {
         crate::ctx::WafPhaseClaim::Execute
+    }
+
+    /// Record one completed WAF phase into the request-owned bounded summary.
+    fn record_waf_phase_outcome(
+        &mut self,
+        _owner: &Arc<()>,
+        _phase: crate::ctx::WafLogPhase,
+        _execution_us: u64,
+        _outcome: &edgion_waf::seclang::PhaseOutcome,
+    ) {
+    }
+
+    /// Record the first terminal WAF error using a closed, non-sensitive code.
+    fn record_waf_terminal_error(
+        &mut self,
+        _owner: &Arc<()>,
+        _phase: crate::ctx::WafLogPhase,
+        _code: crate::ctx::WafErrorCode,
+        _status: u16,
+    ) {
     }
 
     /// Mark the selected WAF transaction as a direct Pingora body-stream

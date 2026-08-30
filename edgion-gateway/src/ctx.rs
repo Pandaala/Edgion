@@ -15,7 +15,6 @@ use crate::routes::grpc::{GrpcRouteRuleUnit, SelectedGrpcBackend};
 use crate::routes::HttpRouteRuleUnit;
 use crate::runtime::GatewayInfo;
 use bytes::Bytes;
-use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::http_route::SessionPersistence;
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::uri_utils;
@@ -33,8 +32,42 @@ use tokio::task::JoinHandle;
 
 const PLUGIN_ENTRY_NAME_CAPACITY: usize = crate::plugins::runtime::log::NAME_CAPACITY;
 const PLUGIN_ENTRY_ALIAS_CAPACITY: usize = 32;
+const MAX_WAF_ACCESS_LOG_FINDINGS: usize = 16;
 
 pub(crate) type AttachedExtProcMap = HashMap<String, Arc<crate::plugins::http::ext_proc::AttachedExtProc>>;
+
+/// Lazily decoded request parameters shared by routing, plugins, templates,
+/// and access-log projections.
+///
+/// Each view keeps its own init-once gate because query matching is a routing
+/// hot path while path captures are plugin-only. Empty results use `None` as a
+/// sentinel and allocate nothing; non-empty maps box only their 48-byte map
+/// header in addition to the buckets they inherently own.
+#[derive(Default)]
+struct ParsedRequestCaches {
+    path: std::sync::OnceLock<Option<Box<HashMap<String, String>>>>,
+    query: std::sync::OnceLock<Option<Box<HashMap<String, String>>>>,
+}
+
+static EMPTY_PARSED_REQUEST_PARAMS: std::sync::LazyLock<HashMap<String, String>> =
+    std::sync::LazyLock::new(HashMap::new);
+
+pub(crate) fn parse_path_params(pattern: &str, actual_path: &str) -> HashMap<String, String> {
+    let mut params = HashMap::new();
+    for (pattern_segment, actual_segment) in pattern
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .zip(actual_path.split('/').filter(|segment| !segment.is_empty()))
+    {
+        if pattern_segment.starts_with(':') && !pattern_segment.starts_with("::") {
+            let name = &pattern_segment[1..];
+            if !name.is_empty() {
+                params.insert(name.to_string(), actual_segment.to_string());
+            }
+        }
+    }
+    params
+}
 
 /// Request-local exactly-once gate for the canonical response-trailer phase.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -108,6 +141,7 @@ pub(crate) struct CurrentPluginEntryIdentity {
 /// because a request may move between executor workers.
 pub(crate) struct WafRequestContext {
     owner: Arc<()>,
+    access_log: WafAccessLog,
     claimed_phases: u8,
     transaction: Option<edgion_waf::seclang::Transaction<'static>>,
     request_body_streaming: bool,
@@ -118,9 +152,10 @@ pub(crate) struct WafRequestContext {
 }
 
 impl WafRequestContext {
-    fn selected(owner: Arc<()>) -> Self {
+    fn selected(selection: WafSelection) -> Self {
         Self {
-            owner,
+            owner: selection.owner,
+            access_log: WafAccessLog::new(selection.source, selection.priority, selection.mode),
             claimed_phases: 0,
             transaction: None,
             request_body_streaming: false,
@@ -220,6 +255,24 @@ impl WafRequestContext {
             self.charged_runtime_bytes = next;
         }
     }
+
+    fn record_phase_outcome(
+        &mut self,
+        owner: &Arc<()>,
+        phase: WafLogPhase,
+        execution_us: u64,
+        outcome: &edgion_waf::seclang::PhaseOutcome,
+    ) {
+        if Arc::ptr_eq(&self.owner, owner) {
+            self.access_log.record_phase(phase, execution_us, outcome);
+        }
+    }
+
+    fn record_terminal_error(&mut self, owner: &Arc<()>, phase: WafLogPhase, code: WafErrorCode, status: u16) {
+        if Arc::ptr_eq(&self.owner, owner) {
+            self.access_log.record_error(phase, code, status);
+        }
+    }
 }
 
 impl Drop for WafRequestContext {
@@ -254,9 +307,322 @@ pub enum WafPhaseClaim {
     Pending,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WafLogSource {
+    Global,
+    Gateway,
+    Route,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WafLogMode {
+    On,
+    DetectionOnly,
+}
+
+#[derive(Debug)]
+pub(crate) struct WafSelection {
+    owner: Arc<()>,
+    source: WafLogSource,
+    priority: u16,
+    mode: WafLogMode,
+}
+
+impl WafSelection {
+    pub(crate) fn new(owner: Arc<()>, source: WafLogSource, priority: u16, mode: WafLogMode) -> Self {
+        Self {
+            owner,
+            source,
+            priority,
+            mode,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn owner(&self) -> &Arc<()> {
+        &self.owner
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WafLogPhase {
+    RequestHeaders,
+    RequestBody,
+    ResponseHeaders,
+    ResponseBody,
+    Logging,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WafLogOutcome {
+    NotRun,
+    Running,
+    Incomplete,
+    Allowed,
+    Detected,
+    Blocked,
+    Error,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WafFindingSeverity {
+    Emergency,
+    Alert,
+    Critical,
+    Error,
+    Warning,
+    Notice,
+    Info,
+    Debug,
+}
+
+impl From<edgion_waf::seclang::Severity> for WafFindingSeverity {
+    fn from(value: edgion_waf::seclang::Severity) -> Self {
+        use edgion_waf::seclang::Severity;
+        match value {
+            Severity::Emergency => Self::Emergency,
+            Severity::Alert => Self::Alert,
+            Severity::Critical => Self::Critical,
+            Severity::Error => Self::Error,
+            Severity::Warning => Self::Warning,
+            Severity::Notice => Self::Notice,
+            Severity::Info => Self::Info,
+            Severity::Debug => Self::Debug,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct WafFindingLog {
+    phase: WafLogPhase,
+    rule_id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    severity: Option<WafFindingSeverity>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct WafInterventionLog {
+    phase: WafLogPhase,
+    rule_id: u64,
+    status: u16,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WafErrorCode {
+    InputLimit,
+    BodyLimit,
+    BodyProcessing,
+    RuntimeLimit,
+    ResponseLimit,
+    PhaseState,
+    Unsupported,
+    RuntimeInvariant,
+    Matcher,
+    Transformation,
+    Allocation,
+    Arithmetic,
+    WinnerNotSelected,
+    TransactionOwnerConflict,
+    TransactionMissing,
+    RequestBodyReadFailed,
+    BodyStreamInstallFailed,
+    BodyStreamAbandoned,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct WafTerminalErrorLog {
+    phase: WafLogPhase,
+    code: WafErrorCode,
+    status: u16,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct WafPhaseLog {
+    execution_us: u64,
+    evaluated_rules: u64,
+    findings: u64,
+    omitted_findings: u64,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct WafPhaseLogs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_headers: Option<WafPhaseLog>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_body: Option<WafPhaseLog>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_headers: Option<WafPhaseLog>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_body: Option<WafPhaseLog>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    logging: Option<WafPhaseLog>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WafAccessLog {
+    source: WafLogSource,
+    priority: u16,
+    mode: WafLogMode,
+    outcome: WafLogOutcome,
+    phases: WafPhaseLogs,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    findings: Vec<WafFindingLog>,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    findings_omitted: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    intervention: Option<WafInterventionLog>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    terminal_error: Option<WafTerminalErrorLog>,
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
+fn saturating_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+impl WafAccessLog {
+    fn new(source: WafLogSource, priority: u16, mode: WafLogMode) -> Self {
+        Self {
+            source,
+            priority,
+            mode,
+            outcome: WafLogOutcome::NotRun,
+            phases: WafPhaseLogs::default(),
+            findings: Vec::new(),
+            findings_omitted: 0,
+            intervention: None,
+            terminal_error: None,
+        }
+    }
+
+    fn phase_slot(&mut self, phase: WafLogPhase) -> &mut Option<WafPhaseLog> {
+        match phase {
+            WafLogPhase::RequestHeaders => &mut self.phases.request_headers,
+            WafLogPhase::RequestBody => &mut self.phases.request_body,
+            WafLogPhase::ResponseHeaders => &mut self.phases.response_headers,
+            WafLogPhase::ResponseBody => &mut self.phases.response_body,
+            WafLogPhase::Logging => &mut self.phases.logging,
+        }
+    }
+
+    fn record_phase(
+        &mut self,
+        phase: WafLogPhase,
+        execution_us: u64,
+        phase_outcome: &edgion_waf::seclang::PhaseOutcome,
+    ) {
+        if self.phase_slot(phase).is_some() {
+            return;
+        }
+        let recordable = saturating_u64(
+            phase_outcome
+                .findings()
+                .iter()
+                .filter(|finding| finding.log() || finding.audit_log())
+                .count(),
+        );
+        let runtime_omitted = saturating_u64(phase_outcome.omitted_loggable_findings());
+        *self.phase_slot(phase) = Some(WafPhaseLog {
+            execution_us,
+            evaluated_rules: saturating_u64(phase_outcome.evaluated_units()),
+            findings: recordable,
+            omitted_findings: runtime_omitted,
+        });
+
+        for finding in phase_outcome.findings() {
+            if !finding.log() && !finding.audit_log() {
+                continue;
+            }
+            if self.findings.len() < MAX_WAF_ACCESS_LOG_FINDINGS {
+                self.findings.push(WafFindingLog {
+                    phase,
+                    rule_id: finding.rule_id(),
+                    severity: finding.severity().map(Into::into),
+                });
+            } else {
+                self.findings_omitted = self.findings_omitted.saturating_add(1);
+            }
+        }
+        self.findings_omitted = self.findings_omitted.saturating_add(runtime_omitted);
+
+        if let Some(intervention) = phase_outcome.intervention() {
+            if self.intervention.is_none() {
+                self.intervention = Some(WafInterventionLog {
+                    phase,
+                    rule_id: intervention.rule_id(),
+                    status: intervention.status(),
+                });
+            }
+            self.outcome = WafLogOutcome::Blocked;
+        } else if recordable != 0 || runtime_omitted != 0 {
+            if !matches!(self.outcome, WafLogOutcome::Blocked | WafLogOutcome::Error) {
+                self.outcome = WafLogOutcome::Detected;
+            }
+        } else if phase == WafLogPhase::Logging
+            && matches!(self.outcome, WafLogOutcome::NotRun | WafLogOutcome::Running)
+        {
+            self.outcome = WafLogOutcome::Allowed;
+        } else if matches!(self.outcome, WafLogOutcome::NotRun) {
+            self.outcome = WafLogOutcome::Running;
+        }
+    }
+
+    fn record_error(&mut self, phase: WafLogPhase, code: WafErrorCode, status: u16) {
+        if self.terminal_error.is_none() {
+            self.terminal_error = Some(WafTerminalErrorLog { phase, code, status });
+        }
+        self.outcome = WafLogOutcome::Error;
+    }
+
+    fn finalize(&mut self) {
+        if self.phases.logging.is_none() && matches!(self.outcome, WafLogOutcome::Running | WafLogOutcome::Detected) {
+            self.outcome = WafLogOutcome::Incomplete;
+        }
+    }
+}
+
 #[cfg(test)]
 mod waf_context_tests {
     use super::*;
+    use edgion_resources::resources::edgion_plugins::{WafConfig, WafMode};
+    use edgion_waf::seclang::{RequestHead, RuleEngineMode, RuntimeLimits, Transaction};
+
+    fn request_headers_outcome(rules: &str, uri: &'static [u8]) -> edgion_waf::seclang::PhaseOutcome {
+        let config = WafConfig {
+            rules: rules.to_string(),
+            mode: WafMode::On,
+            priority: 0,
+        };
+        let generation = Arc::new(config.compile_generation().expect("test WAF compiles"));
+        let request = RequestHead::new(
+            b"GET /audit HTTP/1.1",
+            b"GET",
+            uri,
+            uri,
+            b"HTTP/1.1",
+            b"192.0.2.1",
+            b"request-1",
+            &[],
+        );
+        let mut transaction = Transaction::new_shared_with_modes(
+            generation,
+            request,
+            RuntimeLimits::default(),
+            edgion_waf::seclang::EvaluationMode::Accelerated,
+            RuleEngineMode::On,
+        )
+        .unwrap();
+        transaction.execute_request_headers().unwrap()
+    }
 
     #[test]
     fn winner_selection_and_phase_claims_are_exact_once() {
@@ -265,8 +631,18 @@ mod waf_context_tests {
         let mut ctx = EdgionHttpContext::new();
 
         assert!(ctx.waf.is_none());
-        assert!(ctx.select_waf(Some(Arc::clone(&selected))));
-        assert!(!ctx.select_waf(Some(Arc::clone(&other))));
+        assert!(ctx.select_waf(Some(WafSelection::new(
+            Arc::clone(&selected),
+            WafLogSource::Route,
+            10,
+            WafLogMode::On,
+        ))));
+        assert!(!ctx.select_waf(Some(WafSelection::new(
+            Arc::clone(&other),
+            WafLogSource::Global,
+            20,
+            WafLogMode::DetectionOnly,
+        ))));
         assert_eq!(ctx.claim_waf_phase(&other, WafPhase::Request), WafPhaseClaim::Skip);
         for phase in [WafPhase::Request, WafPhase::ResponseHeaders, WafPhase::ResponseComplete] {
             assert_eq!(ctx.claim_waf_phase(&selected, phase), WafPhaseClaim::Execute);
@@ -281,13 +657,133 @@ mod waf_context_tests {
 
         assert!(ctx.select_waf(None));
         assert!(!ctx.select_waf(None));
-        assert!(!ctx.select_waf(Some(Arc::clone(&owner))));
+        assert!(!ctx.select_waf(Some(WafSelection::new(
+            Arc::clone(&owner),
+            WafLogSource::Route,
+            0,
+            WafLogMode::On,
+        ))));
         assert!(ctx.waf.is_none());
         assert_eq!(ctx.claim_waf_phase(&owner, WafPhase::Request), WafPhaseClaim::Pending);
         assert_eq!(
             std::mem::size_of::<Option<Box<WafRequestContext>>>(),
             std::mem::size_of::<usize>()
         );
+    }
+
+    #[test]
+    fn selected_waf_allocates_one_request_owned_box_and_no_winner_allocates_none() {
+        let owner = Arc::new(());
+        let (selected, selected_allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            let mut ctx = EdgionHttpContext::new();
+            assert!(ctx.select_waf(Some(WafSelection::new(
+                Arc::clone(&owner),
+                WafLogSource::Route,
+                0,
+                WafLogMode::On,
+            ))));
+            ctx
+        });
+        assert!(selected.waf_access_log().is_some());
+        assert_eq!(selected_allocations.calls, 1);
+        assert_eq!(
+            selected_allocations.requested_bytes,
+            std::mem::size_of::<WafRequestContext>()
+        );
+
+        let (unselected, unselected_allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            let mut ctx = EdgionHttpContext::new();
+            assert!(ctx.select_waf(None));
+            ctx
+        });
+        assert!(unselected.waf_access_log().is_none());
+        assert_eq!(unselected_allocations.calls, 0);
+        assert_eq!(unselected_allocations.requested_bytes, 0);
+    }
+
+    #[test]
+    fn access_summary_is_bounded_and_retains_intervention_outside_the_finding_cap() {
+        let mut rules = String::new();
+        for id in 1..=20 {
+            rules.push_str(&format!(
+                "SecRule REQUEST_URI \"@contains /audit\" \"id:{id},phase:1,pass,log,auditlog\"\n"
+            ));
+        }
+        rules.push_str("SecRule REQUEST_URI \"@contains /audit\" \"id:999,phase:1,deny,status:409,log,auditlog\"\n");
+        let outcome = request_headers_outcome(&rules, b"/audit-private-input");
+        let mut access = WafAccessLog::new(WafLogSource::Route, 17, WafLogMode::On);
+        access.record_phase(WafLogPhase::RequestHeaders, 23, &outcome);
+
+        let value = serde_json::to_value(&access).unwrap();
+        assert_eq!(value["source"], "route");
+        assert_eq!(value["priority"], 17);
+        assert_eq!(value["mode"], "on");
+        assert_eq!(value["outcome"], "blocked");
+        assert_eq!(value["findings"].as_array().unwrap().len(), MAX_WAF_ACCESS_LOG_FINDINGS);
+        assert_eq!(value["findings_omitted"], 5);
+        assert_eq!(value["intervention"]["rule_id"], 999);
+        assert_eq!(value["intervention"]["status"], 409);
+        let json = value.to_string();
+        assert!(!json.contains("audit-private-input"));
+    }
+
+    #[test]
+    fn nolog_finding_is_excluded_and_first_terminal_error_is_stable() {
+        let outcome = request_headers_outcome(
+            concat!(
+                "SecRule REQUEST_URI \"@contains /audit\" \"id:1,phase:1,pass,nolog,noauditlog\"\n",
+                "SecRule REQUEST_URI \"@contains /audit\" \"id:2,phase:1,pass,log\"\n",
+            ),
+            b"/audit",
+        );
+        let mut access = WafAccessLog::new(WafLogSource::Gateway, 3, WafLogMode::DetectionOnly);
+        access.record_phase(WafLogPhase::RequestHeaders, 7, &outcome);
+        access.record_error(WafLogPhase::RequestBody, WafErrorCode::BodyLimit, 413);
+        access.record_error(WafLogPhase::Logging, WafErrorCode::RuntimeInvariant, 500);
+
+        let value = serde_json::to_value(&access).unwrap();
+        let findings = value["findings"].as_array().unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0]["rule_id"], 2);
+        assert_eq!(value["terminal_error"]["phase"], "request_body");
+        assert_eq!(value["terminal_error"]["code"], "body_limit");
+        assert_eq!(value["terminal_error"]["status"], 413);
+    }
+
+    #[test]
+    fn finalization_distinguishes_not_run_incomplete_and_allowed() {
+        let clean = request_headers_outcome("", b"/clean");
+        let detected = request_headers_outcome(
+            "SecRule REQUEST_URI \"@contains /detected\" \"id:1,phase:1,pass,log\"\n",
+            b"/detected",
+        );
+
+        let mut not_run = WafAccessLog::new(WafLogSource::Global, 0, WafLogMode::On);
+        not_run.finalize();
+        assert_eq!(serde_json::to_value(&not_run).unwrap()["outcome"], "not_run");
+
+        let mut incomplete = WafAccessLog::new(WafLogSource::Global, 0, WafLogMode::On);
+        incomplete.record_phase(WafLogPhase::RequestHeaders, 1, &clean);
+        incomplete.finalize();
+        assert_eq!(serde_json::to_value(&incomplete).unwrap()["outcome"], "incomplete");
+
+        let mut incomplete_after_finding = WafAccessLog::new(WafLogSource::Global, 0, WafLogMode::On);
+        incomplete_after_finding.record_phase(WafLogPhase::RequestHeaders, 1, &detected);
+        incomplete_after_finding.finalize();
+        assert_eq!(
+            serde_json::to_value(&incomplete_after_finding).unwrap()["outcome"],
+            "incomplete"
+        );
+
+        let mut allowed = WafAccessLog::new(WafLogSource::Global, 0, WafLogMode::On);
+        allowed.record_phase(WafLogPhase::Logging, 1, &clean);
+        allowed.finalize();
+        assert_eq!(serde_json::to_value(&allowed).unwrap()["outcome"], "allowed");
+
+        let mut fully_detected = WafAccessLog::new(WafLogSource::Global, 0, WafLogMode::DetectionOnly);
+        fully_detected.record_phase(WafLogPhase::Logging, 1, &detected);
+        fully_detected.finalize();
+        assert_eq!(serde_json::to_value(&fully_detected).unwrap()["outcome"], "detected");
     }
 }
 
@@ -1564,17 +2060,44 @@ pub(crate) struct DeferredCredentialMutations {
     entries: Vec<DeferredCredentialMutation>,
 }
 
-/// Optional request state shared by native HTTP plugins.
+/// Frequently accessed request state shared by native HTTP plugins.
 ///
-/// Ordinary requests that do not execute a plugin retain only the nullable
-/// pointer in [`EdgionHttpContext`]. Read-only helpers never instantiate this
-/// state; [`EdgionHttpContext::ensure_plugin_state`] is the sole allocation
-/// boundary.
-struct PluginRequestState {
+/// Plugin chains are a normal gateway workload, so their execution cursor,
+/// logs, and request-pinned runtime generations remain inline. Empty vectors
+/// and nullable `Arc`s do not allocate, while the inline layout avoids an
+/// extra branch and heap indirection at every plugin callback.
+struct PluginExecutionState {
     stage_logs: Vec<StageLogs>,
     pending_edgion_plugins_logs: Vec<EdgionPluginsLog>,
-    running_result: PluginRunningResult,
+    terminated: bool,
     current_entry: Option<CurrentPluginEntryIdentity>,
+    resolved_global_plugins: Option<Arc<[Arc<PluginRuntime>]>>,
+    resolved_gateway_plugins: Option<Arc<[Arc<PluginRuntime>]>>,
+    resolved_route_ext_refs: Option<Arc<[Option<Arc<PluginRuntime>>]>>,
+}
+
+impl Default for PluginExecutionState {
+    fn default() -> Self {
+        Self {
+            stage_logs: Vec::new(),
+            pending_edgion_plugins_logs: Vec::new(),
+            terminated: false,
+            current_entry: None,
+            resolved_global_plugins: None,
+            resolved_gateway_plugins: None,
+            resolved_route_ext_refs: None,
+        }
+    }
+}
+
+/// Sparse plugin side effects and feature-specific caches.
+///
+/// These fields have low cross-plugin co-occurrence. Keeping them behind one
+/// lazy pointer avoids charging every request for empty map/vector headers,
+/// while a request using several advanced plugins still pays only one extra
+/// state allocation.
+#[derive(Default)]
+struct PluginAuxState {
     ctx_map: HashMap<String, String>,
     pending_response_header_ops: Vec<PendingHeaderOp>,
     deferred_credential_mutations: DeferredCredentialMutations,
@@ -1582,30 +2105,58 @@ struct PluginRequestState {
     dye_handled_request_names: Vec<String>,
     mirror_state: Option<MirrorState>,
     json_schema_validation_claimed: bool,
-    resolved_global_plugins: Option<Arc<[Arc<PluginRuntime>]>>,
-    resolved_gateway_plugins: Option<Arc<[Arc<PluginRuntime>]>>,
-    resolved_route_ext_refs: Option<Arc<[Option<Arc<PluginRuntime>>]>>,
     resolved_backend_ext_refs: HashMap<String, Option<Arc<PluginRuntime>>>,
 }
 
-impl Default for PluginRequestState {
+const REQUEST_BODY_SOURCE_HANDLER: u8 = 1 << 0;
+const REQUEST_BODY_SOURCE_WAF: u8 = 1 << 1;
+const REQUEST_BODY_SOURCE_OBSERVER: u8 = 1 << 2;
+const REQUEST_BODY_SOURCE_MIRROR: u8 = 1 << 3;
+
+pub(crate) type RequestBodyStreamHandlers =
+    Vec<sync_wrapper::SyncWrapper<Box<dyn crate::plugins::runtime::traits::RequestBodyStreamHandler>>>;
+
+/// Optional drivers attached to Pingora's per-chunk request-body callback.
+///
+/// The source bits are monotonic for the request lifetime. In particular,
+/// handler and WAF bits remain set while handlers are temporarily moved across
+/// an await point, so cancellation can never make a partially streamed request
+/// replayable again.
+#[derive(Default)]
+struct RequestBodyPluginState {
+    handlers: RequestBodyStreamHandlers,
+    observers: Option<Box<crate::request_body::observer::RequestBodyObservers>>,
+    active_sources: u8,
+}
+
+impl RequestBodyPluginState {
+    #[inline]
+    fn is_non_replayable(&self) -> bool {
+        self.active_sources & (REQUEST_BODY_SOURCE_HANDLER | REQUEST_BODY_SOURCE_WAF) != 0
+    }
+}
+
+/// Correlated state for ordinary response processors, ExtProc owners, and
+/// trailer companions.
+///
+/// Terminal arbitration and response-write facts stay inline because AI and
+/// ordinary streaming responses use them without installing this state.
+struct ResponseProcessingState {
+    stream_processors: Vec<Box<dyn StreamingResponseProcessor>>,
+    trailer_companions: Vec<Box<dyn UpstreamResponseTrailer>>,
+    trailer_lifecycle: UpstreamTrailerLifecycle,
+    attached_ext_proc: AttachedExtProcMap,
+    framing_reservations: usize,
+}
+
+impl Default for ResponseProcessingState {
     fn default() -> Self {
         Self {
-            stage_logs: Vec::new(),
-            pending_edgion_plugins_logs: Vec::new(),
-            running_result: PluginRunningResult::Nothing,
-            current_entry: None,
-            ctx_map: HashMap::new(),
-            pending_response_header_ops: Vec::new(),
-            deferred_credential_mutations: DeferredCredentialMutations::default(),
-            current_dye_plan: None,
-            dye_handled_request_names: Vec::new(),
-            mirror_state: None,
-            json_schema_validation_claimed: false,
-            resolved_global_plugins: None,
-            resolved_gateway_plugins: None,
-            resolved_route_ext_refs: None,
-            resolved_backend_ext_refs: HashMap::new(),
+            stream_processors: Vec::new(),
+            trailer_companions: Vec::new(),
+            trailer_lifecycle: UpstreamTrailerLifecycle::Open,
+            attached_ext_proc: HashMap::new(),
+            framing_reservations: 0,
         }
     }
 }
@@ -1899,9 +2450,13 @@ pub struct EdgionHttpContext {
     pub backend_context: Option<BackendContext>,
 
     // --- Plugin execution and access-log staging ---
-    /// Lazily allocated common plugin state. No-plugin requests retain only
-    /// this pointer and all read-only projections remain allocation-free.
-    plugin_state: Option<Box<PluginRequestState>>,
+    /// Hot plugin-chain state. It remains allocation-free while empty and is
+    /// inline because plugin execution is a common gateway workload.
+    plugin_execution: PluginExecutionState,
+
+    /// Sparse plugin effects and feature-specific caches. Ordinary plugin
+    /// chains do not allocate this box.
+    plugin_aux: Option<Box<PluginAuxState>>,
 
     /// The sole native WAF state for this request: selected owner, exactly-once
     /// phase claims, transaction, streaming state, timing, and memory charge.
@@ -1949,28 +2504,16 @@ pub struct EdgionHttpContext {
     /// is the only place the upstream `Host` header can be written.
     pub upstream_authority: Option<String>,
 
-    /// Lazily extracted path parameters from route pattern (e.g., "/api/:uid/profile")
-    /// - None: not yet extracted
-    /// - Some(HashMap): already extracted (may be empty if no params or no match)
-    pub path_params: Option<HashMap<String, String>>,
+    /// Compact path/query caches. The two cells preserve immutable query access
+    /// required by route matching without a shared outer pointer check. Path
+    /// values are frozen from the normalized route-match view before plugins;
+    /// query values always use the frozen entry snapshot.
+    parsed_request_caches: ParsedRequestCaches,
 
-    /// Lazily-built per-request decoded query parameter map.
-    /// Initialized on first access via `cached_query()`. Shared between
-    /// route deep-match and `PluginSession::get_query_param` so the same
-    /// query string is parsed (and url-decoded) at most once per request.
-    /// `std::sync::OnceLock` is used (not `OnceCell`) because Pingora requires
-    /// the per-request CTX type to be `Send + Sync`; per-request access is
-    /// still single-threaded so `&self` init-once is sufficient.
-    /// Field is named `_cell` to disambiguate from the `cached_query()` method
-    /// and prevent accidental in-crate access that would bypass the helper's
-    /// entry-snapshot semantics.
-    pub(crate) cached_query_cell: std::sync::OnceLock<HashMap<String, String>>,
-
-    /// Unified upstream-jump slot. Set by request-stage plugins via
-    /// `PluginSession::set_upstream_jump`. First-write-wins; subsequent setter
-    /// calls are rejected (see `SetJumpOutcome`). Replaces the legacy
-    /// `direct_endpoint` / `internal_jump` / `external_jump` triplet.
-    pub jump: Option<UpstreamJumpTarget>,
+    /// Unified upstream-jump slot. The 80-byte target is boxed because only
+    /// explicit jump plugins activate it; ordinary routing retains one nullable
+    /// pointer. First-write-wins and the target survives upstream retries.
+    pub jump: Option<Box<UpstreamJumpTarget>>,
 
     /// True when `req_header.uri` is already in its upstream-forwarded final form;
     /// further writes are forbidden.
@@ -2011,39 +2554,10 @@ pub struct EdgionHttpContext {
     /// and is then released before streaming the response.
     pub request_body: RequestBodyState,
 
-    /// Streamed request-body handlers installed by request-stage plugins
-    /// (e.g. ExtProc `STREAMED`). Driven per transport body event by
-    /// `request_body_filter_action`. Empty for the overwhelming majority of
-    /// requests — the emptiness test is the per-chunk fast-path gate.
-    ///
-    /// `SyncWrapper` grants only `&mut` access, which makes the `!Sync`
-    /// handler internals (a live gRPC stream) safe inside the Sync-required
-    /// context; all driving is `&mut` anyway.
-    ///
-    /// NOT the monotonic source of truth: the hook temporarily `take`s this
-    /// vector across `.await` points, and the downstream future can be
-    /// dropped mid-hook (the proxy's upstream-error `select!` arm), losing
-    /// the taken handlers. Retry/disposition predicates key on
-    /// [`Self::request_body_stream_active`] instead. Accepted cost of that
-    /// drop: the lost handlers' pending access-log entries die with them, so
-    /// a request killed by an upstream error mid-chunk has no
-    /// `request_body_filters` stage in its access log.
-    pub request_body_stream:
-        Vec<sync_wrapper::SyncWrapper<Box<dyn crate::plugins::runtime::traits::RequestBodyStreamHandler>>>,
-
-    /// Monotonic latch: set when the first streamed body handler is installed
-    /// and NEVER cleared, surviving even a downstream future dropped mid-hook
-    /// (which can empty `request_body_stream`). `request_retry_allowed`,
-    /// `upstream_request_body_disposition`, and the retry `buffer_ok` gates
-    /// derive from this latch — the contract requires the retry predicate to
-    /// be monotonic, and a lost handler must fail the request rather than
-    /// re-arm retries that would forward the remaining body uninspected.
-    pub request_body_stream_active: bool,
-
-    /// Optional fixed-capacity, read-only request-body observer registry.
-    /// Allocated only when an internal request-stage plugin successfully
-    /// registers; it never owns or replays body bytes.
-    pub(crate) request_body_observers: Option<Box<crate::request_body::observer::RequestBodyObservers>>,
+    /// Lazily allocated request-body callback drivers. The outer state is
+    /// small; the fixed-capacity observer registry remains independently boxed
+    /// inside it because that registry is more than two KiB on ARM64.
+    request_body_plugins: Option<Box<RequestBodyPluginState>>,
 
     // --- Lazily allocated AI exchange state ---
     /// Lazily allocated AI-only request, attempt, response, and accounting
@@ -2073,35 +2587,16 @@ pub struct EdgionHttpContext {
     /// successful-write evidence; Pingora `response_written()` owns that fact.
     response_write_started: bool,
 
-    /// Streaming-response processors installed for this request by request-stage
-    /// plugins (e.g. AiProxy's usage extractor). Run in installation order from
-    /// `pg_upstream_response_body_filter`, before the read-only body-filter
-    /// chains. Not operator-facing; not a plugin stage.
-    pub stream_processors: Vec<Box<dyn StreamingResponseProcessor>>,
-
-    /// Request-owned async response-trailer companions. Ordinary compiled
-    /// response plugins install these in response onion order; the transport
-    /// terminal callback dispatches the vector serially exactly once.
-    pub(crate) upstream_response_trailer_companions: Vec<Box<dyn UpstreamResponseTrailer>>,
-
-    /// Exactly-once state shared by Header EOS, body terminal events, the real
-    /// trailer hook, and the logging fallback.
-    pub(crate) upstream_trailer_lifecycle: UpstreamTrailerLifecycle,
+    /// Lazily allocated ordinary response processors, ExtProc owners, framing
+    /// reservations, and trailer companions. AI processors and terminal
+    /// arbitration remain in their existing hot state.
+    response_processing: Option<Box<ResponseProcessingState>>,
 
     /// EOS fact from the final upstream response Header task. This is latched
     /// before response plugins run so protocol owners can decide whether a
     /// header verdict is the final outbound message without guessing from
     /// body-mode configuration.
     pub(crate) upstream_response_headers_end_stream: Option<bool>,
-
-    /// Request-scoped ExtProc transactions keyed by the compiled request-entry
-    /// identity. The request filter and its internal response companion share
-    /// these owners; targets are never used as transaction identity.
-    pub attached_ext_proc: AttachedExtProcMap,
-
-    /// Early framing reservations for attached processors that may mutate the
-    /// final response body before their concrete processor is installed.
-    pub attached_response_framing_reservations: usize,
 
     /// Becomes true at the first response body callback. Late processor
     /// installation is rejected to keep response composition deterministic.
@@ -2157,54 +2652,60 @@ impl Default for EdgionHttpContext {
 
 impl EdgionHttpContext {
     #[inline]
-    fn plugin_state(&self) -> Option<&PluginRequestState> {
-        self.plugin_state.as_deref()
+    fn plugin_aux(&self) -> Option<&PluginAuxState> {
+        self.plugin_aux.as_deref()
     }
 
     #[inline]
-    fn plugin_state_mut(&mut self) -> Option<&mut PluginRequestState> {
-        self.plugin_state.as_deref_mut()
+    fn plugin_aux_mut(&mut self) -> Option<&mut PluginAuxState> {
+        self.plugin_aux.as_deref_mut()
     }
 
     #[inline]
-    fn ensure_plugin_state(&mut self) -> &mut PluginRequestState {
-        self.plugin_state
-            .get_or_insert_with(|| Box::new(PluginRequestState::default()))
+    fn ensure_plugin_aux(&mut self) -> &mut PluginAuxState {
+        self.plugin_aux
+            .get_or_insert_with(|| Box::new(PluginAuxState::default()))
             .as_mut()
     }
 
     #[cfg(test)]
     #[inline]
-    pub(crate) fn has_plugin_state(&self) -> bool {
-        self.plugin_state.is_some()
+    pub(crate) fn has_plugin_aux(&self) -> bool {
+        self.plugin_aux.is_some()
     }
 
     #[inline]
     pub(crate) fn stage_logs(&self) -> &[StageLogs] {
-        self.plugin_state().map_or(&[], |state| state.stage_logs.as_slice())
+        self.plugin_execution.stage_logs.as_slice()
     }
 
     #[inline]
-    pub(crate) fn stage_logs_mut(&mut self) -> Option<&mut Vec<StageLogs>> {
-        self.plugin_state_mut().map(|state| &mut state.stage_logs)
+    pub(crate) fn stage_logs_mut(&mut self) -> &mut Vec<StageLogs> {
+        &mut self.plugin_execution.stage_logs
     }
 
     pub(crate) fn stage_logs_and_attached_ext_proc(&mut self) -> Option<(&mut Vec<StageLogs>, &AttachedExtProcMap)> {
         let Self {
-            plugin_state,
-            attached_ext_proc,
+            plugin_execution,
+            response_processing,
             ..
         } = self;
-        Some((&mut plugin_state.as_deref_mut()?.stage_logs, attached_ext_proc))
+        Some((
+            &mut plugin_execution.stage_logs,
+            &response_processing.as_deref()?.attached_ext_proc,
+        ))
     }
 
     #[inline]
     pub(crate) fn push_stage_log(&mut self, log: StageLogs) {
-        self.ensure_plugin_state().stage_logs.push(log);
+        self.plugin_execution.stage_logs.push(log);
     }
 
     pub(crate) fn finish_plugin_stage(&mut self, stage: &'static str, filters: Vec<crate::plugins::PluginLog>) {
-        let state = self.ensure_plugin_state();
+        let state = &mut self.plugin_execution;
+        if filters.is_empty() && state.pending_edgion_plugins_logs.is_empty() {
+            return;
+        }
         state.stage_logs.push(StageLogs {
             stage,
             filters,
@@ -2214,12 +2715,12 @@ impl EdgionHttpContext {
 
     #[inline]
     pub(crate) fn push_pending_edgion_plugins_log(&mut self, log: EdgionPluginsLog) {
-        self.ensure_plugin_state().pending_edgion_plugins_logs.push(log);
+        self.plugin_execution.pending_edgion_plugins_logs.push(log);
     }
 
     #[inline]
     pub(crate) fn start_pending_edgion_plugins_log(&mut self, name: String) -> usize {
-        let state = self.ensure_plugin_state();
+        let state = &mut self.plugin_execution;
         let idx = state.pending_edgion_plugins_logs.len();
         state
             .pending_edgion_plugins_logs
@@ -2229,18 +2730,17 @@ impl EdgionHttpContext {
 
     #[inline]
     pub(crate) fn pending_edgion_plugins_log_mut(&mut self, index: usize) -> Option<&mut EdgionPluginsLog> {
-        self.plugin_state_mut()?.pending_edgion_plugins_logs.get_mut(index)
+        self.plugin_execution.pending_edgion_plugins_logs.get_mut(index)
     }
 
     #[inline]
     pub(crate) fn plugin_terminated(&self) -> bool {
-        self.plugin_state()
-            .is_some_and(|state| state.running_result == PluginRunningResult::ErrTerminateRequest)
+        self.plugin_execution.terminated
     }
 
     #[inline]
     pub(crate) fn terminate_plugin_execution(&mut self) {
-        self.ensure_plugin_state().running_result = PluginRunningResult::ErrTerminateRequest;
+        self.plugin_execution.terminated = true;
     }
 
     #[inline]
@@ -2248,37 +2748,34 @@ impl EdgionHttpContext {
         &mut self,
         identity: Option<CurrentPluginEntryIdentity>,
     ) -> Option<CurrentPluginEntryIdentity> {
-        if identity.is_none() && self.plugin_state.is_none() {
-            return None;
-        }
-        std::mem::replace(&mut self.ensure_plugin_state().current_entry, identity)
+        std::mem::replace(&mut self.plugin_execution.current_entry, identity)
     }
 
     #[inline]
     pub(crate) fn current_plugin_entry_identity(&self) -> Option<CurrentPluginEntryIdentity> {
-        self.plugin_state().and_then(|state| state.current_entry)
+        self.plugin_execution.current_entry
     }
 
     #[inline]
     pub(crate) fn queue_pending_response_header_op(&mut self, op: PendingHeaderOp) {
-        self.ensure_plugin_state().pending_response_header_ops.push(op);
+        self.ensure_plugin_aux().pending_response_header_ops.push(op);
     }
 
     #[inline]
     pub(crate) fn has_pending_response_header_ops(&self) -> bool {
-        self.plugin_state()
+        self.plugin_aux()
             .is_some_and(|state| !state.pending_response_header_ops.is_empty())
     }
 
     #[inline]
     pub(crate) fn pending_response_header_ops(&self) -> &[PendingHeaderOp] {
-        self.plugin_state()
+        self.plugin_aux()
             .map_or(&[], |state| state.pending_response_header_ops.as_slice())
     }
 
     #[inline]
     pub(crate) fn deferred_credential_mutations(&self) -> Option<&DeferredCredentialMutations> {
-        self.plugin_state().map(|state| &state.deferred_credential_mutations)
+        self.plugin_aux().map(|state| &state.deferred_credential_mutations)
     }
 
     #[inline]
@@ -2295,7 +2792,7 @@ impl EdgionHttpContext {
 
     #[inline]
     pub(crate) fn remove_deferred_credential_mutation(&mut self, name: &str) {
-        if let Some(state) = self.plugin_state_mut() {
+        if let Some(state) = self.plugin_aux_mut() {
             state.deferred_credential_mutations.remove(name);
         }
     }
@@ -2307,103 +2804,103 @@ impl EdgionHttpContext {
         value: Arc<http::HeaderValue>,
         valid_until: Option<std::time::Instant>,
     ) {
-        self.ensure_plugin_state()
+        self.ensure_plugin_aux()
             .deferred_credential_mutations
             .upsert(name, value, valid_until);
     }
 
     #[inline]
     pub(crate) fn install_current_dye_plan(&mut self, plan: Option<Arc<crate::plugins::runtime::CompiledDyePlan>>) {
-        if plan.is_none() && self.plugin_state.is_none() {
+        if plan.is_none() && self.plugin_aux.is_none() {
             return;
         }
-        self.ensure_plugin_state().current_dye_plan = plan;
+        self.ensure_plugin_aux().current_dye_plan = plan;
     }
 
     #[inline]
     pub(crate) fn current_dye_plan(&self) -> Option<Arc<crate::plugins::runtime::CompiledDyePlan>> {
-        self.plugin_state()
+        self.plugin_aux()
             .and_then(|state| state.current_dye_plan.as_ref().map(Arc::clone))
     }
 
     #[inline]
     pub(crate) fn take_dye_handled_request_names(&mut self) -> Vec<String> {
-        self.plugin_state_mut()
+        self.plugin_aux_mut()
             .map_or_else(Vec::new, |state| std::mem::take(&mut state.dye_handled_request_names))
     }
 
     #[inline]
     pub(crate) fn restore_dye_handled_request_names(&mut self, names: Vec<String>) {
-        if names.is_empty() && self.plugin_state.is_none() {
+        if names.is_empty() && self.plugin_aux.is_none() {
             return;
         }
-        self.ensure_plugin_state().dye_handled_request_names = names;
+        self.ensure_plugin_aux().dye_handled_request_names = names;
     }
 
     #[cfg(test)]
     #[inline]
     pub(crate) fn dye_handled_request_names(&self) -> &[String] {
-        self.plugin_state()
+        self.plugin_aux()
             .map_or(&[], |state| state.dye_handled_request_names.as_slice())
     }
 
     #[inline]
     pub(crate) fn has_mirror_state(&self) -> bool {
-        self.plugin_state().is_some_and(|state| state.mirror_state.is_some())
+        self.plugin_aux().is_some_and(|state| state.mirror_state.is_some())
     }
 
     #[inline]
     pub(crate) fn take_mirror_state(&mut self) -> Option<MirrorState> {
-        self.plugin_state_mut()?.mirror_state.take()
+        self.plugin_aux_mut()?.mirror_state.take()
     }
 
     #[inline]
     pub(crate) fn set_mirror_state(&mut self, state: MirrorState) {
-        self.ensure_plugin_state().mirror_state = Some(state);
+        if matches!(&state, MirrorState::Streaming { .. }) {
+            self.activate_request_body_source(REQUEST_BODY_SOURCE_MIRROR);
+        }
+        self.ensure_plugin_aux().mirror_state = Some(state);
     }
 
     #[inline]
     pub(crate) fn install_resolved_global_plugins(&mut self, plugins: Vec<Arc<PluginRuntime>>) {
         if !plugins.is_empty() {
-            self.ensure_plugin_state().resolved_global_plugins = Some(Arc::from(plugins));
+            self.plugin_execution.resolved_global_plugins = Some(Arc::from(plugins));
         }
     }
 
     #[inline]
     pub(crate) fn resolved_global_plugins(&self) -> Option<Arc<[Arc<PluginRuntime>]>> {
-        self.plugin_state()
-            .and_then(|state| state.resolved_global_plugins.as_ref().map(Arc::clone))
+        self.plugin_execution.resolved_global_plugins.as_ref().map(Arc::clone)
     }
 
     #[inline]
     pub(crate) fn install_resolved_gateway_plugins(&mut self, plugins: Vec<Arc<PluginRuntime>>) {
         if !plugins.is_empty() {
-            self.ensure_plugin_state().resolved_gateway_plugins = Some(Arc::from(plugins));
+            self.plugin_execution.resolved_gateway_plugins = Some(Arc::from(plugins));
         }
     }
 
     #[inline]
     pub(crate) fn resolved_gateway_plugins(&self) -> Option<Arc<[Arc<PluginRuntime>]>> {
-        self.plugin_state()
-            .and_then(|state| state.resolved_gateway_plugins.as_ref().map(Arc::clone))
+        self.plugin_execution.resolved_gateway_plugins.as_ref().map(Arc::clone)
     }
 
     #[inline]
     pub(crate) fn install_resolved_route_ext_refs(&mut self, plugins: Vec<Option<Arc<PluginRuntime>>>) {
         if !plugins.is_empty() {
-            self.ensure_plugin_state().resolved_route_ext_refs = Some(Arc::from(plugins));
+            self.plugin_execution.resolved_route_ext_refs = Some(Arc::from(plugins));
         }
     }
 
     #[inline]
     pub(crate) fn resolved_route_ext_refs(&self) -> Option<Arc<[Option<Arc<PluginRuntime>>]>> {
-        self.plugin_state()
-            .and_then(|state| state.resolved_route_ext_refs.as_ref().map(Arc::clone))
+        self.plugin_execution.resolved_route_ext_refs.as_ref().map(Arc::clone)
     }
 
     #[inline]
     pub(crate) fn resolved_route_ext_ref(&self, index: usize) -> Option<Arc<PluginRuntime>> {
-        self.plugin_state()?
+        self.plugin_execution
             .resolved_route_ext_refs
             .as_ref()?
             .get(index)?
@@ -2416,13 +2913,290 @@ impl EdgionHttpContext {
         key: &str,
         resolve: impl FnOnce() -> Option<Arc<PluginRuntime>>,
     ) -> Option<Arc<PluginRuntime>> {
-        let cache = &mut self.ensure_plugin_state().resolved_backend_ext_refs;
+        let cache = &mut self.ensure_plugin_aux().resolved_backend_ext_refs;
         if let Some(runtime) = cache.get(key) {
             return runtime.as_ref().map(Arc::clone);
         }
         let runtime = resolve();
         cache.insert(key.to_string(), runtime.as_ref().map(Arc::clone));
         runtime
+    }
+
+    #[inline]
+    fn request_body_plugins_mut(&mut self) -> Option<&mut RequestBodyPluginState> {
+        self.request_body_plugins.as_deref_mut()
+    }
+
+    #[inline]
+    fn ensure_request_body_plugins(&mut self) -> &mut RequestBodyPluginState {
+        self.request_body_plugins
+            .get_or_insert_with(|| Box::new(RequestBodyPluginState::default()))
+            .as_mut()
+    }
+
+    #[inline]
+    fn activate_request_body_source(&mut self, source: u8) {
+        self.ensure_request_body_plugins().active_sources |= source;
+    }
+
+    #[inline]
+    pub(crate) fn has_request_body_plugins(&self) -> bool {
+        self.request_body_plugins.is_some()
+    }
+
+    /// Whether request bytes have entered an unreplayable streaming consumer.
+    /// This remains true even while the handler vector is moved across await.
+    #[inline]
+    pub(crate) fn request_body_stream_active(&self) -> bool {
+        self.request_body_plugins
+            .as_deref()
+            .is_some_and(RequestBodyPluginState::is_non_replayable)
+    }
+
+    #[inline]
+    pub(crate) fn activate_waf_request_body_streaming(&mut self) {
+        self.activate_request_body_source(REQUEST_BODY_SOURCE_WAF);
+    }
+
+    #[inline]
+    pub(crate) fn push_request_body_stream_handler(
+        &mut self,
+        handler: Box<dyn crate::plugins::runtime::traits::RequestBodyStreamHandler>,
+    ) {
+        let state = self.ensure_request_body_plugins();
+        state.handlers.push(sync_wrapper::SyncWrapper::new(handler));
+        state.active_sources |= REQUEST_BODY_SOURCE_HANDLER;
+    }
+
+    #[inline]
+    pub(crate) fn has_request_body_stream_handlers(&self) -> bool {
+        self.request_body_plugins
+            .as_deref()
+            .is_some_and(|state| !state.handlers.is_empty())
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn request_body_stream_handler_count(&self) -> usize {
+        self.request_body_plugins
+            .as_deref()
+            .map_or(0, |state| state.handlers.len())
+    }
+
+    #[inline]
+    pub(crate) fn take_request_body_stream_handlers(&mut self) -> RequestBodyStreamHandlers {
+        self.request_body_plugins_mut()
+            .map_or_else(Vec::new, |state| std::mem::take(&mut state.handlers))
+    }
+
+    #[inline]
+    pub(crate) fn restore_request_body_stream_handlers(&mut self, handlers: RequestBodyStreamHandlers) {
+        if let Some(state) = self.request_body_plugins_mut() {
+            state.handlers = handlers;
+        }
+    }
+
+    #[inline]
+    pub(crate) fn request_body_observers_are_full(&self) -> bool {
+        self.request_body_plugins
+            .as_deref()
+            .and_then(|state| state.observers.as_deref())
+            .is_some_and(crate::request_body::observer::RequestBodyObservers::is_full)
+    }
+
+    #[inline]
+    pub(crate) fn request_body_observers_mut(
+        &mut self,
+    ) -> Option<&mut crate::request_body::observer::RequestBodyObservers> {
+        self.request_body_plugins_mut()?.observers.as_deref_mut()
+    }
+
+    #[inline]
+    pub(crate) fn install_request_body_observers(
+        &mut self,
+        observers: Box<crate::request_body::observer::RequestBodyObservers>,
+    ) {
+        let state = self.ensure_request_body_plugins();
+        state.observers = Some(observers);
+        state.active_sources |= REQUEST_BODY_SOURCE_OBSERVER;
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn has_request_body_observers(&self) -> bool {
+        self.request_body_plugins
+            .as_deref()
+            .is_some_and(|state| state.observers.is_some())
+    }
+
+    #[inline]
+    fn response_processing(&self) -> Option<&ResponseProcessingState> {
+        self.response_processing.as_deref()
+    }
+
+    #[inline]
+    fn response_processing_mut(&mut self) -> Option<&mut ResponseProcessingState> {
+        self.response_processing.as_deref_mut()
+    }
+
+    #[inline]
+    fn ensure_response_processing(&mut self) -> &mut ResponseProcessingState {
+        self.response_processing
+            .get_or_insert_with(|| Box::new(ResponseProcessingState::default()))
+            .as_mut()
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn has_response_processing(&self) -> bool {
+        self.response_processing.is_some()
+    }
+
+    #[inline]
+    pub(crate) fn push_response_stream_processor(&mut self, processor: Box<dyn StreamingResponseProcessor>) {
+        self.ensure_response_processing().stream_processors.push(processor);
+    }
+
+    #[inline]
+    pub(crate) fn has_response_stream_processors(&self) -> bool {
+        self.response_processing()
+            .is_some_and(|state| !state.stream_processors.is_empty())
+    }
+
+    #[inline]
+    #[cfg(test)]
+    pub(crate) fn response_stream_processor_count(&self) -> usize {
+        self.response_processing()
+            .map_or(0, |state| state.stream_processors.len())
+    }
+
+    #[inline]
+    pub(crate) fn take_response_stream_processors(&mut self) -> Vec<Box<dyn StreamingResponseProcessor>> {
+        self.response_processing_mut()
+            .map_or_else(Vec::new, |state| std::mem::take(&mut state.stream_processors))
+    }
+
+    #[inline]
+    pub(crate) fn restore_response_stream_processors(&mut self, processors: Vec<Box<dyn StreamingResponseProcessor>>) {
+        if let Some(state) = self.response_processing_mut() {
+            state.stream_processors = processors;
+        }
+    }
+
+    #[inline]
+    pub(crate) fn response_stream_processors_change_body_length(&self) -> bool {
+        self.response_processing().is_some_and(|state| {
+            state
+                .stream_processors
+                .iter()
+                .any(|processor| processor.changes_body_length())
+        })
+    }
+
+    #[inline]
+    pub(crate) fn reserve_response_framing(&mut self) {
+        let state = self.ensure_response_processing();
+        state.framing_reservations = state.framing_reservations.saturating_add(1);
+    }
+
+    #[inline]
+    pub(crate) fn has_response_framing_reservation(&self) -> bool {
+        self.response_processing()
+            .is_some_and(|state| state.framing_reservations > 0)
+    }
+
+    pub(crate) fn install_attached_ext_proc(
+        &mut self,
+        identity: String,
+        owner: Arc<crate::plugins::http::ext_proc::AttachedExtProc>,
+        reserve_framing: bool,
+    ) -> bool {
+        if self
+            .response_processing()
+            .is_some_and(|state| state.attached_ext_proc.contains_key(&identity))
+        {
+            return false;
+        }
+        let state = self.ensure_response_processing();
+        state.attached_ext_proc.insert(identity, owner);
+        if reserve_framing {
+            state.framing_reservations = state.framing_reservations.saturating_add(1);
+        }
+        true
+    }
+
+    #[inline]
+    pub(crate) fn attached_ext_proc(
+        &self,
+        identity: &str,
+    ) -> Option<Arc<crate::plugins::http::ext_proc::AttachedExtProc>> {
+        self.response_processing()?.attached_ext_proc.get(identity).cloned()
+    }
+
+    #[inline]
+    pub(crate) fn install_upstream_response_trailer(&mut self, processor: Box<dyn UpstreamResponseTrailer>) -> bool {
+        if self
+            .response_processing()
+            .is_some_and(|state| !state.trailer_lifecycle.is_open())
+        {
+            return false;
+        }
+        self.ensure_response_processing().trailer_companions.push(processor);
+        true
+    }
+
+    #[inline]
+    pub(crate) fn upstream_response_trailer_count(&self) -> usize {
+        self.response_processing()
+            .map_or(0, |state| state.trailer_companions.len())
+    }
+
+    #[inline]
+    pub(crate) fn take_upstream_response_trailers(&mut self) -> Vec<Box<dyn UpstreamResponseTrailer>> {
+        self.response_processing_mut()
+            .map_or_else(Vec::new, |state| std::mem::take(&mut state.trailer_companions))
+    }
+
+    #[inline]
+    pub(crate) fn restore_upstream_response_trailers(&mut self, companions: Vec<Box<dyn UpstreamResponseTrailer>>) {
+        if let Some(state) = self.response_processing_mut() {
+            state.trailer_companions = companions;
+        }
+    }
+
+    #[inline]
+    pub(crate) fn claim_upstream_response_trailers(&mut self, present: bool) -> bool {
+        let Some(state) = self.response_processing_mut() else {
+            return false;
+        };
+        if present {
+            state.trailer_lifecycle.claim_real_trailers()
+        } else {
+            state.trailer_lifecycle.claim_without_trailers()
+        }
+    }
+
+    #[inline]
+    pub(crate) fn mark_upstream_before_trailers(&mut self) -> bool {
+        self.response_processing_mut()
+            .is_some_and(|state| state.trailer_lifecycle.mark_before_trailers())
+    }
+
+    #[inline]
+    pub(crate) fn claim_upstream_trailer_cleanup(&mut self) -> bool {
+        self.response_processing_mut()
+            .is_some_and(|state| state.trailer_lifecycle.claim_cleanup())
+    }
+
+    #[inline]
+    pub(crate) fn upstream_trailer_lifecycle_is_open(&self) -> bool {
+        self.response_processing()
+            .is_none_or(|state| state.trailer_lifecycle.is_open())
+    }
+
+    #[inline]
+    pub(crate) fn upstream_response_trailers_mut(&mut self) -> Option<&mut [Box<dyn UpstreamResponseTrailer>]> {
+        Some(self.response_processing_mut()?.trailer_companions.as_mut_slice())
     }
 
     pub async fn replace_request_body_slice(
@@ -2445,12 +3219,12 @@ impl EdgionHttpContext {
     /// Returns `true` only to the first caller.
     pub(crate) fn claim_json_schema_validation(&mut self) -> bool {
         if self
-            .plugin_state()
+            .plugin_aux()
             .is_some_and(|state| state.json_schema_validation_claimed)
         {
             false
         } else {
-            self.ensure_plugin_state().json_schema_validation_claimed = true;
+            self.ensure_plugin_aux().json_schema_validation_claimed = true;
             true
         }
     }
@@ -2541,7 +3315,7 @@ impl EdgionHttpContext {
         self.ensure_ai_state().attempt_plan = Some(plan);
     }
 
-    pub(crate) fn select_waf(&mut self, owner: Option<Arc<()>>) -> bool {
+    pub(crate) fn select_waf(&mut self, selection: Option<WafSelection>) -> bool {
         if self.waf_selection_complete {
             return false;
         }
@@ -2549,11 +3323,11 @@ impl EdgionHttpContext {
         // This is resolved once before any request-stage plugin runs. Keeping
         // the no-winner state as `None` avoids an allocation for ordinary
         // requests; a selected winner allocates the sole WAF state box.
-        let Some(owner) = owner else {
+        let Some(selection) = selection else {
             return true;
         };
         debug_assert!(self.waf.is_none());
-        self.waf = Some(Box::new(WafRequestContext::selected(owner)));
+        self.waf = Some(Box::new(WafRequestContext::selected(selection)));
         true
     }
 
@@ -2565,12 +3339,63 @@ impl EdgionHttpContext {
             .map_or(WafPhaseClaim::Pending, |waf| waf.claim_phase(owner, phase))
     }
 
+    pub(crate) fn record_waf_phase_outcome(
+        &mut self,
+        owner: &Arc<()>,
+        phase: WafLogPhase,
+        execution_us: u64,
+        outcome: &edgion_waf::seclang::PhaseOutcome,
+    ) {
+        if let Some(waf) = self.waf.as_deref_mut() {
+            waf.record_phase_outcome(owner, phase, execution_us, outcome);
+        }
+    }
+
+    pub(crate) fn record_waf_terminal_error(
+        &mut self,
+        owner: &Arc<()>,
+        phase: WafLogPhase,
+        code: WafErrorCode,
+        status: u16,
+    ) {
+        if let Some(waf) = self.waf.as_deref_mut() {
+            waf.record_terminal_error(owner, phase, code, status);
+        }
+    }
+
+    pub(crate) fn record_selected_waf_phase_outcome(
+        &mut self,
+        phase: WafLogPhase,
+        execution_us: u64,
+        outcome: &edgion_waf::seclang::PhaseOutcome,
+    ) {
+        if let Some(waf) = self.waf.as_deref_mut() {
+            waf.access_log.record_phase(phase, execution_us, outcome);
+        }
+    }
+
+    pub(crate) fn record_selected_waf_terminal_error(&mut self, phase: WafLogPhase, code: WafErrorCode, status: u16) {
+        if let Some(waf) = self.waf.as_deref_mut() {
+            waf.access_log.record_error(phase, code, status);
+        }
+    }
+
+    pub(crate) fn finalize_waf_for_logging(&mut self) {
+        if let Some(waf) = self.waf.as_deref_mut() {
+            waf.access_log.finalize();
+        }
+    }
+
+    pub(crate) fn waf_access_log(&self) -> Option<&WafAccessLog> {
+        self.waf.as_deref().map(|waf| &waf.access_log)
+    }
+
     /// Drain queued response-header ops onto the given real `ResponseHeader`,
     /// preserving each op's original set/append/conditional/remove semantics. Called
     /// from drain points: upstream-response stage and request-stage termination
     /// paths that build their own response (ErrResponse, gRPC errors).
     pub fn drain_pending_response_header_ops(&mut self, response_header: &mut ResponseHeader) {
-        let Some(state) = self.plugin_state_mut() else {
+        let Some(state) = self.plugin_aux_mut() else {
             return;
         };
         let ops = std::mem::take(&mut state.pending_response_header_ops);
@@ -2608,7 +3433,8 @@ impl EdgionHttpContext {
             selected_grpc_backend: None,
             is_grpc_route_matched: false,
             backend_context: None,
-            plugin_state: None,
+            plugin_execution: PluginExecutionState::default(),
+            plugin_aux: None,
             waf: None,
             waf_selection_complete: false,
             try_cnt: 0,
@@ -2617,8 +3443,7 @@ impl EdgionHttpContext {
             upstream_start_time: None,
             hash_key: None,
             upstream_authority: None,
-            path_params: None,
-            cached_query_cell: std::sync::OnceLock::new(),
+            parsed_request_caches: ParsedRequestCaches::default(),
             jump: None,
             uri_finalized: false,
             session_persistence: None,
@@ -2626,9 +3451,7 @@ impl EdgionHttpContext {
             request_body_config: crate::request_body::ResolvedRequestBodyConfig::default(),
             remote_ip_header: http::HeaderName::from_static("x-real-ip"),
             request_body: RequestBodyState::default(),
-            request_body_stream: Vec::new(),
-            request_body_stream_active: false,
-            request_body_observers: None,
+            request_body_plugins: None,
             ai_state: None,
             active_response_processor_slot: None,
             response_terminal_state: ResponseTerminalState::Open,
@@ -2636,12 +3459,8 @@ impl EdgionHttpContext {
             candidate_downstream_status: None,
             final_downstream_status: None,
             response_write_started: false,
-            stream_processors: Vec::new(),
-            upstream_response_trailer_companions: Vec::new(),
-            upstream_trailer_lifecycle: UpstreamTrailerLifecycle::Open,
+            response_processing: None,
             upstream_response_headers_end_stream: None,
-            attached_ext_proc: std::collections::HashMap::new(),
-            attached_response_framing_reservations: 0,
             response_body_processing_started: false,
             response_override: None,
             response_stream_kind: ResponseStreamKind::None,
@@ -2811,8 +3630,52 @@ impl EdgionHttpContext {
     /// `%XX` percent-decoded and `+` translated to space, matching what the
     /// route matcher sees in `queryParams`.
     pub fn cached_query(&self, raw_query: Option<&str>) -> &HashMap<String, String> {
-        self.cached_query_cell
-            .get_or_init(|| raw_query.map(uri_utils::parse_query_string).unwrap_or_default())
+        self.parsed_request_caches
+            .query
+            .get_or_init(|| {
+                raw_query
+                    .map(uri_utils::parse_query_string)
+                    .filter(|params| !params.is_empty())
+                    .map(Box::new)
+            })
+            .as_deref()
+            .unwrap_or(&EMPTY_PARSED_REQUEST_PARAMS)
+    }
+
+    /// Return the path-parameter cache when it has already been initialized.
+    #[inline]
+    pub(crate) fn cached_path_params(&self) -> Option<&HashMap<String, String>> {
+        self.parsed_request_caches
+            .path
+            .get()
+            .map(|params| params.as_deref().unwrap_or(&EMPTY_PARSED_REQUEST_PARAMS))
+    }
+
+    /// Install the init-once path-parameter view and return the winning map.
+    ///
+    /// The production route-match hook calls this before plugins. The session
+    /// adapter uses it lazily only for synthetic/test contexts that bypass that
+    /// hook.
+    #[inline]
+    pub(crate) fn cache_path_params(&self, params: HashMap<String, String>) -> &HashMap<String, String> {
+        self.parsed_request_caches
+            .path
+            .get_or_init(|| (!params.is_empty()).then(|| Box::new(params)))
+            .as_deref()
+            .unwrap_or(&EMPTY_PARSED_REQUEST_PARAMS)
+    }
+
+    /// Freeze named path captures from the route-match view before any rewrite
+    /// plugin can change `normalized_current_path`.
+    pub(crate) fn capture_matched_path_params(&self, matched: &HTTPRouteMatch) {
+        let params = matched
+            .path
+            .as_ref()
+            .filter(|path| !matches!(path.match_type.as_deref(), Some("RegularExpression")))
+            .and_then(|path| path.value.as_deref())
+            .map(|pattern| parse_path_params(pattern, self.path()))
+            .unwrap_or_default();
+        self.cache_path_params(params);
     }
 
     /// Geo for the resolved client (`request_info.remote_ip`). Resolves
@@ -3076,17 +3939,17 @@ impl EdgionHttpContext {
 
     /// Get a context variable by key
     pub fn get_ctx_var(&self, key: &str) -> Option<&str> {
-        self.plugin_state()?.ctx_map.get(key).map(String::as_str)
+        self.plugin_aux()?.ctx_map.get(key).map(String::as_str)
     }
 
     /// Set a context variable (for plugins like KeySet)
     pub fn set_ctx_var(&mut self, key: String, value: String) {
-        self.ensure_plugin_state().ctx_map.insert(key, value);
+        self.ensure_plugin_aux().ctx_map.insert(key, value);
     }
 
     /// Remove a context variable
     pub fn remove_ctx_var(&mut self, key: &str) -> Option<String> {
-        self.plugin_state_mut()?.ctx_map.remove(key)
+        self.plugin_aux_mut()?.ctx_map.remove(key)
     }
 
     // ===== URI/path canonical accessors =====
@@ -3146,7 +4009,7 @@ impl EdgionHttpContext {
         if self.jump.is_some() {
             return SetJumpOutcome::Rejected;
         }
-        self.jump = Some(target);
+        self.jump = Some(Box::new(target));
         SetJumpOutcome::Set
     }
 }
@@ -3526,6 +4389,13 @@ mod path_view_tests {
 mod jump_tests {
     use super::*;
 
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn jump_target_uses_one_pointer_in_the_base_context() {
+        assert_eq!(std::mem::size_of::<UpstreamJumpTarget>(), 80);
+        assert_eq!(std::mem::size_of::<Option<Box<UpstreamJumpTarget>>>(), 8);
+    }
+
     fn fresh_ctx() -> EdgionHttpContext {
         EdgionHttpContext::new()
     }
@@ -3562,7 +4432,7 @@ mod jump_tests {
         let mut ctx = fresh_ctx();
         let outcome = ctx.try_set_jump(UpstreamJumpTarget::Internal(sample_internal()));
         assert_eq!(outcome, SetJumpOutcome::Set);
-        assert!(matches!(ctx.jump, Some(UpstreamJumpTarget::Internal(_))));
+        assert!(matches!(ctx.jump.as_deref(), Some(UpstreamJumpTarget::Internal(_))));
         assert!(
             ctx.selected_backend.is_none(),
             "Internal must NOT co-write selected_backend"
@@ -3574,7 +4444,7 @@ mod jump_tests {
         let mut ctx = fresh_ctx();
         let outcome = ctx.try_set_jump(UpstreamJumpTarget::External(sample_external()));
         assert_eq!(outcome, SetJumpOutcome::Set);
-        assert!(matches!(ctx.jump, Some(UpstreamJumpTarget::External(_))));
+        assert!(matches!(ctx.jump.as_deref(), Some(UpstreamJumpTarget::External(_))));
         assert!(
             ctx.selected_backend.is_none(),
             "External must NOT co-write selected_backend"
@@ -3589,10 +4459,10 @@ mod jump_tests {
             (ctx, outcome)
         });
         assert_eq!(outcome, SetJumpOutcome::Set);
-        assert!(matches!(ctx.jump, Some(UpstreamJumpTarget::Direct(_))));
+        assert!(matches!(ctx.jump.as_deref(), Some(UpstreamJumpTarget::Direct(_))));
         assert!(ctx.selected_backend.is_none());
-        assert_eq!(allocations.calls, 0);
-        assert_eq!(allocations.requested_bytes, 0);
+        assert_eq!(allocations.calls, 1);
+        assert_eq!(allocations.requested_bytes, std::mem::size_of::<UpstreamJumpTarget>());
     }
 
     #[test]
@@ -3605,7 +4475,7 @@ mod jump_tests {
         let second = ctx.try_set_jump(UpstreamJumpTarget::Direct(sample_direct()));
         assert_eq!(second, SetJumpOutcome::Rejected);
 
-        assert!(matches!(ctx.jump, Some(UpstreamJumpTarget::External(_))));
+        assert!(matches!(ctx.jump.as_deref(), Some(UpstreamJumpTarget::External(_))));
         assert_eq!(
             ctx.selected_backend.as_ref().map(|b| b.name.as_str()),
             selected_before_name.as_deref(),
@@ -3631,6 +4501,60 @@ mod jump_tests {
 #[cfg(test)]
 mod cached_query_tests {
     use super::*;
+    use edgion_resources::resources::http_route::HTTPPathMatch;
+
+    fn matched_path(match_type: &str, value: &str) -> HTTPRouteMatch {
+        HTTPRouteMatch {
+            path: Some(HTTPPathMatch {
+                match_type: Some(match_type.to_string()),
+                value: Some(value.to_string()),
+            }),
+            headers: None,
+            query_params: None,
+            method: None,
+        }
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn parsed_request_caches_have_compact_inline_layout() {
+        assert_eq!(std::mem::size_of::<ParsedRequestCaches>(), 32);
+    }
+
+    #[test]
+    fn empty_parsed_views_initialize_without_allocating() {
+        let ctx = EdgionHttpContext::new();
+        let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            assert!(ctx.cached_query(None).is_empty());
+            assert!(ctx.cache_path_params(HashMap::new()).is_empty());
+        });
+
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
+    }
+
+    #[test]
+    fn matched_path_captures_are_frozen_before_rewrite() {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.normalized_current_path = "/users/123".to_string();
+        ctx.capture_matched_path_params(&matched_path("Exact", "/users/:id"));
+        ctx.request_info.normalized_current_path = "/backend/999".to_string();
+        ctx.capture_matched_path_params(&matched_path("Exact", "/backend/:id"));
+
+        assert_eq!(
+            ctx.cached_path_params().unwrap().get("id").map(String::as_str),
+            Some("123")
+        );
+    }
+
+    #[test]
+    fn regular_expression_paths_do_not_create_named_captures() {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.normalized_current_path = "/users/123".to_string();
+        ctx.capture_matched_path_params(&matched_path("RegularExpression", "/users/:id"));
+
+        assert!(ctx.cached_path_params().unwrap().is_empty());
+    }
 
     #[test]
     fn cached_query_initializes_lazily_and_caches() {
@@ -3898,10 +4822,18 @@ mod plugin_request_state_tests {
     use super::*;
 
     #[test]
-    fn ordinary_context_keeps_plugin_state_unallocated_on_reads() {
+    #[cfg(target_pointer_width = "64")]
+    fn plugin_state_layout_keeps_hot_and_sparse_costs_separate() {
+        assert_eq!(std::mem::size_of::<PluginExecutionState>(), 168);
+        assert_eq!(std::mem::size_of::<PluginAuxState>(), 232);
+        assert_eq!(std::mem::size_of::<Option<Box<PluginAuxState>>>(), 8);
+    }
+
+    #[test]
+    fn ordinary_context_keeps_plugin_aux_unallocated_on_reads() {
         let mut ctx = EdgionHttpContext::new();
         let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
-            assert!(!ctx.has_plugin_state());
+            assert!(!ctx.has_plugin_aux());
             assert!(ctx.stage_logs().is_empty());
             assert!(!ctx.plugin_terminated());
             assert!(ctx.get_ctx_var("missing").is_none());
@@ -3915,31 +4847,53 @@ mod plugin_request_state_tests {
             assert!(ctx.take_mirror_state().is_none());
         });
 
-        assert!(!ctx.has_plugin_state());
+        assert!(!ctx.has_plugin_aux());
         assert_eq!(allocations.calls, 0);
         assert_eq!(allocations.requested_bytes, 0);
     }
 
     #[test]
-    fn first_plugin_write_allocates_one_state_box_and_later_scalar_writes_reuse_it() {
+    fn hot_plugin_execution_state_remains_allocation_free() {
         let mut ctx = EdgionHttpContext::new();
-        let (_, first) = crate::test_allocation_counter::count_allocation_stats(|| {
-            ctx.terminate_plugin_execution();
-        });
-        assert!(ctx.has_plugin_state());
-        assert!(ctx.plugin_terminated());
-        assert_eq!(first.calls, 1);
-
-        let (_, later) = crate::test_allocation_counter::count_allocation_stats(|| {
+        let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
             ctx.terminate_plugin_execution();
             assert!(ctx.plugin_terminated());
+        });
+        assert!(!ctx.has_plugin_aux());
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
+    }
+
+    #[test]
+    fn suppressed_only_stage_does_not_create_an_empty_stage_log() {
+        let mut ctx = EdgionHttpContext::new();
+        let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            ctx.finish_plugin_stage("request_filters", Vec::new());
+        });
+        assert!(ctx.stage_logs().is_empty());
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
+    }
+
+    #[test]
+    fn first_sparse_plugin_effect_allocates_one_aux_box_and_reuses_it() {
+        let mut ctx = EdgionHttpContext::new();
+        let (_, first) = crate::test_allocation_counter::count_allocation_stats(|| {
+            assert!(ctx.claim_json_schema_validation());
+        });
+        assert!(ctx.has_plugin_aux());
+        assert_eq!(first.calls, 1);
+        assert_eq!(first.requested_bytes, std::mem::size_of::<PluginAuxState>());
+
+        let (_, later) = crate::test_allocation_counter::count_allocation_stats(|| {
+            assert!(!ctx.claim_json_schema_validation());
         });
         assert_eq!(later.calls, 0);
         assert_eq!(later.requested_bytes, 0);
     }
 
     #[test]
-    fn empty_runtime_snapshots_do_not_instantiate_plugin_state() {
+    fn runtime_snapshots_do_not_instantiate_plugin_aux() {
         let mut ctx = EdgionHttpContext::new();
         let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
             ctx.install_resolved_global_plugins(Vec::new());
@@ -3947,16 +4901,19 @@ mod plugin_request_state_tests {
             ctx.install_resolved_route_ext_refs(Vec::new());
         });
 
-        assert!(!ctx.has_plugin_state());
+        assert!(!ctx.has_plugin_aux());
         assert_eq!(allocations.calls, 0);
         assert_eq!(allocations.requested_bytes, 0);
+
+        ctx.install_resolved_route_ext_refs(vec![None]);
+        assert!(!ctx.has_plugin_aux());
     }
 
     #[test]
     fn dangling_route_and_backend_refs_remain_request_pinned() {
         let mut ctx = EdgionHttpContext::new();
         ctx.install_resolved_route_ext_refs(vec![None]);
-        assert!(ctx.has_plugin_state());
+        assert!(!ctx.has_plugin_aux());
         assert_eq!(ctx.resolved_route_ext_refs().unwrap().len(), 1);
         assert!(ctx.resolved_route_ext_ref(0).is_none());
 
@@ -3967,6 +4924,7 @@ mod plugin_request_state_tests {
                 None
             })
             .is_none());
+        assert!(ctx.has_plugin_aux());
         assert!(ctx
             .pinned_backend_ext_ref("default/missing", || {
                 resolve_calls += 1;
@@ -3974,6 +4932,98 @@ mod plugin_request_state_tests {
             })
             .is_none());
         assert_eq!(resolve_calls, 1);
+    }
+}
+
+#[cfg(test)]
+mod request_body_plugin_state_tests {
+    use super::*;
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn request_body_plugin_state_has_one_small_outer_box() {
+        assert_eq!(std::mem::size_of::<RequestBodyPluginState>(), 40);
+        assert_eq!(std::mem::size_of::<Option<Box<RequestBodyPluginState>>>(), 8);
+    }
+
+    #[test]
+    fn first_waf_stream_activation_allocates_one_state_and_is_monotonic() {
+        let mut ctx = EdgionHttpContext::new();
+        let (_, first) = crate::test_allocation_counter::count_allocation_stats(|| {
+            ctx.activate_waf_request_body_streaming();
+        });
+        assert!(ctx.has_request_body_plugins());
+        assert!(ctx.request_body_stream_active());
+        assert_eq!(first.calls, 1);
+        assert_eq!(first.requested_bytes, std::mem::size_of::<RequestBodyPluginState>());
+
+        let (_, later) = crate::test_allocation_counter::count_allocation_stats(|| {
+            ctx.activate_waf_request_body_streaming();
+        });
+        assert_eq!(later.calls, 0);
+        assert!(ctx.request_body_stream_active());
+    }
+
+    #[test]
+    fn observer_source_does_not_disable_request_replay() {
+        let mut ctx = EdgionHttpContext::new();
+        let observers = Box::new(crate::request_body::observer::RequestBodyObservers::default());
+        let (_, allocation) = crate::test_allocation_counter::count_allocation_stats(|| {
+            ctx.install_request_body_observers(observers);
+        });
+
+        assert!(ctx.has_request_body_plugins());
+        assert!(ctx.has_request_body_observers());
+        assert!(!ctx.request_body_stream_active());
+        assert_eq!(allocation.calls, 1);
+        assert_eq!(
+            allocation.requested_bytes,
+            std::mem::size_of::<RequestBodyPluginState>()
+        );
+    }
+}
+
+#[cfg(test)]
+mod response_processing_state_tests {
+    use super::*;
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn response_processing_state_has_one_scenario_box() {
+        assert_eq!(std::mem::size_of::<ResponseProcessingState>(), 112);
+        assert_eq!(std::mem::size_of::<Option<Box<ResponseProcessingState>>>(), 8);
+    }
+
+    #[test]
+    fn first_framing_reservation_allocates_once_and_reuses_state() {
+        let mut ctx = EdgionHttpContext::new();
+        let (_, first) = crate::test_allocation_counter::count_allocation_stats(|| {
+            ctx.reserve_response_framing();
+        });
+        assert!(ctx.has_response_processing());
+        assert!(ctx.has_response_framing_reservation());
+        assert_eq!(first.calls, 1);
+        assert_eq!(first.requested_bytes, std::mem::size_of::<ResponseProcessingState>());
+
+        let (_, later) = crate::test_allocation_counter::count_allocation_stats(|| {
+            ctx.reserve_response_framing();
+        });
+        assert_eq!(later.calls, 0);
+        assert!(ctx.has_response_framing_reservation());
+    }
+
+    #[test]
+    fn absent_response_processing_terminal_hooks_do_not_allocate() {
+        let mut ctx = EdgionHttpContext::new();
+        let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            assert!(!ctx.claim_upstream_response_trailers(false));
+            assert!(!ctx.mark_upstream_before_trailers());
+            assert!(!ctx.claim_upstream_trailer_cleanup());
+        });
+
+        assert!(!ctx.has_response_processing());
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
     }
 }
 
@@ -4053,7 +5103,7 @@ mod ai_context_claim_tests {
     #[test]
     fn ordinary_context_size_stays_within_budget() {
         assert!(
-            std::mem::size_of::<EdgionHttpContext>() <= 1248,
+            std::mem::size_of::<EdgionHttpContext>() <= 1280,
             "EdgionHttpContext grew beyond the ordinary-request hot-path size budget"
         );
     }
@@ -4063,10 +5113,66 @@ mod ai_context_claim_tests {
     fn ordinary_context_construction_is_allocation_free() {
         let (ctx, allocations) = crate::test_allocation_counter::count_allocation_stats(EdgionHttpContext::new);
 
-        assert_eq!(std::mem::size_of_val(&ctx), 1200);
+        assert_eq!(std::mem::size_of_val(&ctx), 1104);
         assert!(ctx.gateway_info.is_none());
         assert_eq!(allocations.calls, 0);
         assert_eq!(allocations.requested_bytes, 0);
+    }
+}
+
+#[cfg(test)]
+mod context_benchmark_tests {
+    use super::*;
+    use std::hint::black_box;
+
+    const ITERATIONS: usize = 250_000;
+
+    fn run_scenario(label: &str, mut scenario: impl FnMut()) {
+        let started = std::time::Instant::now();
+        for _ in 0..ITERATIONS {
+            scenario();
+        }
+        let elapsed = started.elapsed();
+        let nanos_per_op = elapsed.as_nanos() / ITERATIONS as u128;
+        eprintln!("context-benchmark {label}: {nanos_per_op} ns/op ({ITERATIONS} iterations)");
+    }
+
+    /// Internal, dependency-free request-context microbenchmark.
+    ///
+    /// Run on the target architecture with:
+    /// `cargo test -p edgion-gateway --release benchmark_http_context_scenarios -- --ignored --nocapture`
+    #[test]
+    #[ignore = "manual performance benchmark"]
+    fn benchmark_http_context_scenarios() {
+        eprintln!(
+            "context-benchmark layout: {} bytes",
+            std::mem::size_of::<EdgionHttpContext>()
+        );
+        run_scenario("default", || {
+            black_box(EdgionHttpContext::new());
+        });
+        run_scenario("hot-plugin-latch", || {
+            let mut ctx = EdgionHttpContext::new();
+            ctx.terminate_plugin_execution();
+            black_box(ctx);
+        });
+        run_scenario("sparse-plugin-state", || {
+            let mut ctx = EdgionHttpContext::new();
+            black_box(ctx.claim_json_schema_validation());
+            black_box(ctx);
+        });
+
+        let owner = Arc::new(());
+        run_scenario("selected-waf", || {
+            let mut ctx = EdgionHttpContext::new();
+            black_box(ctx.select_waf(Some(WafSelection::new(
+                Arc::clone(&owner),
+                WafLogSource::Route,
+                0,
+                WafLogMode::On,
+            ))));
+            black_box(ctx);
+        });
     }
 }
 

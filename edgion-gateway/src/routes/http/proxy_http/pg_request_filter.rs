@@ -112,6 +112,7 @@ pub async fn request_filter(
         match port_routes.match_route(session, ctx, &gateway_index) {
             Ok(result) => {
                 ctx.gateway_info = Some(result.matched_gateway);
+                ctx.capture_matched_path_params(&result.route_unit.matched_info.m);
                 ctx.route_unit = Some(result.route_unit);
             }
             Err(_) => {

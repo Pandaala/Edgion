@@ -85,6 +85,7 @@ use crate::plugins::runtime::gateway_api_filters::{
 pub(crate) struct WafCandidate {
     owner: Arc<()>,
     priority: u16,
+    mode: crate::ctx::WafLogMode,
 }
 
 impl WafCandidate {
@@ -94,6 +95,10 @@ impl WafCandidate {
 
     pub(crate) const fn priority(&self) -> u16 {
         self.priority
+    }
+
+    pub(crate) const fn mode(&self) -> crate::ctx::WafLogMode {
+        self.mode
     }
 }
 
@@ -257,6 +262,12 @@ impl PluginRuntime {
                 self.waf_candidate = Some(WafCandidate {
                     owner: plugin.owner(),
                     priority: plugin.priority(),
+                    mode: match config.mode {
+                        edgion_resources::resources::edgion_plugins::WafMode::On => crate::ctx::WafLogMode::On,
+                        edgion_resources::resources::edgion_plugins::WafMode::DetectionOnly => {
+                            crate::ctx::WafLogMode::DetectionOnly
+                        }
+                    },
                 });
                 self.add_request_filter(Box::new(plugin.clone()));
                 self.add_upstream_response_filter(Box::new(plugin.clone()));
@@ -1840,7 +1851,7 @@ impl PluginRuntime {
         // Snapshot before `ctx` is borrowed by `session_adapter`. Set in
         // `pg_request_filter` and not mutated during plugin execution.
         let is_grpc_request = ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched;
-        let mut filter_logs = Vec::with_capacity(self.request_plugins.len());
+        let mut filter_logs = Vec::new();
         let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
         for filter in &self.request_plugins {
@@ -1855,8 +1866,13 @@ impl PluginRuntime {
             session_adapter.install_dye_plan(filter.dye_plan().cloned());
             session_adapter.strip_request_dye_once();
 
-            let mut plugin_log = PluginLog::with_alias(filter.name(), filter.alias());
-            let start = std::time::Instant::now();
+            let suppress_log = filter.suppress_automatic_log();
+            let mut plugin_log = if suppress_log {
+                PluginLog::disabled()
+            } else {
+                PluginLog::with_alias(filter.name(), filter.alias())
+            };
+            let start = (!suppress_log).then(std::time::Instant::now);
 
             // If this future is cancelled while the plugin is awaiting, the
             // whole request-stage future and adapter are dropped; no later
@@ -1867,11 +1883,15 @@ impl PluginRuntime {
             session_adapter.restore_plugin_entry_identity(previous_identity);
 
             // Skip time_cost for ExtensionRef (identified by refer_to being set)
-            if plugin_log.refer_to.is_none() {
-                plugin_log.time_cost =
-                    Some(std::time::Instant::now().saturating_duration_since(start).as_micros() as u64);
+            if let Some(start) = start.filter(|_| plugin_log.refer_to.is_none()) {
+                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
             }
-            filter_logs.push(plugin_log);
+            if !suppress_log {
+                if filter_logs.is_empty() {
+                    filter_logs.reserve(self.request_plugins.len());
+                }
+                filter_logs.push(plugin_log);
+            }
 
             if ErrTerminateRequest == result {
                 session_adapter.set_terminate();
@@ -1936,7 +1956,7 @@ impl PluginRuntime {
             return;
         }
 
-        let mut filter_logs = Vec::with_capacity(self.upstream_response_plugins.len());
+        let mut filter_logs = Vec::new();
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
         for filter in &self.upstream_response_plugins {
@@ -1946,19 +1966,28 @@ impl PluginRuntime {
             // here (validation forbids them on non-request-stage entries).
             session_adapter.install_dye_plan(filter.dye_plan().cloned());
 
-            let mut plugin_log = PluginLog::with_alias(filter.name(), filter.alias());
-            let start = std::time::Instant::now();
+            let suppress_log = filter.suppress_automatic_log();
+            let mut plugin_log = if suppress_log {
+                PluginLog::disabled()
+            } else {
+                PluginLog::with_alias(filter.name(), filter.alias())
+            };
+            let start = (!suppress_log).then(std::time::Instant::now);
 
             let result = filter.run_upstream_response_filter(&mut session_adapter, &mut plugin_log);
 
             // Skip time_cost for ExtensionRef (identified by refer_to being set)
-            if plugin_log.refer_to.is_none() {
-                plugin_log.time_cost =
-                    Some(std::time::Instant::now().saturating_duration_since(start).as_micros() as u64);
+            if let Some(start) = start.filter(|_| plugin_log.refer_to.is_none()) {
+                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
             }
 
             let should_terminate = check_response_stage_terminate(&result, &mut plugin_log, &mut session_adapter);
-            filter_logs.push(plugin_log);
+            if !suppress_log {
+                if filter_logs.is_empty() {
+                    filter_logs.reserve(self.upstream_response_plugins.len());
+                }
+                filter_logs.push(plugin_log);
+            }
 
             if should_terminate {
                 session_adapter.set_terminate();
@@ -2032,7 +2061,7 @@ impl PluginRuntime {
             return;
         }
 
-        let mut filter_logs = Vec::with_capacity(self.upstream_response_async_plugins.len());
+        let mut filter_logs = Vec::new();
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
         for filter in &self.upstream_response_async_plugins {
@@ -2042,21 +2071,28 @@ impl PluginRuntime {
             // here (validation forbids them on non-request-stage entries).
             session_adapter.install_dye_plan(filter.dye_plan().cloned());
 
-            let mut plugin_log = PluginLog::with_alias(filter.name(), filter.alias());
-            let start = std::time::Instant::now();
+            let suppress_log = filter.suppress_automatic_log();
+            let mut plugin_log = if suppress_log {
+                PluginLog::disabled()
+            } else {
+                PluginLog::with_alias(filter.name(), filter.alias())
+            };
+            let start = (!suppress_log).then(std::time::Instant::now);
 
             let result = filter
                 .run_upstream_response(&mut session_adapter, &mut plugin_log)
                 .await;
 
             // Skip time_cost for ExtensionRef (identified by refer_to being set)
-            if plugin_log.refer_to.is_none() {
-                plugin_log.time_cost =
-                    Some(std::time::Instant::now().saturating_duration_since(start).as_micros() as u64);
+            if let Some(start) = start.filter(|_| plugin_log.refer_to.is_none()) {
+                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
             }
 
             let should_terminate = check_response_stage_terminate(&result, &mut plugin_log, &mut session_adapter);
-            if !filter.suppress_automatic_log() {
+            if !suppress_log {
+                if filter_logs.is_empty() {
+                    filter_logs.reserve(self.upstream_response_async_plugins.len());
+                }
                 filter_logs.push(plugin_log);
             }
 
@@ -2261,6 +2297,36 @@ mod tests {
 
         assert_eq!(ctx.final_downstream_status(), Some(401));
         assert_eq!(client_closed_count(&ctx), 1);
+    }
+
+    #[tokio::test]
+    async fn waf_request_runner_emits_only_the_dedicated_summary() {
+        let (mut session, _client) = plugin_test_session().await;
+        let mut runtime = PluginRuntime::new();
+        runtime
+            .add_waf(&WafConfig {
+                rules: "SecAction \"id:1,phase:1,pass,log\"\n".to_string(),
+                mode: edgion_resources::resources::edgion_plugins::WafMode::On,
+                priority: 12,
+            })
+            .unwrap();
+        let candidate = runtime.waf_candidate().unwrap();
+        let mut ctx = EdgionHttpContext::default();
+        assert!(ctx.select_waf(Some(crate::ctx::WafSelection::new(
+            candidate.owner(),
+            crate::ctx::WafLogSource::Route,
+            candidate.priority(),
+            candidate.mode(),
+        ))));
+
+        runtime.run_request_plugins(&mut session, &mut ctx).await;
+
+        assert!(ctx.stage_logs().is_empty());
+        let waf = serde_json::to_value(ctx.waf_access_log().unwrap()).unwrap();
+        assert_eq!(waf["source"], "route");
+        assert_eq!(waf["priority"], 12);
+        assert_eq!(waf["phases"]["request_headers"]["findings"], 1);
+        assert_eq!(waf["findings"][0]["rule_id"], 1);
     }
 
     #[test]

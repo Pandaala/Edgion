@@ -4,7 +4,7 @@
 //! `docs/superpowers/specs/2026-08-03-ai-gateway-phase1-design.md`). It is
 //! deliberately NOT an operator-facing EdgionPlugins stage: request-stage
 //! plugins that need to observe or transform the response stream push a
-//! processor onto `EdgionHttpContext::stream_processors`, and the proxy's
+//! processor through `EdgionHttpContext::push_response_stream_processor`, and the proxy's
 //! upstream-response-body hook runs them in installation order, BEFORE the
 //! read-only `UpstreamResponseBodyFilter` chains (so bandwidth limiting sees
 //! post-mutation bytes). Those read-only chains are NOT terminate-aware: a

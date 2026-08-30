@@ -424,6 +424,7 @@ impl Intervention {
 pub struct PhaseOutcome {
     findings: Vec<RuleFinding>,
     omitted_findings: usize,
+    omitted_loggable_findings: usize,
     intervention: Option<Intervention>,
     evaluated_units: usize,
 }
@@ -435,6 +436,13 @@ impl PhaseOutcome {
 
     pub const fn omitted_findings(&self) -> usize {
         self.omitted_findings
+    }
+
+    /// Findings omitted by `max_findings` that retained at least one logging
+    /// action. This lets callers honor `nolog,noauditlog` without retaining
+    /// the full finding payload beyond the configured runtime bound.
+    pub const fn omitted_loggable_findings(&self) -> usize {
+        self.omitted_loggable_findings
     }
 
     pub const fn intervention(&self) -> Option<Intervention> {
@@ -1183,13 +1191,10 @@ impl<'generation> Transaction<'generation> {
         let mut outcome = PhaseOutcome {
             findings: Vec::new(),
             omitted_findings: 0,
+            omitted_loggable_findings: 0,
             intervention: None,
             evaluated_units: 0,
         };
-        outcome
-            .findings
-            .try_reserve_exact(self.limits.max_findings.min(self.generation.units.len()))
-            .map_err(|_| RuntimeError::Allocation)?;
         let schedule_index = phase_index(phase);
         let schedule_len = self.generation.schedules[schedule_index].len();
         let mut schedule_ordinal = 0_usize;
@@ -1212,6 +1217,14 @@ impl<'generation> Transaction<'generation> {
                     .get(unit_id)
                     .ok_or(RuntimeError::GenerationInvariant)?;
                 if outcome.findings.len() < self.limits.max_findings {
+                    if outcome.findings.len() == outcome.findings.capacity() {
+                        let remaining = self.limits.max_findings.saturating_sub(outcome.findings.len());
+                        let additional = remaining.min(outcome.findings.capacity().max(4));
+                        outcome
+                            .findings
+                            .try_reserve_exact(additional)
+                            .map_err(|_| RuntimeError::Allocation)?;
+                    }
                     let (severity, tag_count) = self.finding_metadata(unit)?;
                     outcome.findings.push(RuleFinding {
                         rule_id: unit.id,
@@ -1225,6 +1238,12 @@ impl<'generation> Transaction<'generation> {
                         .omitted_findings
                         .checked_add(1)
                         .ok_or(RuntimeError::Arithmetic)?;
+                    if unit.log || unit.audit_log {
+                        outcome.omitted_loggable_findings = outcome
+                            .omitted_loggable_findings
+                            .checked_add(1)
+                            .ok_or(RuntimeError::Arithmetic)?;
+                    }
                 }
                 if unit.disruptive == super::ResolvedDisruptive::Deny && self.rule_engine_mode == RuleEngineMode::On {
                     outcome.intervention = Some(Intervention {
@@ -3429,6 +3448,51 @@ mod tests {
             transaction.execute_request_headers().unwrap().findings()[0].rule_id(),
             1
         );
+    }
+
+    #[test]
+    fn finding_storage_is_lazy_and_grows_only_after_matches() {
+        let mut clean_source = String::new();
+        let mut matching_source = String::new();
+        for id in 1..=64 {
+            clean_source.push_str(&format!(
+                "SecRule REQUEST_URI \"@streq /never-{id}\" \"id:{id},phase:1,pass\"\n"
+            ));
+            matching_source.push_str(&format!(
+                "SecRule REQUEST_URI \"@contains /\" \"id:{id},phase:1,pass\"\n"
+            ));
+        }
+
+        let clean_generation = generation(&clean_source);
+        let mut clean = Transaction::new(&clean_generation, request(&[], b"/clean"), RuntimeLimits::default()).unwrap();
+        let clean_outcome = clean.execute_request_headers().unwrap();
+        assert!(clean_outcome.findings.is_empty());
+        assert_eq!(clean_outcome.findings.capacity(), 0);
+
+        let matching_generation = generation(&matching_source);
+        let limits = RuntimeLimits {
+            max_findings: 17,
+            ..RuntimeLimits::default()
+        };
+        let mut matching = Transaction::new(&matching_generation, request(&[], b"/match"), limits).unwrap();
+        let matching_outcome = matching.execute_request_headers().unwrap();
+        assert_eq!(matching_outcome.findings.len(), 17);
+        assert_eq!(matching_outcome.omitted_findings, 47);
+        assert_eq!(matching_outcome.omitted_loggable_findings, 47);
+        assert!(matching_outcome.findings.capacity() >= matching_outcome.findings.len());
+        assert!(matching_outcome.findings.capacity() <= 32);
+
+        let silent_generation =
+            generation("SecRule REQUEST_URI \"@contains /\" \"id:100,phase:1,pass,nolog,noauditlog\"\n");
+        let silent_limits = RuntimeLimits {
+            max_findings: 0,
+            ..RuntimeLimits::default()
+        };
+        let mut silent = Transaction::new(&silent_generation, request(&[], b"/match"), silent_limits).unwrap();
+        let silent_outcome = silent.execute_request_headers().unwrap();
+        assert_eq!(silent_outcome.omitted_findings, 1);
+        assert_eq!(silent_outcome.omitted_loggable_findings, 0);
+        assert_eq!(silent_outcome.findings.capacity(), 0);
     }
 
     #[test]

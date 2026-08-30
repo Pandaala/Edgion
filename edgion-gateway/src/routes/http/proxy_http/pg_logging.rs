@@ -64,7 +64,9 @@ pub async fn logging(
     finalize_attached_ext_proc_logs(ctx);
     finalize_attached_guardrail_log(ctx);
 
+    ctx.finalize_waf_for_logging();
     let mut entry = AccessLogEntry::from_context(ctx);
+    entry.waf = ctx.waf_access_log();
     // Resolve operator-declared `ext` fields here rather than in a request-stage
     // filter: this is the only point every request reaches, including the ones
     // that short-circuited before any plugin ran and the ones a Deny terminated.
@@ -159,9 +161,10 @@ fn finalize_attached_guardrail_log(ctx: &mut EdgionHttpContext) {
     let Some(line) = owner.take_summary_line() else {
         return;
     };
-    let Some(stages) = ctx.stage_logs_mut() else {
+    let stages = ctx.stage_logs_mut();
+    if stages.is_empty() {
         return;
-    };
+    }
     'stages: for stage in stages.iter_mut() {
         for log in &mut stage.filters {
             if log.internal_token.as_deref() == Some(identity.as_str()) {
@@ -525,7 +528,7 @@ mod tests {
         let mut log = PluginLog::new("ExtProc");
         log.set_internal_token(identity.clone());
         let mut ctx = EdgionHttpContext::default();
-        ctx.attached_ext_proc.insert(identity, owner);
+        assert!(ctx.install_attached_ext_proc(identity, owner, false));
         ctx.push_stage_log(StageLogs {
             stage: "request_filters",
             filters: vec![log],
@@ -540,6 +543,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn attached_owner_without_stage_log_still_terminalizes() {
+        let identity = "route/requestPlugins/#0".to_string();
+        let owner = attached_owner();
+        let mut ctx = EdgionHttpContext::default();
+        assert!(ctx.install_attached_ext_proc(identity, Arc::clone(&owner), false));
+
+        finalize_attached_ext_proc_logs(&mut ctx);
+
+        assert_eq!(owner.test_state(), ("cancelled", "logging-fallback", true));
+        assert!(ctx.stage_logs().is_empty());
+    }
+
+    #[tokio::test]
     async fn attached_summary_finds_nested_extension_ref_token_once() {
         use crate::plugins::runtime::log::{EdgionPluginsLog, PluginLog, StageLogs};
 
@@ -548,7 +564,7 @@ mod tests {
         let mut log = PluginLog::new("ExtProc");
         log.set_internal_token(identity.clone());
         let mut ctx = EdgionHttpContext::default();
-        ctx.attached_ext_proc.insert(identity, owner);
+        assert!(ctx.install_attached_ext_proc(identity, owner, false));
         ctx.push_stage_log(StageLogs {
             stage: "request_filters",
             filters: Vec::new(),

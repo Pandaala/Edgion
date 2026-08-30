@@ -13,13 +13,13 @@ struct TrailerCompanionRunSet {
 impl TrailerCompanionRunSet {
     fn take(ctx: &mut EdgionHttpContext) -> Self {
         Self {
-            companions: std::mem::take(&mut ctx.upstream_response_trailer_companions),
+            companions: ctx.take_upstream_response_trailers(),
             released: false,
         }
     }
 
     fn restore(mut self, ctx: &mut EdgionHttpContext) {
-        ctx.upstream_response_trailer_companions = std::mem::take(&mut self.companions);
+        ctx.restore_upstream_response_trailers(std::mem::take(&mut self.companions));
         self.released = true;
     }
 }
@@ -45,11 +45,7 @@ pub(crate) async fn dispatch_upstream_response_trailers(
     ctx: &mut EdgionHttpContext,
     mut trailers: Option<&mut HeaderMap>,
 ) -> pingora_core::Result<()> {
-    let claimed = if trailers.is_some() {
-        ctx.upstream_trailer_lifecycle.claim_real_trailers()
-    } else {
-        ctx.upstream_trailer_lifecycle.claim_without_trailers()
-    };
+    let claimed = ctx.claim_upstream_response_trailers(trailers.is_some());
     if !claimed {
         return Ok(());
     }
@@ -95,11 +91,13 @@ pub(crate) async fn dispatch_upstream_response_trailers(
 }
 
 pub(crate) fn finalize_incomplete_trailer_companions(ctx: &mut EdgionHttpContext) {
-    if !ctx.upstream_trailer_lifecycle.claim_cleanup() {
+    if !ctx.claim_upstream_trailer_cleanup() {
         return;
     }
-    for companion in &mut ctx.upstream_response_trailer_companions {
-        companion.finalize_incomplete("logging-fallback");
+    if let Some(companions) = ctx.upstream_response_trailers_mut() {
+        for companion in companions {
+            companion.finalize_incomplete("logging-fallback");
+        }
     }
 }
 
@@ -183,7 +181,7 @@ mod tests {
         let order = Arc::new(Mutex::new(Vec::new()));
         let calls = Arc::new(AtomicUsize::new(0));
         for id in ["route", "backend", "gateway", "global"] {
-            ctx.upstream_response_trailer_companions.push(recording(
+            ctx.install_upstream_response_trailer(recording(
                 id,
                 Arc::clone(&order),
                 Arc::clone(&calls),
@@ -191,7 +189,7 @@ mod tests {
                 Arc::new(AtomicBool::new(false)),
             ));
         }
-        assert!(ctx.upstream_trailer_lifecycle.mark_before_trailers());
+        assert!(ctx.mark_upstream_before_trailers());
         let mut trailers = HeaderMap::new();
 
         dispatch_upstream_response_trailers(&mut session, &mut ctx, Some(&mut trailers))
@@ -221,7 +219,7 @@ mod tests {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
         let calls = Arc::new(AtomicUsize::new(0));
-        ctx.upstream_response_trailer_companions.push(recording(
+        ctx.install_upstream_response_trailer(recording(
             "observer",
             Arc::new(Mutex::new(Vec::new())),
             Arc::clone(&calls),
@@ -246,21 +244,21 @@ mod tests {
         let order = Arc::new(Mutex::new(Vec::new()));
         let calls = Arc::new(AtomicUsize::new(0));
         let last_preempted = Arc::new(AtomicBool::new(false));
-        ctx.upstream_response_trailer_companions.push(recording(
+        ctx.install_upstream_response_trailer(recording(
             "first",
             Arc::clone(&order),
             Arc::clone(&calls),
             false,
             Arc::new(AtomicBool::new(false)),
         ));
-        ctx.upstream_response_trailer_companions.push(recording(
+        ctx.install_upstream_response_trailer(recording(
             "failure",
             Arc::clone(&order),
             Arc::clone(&calls),
             true,
             Arc::new(AtomicBool::new(false)),
         ));
-        ctx.upstream_response_trailer_companions.push(recording(
+        ctx.install_upstream_response_trailer(recording(
             "last",
             Arc::clone(&order),
             Arc::clone(&calls),
@@ -315,11 +313,10 @@ mod tests {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
         let released = Arc::new(AtomicBool::new(false));
-        ctx.upstream_response_trailer_companions
-            .push(Box::new(PendingCompanion {
-                released: Arc::clone(&released),
-                finalized: None,
-            }));
+        assert!(ctx.install_upstream_response_trailer(Box::new(PendingCompanion {
+            released: Arc::clone(&released),
+            finalized: None,
+        })));
         let mut trailers = HeaderMap::new();
         let mut future = Box::pin(dispatch_upstream_response_trailers(
             &mut session,
@@ -338,11 +335,10 @@ mod tests {
     fn logging_fallback_finalizes_once() {
         let mut ctx = EdgionHttpContext::default();
         let finalized = Arc::new(AtomicUsize::new(0));
-        ctx.upstream_response_trailer_companions
-            .push(Box::new(PendingCompanion {
-                released: Arc::new(AtomicBool::new(false)),
-                finalized: Some(Arc::clone(&finalized)),
-            }));
+        assert!(ctx.install_upstream_response_trailer(Box::new(PendingCompanion {
+            released: Arc::new(AtomicBool::new(false)),
+            finalized: Some(Arc::clone(&finalized)),
+        })));
 
         finalize_incomplete_trailer_companions(&mut ctx);
         finalize_incomplete_trailer_companions(&mut ctx);
@@ -356,7 +352,8 @@ mod tests {
 
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
-        assert!(ctx.upstream_trailer_lifecycle.mark_before_trailers());
+        ctx.reserve_response_framing();
+        assert!(ctx.mark_upstream_before_trailers());
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
 
         assert!(!adapter.install_upstream_response_trailer(Box::new(PendingCompanion {
@@ -373,7 +370,7 @@ mod tests {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
         ctx.response_body_processing_started = true;
-        assert!(ctx.upstream_trailer_lifecycle.is_open());
+        assert!(ctx.upstream_trailer_lifecycle_is_open());
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
 
         assert!(!adapter.install_upstream_response_trailer(Box::new(PendingCompanion {

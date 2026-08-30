@@ -601,11 +601,12 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.observe_delivery(result)
     }
 
-    /// Extract path parameters from route pattern (lazy extraction).
+    /// Extract path parameters for synthetic/test contexts that bypass the
+    /// normal route-match capture hook.
     ///
     /// Parses the route pattern (e.g., "/api/:uid/profile") against the actual
     /// request path (e.g., "/api/123/profile") and extracts named parameters.
-    fn extract_path_params(&mut self) {
+    fn extract_path_params(&self) -> HashMap<String, String> {
         let mut params = HashMap::new();
 
         // Get the route pattern from matched route
@@ -628,7 +629,7 @@ impl<'a> PingoraSessionAdapter<'a> {
             }
         }
 
-        self.ctx.path_params = Some(params);
+        params
     }
 
     /// Send a gRPC error response as a single-frame Trailers-Only response (HEADERS+END_STREAM),
@@ -665,25 +666,7 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// # Returns
     /// HashMap of parameter names to values.
     fn parse_path_params(pattern: &str, actual_path: &str) -> HashMap<String, String> {
-        let mut params = HashMap::new();
-
-        let pattern_segments: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
-        let actual_segments: Vec<&str> = actual_path.split('/').filter(|s| !s.is_empty()).collect();
-
-        for (i, pat_seg) in pattern_segments.iter().enumerate() {
-            // Check if this is a parameter segment (starts with ':' but not '::')
-            if pat_seg.starts_with(':') && !pat_seg.starts_with("::") {
-                // Extract parameter name (skip the ':')
-                let param_name = &pat_seg[1..];
-                if !param_name.is_empty() {
-                    if let Some(&actual_value) = actual_segments.get(i) {
-                        params.insert(param_name.to_string(), actual_value.to_string());
-                    }
-                }
-            }
-        }
-
-        params
+        crate::ctx::parse_path_params(pattern, actual_path)
     }
 }
 
@@ -921,11 +904,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn get_path_param(&mut self, name: &str) -> Option<String> {
-        // Lazy extraction: only parse on first call
-        if self.ctx.path_params.is_none() {
-            self.extract_path_params();
+        if self.ctx.cached_path_params().is_none() {
+            let params = self.extract_path_params();
+            self.ctx.cache_path_params(params);
         }
-        self.ctx.path_params.as_ref()?.get(name).cloned()
+        self.ctx.cached_path_params()?.get(name).cloned()
     }
 
     fn matched_route_meta(&self, proto: RouteProto, selector: &str) -> Option<String> {
@@ -1267,6 +1250,26 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.claim_waf_phase(owner, phase)
     }
 
+    fn record_waf_phase_outcome(
+        &mut self,
+        owner: &Arc<()>,
+        phase: crate::ctx::WafLogPhase,
+        execution_us: u64,
+        outcome: &edgion_waf::seclang::PhaseOutcome,
+    ) {
+        self.ctx.record_waf_phase_outcome(owner, phase, execution_us, outcome);
+    }
+
+    fn record_waf_terminal_error(
+        &mut self,
+        owner: &Arc<()>,
+        phase: crate::ctx::WafLogPhase,
+        code: crate::ctx::WafErrorCode,
+        status: u16,
+    ) {
+        self.ctx.record_waf_terminal_error(owner, phase, code, status);
+    }
+
     fn enable_waf_request_body_streaming(&mut self, owner: &Arc<()>, body_limit: u64) -> bool {
         let enabled = self
             .ctx
@@ -1274,7 +1277,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .as_deref_mut()
             .is_some_and(|waf| waf.enable_request_body_streaming(owner, body_limit));
         if enabled {
-            self.ctx.request_body_stream_active = true;
+            self.ctx.activate_waf_request_body_streaming();
         }
         enabled
     }
@@ -1295,7 +1298,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
     ) {
-        self.ctx.stream_processors.push(processor);
+        self.ctx.push_response_stream_processor(processor);
     }
 
     fn semantic_guard_active(&self) -> bool {
@@ -1372,22 +1375,14 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         owner: std::sync::Arc<crate::plugins::http::ext_proc::AttachedExtProc>,
         reserve_framing: bool,
     ) -> bool {
-        if self.ctx.attached_ext_proc.contains_key(&identity) {
-            return false;
-        }
-        self.ctx.attached_ext_proc.insert(identity, owner);
-        if reserve_framing {
-            self.ctx.attached_response_framing_reservations =
-                self.ctx.attached_response_framing_reservations.saturating_add(1);
-        }
-        true
+        self.ctx.install_attached_ext_proc(identity, owner, reserve_framing)
     }
 
     fn attached_ext_proc(
         &self,
         identity: &str,
     ) -> Option<std::sync::Arc<crate::plugins::http::ext_proc::AttachedExtProc>> {
-        self.ctx.attached_ext_proc.get(identity).cloned()
+        self.ctx.attached_ext_proc(identity)
     }
 
     fn install_attached_guardrail(
@@ -1405,8 +1400,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         let state = self.ctx.ensure_ai_state();
         state.attached_guardrail = Some((identity, owner));
         state.semantic_guard_claimed = true;
-        self.ctx.attached_response_framing_reservations =
-            self.ctx.attached_response_framing_reservations.saturating_add(1);
+        self.ctx.reserve_response_framing();
         true
     }
 
@@ -1429,7 +1423,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         if self.ctx.response_body_processing_started {
             return false;
         }
-        self.ctx.stream_processors.push(processor);
+        self.ctx.push_response_stream_processor(processor);
         true
     }
 
@@ -1437,15 +1431,14 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         processor: Box<dyn crate::plugins::runtime::traits::UpstreamResponseTrailer>,
     ) -> bool {
-        if self.ctx.response_body_processing_started || !self.ctx.upstream_trailer_lifecycle.is_open() {
+        if self.ctx.response_body_processing_started || !self.ctx.upstream_trailer_lifecycle_is_open() {
             return false;
         }
-        self.ctx.upstream_response_trailer_companions.push(processor);
-        true
+        self.ctx.install_upstream_response_trailer(processor)
     }
 
     fn upstream_response_trailer_count(&self) -> usize {
-        self.ctx.upstream_response_trailer_companions.len()
+        self.ctx.upstream_response_trailer_count()
     }
 
     fn downstream_response_trailers_representable(&self) -> bool {
@@ -1875,15 +1868,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         let Some(identity) = self.ctx.current_plugin_entry_identity() else {
             return refuse(factory);
         };
-        if self
-            .ctx
-            .request_body_observers
-            .as_ref()
-            .is_some_and(|observers| observers.is_full())
-        {
+        if self.ctx.request_body_observers_are_full() {
             return refuse(factory);
         }
-        if let Some(observers) = self.ctx.request_body_observers.as_mut() {
+        if let Some(observers) = self.ctx.request_body_observers_mut() {
             return observers.try_install(identity, factory, limits);
         }
 
@@ -1891,7 +1879,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         if !observers.try_install(identity, factory, limits) {
             return false;
         }
-        self.ctx.request_body_observers = Some(observers);
+        self.ctx.install_request_body_observers(observers);
         true
     }
 
@@ -1920,11 +1908,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         {
             return false;
         }
-        self.ctx
-            .request_body_stream
-            .push(sync_wrapper::SyncWrapper::new(handler));
-        // Monotonic latch for the retry/disposition predicates; never cleared.
-        self.ctx.request_body_stream_active = true;
+        self.ctx.push_request_body_stream_handler(handler);
         true
     }
 
@@ -2896,11 +2880,19 @@ mod record_outcome_tests {
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert!(adapter.request_headers_end_stream().is_some());
         assert!(adapter.install_request_body_stream_handler(Box::new(NoopStreamHandler)));
-        assert_eq!(ctx.request_body_stream.len(), 1);
+        assert_eq!(ctx.request_body_stream_handler_count(), 1);
         assert!(
-            ctx.request_body_stream_active,
+            ctx.request_body_stream_active(),
             "install must set the monotonic retry/disposition latch"
         );
+        let handlers = ctx.take_request_body_stream_handlers();
+        assert_eq!(handlers.len(), 1);
+        assert_eq!(ctx.request_body_stream_handler_count(), 0);
+        assert!(
+            ctx.request_body_stream_active(),
+            "losing handlers across a cancelled callback must not re-arm replay"
+        );
+        drop(handlers);
     }
 
     #[tokio::test]
@@ -2916,7 +2908,7 @@ mod record_outcome_tests {
 
         assert!(!adapter
             .install_request_body_observer(make_factory(), crate::request_body::observer::ObserverLimits::default(),));
-        assert!(adapter.ctx.request_body_observers.is_none());
+        assert!(!adapter.ctx.has_request_body_observers());
 
         let previous = adapter
             .replace_plugin_entry_identity(crate::ctx::CurrentPluginEntryIdentity::new("AiGuard", Some("entry")));
@@ -2924,22 +2916,22 @@ mod record_outcome_tests {
             Box::new(|| Err(crate::request_body::observer::ObserverInitError)),
             crate::request_body::observer::ObserverLimits::default(),
         ));
-        assert!(adapter.ctx.request_body_observers.is_none());
+        assert!(!adapter.ctx.has_request_body_observers());
         assert!(!adapter.install_request_body_observer(
             Box::new(|| panic!("static factory panic")),
             crate::request_body::observer::ObserverLimits::default(),
         ));
-        assert!(adapter.ctx.request_body_observers.is_none());
+        assert!(!adapter.ctx.has_request_body_observers());
         assert!(!adapter.install_request_body_observer(
             Box::new(|| Ok(Box::new(OversizedObserver))),
             crate::request_body::observer::ObserverLimits::default(),
         ));
-        assert!(adapter.ctx.request_body_observers.is_none());
+        assert!(!adapter.ctx.has_request_body_observers());
         assert!(adapter
             .install_request_body_observer(make_factory(), crate::request_body::observer::ObserverLimits::default(),));
         adapter.restore_plugin_entry_identity(previous);
-        assert!(adapter.ctx.request_body_observers.is_some());
-        assert!(!adapter.ctx.request_body_stream_active);
+        assert!(adapter.ctx.has_request_body_observers());
+        assert!(!adapter.ctx.request_body_stream_active());
     }
 
     #[tokio::test]
@@ -2976,8 +2968,8 @@ mod record_outcome_tests {
             assert!(!adapter
                 .install_request_body_observer(factory, crate::request_body::observer::ObserverLimits::default(),));
             adapter.restore_plugin_entry_identity(previous);
-            assert!(adapter.ctx.request_body_observers.is_none());
-            assert!(!adapter.ctx.request_body_stream_active);
+            assert!(!adapter.ctx.has_request_body_observers());
+            assert!(!adapter.ctx.request_body_stream_active());
         }
 
         for case in [Refusal::Stage, Refusal::Connect, Refusal::Upgrade, Refusal::Http10] {

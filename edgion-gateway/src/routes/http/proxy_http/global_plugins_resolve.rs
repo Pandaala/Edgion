@@ -13,6 +13,7 @@
 
 use std::sync::Arc;
 
+use crate::ctx::{WafLogSource, WafSelection};
 use crate::plugins::http::PluginStore;
 use crate::plugins::runtime::PluginRuntime;
 use edgion_resources::resources::edgion_gateway_config::PluginReference;
@@ -83,8 +84,8 @@ pub(crate) fn select_waf_owner(
     global: &[Arc<PluginRuntime>],
     gateway: &[Arc<PluginRuntime>],
     route: &[Option<Arc<PluginRuntime>>],
-) -> Option<Arc<()>> {
-    let mut winner: Option<(u16, WafScope, Arc<()>)> = None;
+) -> Option<WafSelection> {
+    let mut winner = None;
     for (scope, runtime) in global
         .iter()
         .map(|runtime| (WafScope::Global, runtime.as_ref()))
@@ -99,15 +100,22 @@ pub(crate) fn select_waf_owner(
         let Some(candidate) = runtime.waf_candidate() else {
             continue;
         };
-        let replace = winner.as_ref().is_none_or(|(priority, selected_scope, _)| {
+        let replace = winner.as_ref().is_none_or(|(priority, selected_scope, _, _)| {
             candidate.priority() > *priority
                 || (candidate.priority() == *priority && scope as u8 > *selected_scope as u8)
         });
         if replace {
-            winner = Some((candidate.priority(), scope, candidate.owner()));
+            winner = Some((candidate.priority(), scope, candidate.mode(), candidate.owner()));
         }
     }
-    winner.map(|(_, _, owner)| owner)
+    winner.map(|(priority, scope, mode, owner)| {
+        let source = match scope {
+            WafScope::Global => WafLogSource::Global,
+            WafScope::Gateway => WafLogSource::Gateway,
+            WafScope::Route => WafLogSource::Route,
+        };
+        WafSelection::new(owner, source, priority, mode)
+    })
 }
 
 #[cfg(test)]
@@ -187,7 +195,10 @@ mod tests {
         let route_low = waf_runtime(10);
         let selected =
             select_waf_owner(&[Arc::clone(&global_high)], &[], &[Some(route_low)]).expect("one WAF is selected");
-        assert!(Arc::ptr_eq(&selected, &global_high.waf_candidate().unwrap().owner()));
+        assert!(Arc::ptr_eq(
+            selected.owner(),
+            &global_high.waf_candidate().unwrap().owner()
+        ));
 
         let global_equal = waf_runtime(30);
         let gateway_equal = waf_runtime(30);
@@ -199,7 +210,10 @@ mod tests {
             &[Some(Arc::clone(&route_first)), None, Some(route_second)],
         )
         .expect("one WAF is selected");
-        assert!(Arc::ptr_eq(&selected, &route_first.waf_candidate().unwrap().owner()));
+        assert!(Arc::ptr_eq(
+            selected.owner(),
+            &route_first.waf_candidate().unwrap().owner()
+        ));
         assert!(select_waf_owner(&[], &[], &[]).is_none());
     }
 

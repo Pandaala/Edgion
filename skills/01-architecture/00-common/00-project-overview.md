@@ -110,7 +110,7 @@ Defined in `edgion-gateway/src/ctx.rs`, the "backpack" carried through the entir
 | `stage_logs` | `Vec<StageLogs>` — plugin logs per execution phase |
 | `plugin_running_result` | Current plugin chain execution result |
 | `ctx_map` | `HashMap<String, String>` — variables set by plugins |
-| `path_params` | Routing path parameters (lazily extracted) |
+| `parsed_request_caches` | Query parameters decoded on demand and path parameters frozen at route match |
 | `hash_key` | Consistent-hashing key |
 | `try_cnt` | Upstream connection attempt counter |
 

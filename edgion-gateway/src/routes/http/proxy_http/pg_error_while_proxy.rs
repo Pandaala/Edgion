@@ -95,7 +95,7 @@ pub fn error_while_proxy(
     // ("nothing truncated") — consult the monotonic latch directly (contract
     // §4.6). The proxy also suppresses such retries on its side; this keeps
     // the local decision (and its logging) consistent.
-    let buffer_ok = !session.as_ref().retry_buffer_truncated() && !ctx.request_body_stream_active;
+    let buffer_ok = !session.as_ref().retry_buffer_truncated() && !ctx.request_body_stream_active();
 
     if ctx.has_ai_attempt_plan() {
         // A status retry was decided and transitioned exactly once in the

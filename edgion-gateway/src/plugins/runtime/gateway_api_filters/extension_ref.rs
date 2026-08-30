@@ -196,9 +196,16 @@ impl ExtensionRefFilter {
                     // call site must do it itself or the bundle's dye rules
                     // never render (response-stage: no strip).
                     session.install_dye_plan(plugin.dye_plan().cloned());
-                    let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
+                    let suppress_log = plugin.suppress_automatic_log();
+                    let mut inner_log = if suppress_log {
+                        PluginLog::disabled()
+                    } else {
+                        PluginLog::with_alias(plugin.name(), plugin.alias())
+                    };
                     let result = plugin.run_upstream_response_filter(session, &mut inner_log);
-                    session.push_to_edgion_plugins_log(&log_token, inner_log);
+                    if !suppress_log {
+                        session.push_to_edgion_plugins_log(&log_token, inner_log);
+                    }
 
                     if !matches!(result, PluginRunningResult::GoodNext | PluginRunningResult::Nothing) {
                         return result;
@@ -262,10 +269,17 @@ impl ExtensionRefFilter {
                     // (and the strip) never run.
                     session.install_dye_plan(plugin.dye_plan().cloned());
                     session.strip_request_dye_once();
-                    let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
+                    let suppress_log = plugin.suppress_automatic_log();
+                    let mut inner_log = if suppress_log {
+                        PluginLog::disabled()
+                    } else {
+                        PluginLog::with_alias(plugin.name(), plugin.alias())
+                    };
                     let result = plugin.run_request(session, &mut inner_log).await;
                     session.restore_plugin_entry_identity(previous_identity);
-                    session.push_to_edgion_plugins_log(&log_token, inner_log);
+                    if !suppress_log {
+                        session.push_to_edgion_plugins_log(&log_token, inner_log);
+                    }
 
                     if !matches!(result, PluginRunningResult::GoodNext | PluginRunningResult::Nothing) {
                         return result;
@@ -279,9 +293,16 @@ impl ExtensionRefFilter {
                     // `PluginRuntime::run_upstream_response_plugins_async`
                     // (response-stage: no strip).
                     session.install_dye_plan(plugin.dye_plan().cloned());
-                    let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
+                    let suppress_log = plugin.suppress_automatic_log();
+                    let mut inner_log = if suppress_log {
+                        PluginLog::disabled()
+                    } else {
+                        PluginLog::with_alias(plugin.name(), plugin.alias())
+                    };
                     let result = plugin.run_upstream_response(session, &mut inner_log).await;
-                    session.push_to_edgion_plugins_log(&log_token, inner_log);
+                    if !suppress_log {
+                        session.push_to_edgion_plugins_log(&log_token, inner_log);
+                    }
 
                     if !matches!(result, PluginRunningResult::GoodNext | PluginRunningResult::Nothing) {
                         return result;
@@ -295,9 +316,16 @@ impl ExtensionRefFilter {
                     // `PluginRuntime::run_upstream_response_plugins_sync`
                     // (response-stage: no strip).
                     session.install_dye_plan(plugin.dye_plan().cloned());
-                    let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
+                    let suppress_log = plugin.suppress_automatic_log();
+                    let mut inner_log = if suppress_log {
+                        PluginLog::disabled()
+                    } else {
+                        PluginLog::with_alias(plugin.name(), plugin.alias())
+                    };
                     let result = plugin.run_upstream_response_filter(session, &mut inner_log);
-                    session.push_to_edgion_plugins_log(&log_token, inner_log);
+                    if !suppress_log {
+                        session.push_to_edgion_plugins_log(&log_token, inner_log);
+                    }
 
                     if !matches!(result, PluginRunningResult::GoodNext | PluginRunningResult::Nothing) {
                         return result;
@@ -515,6 +543,70 @@ mod tests {
         let mut log = PluginLog::new("test");
         let result = filter.run_request(&mut session, &mut log).await;
         assert!(matches!(result, PluginRunningResult::ErrResponse { status: 200, .. }));
+    }
+
+    #[tokio::test]
+    async fn request_extension_suppresses_inner_waf_plugin_log() {
+        let mut inner = crate::plugins::runtime::PluginRuntime::new();
+        inner
+            .add_waf(&edgion_resources::resources::edgion_plugins::WafConfig {
+                rules: "SecAction \"id:1,phase:1,pass,log\"\n".to_string(),
+                mode: edgion_resources::resources::edgion_plugins::WafMode::On,
+                priority: 0,
+            })
+            .unwrap();
+        let inner = Arc::new(inner);
+        let inner_for_resolve = Arc::clone(&inner);
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_resolved_route_ext_ref()
+            .with(eq(0usize))
+            .times(1)
+            .returning(move |_| Some(Arc::clone(&inner_for_resolve)));
+        session
+            .expect_start_edgion_plugins_log()
+            .returning(|_| EdgionPluginsLogToken::new(0));
+        session.expect_install_dye_plan().return_const(());
+        session.expect_strip_request_dye_once().return_const(());
+        session
+            .expect_replace_plugin_entry_identity()
+            .times(1)
+            .returning(|_| None);
+        session.expect_restore_plugin_entry_identity().times(1).return_const(());
+        session
+            .expect_claim_waf_phase()
+            .returning(|_, _| crate::ctx::WafPhaseClaim::Execute);
+        session.expect_request_headers_bytes().return_once(Vec::new);
+        session.expect_get_method().times(2).return_const("GET".to_string());
+        session.expect_get_uri().return_const("/".to_string());
+        session.expect_get_request_uri().return_const("/".to_string());
+        session.expect_get_http_protocol().return_const("HTTP/1.1".to_string());
+        session.expect_remote_ip().return_const("192.0.2.1".to_string());
+        session.expect_get_request_id().return_const("request-1".to_string());
+        session.expect_record_waf_phase_outcome().returning(|_, _, _, _| ());
+        session.expect_install_waf_transaction().return_once(|_, transaction| {
+            drop(transaction);
+            true
+        });
+        session.expect_push_to_edgion_plugins_log().times(0);
+
+        let mut filter = ExtensionRefFilter::new(
+            "ns".to_string(),
+            LocalObjectReference {
+                group: "".into(),
+                kind: "EdgionPlugins".into(),
+                name: "waf".into(),
+                resolved_namespace: None,
+            },
+        );
+        filter.set_index(0);
+        let mut log = PluginLog::new("ExtensionRef");
+
+        let result = filter.run_request(&mut session, &mut log).await;
+
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert_eq!(log.refer_to.as_deref(), Some("waf"));
     }
 
     #[test]

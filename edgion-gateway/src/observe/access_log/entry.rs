@@ -5,7 +5,7 @@ use crate::observe::access_log::log_ext::LogExt;
 use crate::observe::RequestDiagnostic;
 use crate::plugins::StageLogs;
 use crate::routes::grpc::GrpcMatchInfo;
-use crate::{ai::GenAiSummary, BackendContext, EdgionHttpContext, MatchInfo, RequestInfo};
+use crate::{ai::GenAiSummary, ctx::WafAccessLog, BackendContext, EdgionHttpContext, MatchInfo, RequestInfo};
 use serde::Serialize;
 
 /// Explicit per-slot outcome marker. "Not queried" (no database loaded) and
@@ -182,6 +182,12 @@ pub struct AccessLogEntry<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub genai: Option<&'a GenAiSummary>,
 
+    /// Final native WAF decision summary. This field is deliberately attached
+    /// only by the terminal logging hook: intermediate/debug access-log views
+    /// must not expose rule identifiers or the active protection posture.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waf: Option<&'a WafAccessLog>,
+
     /// Resolved geo attributes for the client and direct-peer addresses.
     /// Present only when a plugin (or L4 predicate) resolved at least one geo
     /// slot during the request; absent otherwise. Building this entry never
@@ -235,6 +241,7 @@ impl<'a> AccessLogEntry<'a> {
             conn_est: None,
             upstream_authority: ctx.upstream_authority.as_deref(),
             genai: ctx.ai_state().and_then(|state| state.summary.as_ref()),
+            waf: None,
             geo,
             ext: LogExt::default(),
         }
@@ -258,8 +265,10 @@ fn access_log_fallback(timestamp: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ctx::{WafLogMode, WafLogSource, WafSelection};
     use crate::geoip::GeoInfo;
     use edgion_resources::{EdgionErrorCode, EdgionInfoCode};
+    use std::sync::Arc;
 
     #[test]
     fn empty_diagnostics_and_full_marker_are_omitted() {
@@ -278,6 +287,29 @@ mod tests {
 
         assert!(!ctx.request_info.has_tls_info());
         assert!(!ctx.request_info.has_grpc_info());
+    }
+
+    #[test]
+    fn waf_summary_is_attached_only_by_terminal_logging() {
+        let mut ctx = EdgionHttpContext::new();
+        assert!(ctx.select_waf(Some(WafSelection::new(
+            Arc::new(()),
+            WafLogSource::Route,
+            9,
+            WafLogMode::DetectionOnly,
+        ))));
+
+        let intermediate = AccessLogEntry::from_context(&ctx).to_json();
+        assert!(!intermediate.contains("\"waf\""));
+
+        ctx.finalize_waf_for_logging();
+        let mut terminal = AccessLogEntry::from_context(&ctx);
+        terminal.waf = ctx.waf_access_log();
+        let value: serde_json::Value = serde_json::from_str(&terminal.to_json()).unwrap();
+        assert_eq!(value["waf"]["source"], "route");
+        assert_eq!(value["waf"]["priority"], 9);
+        assert_eq!(value["waf"]["mode"], "detection_only");
+        assert_eq!(value["waf"]["outcome"], "not_run");
     }
 
     #[test]
@@ -420,13 +452,15 @@ mod tests {
     }
 
     #[test]
-    fn access_log_projection_does_not_instantiate_plugin_state() {
+    fn access_log_projection_does_not_instantiate_plugin_aux() {
         let ctx = EdgionHttpContext::new();
-        assert!(!ctx.has_plugin_state());
+        assert!(!ctx.has_plugin_aux());
+        assert!(!ctx.has_response_processing());
 
         let json = AccessLogEntry::from_context(&ctx).to_json();
 
-        assert!(!ctx.has_plugin_state());
+        assert!(!ctx.has_plugin_aux());
+        assert!(!ctx.has_response_processing());
         assert!(!json.contains(r#""stage_logs""#));
     }
 

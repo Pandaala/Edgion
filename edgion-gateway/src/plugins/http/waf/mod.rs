@@ -12,8 +12,7 @@ use edgion_waf::seclang::{
     Transaction,
 };
 
-use crate::ctx::{WafPhase, WafPhaseClaim};
-use crate::la;
+use crate::ctx::{WafErrorCode, WafLogPhase, WafPhase, WafPhaseClaim};
 use crate::plugins::runtime::body_gate::body_read_failure_result;
 use crate::plugins::runtime::log::PluginLog;
 use crate::plugins::runtime::traits::{PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseFilter};
@@ -110,34 +109,80 @@ impl WafPlugin {
         }
     }
 
-    fn runtime_failure(log: &mut PluginLog, error: &RuntimeError) -> PluginRunningResult {
+    pub(crate) fn runtime_error_code(error: &RuntimeError) -> WafErrorCode {
+        match error {
+            RuntimeError::InputByteLimit { .. }
+            | RuntimeError::HeaderLimit { .. }
+            | RuntimeError::HeaderByteLimit { .. }
+            | RuntimeError::ValueByteLimit { .. }
+            | RuntimeError::QueryArgumentLimit { .. }
+            | RuntimeError::CookieLimit { .. } => WafErrorCode::InputLimit,
+            RuntimeError::Body {
+                kind: BodyError::ByteLimit { .. },
+            } => WafErrorCode::BodyLimit,
+            RuntimeError::Body { .. } => WafErrorCode::BodyProcessing,
+            RuntimeError::CollectionEntryLimit { .. }
+            | RuntimeError::RetainedByteLimit { .. }
+            | RuntimeError::MatcherScratchByteLimit { .. }
+            | RuntimeError::SelectedValueLimit { .. }
+            | RuntimeError::OperatorEvaluationLimit { .. }
+            | RuntimeError::OperatorWorkLimit { .. }
+            | RuntimeError::TxVariableLimit { .. }
+            | RuntimeError::TxByteLimit { .. }
+            | RuntimeError::SetVarActionLimit { .. }
+            | RuntimeError::CaptureEntryLimit { .. }
+            | RuntimeError::CaptureByteLimit { .. } => WafErrorCode::RuntimeLimit,
+            RuntimeError::ResponseHeaderLimit { .. }
+            | RuntimeError::ResponseHeaderByteLimit { .. }
+            | RuntimeError::InvalidResponseStatus { .. }
+            | RuntimeError::ResponseWindowByteLimit { .. } => WafErrorCode::ResponseLimit,
+            RuntimeError::RequestBodyAlreadyPublished
+            | RuntimeError::RequestBodyNotPublished
+            | RuntimeError::ResponseAlreadyPublished
+            | RuntimeError::ResponseNotPublished
+            | RuntimeError::PhaseOrder { .. } => WafErrorCode::PhaseState,
+            RuntimeError::XmlSelectorUnavailable
+            | RuntimeError::RuntimeActionUnavailable { .. }
+            | RuntimeError::RuntimeMacroUnavailable { .. } => WafErrorCode::Unsupported,
+            RuntimeError::GenerationInvariant
+            | RuntimeError::InvalidHeaderName { .. }
+            | RuntimeError::InvalidHeaderValue { .. }
+            | RuntimeError::InvalidResponseHeaderName { .. }
+            | RuntimeError::InvalidResponseHeaderValue { .. } => WafErrorCode::RuntimeInvariant,
+            RuntimeError::Matcher { .. } => WafErrorCode::Matcher,
+            RuntimeError::Transformation { .. } => WafErrorCode::Transformation,
+            RuntimeError::Allocation => WafErrorCode::Allocation,
+            RuntimeError::IntegerConversion | RuntimeError::Arithmetic => WafErrorCode::Arithmetic,
+        }
+    }
+
+    fn runtime_failure(
+        &self,
+        session: &mut dyn PluginSession,
+        phase: WafLogPhase,
+        error: &RuntimeError,
+    ) -> PluginRunningResult {
         let status = Self::runtime_error_status(error);
-        log.push_err("runtime-failed");
+        session.record_waf_terminal_error(&self.shared.owner, phase, Self::runtime_error_code(error), status);
         PluginRunningResult::ErrResponse { status, body: None }
     }
 
-    pub(crate) fn record_outcome(outcome: &PhaseOutcome, log: &mut PluginLog) -> Option<(u64, u16)> {
-        if !outcome.findings().is_empty() {
-            let count = outcome.findings().len().to_string();
-            log.push_fmt("matched {}", la![count.as_str()]);
-        }
-        if outcome.omitted_findings() != 0 {
-            let count = outcome.omitted_findings().to_string();
-            log.push_fmt("omitted {}", la![count.as_str()]);
-        }
+    fn record_outcome(
+        &self,
+        session: &mut dyn PluginSession,
+        phase: WafLogPhase,
+        execution_us: u64,
+        outcome: &PhaseOutcome,
+    ) -> Option<(u64, u16)> {
+        session.record_waf_phase_outcome(&self.shared.owner, phase, execution_us, outcome);
         outcome
             .intervention()
             .map(|intervention| (intervention.rule_id(), intervention.status()))
     }
 
-    fn intervention_result(intervention: Option<(u64, u16)>, log: &mut PluginLog) -> PluginRunningResult {
+    fn intervention_result(intervention: Option<(u64, u16)>) -> PluginRunningResult {
         match intervention {
-            Some((rule_id, status)) => {
-                let rule_id = rule_id.to_string();
-                let status_text = status.to_string();
-                log.push_fmt("blocked rule {} status {}", la![rule_id.as_str(), status_text.as_str()]);
-                PluginRunningResult::ErrResponse { status, body: None }
-            }
+            Some((_, status)) => PluginRunningResult::ErrResponse { status, body: None },
             None => PluginRunningResult::GoodNext,
         }
     }
@@ -146,12 +191,12 @@ impl WafPlugin {
         &self,
         session: &mut dyn PluginSession,
         transaction: Transaction<'static>,
-        log: &mut PluginLog,
+        phase: WafLogPhase,
     ) -> PluginRunningResult {
         if session.install_waf_transaction(Arc::clone(&self.shared.owner), transaction) {
             PluginRunningResult::GoodNext
         } else {
-            log.push_err("transaction-owner-conflict");
+            session.record_waf_terminal_error(&self.shared.owner, phase, WafErrorCode::TransactionOwnerConflict, 500);
             PluginRunningResult::ErrResponse {
                 status: 500,
                 body: None,
@@ -163,13 +208,13 @@ impl WafPlugin {
         &self,
         session: &mut dyn PluginSession,
         phase: WafPhase,
-        log: &mut PluginLog,
+        log_phase: WafLogPhase,
     ) -> Option<PluginRunningResult> {
         match session.claim_waf_phase(&self.shared.owner, phase) {
             WafPhaseClaim::Execute => None,
             WafPhaseClaim::Skip => Some(PluginRunningResult::GoodNext),
             WafPhaseClaim::Pending => {
-                log.push_err("winner-not-selected");
+                session.record_waf_terminal_error(&self.shared.owner, log_phase, WafErrorCode::WinnerNotSelected, 500);
                 Some(PluginRunningResult::ErrResponse {
                     status: 500,
                     body: None,
@@ -185,8 +230,12 @@ impl RequestFilter for WafPlugin {
         NAME
     }
 
+    fn suppress_automatic_log(&self) -> bool {
+        true
+    }
+
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        if let Some(result) = self.claim_phase(session, WafPhase::Request, log) {
+        if let Some(result) = self.claim_phase(session, WafPhase::Request, WafLogPhase::RequestHeaders) {
             return result;
         }
         let raw_headers = session.request_headers_bytes();
@@ -219,18 +268,19 @@ impl RequestFilter for WafPlugin {
             self.shared.engine_mode,
         ) {
             Ok(transaction) => transaction,
-            Err(error) => return Self::runtime_failure(log, &error),
+            Err(error) => return self.runtime_failure(session, WafLogPhase::RequestHeaders, &error),
         };
 
         let started = Instant::now();
         let execution = transaction.execute_request_headers();
-        crate::observe::metrics::record_waf_execution_micros("request_headers", elapsed_micros(started));
+        let request_headers_us = elapsed_micros(started);
+        crate::observe::metrics::record_waf_execution_micros("request_headers", request_headers_us);
         let phase_one = match execution {
-            Ok(outcome) => Self::record_outcome(&outcome, log),
-            Err(error) => return Self::runtime_failure(log, &error),
+            Ok(outcome) => self.record_outcome(session, WafLogPhase::RequestHeaders, request_headers_us, &outcome),
+            Err(error) => return self.runtime_failure(session, WafLogPhase::RequestHeaders, &error),
         };
         if phase_one.is_some() {
-            return Self::intervention_result(phase_one, log);
+            return Self::intervention_result(phase_one);
         }
 
         let raw_stream_only = self.shared.requires_request_body
@@ -240,15 +290,20 @@ impl RequestFilter for WafPlugin {
             && self.shared.request_body_execution.unsupported_rule_units() == 0;
         if raw_stream_only {
             if let Err(error) = transaction.start_request_body_stream() {
-                return Self::runtime_failure(log, &error);
+                return self.runtime_failure(session, WafLogPhase::RequestBody, &error);
             }
-            let restored = self.restore_transaction(session, transaction, log);
+            let restored = self.restore_transaction(session, transaction, WafLogPhase::RequestBody);
             if !matches!(restored, PluginRunningResult::GoodNext) {
                 return restored;
             }
             let body_limit = session.ctx().request_body_config.max_body_size_bytes;
             if !session.enable_waf_request_body_streaming(&self.shared.owner, body_limit) {
-                log.push_err("body-stream-install-failed");
+                session.record_waf_terminal_error(
+                    &self.shared.owner,
+                    WafLogPhase::RequestBody,
+                    WafErrorCode::BodyStreamInstallFailed,
+                    500,
+                );
                 return PluginRunningResult::ErrResponse {
                     status: 500,
                     body: None,
@@ -261,26 +316,40 @@ impl RequestFilter for WafPlugin {
             let cap = session.ctx().request_body_config.max_body_size_bytes;
             match session.read_request_body(Some(cap)).await {
                 Ok(body) => body,
-                Err(error) => return body_read_failure_result(session, &BodyRequirement::fail_close(), log, &error),
+                Err(error) => {
+                    let result = body_read_failure_result(session, &BodyRequirement::fail_close(), log, &error);
+                    let status = match &result {
+                        PluginRunningResult::ErrResponse { status, .. } => *status,
+                        _ => 500,
+                    };
+                    session.record_waf_terminal_error(
+                        &self.shared.owner,
+                        WafLogPhase::RequestBody,
+                        WafErrorCode::RequestBodyReadFailed,
+                        status,
+                    );
+                    return result;
+                }
             }
         } else {
             bytes::Bytes::new()
         };
         if let Err(error) = transaction.publish_request_body(RequestBody::new(&body, BodyProcessorSelection::Auto)) {
-            return Self::runtime_failure(log, &error);
+            return self.runtime_failure(session, WafLogPhase::RequestBody, &error);
         }
         let started = Instant::now();
         let execution = transaction.execute_request_body();
-        crate::observe::metrics::record_waf_execution_micros("request_body", elapsed_micros(started));
+        let request_body_us = elapsed_micros(started);
+        crate::observe::metrics::record_waf_execution_micros("request_body", request_body_us);
         let phase_two = match execution {
-            Ok(outcome) => Self::record_outcome(&outcome, log),
-            Err(error) => return Self::runtime_failure(log, &error),
+            Ok(outcome) => self.record_outcome(session, WafLogPhase::RequestBody, request_body_us, &outcome),
+            Err(error) => return self.runtime_failure(session, WafLogPhase::RequestBody, &error),
         };
         if phase_two.is_some() {
-            return Self::intervention_result(phase_two, log);
+            return Self::intervention_result(phase_two);
         }
 
-        self.restore_transaction(session, transaction, log)
+        self.restore_transaction(session, transaction, WafLogPhase::RequestBody)
     }
 }
 
@@ -289,16 +358,25 @@ impl UpstreamResponseFilter for WafPlugin {
         NAME
     }
 
+    fn suppress_automatic_log(&self) -> bool {
+        true
+    }
+
     fn run_upstream_response_filter(
         &self,
         session: &mut dyn PluginSession,
-        log: &mut PluginLog,
+        _log: &mut PluginLog,
     ) -> PluginRunningResult {
-        if let Some(result) = self.claim_phase(session, WafPhase::ResponseHeaders, log) {
+        if let Some(result) = self.claim_phase(session, WafPhase::ResponseHeaders, WafLogPhase::ResponseHeaders) {
             return result;
         }
         let Some(mut transaction) = session.take_waf_transaction(&self.shared.owner) else {
-            log.push_err("transaction-missing");
+            session.record_waf_terminal_error(
+                &self.shared.owner,
+                WafLogPhase::ResponseHeaders,
+                WafErrorCode::TransactionMissing,
+                500,
+            );
             return PluginRunningResult::ErrResponse {
                 status: 500,
                 body: None,
@@ -311,19 +389,20 @@ impl UpstreamResponseFilter for WafPlugin {
             .collect();
         let status = session.get_response_status().unwrap_or(500);
         if let Err(error) = transaction.publish_response_head(ResponseHead::new(status, &headers)) {
-            return Self::runtime_failure(log, &error);
+            return self.runtime_failure(session, WafLogPhase::ResponseHeaders, &error);
         }
         let started = Instant::now();
         let execution = transaction.execute_response_headers();
-        crate::observe::metrics::record_waf_execution_micros("response_headers", elapsed_micros(started));
+        let response_headers_us = elapsed_micros(started);
+        crate::observe::metrics::record_waf_execution_micros("response_headers", response_headers_us);
         let intervention = match execution {
-            Ok(outcome) => Self::record_outcome(&outcome, log),
-            Err(error) => return Self::runtime_failure(log, &error),
+            Ok(outcome) => self.record_outcome(session, WafLogPhase::ResponseHeaders, response_headers_us, &outcome),
+            Err(error) => return self.runtime_failure(session, WafLogPhase::ResponseHeaders, &error),
         };
         if intervention.is_some() {
-            return Self::intervention_result(intervention, log);
+            return Self::intervention_result(intervention);
         }
-        self.restore_transaction(session, transaction, log)
+        self.restore_transaction(session, transaction, WafLogPhase::ResponseHeaders)
     }
 }
 
@@ -333,12 +412,25 @@ impl UpstreamResponse for WafPlugin {
         NAME
     }
 
-    async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        if let Some(result) = self.claim_phase(session, WafPhase::ResponseComplete, log) {
+    fn suppress_automatic_log(&self) -> bool {
+        true
+    }
+
+    async fn run_upstream_response(
+        &self,
+        session: &mut dyn PluginSession,
+        _log: &mut PluginLog,
+    ) -> PluginRunningResult {
+        if let Some(result) = self.claim_phase(session, WafPhase::ResponseComplete, WafLogPhase::ResponseBody) {
             return result;
         }
         let Some(mut transaction) = session.take_waf_transaction(&self.shared.owner) else {
-            log.push_err("transaction-missing");
+            session.record_waf_terminal_error(
+                &self.shared.owner,
+                WafLogPhase::ResponseBody,
+                WafErrorCode::TransactionMissing,
+                500,
+            );
             return PluginRunningResult::ErrResponse {
                 status: 500,
                 body: None,
@@ -347,19 +439,21 @@ impl UpstreamResponse for WafPlugin {
 
         let started = Instant::now();
         let execution = transaction.execute_response_window(ResponseWindow::new(&[], true));
-        crate::observe::metrics::record_waf_execution_micros("response_body", elapsed_micros(started));
+        let response_body_us = elapsed_micros(started);
+        crate::observe::metrics::record_waf_execution_micros("response_body", response_body_us);
         let phase_four = match execution {
-            Ok(outcome) => Self::record_outcome(&outcome, log),
-            Err(error) => return Self::runtime_failure(log, &error),
+            Ok(outcome) => self.record_outcome(session, WafLogPhase::ResponseBody, response_body_us, &outcome),
+            Err(error) => return self.runtime_failure(session, WafLogPhase::ResponseBody, &error),
         };
         let started = Instant::now();
         let execution = transaction.execute_logging();
-        crate::observe::metrics::record_waf_execution_micros("logging", elapsed_micros(started));
+        let logging_us = elapsed_micros(started);
+        crate::observe::metrics::record_waf_execution_micros("logging", logging_us);
         let phase_five = match execution {
-            Ok(outcome) => Self::record_outcome(&outcome, log),
-            Err(error) => return Self::runtime_failure(log, &error),
+            Ok(outcome) => self.record_outcome(session, WafLogPhase::Logging, logging_us, &outcome),
+            Err(error) => return self.runtime_failure(session, WafLogPhase::Logging, &error),
         };
-        Self::intervention_result(phase_four.or(phase_five), log)
+        Self::intervention_result(phase_four.or(phase_five))
     }
 }
 
@@ -381,6 +475,14 @@ mod tests {
         .expect("test WAF compiles")
     }
 
+    #[test]
+    fn dedicated_summary_suppresses_all_generic_stage_logs() {
+        let plugin = plugin("", WafMode::On);
+        assert!(RequestFilter::suppress_automatic_log(&plugin));
+        assert!(UpstreamResponseFilter::suppress_automatic_log(&plugin));
+        assert!(UpstreamResponse::suppress_automatic_log(&plugin));
+    }
+
     fn expect_request_head(session: &mut MockPluginSession, uri: &str) {
         expect_request_head_with_headers(session, uri, Vec::new());
     }
@@ -389,6 +491,8 @@ mod tests {
         session
             .expect_claim_waf_phase()
             .returning(|_, _| WafPhaseClaim::Execute);
+        session.expect_record_waf_phase_outcome().returning(|_, _, _, _| ());
+        session.expect_record_waf_terminal_error().returning(|_, _, _, _| ());
         session.expect_request_headers_bytes().return_once(move || headers);
         session.expect_get_method().times(2).return_const("POST".to_string());
         session.expect_get_uri().return_const(uri.to_string());
@@ -417,7 +521,7 @@ mod tests {
                 body: None
             }
         );
-        assert!(log.contains("blocked rule 1 status 403"));
+        assert!(!log.contains("blocked rule"));
     }
 
     #[tokio::test]
@@ -518,7 +622,6 @@ mod tests {
                 body: None
             }
         );
-        assert!(log.contains("runtime-failed"));
         assert!(!log.contains("private"));
     }
 
@@ -577,7 +680,7 @@ mod tests {
         let result = RequestFilter::run_request(&plugin, &mut session, &mut log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("matched 1"));
+        assert!(!log.contains("matched"));
         assert!(!log.contains("blocked rule"));
     }
 

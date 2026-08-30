@@ -646,7 +646,7 @@ pub async fn upstream_peer_http(
     // 0/1. Upstream-jump slot (Direct/External bypass; Internal falls through to LB).
     // INVARIANT: this check MUST come before backend selection. Direct and
     // External jumps bypass ordinary LB; Internal remains an LB input modifier.
-    if let Some(jump) = &ctx.jump {
+    if let Some(jump) = ctx.jump.as_deref() {
         match jump {
             UpstreamJumpTarget::Direct(_) => return try_direct_endpoint_peer(edgion_http, ctx),
             UpstreamJumpTarget::External(_) => return try_external_jump_peer(edgion_http, ctx).await,
@@ -738,7 +738,7 @@ pub async fn select_http_backend(
     // per-request override — it wins over the sticky session, and the session
     // binding is left untouched (no resolution, state stays `Inactive`, no
     // cookie rewrite; the next non-jump request resolves normally).
-    let sp_idx = if sp_token.is_none() || matches!(ctx.jump.as_ref(), Some(UpstreamJumpTarget::Internal(_))) {
+    let sp_idx = if sp_token.is_none() || matches!(ctx.jump.as_deref(), Some(UpstreamJumpTarget::Internal(_))) {
         None
     } else {
         let candidates = route_unit
@@ -770,7 +770,7 @@ pub async fn select_http_backend(
     // round-robin on miss; without InternalJump, plain weighted round-robin.
     let backend_ref = match sticky_backend {
         Some(b) => b,
-        None => match pick_backend_ref(&route_unit, &route_unit.matched_info.rsc.ns, ctx.jump.as_ref()) {
+        None => match pick_backend_ref(&route_unit, &route_unit.matched_info.rsc.ns, ctx.jump.as_deref()) {
             Ok(b) => b,
             Err(e) => {
                 ctx.record_error(backend_select_status(&e));
@@ -1102,7 +1102,7 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
 
     let route_backend_timeout = route_timeouts.map(|rt| &rt.backend_request_timeout);
     let normal_backend_timeout = effective_backend_bound(route_backend_timeout, backend_timeout.request_timeout);
-    let upstream_read_timeout_override = match ctx.jump.as_ref() {
+    let upstream_read_timeout_override = match ctx.jump.as_deref() {
         Some(crate::UpstreamJumpTarget::External(external)) => external.upstream_read_timeout_override,
         _ => None,
     };
@@ -1389,7 +1389,7 @@ fn try_direct_endpoint_peer(
     edgion_http: &EdgionHttpProxy,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
-    let direct = match ctx.jump.as_ref() {
+    let direct = match ctx.jump.as_deref() {
         Some(UpstreamJumpTarget::Direct(preset)) => preset,
         // invariant: caller (line 146) only reaches this helper after matching Direct{..};
         //   other variants are dispatched to sibling helpers
@@ -1419,7 +1419,7 @@ async fn try_external_jump_peer(
     edgion_http: &EdgionHttpProxy,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
-    let external = match ctx.jump.as_ref() {
+    let external = match ctx.jump.as_deref() {
         Some(UpstreamJumpTarget::External(p)) => p,
         // invariant: caller (line 147) only reaches this helper after matching External(..);
         //   other variants are dispatched to sibling helpers
@@ -1486,7 +1486,7 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
     }
 
     let (name, namespace, service_kind, backend_ref_idx) =
-        if let Some(UpstreamJumpTarget::Direct(preset)) = ctx.jump.as_ref() {
+        if let Some(UpstreamJumpTarget::Direct(preset)) = ctx.jump.as_deref() {
             let (name, namespace, service_kind, slot) = ctx
                 .route_unit
                 .as_ref()
@@ -1603,7 +1603,7 @@ fn finalize_request_uri(session: &mut Session, ctx: &mut EdgionHttpContext) -> p
 
     let cfg = get_path_normalization_config();
     let annotation = ctx.route_unit.as_ref().and_then(|ru| ru.rule.parsed_forward_raw_path);
-    let external_jump_preserve_raw = match &ctx.jump {
+    let external_jump_preserve_raw = match ctx.jump.as_deref() {
         Some(UpstreamJumpTarget::External(p)) => p.preserve_raw_path,
         _ => false,
     };

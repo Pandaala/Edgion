@@ -47,8 +47,25 @@ Each access log entry must contain enough information for an operator to locate 
 | `diagnostics_full` | Present and `true` only when the bounded request history dropped one or more tail entries |
 | `match_info.sv` | sync_version — gRPC sync version, used to correlate control-plane logs (omitted when 0). See [../00-logging-and-tracing-ids.md](../00-logging-and-tracing-ids.md) |
 | stage_logs | Per-phase plugin logs (see PluginLog below) |
+| `waf` | Optional final native-WAF summary: selected source/priority/mode, fixed phase summaries, bounded loggable findings, first intervention, and first terminal error |
 | upstreams | Upstream connection details (ip, port, ct/ht/bt/et); per-attempt retry reason in `err`: etype strings / `RetryOnStatus` / `ConnectionReuseRetry`. Client-disconnect waste is marked by the request diagnostic `{kind: "error", code: "ClientClosed"}` |
 | `ext` | Operator-declared fields from `AccessLogExtern` (see below); omitted when nothing was collected |
+
+### Native WAF block
+
+The native WAF owns one request-wide top-level `waf` block instead of emitting
+duplicate `PluginLog` entries under each stage. Only terminal `logging()` may
+attach it; `AccessLogEntry::from_context` leaves it absent so connection-stage
+and debug-header projections cannot expose rule identifiers or the active
+protection posture.
+
+The block is bounded to 16 retained loggable findings. The first intervention
+and first terminal error are separate fixed-size facts, so they survive finding
+truncation. `nolog,noauditlog` findings are excluded from both retained and
+omitted loggable counts. Never add matched input, selected variable values,
+headers, cookies, query/body bytes, rule messages, operator parameters, rule
+source text, or formatted runtime errors. Closed error codes and numeric counts
+belong here; diagnostic detail stays out of the data-plane access log.
 
 ### Final downstream/access-log status
 
