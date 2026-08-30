@@ -49,19 +49,24 @@ impl LogExt {
     /// UTF-8 char boundary. At the cap a *new* key is dropped, but an existing
     /// key still updates — otherwise a full map would silently ignore the route
     /// tier's override of a global field.
-    pub fn insert(&mut self, key: &str, value: &str, sensitive: bool) {
-        let value = truncate_on_char_boundary(value, LOG_LABEL_MAX_VALUE_LEN);
-        if let Some(existing) = self.0.iter_mut().find(|f| f.key == key) {
-            existing.value = value.to_string();
-            existing.sensitive = sensitive;
+    pub fn insert(&mut self, key: &str, value: impl Into<String>, sensitive: bool) {
+        let existing = self.0.iter().position(|field| field.key == key);
+        if existing.is_none() && self.0.len() >= LOG_LABEL_MAX_COUNT {
             return;
         }
-        if self.0.len() >= LOG_LABEL_MAX_COUNT {
+
+        // Dynamic sources already resolve to `String`; accepting ownership
+        // avoids copying every projected value again on the request path.
+        let mut value = value.into();
+        truncate_on_char_boundary(&mut value, LOG_LABEL_MAX_VALUE_LEN);
+        if let Some(index) = existing {
+            self.0[index].value = value;
+            self.0[index].sensitive = sensitive;
             return;
         }
         self.0.push(LogExtField {
             key: key.to_string(),
-            value: value.to_string(),
+            value,
             sensitive,
         });
     }
@@ -78,15 +83,22 @@ impl LogExt {
 }
 
 /// Truncate to at most `max` bytes without splitting a UTF-8 char.
-fn truncate_on_char_boundary(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        return s;
+fn truncate_on_char_boundary(value: &mut String, max: usize) {
+    if value.len() > max {
+        let mut end = max;
+        while end > 0 && !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        value.truncate(end);
     }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
+
+    // `String::truncate` keeps the original allocation. Resolved values may
+    // come from attacker-controlled headers/query parameters, so retaining a
+    // large capacity in each of the bounded fields would undermine the value
+    // size cap until the access-log entry is serialized.
+    if value.capacity() > max {
+        *value = value.as_str().to_owned();
     }
-    &s[..end]
 }
 
 impl Serialize for LogExt {
@@ -211,7 +223,7 @@ fn apply_declarations(
         for field in compiled.spec.access_log_extern_fields() {
             if let Some(value) = resolve_field(field, session, ctx) {
                 let sensitive = should_mask(whitelist, field.from, &field.name);
-                ext.insert(&field.key, &value, sensitive);
+                ext.insert(&field.key, value, sensitive);
             }
         }
     });
@@ -370,6 +382,33 @@ mod tests {
         // 2 quotes + the key + separators; assert on the value length itself.
         let value = json.trim_start_matches(r#"{"k":""#).trim_end_matches(r#""}"#);
         assert_eq!(value.len(), LOG_LABEL_MAX_VALUE_LEN);
+    }
+
+    #[test]
+    fn owned_insert_reuses_the_resolved_value_allocation() {
+        let _g = set_mode(0);
+        let mut ext = LogExt::default();
+        let value = String::from("resolved");
+        let value_ptr = value.as_ptr();
+
+        ext.insert("k", value, false);
+
+        assert_eq!(ext.0[0].value.as_ptr(), value_ptr);
+        assert_eq!(json_of(&ext), r#"{"k":"resolved"}"#);
+    }
+
+    #[test]
+    fn owned_insert_does_not_retain_oversized_capacity() {
+        let _g = set_mode(0);
+        let mut ext = LogExt::default();
+        let mut value = String::with_capacity(LOG_LABEL_MAX_VALUE_LEN * 16);
+        value.push_str(&"v".repeat(LOG_LABEL_MAX_VALUE_LEN + 1));
+        let original_capacity = value.capacity();
+
+        ext.insert("k", value, false);
+
+        assert_eq!(ext.0[0].value.len(), LOG_LABEL_MAX_VALUE_LEN);
+        assert!(ext.0[0].value.capacity() < original_capacity);
     }
 
     #[test]
