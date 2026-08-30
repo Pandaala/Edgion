@@ -28,11 +28,14 @@ impl TestType {
     /// Supported values: "lb", "retry", "latency" (case-insensitive)
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "lb" => TestType::Lb,
-            "retry" => TestType::Retry,
-            "latency" => TestType::Latency,
-            _ => TestType::None,
+        if s.eq_ignore_ascii_case("lb") {
+            TestType::Lb
+        } else if s.eq_ignore_ascii_case("retry") {
+            TestType::Retry
+        } else if s.eq_ignore_ascii_case("latency") {
+            TestType::Latency
+        } else {
+            TestType::None
         }
     }
 

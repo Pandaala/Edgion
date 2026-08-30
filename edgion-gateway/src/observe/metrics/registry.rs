@@ -285,6 +285,17 @@ pub struct GatewayMetrics {
     config_relist_total: OnceLock<Counter>,
 }
 
+/// Balances the active-context gauge when terminal request logging finishes.
+pub(crate) struct ActiveContextReleaseGuard<'a> {
+    metrics: &'a GatewayMetrics,
+}
+
+impl Drop for ActiveContextReleaseGuard<'_> {
+    fn drop(&mut self) {
+        self.metrics.ctx_destroyed();
+    }
+}
+
 #[inline]
 fn get_or_register_counter<'a>(slot: &'a OnceLock<Counter>, name: &'static str) -> &'a Counter {
     slot.get_or_init(|| counter!(name))
@@ -315,11 +326,23 @@ impl GatewayMetrics {
         }
     }
 
-    /// Record a new context creation
+    /// Record a new proxy context.
     #[inline]
-    pub fn ctx_created(&self) {
+    pub(crate) fn ctx_created(&self) {
         self.ctx_created.increment(1);
         self.ctx_active.increment(1.0);
+    }
+
+    /// Release one proxy context's active-gauge charge.
+    #[inline]
+    pub(crate) fn ctx_destroyed(&self) {
+        self.ctx_active.decrement(1.0);
+    }
+
+    /// Hold through Pingora's terminal logging hook to balance `ctx_created`.
+    #[inline]
+    pub(crate) fn active_context_release_guard(&self) -> ActiveContextReleaseGuard<'_> {
+        ActiveContextReleaseGuard { metrics: self }
     }
 
     /// Record a dropped access log entry
@@ -1114,6 +1137,25 @@ mod tests {
                 !rendered.contains("edgion_ssl_log_dropped_total"),
                 "still-untouched cold counter must remain absent, got:\n{rendered}"
             );
+        });
+    }
+
+    #[test]
+    fn context_lifecycle_balances_the_active_gauge() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+
+        metrics::with_local_recorder(&recorder, || {
+            let metrics = GatewayMetrics::new();
+            metrics.ctx_created();
+            let release = metrics.active_context_release_guard();
+            let rendered = handle.render();
+            assert!(rendered.lines().any(|line| line == "edgion_ctx_created_total 1"));
+            assert!(rendered.lines().any(|line| line == "edgion_ctx_active 1"));
+
+            drop(release);
+            let rendered = handle.render();
+            assert!(rendered.lines().any(|line| line == "edgion_ctx_active 0"));
         });
     }
 

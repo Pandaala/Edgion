@@ -22,6 +22,12 @@ pub async fn logging(
     _e: Option<&PingoraError>,
     ctx: &mut EdgionHttpContext,
 ) {
+    // Pingora invokes this exactly once from `finish` as the universal terminal
+    // hook, including fatal errors and locally terminated requests.
+    // Acquire before any await so unwind or cancellation inside logging also
+    // releases the active-context gauge charge.
+    let _active_context_release = global_metrics().active_context_release_guard();
+
     if let Some(upstream) = ctx.get_current_upstream_mut() {
         upstream.set_response_body_size(session.upstream_body_bytes_received());
         let wpt = session.upstream_write_pending_time();

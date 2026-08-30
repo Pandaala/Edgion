@@ -79,26 +79,41 @@ pub struct GatewayMatrixEntry {
 impl GatewayMatrixEntry {
     /// Record one request into the precomputed handles at `(backend_idx, ps_idx)`.
     ///
-    /// Returns `true` on success. Returns `false` when `backend_idx` falls
-    /// outside the counter array (precomputed handles built against a stale set
-    /// of `backend_refs`). The caller then falls back to the dynamic metrics
-    /// path, so the request still emits its time series and the drift is
-    /// observable from the access log. No panic / `debug_assert!(false)` on the
-    /// data-plane hot path (see `skills/03-coding/02-rust-coding-rules.md` Rule 5).
+    /// Returns `true` on success. Returns `false` when either index is out of
+    /// bounds or the precomputed counter/histogram slots are incomplete. The
+    /// caller then falls back to the dynamic metrics path, so the request still
+    /// emits its time series. All slots are validated before either metric is
+    /// recorded, keeping the fallback atomic and preventing double-counting.
+    /// No panic / `debug_assert!(false)` on the data-plane hot path (see
+    /// `skills/03-coding/02-rust-coding-rules.md` Rule 5).
     #[inline]
     pub fn record(&self, backend_idx: usize, ps_idx: usize, duration_ms: f64) -> bool {
-        if backend_idx >= self.counters.len() {
-            return false;
-        }
-        let Some(counters) = self.counters[backend_idx].as_ref() else {
+        let Some(counter) = self
+            .counters
+            .get(backend_idx)
+            .and_then(Option::as_ref)
+            .and_then(|counters| counters.get(ps_idx))
+        else {
             return false;
         };
-        counters[ps_idx].increment(1);
-        if let Some(hs) = self.histograms.as_ref() {
-            let Some(histograms) = hs[backend_idx].as_ref() else {
-                return false;
-            };
-            histograms[ps_idx].record(duration_ms);
+
+        let histogram = match self.histograms.as_ref() {
+            Some(histograms) => {
+                let Some(histogram) = histograms
+                    .get(backend_idx)
+                    .and_then(Option::as_ref)
+                    .and_then(|histograms| histograms.get(ps_idx))
+                else {
+                    return false;
+                };
+                Some(histogram)
+            }
+            None => None,
+        };
+
+        counter.increment(1);
+        if let Some(histogram) = histogram {
+            histogram.record(duration_ms);
         }
         true
     }
@@ -546,6 +561,66 @@ mod tests {
         });
 
         assert!(!ok, "out-of-bounds backend index must return false (graceful fallback)");
+    }
+
+    #[test]
+    fn record_falls_back_on_out_of_bounds_protocol_status_index() {
+        let gws = vec![("gw_ns".to_string(), "gw_a".to_string())];
+        let backends = vec![("ns1".to_string(), "svc_a".to_string())];
+        let backend_cfg = BackendRequestsLabels::default();
+        let duration_cfg = RequestDurationConfig::default();
+
+        let (_, ok) = run_with_recorder(|| {
+            let handles =
+                RouteMetricHandles::build_with(&gws, "rns", "route_a", &backends, &backend_cfg, &duration_cfg);
+            let entry = handles.lookup("gw_ns", "gw_a").unwrap();
+            entry.record(0, N_PS, 1.0)
+        });
+
+        assert!(!ok, "out-of-bounds protocol/status index must return false");
+    }
+
+    #[test]
+    fn record_validates_histogram_slot_before_incrementing_counter() {
+        let gws = vec![("gw_ns".to_string(), "gw_a".to_string())];
+        let backends = vec![("ns1".to_string(), "svc_a".to_string())];
+        let backend_cfg = BackendRequestsLabels::default();
+        let duration_cfg = RequestDurationConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let cell = ps_index(ProtocolIdx::Http, StatusIdx::S2xx);
+
+        let (snap, ok) = run_with_recorder(|| {
+            let mut handles =
+                RouteMetricHandles::build_with(&gws, "rns", "route_a", &backends, &backend_cfg, &duration_cfg);
+            let entry = handles.matrices.first_mut().unwrap();
+            entry.histograms.as_mut().unwrap().clear();
+            entry.record(0, cell, 1.0)
+        });
+
+        assert!(!ok, "an incomplete histogram matrix must use the dynamic fallback");
+        let counter_value = snap
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .find_map(|(key, _, _, value)| {
+                let is_target = key.key().name() == names::BACKEND_REQUESTS_TOTAL
+                    && key
+                        .key()
+                        .labels()
+                        .any(|label| label.key() == "protocol" && label.value() == "http")
+                    && key
+                        .key()
+                        .labels()
+                        .any(|label| label.key() == "status" && label.value() == "2xx");
+                is_target.then_some(value)
+            })
+            .expect("target counter registered");
+        assert!(
+            matches!(counter_value, metrics_util::debugging::DebugValue::Counter(0)),
+            "counter must remain untouched before dynamic fallback: {counter_value:?}"
+        );
     }
 
     #[test]
