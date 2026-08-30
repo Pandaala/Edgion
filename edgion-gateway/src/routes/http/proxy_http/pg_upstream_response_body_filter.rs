@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::EdgionHttpProxy;
@@ -363,14 +362,14 @@ fn run_read_only_body_plugins(
             .plugin_runtime
             .run_upstream_response_body_plugins(session, ctx, body, end_of_stream);
     }
-    if let Some(plugins) = ctx.resolved_gateway_plugins.as_ref().map(Arc::clone) {
+    if let Some(plugins) = ctx.resolved_gateway_plugins() {
         for runtime in plugins.iter() {
             if let Some(delay) = runtime.run_upstream_response_body_plugins(session, ctx, body, end_of_stream) {
                 max_delay = Some(max_delay.map_or(delay, |current| current.max(delay)));
             }
         }
     }
-    if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(Arc::clone) {
+    if let Some(plugins) = ctx.resolved_global_plugins() {
         for runtime in plugins.iter() {
             if let Some(delay) = runtime.run_upstream_response_body_plugins(session, ctx, body, end_of_stream) {
                 max_delay = Some(max_delay.map_or(delay, |current| current.max(delay)));
@@ -414,6 +413,7 @@ mod tests {
     use async_trait::async_trait;
     use bytes::Bytes;
     use parking_lot::Mutex;
+    use std::sync::Arc;
     use tokio::io::AsyncWriteExt;
 
     fn ctx_with_upstream() -> crate::EdgionHttpContext {

@@ -592,7 +592,7 @@ pub trait PluginSession: Send + Sync {
     ///
     /// Default impl returns `None` — used by adapters that don't carry an
     /// `EdgionHttpContext` (e.g. some test mocks). Production path is
-    /// `PingoraSessionAdapter`, which reads `ctx.resolved_route_ext_refs`.
+    /// `PingoraSessionAdapter`, which reads the request-pinned route snapshot.
     fn resolved_route_ext_ref(&self, _index: usize) -> Option<std::sync::Arc<crate::plugins::runtime::PluginRuntime>> {
         None
     }

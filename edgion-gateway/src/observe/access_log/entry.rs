@@ -231,7 +231,7 @@ impl<'a> AccessLogEntry<'a> {
             diagnostics: ctx.diagnostics.entries(),
             diagnostics_full: ctx.diagnostics.is_full(),
             backend_context: ctx.backend_context.as_ref(),
-            stage_logs: &ctx.stage_logs,
+            stage_logs: ctx.stage_logs(),
             conn_est: None,
             upstream_authority: ctx.upstream_authority.as_deref(),
             genai: ctx.ai_state().and_then(|state| state.summary.as_ref()),
@@ -417,6 +417,17 @@ mod tests {
         assert!(!json.contains("user_tier") && !json.contains("gold"), "got: {json}");
         assert!(!json.contains("jwt_claims") && !json.contains("alice"), "got: {json}");
         assert!(!json.contains(r#""ext""#), "empty ext must be omitted, got: {json}");
+    }
+
+    #[test]
+    fn access_log_projection_does_not_instantiate_plugin_state() {
+        let ctx = EdgionHttpContext::new();
+        assert!(!ctx.has_plugin_state());
+
+        let json = AccessLogEntry::from_context(&ctx).to_json();
+
+        assert!(!ctx.has_plugin_state());
+        assert!(!json.contains(r#""stage_logs""#));
     }
 
     #[test]

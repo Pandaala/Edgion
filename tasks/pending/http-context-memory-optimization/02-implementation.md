@@ -4,7 +4,7 @@
 
 | Measurement | ARM64 baseline | Current | Final |
 |-------------|---------------:|--------:|------:|
-| `size_of::<EdgionHttpContext>()` | 2,672 bytes | 1,592 bytes | pending |
+| `size_of::<EdgionHttpContext>()` | 2,672 bytes | 1,200 bytes | pending |
 | `Option<Box<WafRequestContext>>` | 8 bytes | 8 bytes | pending |
 | Default Context allocation calls | 1 | 0 | pending |
 | Default Context requested allocation bytes | 192 | 0 | pending |
@@ -42,6 +42,17 @@ state, and cleartext ordinary HTTP stays allocation-free. The unused,
 non-serialized `downstream_peer_port` field was removed. This reduced
 `RequestInfo` from 528 to 288 bytes and `EdgionHttpContext` from 1,832 to 1,592
 bytes.
+
+Stage 4 moved common plugin execution state behind one lazy
+`Option<Box<PluginRequestState>>`: stage logs, pending resource logs,
+termination and entry identity, context variables, deferred response headers
+and credentials, dye state, request mirroring, the JSON Schema claim, and all
+request-pinned plugin runtime snapshots. Empty global/Gateway snapshots and
+routes without ExtensionRef slots remain absent; positional dangling route
+slots and first-observed dangling backend refs remain pinned for the request.
+Read-only access-log and response paths never instantiate the box. This reduced
+`EdgionHttpContext` from 1,592 to 1,200 bytes while retaining zero allocations
+for default construction.
 
 ## Per-stage verification
 

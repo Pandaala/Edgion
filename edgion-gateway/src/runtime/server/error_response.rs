@@ -448,15 +448,15 @@ mod tests {
     async fn response_stage_exact_grpc_reply_drains_allowed_ops_and_reasserts_invariants() {
         let (mut session, _client) = live_downstream_session().await;
         let mut ctx = EdgionHttpContext::new();
-        ctx.pending_response_header_ops.push(PendingHeaderOp::Append {
+        ctx.queue_pending_response_header_op(PendingHeaderOp::Append {
             name: "x-ext-proc".to_string(),
             value: "allowed".to_string(),
         });
-        ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
+        ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
             name: "content-type".to_string(),
             value: "text/plain".to_string(),
         });
-        ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
+        ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
             name: "content-length".to_string(),
             value: "999".to_string(),
         });
@@ -472,7 +472,7 @@ mod tests {
         assert!(written.headers.get("content-length").is_none());
         assert!(written.headers.get("transfer-encoding").is_none());
         assert_eq!(written.headers.get("grpc-status").unwrap(), "8");
-        assert!(ctx.pending_response_header_ops.is_empty());
+        assert!(!ctx.has_pending_response_header_ops());
     }
 
     #[tokio::test]
@@ -493,7 +493,7 @@ mod tests {
                 value: "conflict".to_string(),
             },
         ] {
-            ctx.pending_response_header_ops.push(op);
+            ctx.queue_pending_response_header_op(op);
         }
 
         send_grpc_status_trailers_only(&mut session, &mut ctx, &ServerHeaderOpts::default(), 8, Some("quota"))

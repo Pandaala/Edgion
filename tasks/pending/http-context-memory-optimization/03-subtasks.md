@@ -9,8 +9,8 @@
 | 2b | completed | Compact HTTP backend selection with generation/index handles | completed; Arc classification and TLS test findings fixed | `300035fd` |
 | 2c | completed | Compact gRPC backend selection with request-stable TLS policy | completed; no blocking findings | `bc1af533` |
 | 2d | completed | Remove residual AI/direct-endpoint backend copies | completed; ReferenceGrant bypass finding fixed | `1b2d4972` |
-| 3 | completed | Common/TLS/gRPC RequestInfo split | completed; no blocking findings | pending |
-| 4 | pending | Optional boxed plugin request state | pending | pending |
+| 3 | completed | Common/TLS/gRPC RequestInfo split | completed; no blocking findings | `0b949c90` |
+| 4 | completed | Optional boxed plugin request state | completed; production backend-ref pin test coverage fixed | pending |
 | 5 | pending | Optional request-body-plugin and response-processing state | pending | pending |
 | 6 | pending | Compact parsed parameters and remaining rare state | pending | pending |
 | 7 | pending | Dedicated bounded WAF access-log block | pending | pending |

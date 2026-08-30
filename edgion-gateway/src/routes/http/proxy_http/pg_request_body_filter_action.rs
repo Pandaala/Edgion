@@ -48,7 +48,7 @@ pub async fn request_body_filter_action(
                 // request-direction rule writes are inert here (and a
                 // response-direction append is lost if the upstream response
                 // header was also already committed).
-                ctx.current_dye_plan = handler.dye_plan();
+                ctx.install_current_dye_plan(handler.dye_plan());
                 PingoraSessionAdapter::new(session, ctx).record_outcome(outcome, &cause);
             }
             match verdict {
@@ -115,7 +115,7 @@ fn run_waf_body_stream(chunk: &[u8], event: RequestBodyEvent, ctx: &mut EdgionHt
         crate::observe::metrics::record_waf_execution_micros("request_body", elapsed_micros);
         log.time_cost = Some(elapsed_micros);
         log.push_err("body-stream-abandoned");
-        ctx.stage_logs.push(StageLogs {
+        ctx.push_stage_log(StageLogs {
             stage: "request_body_filters",
             filters: vec![log],
             edgion_plugins: Vec::new(),
@@ -150,7 +150,7 @@ fn run_waf_body_stream(chunk: &[u8], event: RequestBodyEvent, ctx: &mut EdgionHt
         Ok(None) => unreachable!("non-terminal streamed WAF result returned above"),
         Ok(Some(outcome)) => {
             let intervention = crate::plugins::http::waf::WafPlugin::record_outcome(&outcome, &mut log);
-            ctx.stage_logs.push(StageLogs {
+            ctx.push_stage_log(StageLogs {
                 stage: "request_body_filters",
                 filters: vec![log],
                 edgion_plugins: Vec::new(),
@@ -167,7 +167,7 @@ fn run_waf_body_stream(chunk: &[u8], event: RequestBodyEvent, ctx: &mut EdgionHt
         Err(error) => {
             log.push_err("runtime-failed");
             let status = crate::plugins::http::waf::WafPlugin::runtime_error_status(&error);
-            ctx.stage_logs.push(StageLogs {
+            ctx.push_stage_log(StageLogs {
                 stage: "request_body_filters",
                 filters: vec![log],
                 edgion_plugins: Vec::new(),
@@ -382,7 +382,7 @@ mod tests {
 fn drain_handler_logs(handlers: &mut Handlers, ctx: &mut EdgionHttpContext) {
     let filters: Vec<_> = handlers.iter_mut().filter_map(|h| h.get_mut().take_log()).collect();
     if !filters.is_empty() {
-        ctx.stage_logs.push(StageLogs {
+        ctx.push_stage_log(StageLogs {
             stage: "request_body_filters",
             filters,
             edgion_plugins: Vec::new(),
@@ -409,7 +409,7 @@ pub fn drain_request_body_observer_logs(ctx: &mut EdgionHttpContext) {
     };
     let filters = observers.finalize_incomplete_and_take_logs();
     if !filters.is_empty() {
-        ctx.stage_logs.push(StageLogs {
+        ctx.push_stage_log(StageLogs {
             stage: "request_body_observers",
             filters,
             edgion_plugins: Vec::new(),

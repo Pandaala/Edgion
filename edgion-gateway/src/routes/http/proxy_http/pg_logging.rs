@@ -101,7 +101,7 @@ pub async fn logging(
     edgion_http.access_logger.send_with_meta(entry_json, meta).await;
 
     // Defensive cleanup for mirror state. Dropping JoinHandle detaches task.
-    if let Some(mirror_state) = ctx.mirror_state.take() {
+    if let Some(mirror_state) = ctx.take_mirror_state() {
         drop(mirror_state);
     }
 
@@ -125,12 +125,15 @@ pub async fn logging(
 
 fn finalize_attached_ext_proc_logs(ctx: &mut EdgionHttpContext) {
     super::pg_upstream_response_trailer_filter::finalize_incomplete_trailer_companions(ctx);
-    for (identity, owner) in &ctx.attached_ext_proc {
+    let Some((stages, attached)) = ctx.stage_logs_and_attached_ext_proc() else {
+        return;
+    };
+    for (identity, owner) in attached {
         owner.terminalize_for_logging();
         let Some(line) = owner.take_summary_line() else {
             continue;
         };
-        'stages: for stage in &mut ctx.stage_logs {
+        'stages: for stage in stages.iter_mut() {
             for log in &mut stage.filters {
                 if log.internal_token.as_deref() == Some(identity.as_str()) {
                     log.push(&line);
@@ -156,7 +159,10 @@ fn finalize_attached_guardrail_log(ctx: &mut EdgionHttpContext) {
     let Some(line) = owner.take_summary_line() else {
         return;
     };
-    'stages: for stage in &mut ctx.stage_logs {
+    let Some(stages) = ctx.stage_logs_mut() else {
+        return;
+    };
+    'stages: for stage in stages.iter_mut() {
         for log in &mut stage.filters {
             if log.internal_token.as_deref() == Some(identity.as_str()) {
                 log.push(&line);
@@ -520,7 +526,7 @@ mod tests {
         log.set_internal_token(identity.clone());
         let mut ctx = EdgionHttpContext::default();
         ctx.attached_ext_proc.insert(identity, owner);
-        ctx.stage_logs.push(StageLogs {
+        ctx.push_stage_log(StageLogs {
             stage: "request_filters",
             filters: vec![log],
             edgion_plugins: Vec::new(),
@@ -528,7 +534,7 @@ mod tests {
 
         finalize_attached_ext_proc_logs(&mut ctx);
         finalize_attached_ext_proc_logs(&mut ctx);
-        let rendered = serde_json::to_string(&ctx.stage_logs[0].filters[0]).unwrap();
+        let rendered = serde_json::to_string(&ctx.stage_logs()[0].filters[0]).unwrap();
         assert_eq!(rendered.matches("ext_proc attached").count(), 1);
         assert!(rendered.contains("reason=logging-fallback"));
     }
@@ -543,7 +549,7 @@ mod tests {
         log.set_internal_token(identity.clone());
         let mut ctx = EdgionHttpContext::default();
         ctx.attached_ext_proc.insert(identity, owner);
-        ctx.stage_logs.push(StageLogs {
+        ctx.push_stage_log(StageLogs {
             stage: "request_filters",
             filters: Vec::new(),
             edgion_plugins: vec![EdgionPluginsLog {
@@ -554,7 +560,7 @@ mod tests {
 
         finalize_attached_ext_proc_logs(&mut ctx);
         finalize_attached_ext_proc_logs(&mut ctx);
-        let rendered = serde_json::to_string(&ctx.stage_logs[0].edgion_plugins[0].logs[0]).unwrap();
+        let rendered = serde_json::to_string(&ctx.stage_logs()[0].edgion_plugins[0].logs[0]).unwrap();
         assert_eq!(rendered.matches("ext_proc attached").count(), 1);
         assert!(rendered.contains("reason=logging-fallback"));
     }

@@ -19,7 +19,7 @@ pub async fn request_body_filter(
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<()> {
     // Fast path: no mirror active, skip all mirror logic.
-    if ctx.mirror_state.is_none() {
+    if !ctx.has_mirror_state() {
         return Ok(());
     }
 
@@ -46,7 +46,7 @@ async fn mirror_body_tee(body: &mut Option<Bytes>, event: RequestBodyEvent, ctx:
     }
 
     // Take ownership to avoid borrow conflicts when mutating ctx.mirror_state below.
-    let Some(state) = ctx.mirror_state.take() else {
+    let Some(state) = ctx.take_mirror_state() else {
         return;
     };
 
@@ -83,7 +83,7 @@ async fn mirror_body_tee(body: &mut Option<Bytes>, event: RequestBodyEvent, ctx:
                             // Drop writer_handle to detach (NOT abort) the task; it will finish
                             // on its own and emit the "channel_full" outcome.
                             drop(writer_handle);
-                            ctx.mirror_state = Some(MirrorState::Abandoned);
+                            ctx.set_mirror_state(MirrorState::Abandoned);
                             return; // body_tx is dropped here (end of match arm)
                         }
 
@@ -96,7 +96,7 @@ async fn mirror_body_tee(body: &mut Option<Bytes>, event: RequestBodyEvent, ctx:
                         // already-determined outcome with `body_abandoned`.
                         cancellation.complete();
                         drop(writer_handle);
-                        ctx.mirror_state = Some(MirrorState::Abandoned);
+                        ctx.set_mirror_state(MirrorState::Abandoned);
                         return;
                     }
                 }
@@ -111,9 +111,9 @@ async fn mirror_body_tee(body: &mut Option<Bytes>, event: RequestBodyEvent, ctx:
                 drop(body_tx);
                 cancellation.complete();
                 drop(writer_handle);
-                ctx.mirror_state = Some(MirrorState::Abandoned);
+                ctx.set_mirror_state(MirrorState::Abandoned);
             } else {
-                ctx.mirror_state = Some(MirrorState::Streaming {
+                ctx.set_mirror_state(MirrorState::Streaming {
                     body_tx,
                     writer_handle,
                     cancellation,
@@ -122,13 +122,13 @@ async fn mirror_body_tee(body: &mut Option<Bytes>, event: RequestBodyEvent, ctx:
             }
         }
         MirrorState::Abandoned => {
-            ctx.mirror_state = Some(MirrorState::Abandoned);
+            ctx.set_mirror_state(MirrorState::Abandoned);
         }
     }
 }
 
 pub(super) fn abandon_request_mirror(ctx: &mut EdgionHttpContext, reason: MirrorAbandonReason) {
-    let Some(state) = ctx.mirror_state.take() else {
+    let Some(state) = ctx.take_mirror_state() else {
         return;
     };
     if let MirrorState::Streaming {
@@ -142,7 +142,7 @@ pub(super) fn abandon_request_mirror(ctx: &mut EdgionHttpContext, reason: Mirror
         drop(body_tx);
         drop(writer_handle);
     }
-    ctx.mirror_state = Some(MirrorState::Abandoned);
+    ctx.set_mirror_state(MirrorState::Abandoned);
 }
 
 #[cfg(test)]
@@ -177,12 +177,12 @@ mod tests {
     async fn abandoned_body_cancels_mirror_request() {
         let (state, cancel_rx, _reason) = streaming_state();
         let mut ctx = EdgionHttpContext::default();
-        ctx.mirror_state = Some(state);
+        ctx.set_mirror_state(state);
         let mut body = None;
 
         mirror_body_tee(&mut body, RequestBodyEvent::Abandoned, &mut ctx).await;
 
-        assert!(matches!(ctx.mirror_state, Some(MirrorState::Abandoned)));
+        assert!(matches!(ctx.take_mirror_state(), Some(MirrorState::Abandoned)));
         assert!(cancel_rx.await.is_ok(), "abandonment must cancel the HTTP send future");
     }
 
@@ -190,12 +190,12 @@ mod tests {
     async fn complete_body_closes_mirror_without_cancelling() {
         let (state, cancel_rx, _reason) = streaming_state();
         let mut ctx = EdgionHttpContext::default();
-        ctx.mirror_state = Some(state);
+        ctx.set_mirror_state(state);
         let mut body = None;
 
         mirror_body_tee(&mut body, RequestBodyEvent::Complete, &mut ctx).await;
 
-        assert!(matches!(ctx.mirror_state, Some(MirrorState::Abandoned)));
+        assert!(matches!(ctx.take_mirror_state(), Some(MirrorState::Abandoned)));
         assert!(
             cancel_rx.await.is_err(),
             "a complete body must close the stream normally, not cancel it"
@@ -223,12 +223,12 @@ mod tests {
         // takes the `TrySendError::Closed` arm.
         let (state, cancel_rx, reason) = streaming_state();
         let mut ctx = EdgionHttpContext::default();
-        ctx.mirror_state = Some(state);
+        ctx.set_mirror_state(state);
         let mut body = Some(Bytes::from_static(b"partial chunk"));
 
         mirror_body_tee(&mut body, RequestBodyEvent::Data, &mut ctx).await;
 
-        assert!(matches!(ctx.mirror_state, Some(MirrorState::Abandoned)));
+        assert!(matches!(ctx.take_mirror_state(), Some(MirrorState::Abandoned)));
         assert!(
             cancel_rx.await.is_err(),
             "a closed body channel must disarm the guard (sender dropped, no signal), not cancel it: \
@@ -249,7 +249,7 @@ mod tests {
         abandon_request_mirror(&mut ctx, MirrorAbandonReason::BodyAbandoned);
 
         assert!(
-            ctx.mirror_state.is_none(),
+            !ctx.has_mirror_state(),
             "a request with no mirror must not acquire an abandoned mirror sentinel"
         );
     }

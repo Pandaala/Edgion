@@ -14,7 +14,6 @@ use crate::{
     terminate_with_fallback,
 };
 use crate::{EdgionHttpContext, TlsConnId, TlsConnMeta};
-use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::path_normalization::get_path_normalization_config;
 use edgion_resources::path_normalization::{
     contains_escaped_slash, has_invalid_percent_encoding, normalize_path, PathNormalizationConfig,
@@ -126,14 +125,12 @@ pub async fn request_filter(
     // Capture HTTPRoute ExtensionRefs before preflight so preflight ownership
     // and every later plugin stage observe one request-coherent generation.
     // GRPCRoute keeps its existing post-preflight capture timing.
-    if ctx.route_unit.is_some() && ctx.resolved_route_ext_refs.is_none() {
+    if let Some(route_unit) = ctx.route_unit.as_ref() {
         let plugin_store = get_global_plugin_store();
-        let keys = ctx
-            .route_unit
-            .as_ref()
-            .map(|unit| unit.plugin_runtime.ext_ref_keys())
-            .unwrap_or_default();
-        ctx.resolved_route_ext_refs = Some(Arc::new(resolve_route_ext_refs(&plugin_store, keys)));
+        let keys = route_unit.plugin_runtime.ext_ref_keys();
+        if !keys.is_empty() {
+            ctx.install_resolved_route_ext_refs(resolve_route_ext_refs(&plugin_store, keys));
+        }
     }
 
     // Step 1.5: Handle preflight requests (before plugin execution)
@@ -150,13 +147,11 @@ pub async fn request_filter(
         if !has_native_cors {
             // Get CORS config dynamically from matched route's EdgionPlugins
             // This ensures we always get the latest config even if EdgionPlugin is updated
+            let route_ext_refs = ctx.resolved_route_ext_refs();
             let cors_config = if let Some(ref route_unit) = ctx.route_unit {
                 extract_cors_config_from_route_filters(
                     &route_unit.rule.filters,
-                    ctx.resolved_route_ext_refs
-                        .as_deref()
-                        .map(Vec::as_slice)
-                        .unwrap_or_default(),
+                    route_ext_refs.as_deref().unwrap_or_default(),
                 )
             } else if let Some(_grpc_route_unit) = &ctx.grpc_route_unit {
                 // gRPC routes don't have CORS config yet, so None
@@ -183,57 +178,43 @@ pub async fn request_filter(
         }
     }
 
-    // Per-request resolve: populate ctx.resolved_* once here; later stages read
+    // Per-request resolve: populate the lazy plugin state once here; later stages read
     // directly without paying any format!() / store-lookup cost.
     // Fetch the global plugin store once and share &PluginStore across both
     // resolve calls to avoid redundant Arc::clone on the hot path.
-    if ctx.resolved_global_plugins.is_none()
-        || ctx.resolved_gateway_plugins.is_none()
-        || ctx.resolved_route_ext_refs.is_none()
-    {
-        let plugin_store = get_global_plugin_store();
+    let plugin_store = get_global_plugin_store();
+    let global_plugins = resolve_global_plugins(
+        &plugin_store,
+        edgion_http.edgion_gateway_config.spec.global_plugins_ref.as_deref(),
+    );
+    ctx.install_resolved_global_plugins(global_plugins);
 
-        if ctx.resolved_global_plugins.is_none() {
-            let resolved = resolve_global_plugins(
-                &plugin_store,
-                edgion_http.edgion_gateway_config.spec.global_plugins_ref.as_deref(),
-            );
-            ctx.resolved_global_plugins = Some(Arc::new(resolved));
-        }
-
-        if ctx.resolved_route_ext_refs.is_none() {
-            let resolved = match (&ctx.route_unit, &ctx.grpc_route_unit) {
-                (Some(unit), _) => resolve_route_ext_refs(&plugin_store, unit.plugin_runtime.ext_ref_keys()),
-                (_, Some(unit)) => resolve_route_ext_refs(&plugin_store, unit.plugin_runtime.ext_ref_keys()),
-                _ => Vec::new(),
-            };
-            ctx.resolved_route_ext_refs = Some(Arc::new(resolved));
-        }
-
-        if ctx.resolved_gateway_plugins.is_none() {
-            let gateway_plugin_keys = ctx
-                .gateway_info
-                .as_deref()
-                .map(|info| info.plugin_store_keys.as_slice())
-                .unwrap_or_default();
-            let resolved = resolve_gateway_plugins(&plugin_store, gateway_plugin_keys);
-            ctx.resolved_gateway_plugins = Some(Arc::new(resolved));
+    if ctx.resolved_route_ext_refs().is_none() {
+        let keys = ctx
+            .grpc_route_unit
+            .as_ref()
+            .map(|unit| unit.plugin_runtime.ext_ref_keys())
+            .unwrap_or_default();
+        if !keys.is_empty() {
+            ctx.install_resolved_route_ext_refs(resolve_route_ext_refs(&plugin_store, keys));
         }
     }
 
+    let gateway_plugin_keys = ctx
+        .gateway_info
+        .as_deref()
+        .map(|info| info.plugin_store_keys.as_slice())
+        .unwrap_or_default();
+    ctx.install_resolved_gateway_plugins(resolve_gateway_plugins(&plugin_store, gateway_plugin_keys));
+
+    let global_plugins = ctx.resolved_global_plugins();
+    let gateway_plugins = ctx.resolved_gateway_plugins();
+    let route_ext_refs = ctx.resolved_route_ext_refs();
+
     let selected_waf = select_waf_owner(
-        ctx.resolved_global_plugins
-            .as_deref()
-            .map(Vec::as_slice)
-            .unwrap_or_default(),
-        ctx.resolved_gateway_plugins
-            .as_deref()
-            .map(Vec::as_slice)
-            .unwrap_or_default(),
-        ctx.resolved_route_ext_refs
-            .as_deref()
-            .map(Vec::as_slice)
-            .unwrap_or_default(),
+        global_plugins.as_deref().unwrap_or_default(),
+        gateway_plugins.as_deref().unwrap_or_default(),
+        route_ext_refs.as_deref().unwrap_or_default(),
     );
     if !ctx.select_waf(selected_waf) {
         end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
@@ -242,13 +223,13 @@ pub async fn request_filter(
 
     // Step 2: Run global plugins from EdgionGatewayConfig (executed before route-level plugins)
     // Reads the per-request snapshot populated above (zero format!/store cost).
-    if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(Arc::clone) {
+    if let Some(plugins) = global_plugins {
         for runtime in plugins.iter() {
             if runtime.request_plugins_count() == 0 {
                 continue;
             }
             runtime.run_request_plugins(session, ctx).await;
-            if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+            if ctx.plugin_terminated() {
                 let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
                 return Ok(true);
             }
@@ -258,13 +239,13 @@ pub async fn request_filter(
     // Step 2b: Run Gateway-level plugins (edgion.io/edgion-plugins annotation), after
     // GatewayClass-global and before route-level. The snapshot was resolved
     // before WAF winner election above.
-    if let Some(plugins) = ctx.resolved_gateway_plugins.as_ref().map(Arc::clone) {
+    if let Some(plugins) = gateway_plugins {
         for runtime in plugins.iter() {
             if runtime.request_plugins_count() == 0 {
                 continue;
             }
             runtime.run_request_plugins(session, ctx).await;
-            if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+            if ctx.plugin_terminated() {
                 let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
                 return Ok(true);
             }
@@ -274,13 +255,13 @@ pub async fn request_filter(
     // Step 3: Run route-level plugins based on matched route type
     if let Some(grpc_route_unit) = ctx.grpc_route_unit.clone() {
         grpc_route_unit.plugin_runtime.run_request_plugins(session, ctx).await;
-        if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+        if ctx.plugin_terminated() {
             let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
             return Ok(true);
         }
     } else if let Some(route_unit) = ctx.route_unit.clone() {
         route_unit.plugin_runtime.run_request_plugins(session, ctx).await;
-        if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+        if ctx.plugin_terminated() {
             let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
             return Ok(true);
         }

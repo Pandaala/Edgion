@@ -2,9 +2,8 @@
 //! keys, and rule-level ExtensionRefs.
 //!
 //! All helpers are pure: input refs/keys -> output Vec. They are called
-//! from `pg_request_filter` once per request to populate
-//! `ctx.resolved_global_plugins`, `ctx.resolved_gateway_plugins`, and
-//! `ctx.resolved_route_ext_refs`.
+//! from `pg_request_filter` once per request to populate the lazily allocated
+//! plugin-runtime snapshot state.
 //! Dangling references are silently dropped (global/gateway refs) or kept as a
 //! `None` placeholder (ext refs); they are intentionally NOT logged here
 //! because this is the data-plane hot path, where `tracing` is forbidden

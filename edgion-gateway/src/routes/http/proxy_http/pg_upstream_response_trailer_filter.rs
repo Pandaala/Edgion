@@ -2,7 +2,7 @@ use http::HeaderMap;
 use pingora_proxy::Session;
 
 use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
-use crate::plugins::runtime::{PluginLog, StageLogs, UpstreamResponseTrailer, UpstreamTrailerResult};
+use crate::plugins::runtime::{PluginLog, UpstreamResponseTrailer, UpstreamTrailerResult};
 use crate::EdgionHttpContext;
 
 struct TrailerCompanionRunSet {
@@ -81,11 +81,7 @@ pub(crate) async fn dispatch_upstream_response_trailers(
         for companion in run_set.companions.iter_mut().skip(index + 1) {
             companion.on_terminal_preempted("earlier-trailer-fail-close");
         }
-        ctx.stage_logs.push(StageLogs {
-            stage: "upstream_response_trailers",
-            filters: logs,
-            edgion_plugins: std::mem::take(&mut ctx.pending_edgion_plugins_logs),
-        });
+        ctx.finish_plugin_stage("upstream_response_trailers", logs);
         run_set.restore(ctx);
         return Err(pingora_core::Error::explain(
             pingora_core::ErrorType::InternalError,
@@ -93,11 +89,7 @@ pub(crate) async fn dispatch_upstream_response_trailers(
         ));
     }
 
-    ctx.stage_logs.push(StageLogs {
-        stage: "upstream_response_trailers",
-        filters: logs,
-        edgion_plugins: std::mem::take(&mut ctx.pending_edgion_plugins_logs),
-    });
+    ctx.finish_plugin_stage("upstream_response_trailers", logs);
     run_set.restore(ctx);
     Ok(())
 }

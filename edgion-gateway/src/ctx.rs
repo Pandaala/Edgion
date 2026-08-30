@@ -34,6 +34,8 @@ use tokio::task::JoinHandle;
 const PLUGIN_ENTRY_NAME_CAPACITY: usize = crate::plugins::runtime::log::NAME_CAPACITY;
 const PLUGIN_ENTRY_ALIAS_CAPACITY: usize = 32;
 
+pub(crate) type AttachedExtProcMap = HashMap<String, Arc<crate::plugins::http::ext_proc::AttachedExtProc>>;
+
 /// Request-local exactly-once gate for the canonical response-trailer phase.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum UpstreamTrailerLifecycle {
@@ -1562,6 +1564,52 @@ pub(crate) struct DeferredCredentialMutations {
     entries: Vec<DeferredCredentialMutation>,
 }
 
+/// Optional request state shared by native HTTP plugins.
+///
+/// Ordinary requests that do not execute a plugin retain only the nullable
+/// pointer in [`EdgionHttpContext`]. Read-only helpers never instantiate this
+/// state; [`EdgionHttpContext::ensure_plugin_state`] is the sole allocation
+/// boundary.
+struct PluginRequestState {
+    stage_logs: Vec<StageLogs>,
+    pending_edgion_plugins_logs: Vec<EdgionPluginsLog>,
+    running_result: PluginRunningResult,
+    current_entry: Option<CurrentPluginEntryIdentity>,
+    ctx_map: HashMap<String, String>,
+    pending_response_header_ops: Vec<PendingHeaderOp>,
+    deferred_credential_mutations: DeferredCredentialMutations,
+    current_dye_plan: Option<Arc<crate::plugins::runtime::CompiledDyePlan>>,
+    dye_handled_request_names: Vec<String>,
+    mirror_state: Option<MirrorState>,
+    json_schema_validation_claimed: bool,
+    resolved_global_plugins: Option<Arc<[Arc<PluginRuntime>]>>,
+    resolved_gateway_plugins: Option<Arc<[Arc<PluginRuntime>]>>,
+    resolved_route_ext_refs: Option<Arc<[Option<Arc<PluginRuntime>>]>>,
+    resolved_backend_ext_refs: HashMap<String, Option<Arc<PluginRuntime>>>,
+}
+
+impl Default for PluginRequestState {
+    fn default() -> Self {
+        Self {
+            stage_logs: Vec::new(),
+            pending_edgion_plugins_logs: Vec::new(),
+            running_result: PluginRunningResult::Nothing,
+            current_entry: None,
+            ctx_map: HashMap::new(),
+            pending_response_header_ops: Vec::new(),
+            deferred_credential_mutations: DeferredCredentialMutations::default(),
+            current_dye_plan: None,
+            dye_handled_request_names: Vec::new(),
+            mirror_state: None,
+            json_schema_validation_claimed: false,
+            resolved_global_plugins: None,
+            resolved_gateway_plugins: None,
+            resolved_route_ext_refs: None,
+            resolved_backend_ext_refs: HashMap::new(),
+        }
+    }
+}
+
 impl fmt::Debug for DeferredCredentialMutations {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1711,8 +1759,8 @@ pub enum PeerTimeoutSource {
 ///
 /// A denial the response stage cannot express is NOT permission to forward the
 /// upstream response. The runners answer such a plugin result by calling
-/// `set_terminate`, which only writes `ctx.plugin_running_result` — and every
-/// reader of that field is request-stage, so on its own it is a silent ALLOW.
+/// `set_terminate`, which only marks the common plugin request state — and
+/// every reader of that marker is request-stage, so on its own it is a silent ALLOW.
 /// Setting this instead makes the response-stage entry point abort the exchange,
 /// and the abort is raised as `ErrorType::HTTPStatus`, the same mechanism the
 /// retry-budget denial in `upstream_response_filter` already uses: the upstream
@@ -1851,18 +1899,9 @@ pub struct EdgionHttpContext {
     pub backend_context: Option<BackendContext>,
 
     // --- Plugin execution and access-log staging ---
-    /// Stage execution logs (grouped by stage)
-    pub stage_logs: Vec<StageLogs>,
-
-    /// Pending EdgionPlugins logs (collected during current stage, merged at stage end)
-    pub pending_edgion_plugins_logs: Vec<EdgionPluginsLog>,
-
-    /// Plugin running result
-    pub plugin_running_result: PluginRunningResult,
-
-    /// Host-owned identity of the request-stage plugin entry currently being
-    /// invoked. Nested ExtensionRef execution replaces and restores this slot.
-    pub(crate) current_plugin_entry: Option<CurrentPluginEntryIdentity>,
+    /// Lazily allocated common plugin state. No-plugin requests retain only
+    /// this pointer and all read-only projections remain allocation-free.
+    plugin_state: Option<Box<PluginRequestState>>,
 
     /// The sole native WAF state for this request: selected owner, exactly-once
     /// phase claims, transaction, streaming state, timing, and memory charge.
@@ -1903,11 +1942,7 @@ pub struct EdgionHttpContext {
     /// Hash key used for consistent hashing (for test metrics)
     pub hash_key: Option<String>,
 
-    // --- Request-scoped variables, URI, and deferred headers ---
-    /// Context variables map for plugin communication
-    /// Plugins can set values (e.g., KeySet plugin) and conditions can read them
-    pub ctx_map: HashMap<String, String>,
-
+    // --- Request-scoped URI and routing state ---
     /// Composed upstream authority for this request, when the target Service
     /// carries an `upstreamAuthority` policy. Written in `upstream_peer` (which
     /// also sets it as the peer SNI) and read in `upstream_request_filter`, which
@@ -1951,50 +1986,7 @@ pub struct EdgionHttpContext {
     ///   - mirror / fan-out consumers see consistent `req_header.uri`
     pub uri_finalized: bool,
 
-    /// Response-header mutations queued by plugins running before the real
-    /// `ResponseHeader` is available (typically request stage). Drained onto
-    /// the real `ResponseHeader` at four sites:
-    ///   1. `upstream_response_filter` (Phase 6) — applied NON-DESTRUCTIVELY via
-    ///      `apply_pending_response_header_ops` before any response-stage plugin
-    ///      runs, so they can further mutate the already-merged headers. The queue
-    ///      is left intact so a subsequent response-phase local reply can re-apply
-    ///      the ops onto its fresh header (filter-04c).
-    ///   2. `ErrResponse` request-stage termination handler (HTTP route) —
-    ///      applied after runtime defaults (`content-type: text/plain`,
-    ///      `content-length`) so plugin Set ops override defaults. The gRPC
-    ///      branch dispatches to `send_grpc_error_direct` instead and lets
-    ///      that site handle the drain; on that branch the user-provided
-    ///      `body` is forwarded as the `grpc-message` trailer (with the
-    ///      `http_to_grpc_status` default message as fallback when `body`
-    ///      is `None`).
-    ///   3. `send_grpc_error_direct` — applied before re-asserting
-    ///      `content-type: application/grpc` so the gRPC contract value
-    ///      cannot be overwritten by a queued Set.
-    ///   4. `send_grpc_trailers_only` — same single-frame Trailers-Only pattern
-    ///      as (3), reached when a plugin calls `write_response_header` directly
-    ///      with a non-200 status on a gRPC route.
-    ///
-    /// Each entry carries an explicit op (Set/Append/Remove) so semantics
-    /// are preserved across the deferral — without this tag, an `Append`
-    /// would silently degrade to `Set` at drain time.
-    pub pending_response_header_ops: Vec<PendingHeaderOp>,
-
-    /// Credential headers selected by request-stage declaration order. Values
-    /// are materialized only onto attempt-local upstream headers.
-    pub(crate) deferred_credential_mutations: DeferredCredentialMutations,
-
-    // --- Dye tracing, mirroring, and optional route state ---
-    /// Dye plan of the plugin entry currently being invoked (installed by the
-    /// stage loops before each invocation, overwritten per invocation).
-    /// Arc so the adapter lifts it out before iterating (render mutates ctx).
-    pub current_dye_plan: Option<Arc<crate::plugins::runtime::CompiledDyePlan>>,
-    /// Request-direction dye names already handled this request (client value
-    /// stripped once; gateway-rendered values are never re-stripped).
-    pub dye_handled_request_names: Vec<String>,
-
-    /// Per-request mirror state for RequestMirror plugin.
-    pub mirror_state: Option<MirrorState>,
-
+    // --- Optional route state ---
     /// Lazily allocated state for routes that enable session persistence.
     /// Ordinary routes retain only this nullable pointer.
     pub(crate) session_persistence: Option<Box<SessionPersistenceContext>>,
@@ -2053,61 +2045,6 @@ pub struct EdgionHttpContext {
     /// registers; it never owns or replays body bytes.
     pub(crate) request_body_observers: Option<Box<crate::request_body::observer::RequestBodyObservers>>,
 
-    /// First-write-wins request-chain guard for JSON Schema validation.
-    ///
-    /// A request may compose plugins from global, Gateway, Route, and BackendRef
-    /// sources even though each individual EdgionPlugins resource permits only
-    /// one validator. The first validator that actually runs claims this slot;
-    /// a second validator fails closed before materializing or parsing JSON.
-    pub(crate) json_schema_validation_claimed: bool,
-
-    // --- Per-request plugin runtime snapshots ---
-    /// Snapshot of resolved global plugin runtimes for this request, taken at
-    /// `request_filter` entry. Each entry is one EdgionPlugins resource;
-    /// per-stage bucketing is handled by `PluginRuntime`'s internal stage Vecs.
-    /// `None` until resolve runs; `Some` with empty Vec if config has no
-    /// `global_plugins_ref` or all refs are dangling.
-    ///
-    /// Populated by `pg_request_filter` (early stage), read by:
-    ///   - Step-2 global iteration in `pg_request_filter`
-    ///   - global iteration in `pg_upstream_response_filter` (sync)
-    ///   - global iteration in `pg_upstream_response_body_filter` (per-chunk hot path)
-    ///   - global iteration in `pg_response_filter` (async)
-    ///
-    /// `Arc<Vec<...>>` lets call sites `Arc::clone` once to release the borrow on
-    /// `ctx` before iterating, avoiding `&ctx` / `&mut ctx` conflicts when running
-    /// plugins.
-    pub resolved_global_plugins: Option<Arc<Vec<Arc<PluginRuntime>>>>,
-
-    /// Snapshot of resolved Gateway-level plugin runtimes for this request (from the
-    /// `edgion.io/edgion-plugins` annotation on the matched Gateway). Runs after
-    /// GatewayClass-wide global plugins and before route-level plugins. `None` until
-    /// resolve runs; `Some` with empty Vec when the Gateway has no annotation or all
-    /// refs dangle.
-    ///
-    /// Populated by `pg_request_filter` Step 2b; read by response stages (inner→outer
-    /// order: route-level → Gateway-level → GatewayClass-global).
-    pub resolved_gateway_plugins: Option<Arc<Vec<Arc<PluginRuntime>>>>,
-
-    /// Resolved targets of every ExtensionRef in the matched route's filter list,
-    /// indexed by `ExtensionRefFilter.index` (assigned at route build time by
-    /// `PluginRuntime::from_httproute_filters_for_rule` /
-    /// `from_grpcroute_filters_for_rule`).
-    ///
-    /// Slot value `None` = dangling ref (target not in plugin store at resolve
-    /// time); the slot is preserved so the index continues to align with
-    /// `ExtensionRefFilter.index`.
-    /// Outer `None` = resolve has not run yet.
-    ///
-    /// Populated by `pg_request_filter`, read by `ExtensionRefFilter::prepare_execution`
-    /// via `PluginSession::resolved_route_ext_ref(index)`.
-    pub resolved_route_ext_refs: Option<Arc<Vec<Option<Arc<PluginRuntime>>>>>,
-
-    /// First-observed backend-scope ExtensionRef runtime per `namespace/name`.
-    /// `None` values are cached too, so a dangling ref cannot become available
-    /// halfway through one logical request after a PluginStore update.
-    pub(crate) resolved_backend_ext_refs: HashMap<String, Option<Arc<PluginRuntime>>>,
-
     // --- Lazily allocated AI exchange state ---
     /// Lazily allocated AI-only request, attempt, response, and accounting
     /// state. Ordinary HTTP requests retain only this nullable pointer.
@@ -2160,8 +2097,7 @@ pub struct EdgionHttpContext {
     /// Request-scoped ExtProc transactions keyed by the compiled request-entry
     /// identity. The request filter and its internal response companion share
     /// these owners; targets are never used as transaction identity.
-    pub attached_ext_proc:
-        std::collections::HashMap<String, std::sync::Arc<crate::plugins::http::ext_proc::AttachedExtProc>>,
+    pub attached_ext_proc: AttachedExtProcMap,
 
     /// Early framing reservations for attached processors that may mutate the
     /// final response body before their concrete processor is installed.
@@ -2220,6 +2156,275 @@ impl Default for EdgionHttpContext {
 }
 
 impl EdgionHttpContext {
+    #[inline]
+    fn plugin_state(&self) -> Option<&PluginRequestState> {
+        self.plugin_state.as_deref()
+    }
+
+    #[inline]
+    fn plugin_state_mut(&mut self) -> Option<&mut PluginRequestState> {
+        self.plugin_state.as_deref_mut()
+    }
+
+    #[inline]
+    fn ensure_plugin_state(&mut self) -> &mut PluginRequestState {
+        self.plugin_state
+            .get_or_insert_with(|| Box::new(PluginRequestState::default()))
+            .as_mut()
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn has_plugin_state(&self) -> bool {
+        self.plugin_state.is_some()
+    }
+
+    #[inline]
+    pub(crate) fn stage_logs(&self) -> &[StageLogs] {
+        self.plugin_state().map_or(&[], |state| state.stage_logs.as_slice())
+    }
+
+    #[inline]
+    pub(crate) fn stage_logs_mut(&mut self) -> Option<&mut Vec<StageLogs>> {
+        self.plugin_state_mut().map(|state| &mut state.stage_logs)
+    }
+
+    pub(crate) fn stage_logs_and_attached_ext_proc(&mut self) -> Option<(&mut Vec<StageLogs>, &AttachedExtProcMap)> {
+        let Self {
+            plugin_state,
+            attached_ext_proc,
+            ..
+        } = self;
+        Some((&mut plugin_state.as_deref_mut()?.stage_logs, attached_ext_proc))
+    }
+
+    #[inline]
+    pub(crate) fn push_stage_log(&mut self, log: StageLogs) {
+        self.ensure_plugin_state().stage_logs.push(log);
+    }
+
+    pub(crate) fn finish_plugin_stage(&mut self, stage: &'static str, filters: Vec<crate::plugins::PluginLog>) {
+        let state = self.ensure_plugin_state();
+        state.stage_logs.push(StageLogs {
+            stage,
+            filters,
+            edgion_plugins: std::mem::take(&mut state.pending_edgion_plugins_logs),
+        });
+    }
+
+    #[inline]
+    pub(crate) fn push_pending_edgion_plugins_log(&mut self, log: EdgionPluginsLog) {
+        self.ensure_plugin_state().pending_edgion_plugins_logs.push(log);
+    }
+
+    #[inline]
+    pub(crate) fn start_pending_edgion_plugins_log(&mut self, name: String) -> usize {
+        let state = self.ensure_plugin_state();
+        let idx = state.pending_edgion_plugins_logs.len();
+        state
+            .pending_edgion_plugins_logs
+            .push(EdgionPluginsLog { name, logs: Vec::new() });
+        idx
+    }
+
+    #[inline]
+    pub(crate) fn pending_edgion_plugins_log_mut(&mut self, index: usize) -> Option<&mut EdgionPluginsLog> {
+        self.plugin_state_mut()?.pending_edgion_plugins_logs.get_mut(index)
+    }
+
+    #[inline]
+    pub(crate) fn plugin_terminated(&self) -> bool {
+        self.plugin_state()
+            .is_some_and(|state| state.running_result == PluginRunningResult::ErrTerminateRequest)
+    }
+
+    #[inline]
+    pub(crate) fn terminate_plugin_execution(&mut self) {
+        self.ensure_plugin_state().running_result = PluginRunningResult::ErrTerminateRequest;
+    }
+
+    #[inline]
+    pub(crate) fn replace_plugin_entry_identity(
+        &mut self,
+        identity: Option<CurrentPluginEntryIdentity>,
+    ) -> Option<CurrentPluginEntryIdentity> {
+        if identity.is_none() && self.plugin_state.is_none() {
+            return None;
+        }
+        std::mem::replace(&mut self.ensure_plugin_state().current_entry, identity)
+    }
+
+    #[inline]
+    pub(crate) fn current_plugin_entry_identity(&self) -> Option<CurrentPluginEntryIdentity> {
+        self.plugin_state().and_then(|state| state.current_entry)
+    }
+
+    #[inline]
+    pub(crate) fn queue_pending_response_header_op(&mut self, op: PendingHeaderOp) {
+        self.ensure_plugin_state().pending_response_header_ops.push(op);
+    }
+
+    #[inline]
+    pub(crate) fn has_pending_response_header_ops(&self) -> bool {
+        self.plugin_state()
+            .is_some_and(|state| !state.pending_response_header_ops.is_empty())
+    }
+
+    #[inline]
+    pub(crate) fn pending_response_header_ops(&self) -> &[PendingHeaderOp] {
+        self.plugin_state()
+            .map_or(&[], |state| state.pending_response_header_ops.as_slice())
+    }
+
+    #[inline]
+    pub(crate) fn deferred_credential_mutations(&self) -> Option<&DeferredCredentialMutations> {
+        self.plugin_state().map(|state| &state.deferred_credential_mutations)
+    }
+
+    #[inline]
+    pub(crate) fn deferred_credentials_all_unexpired(&self, now: std::time::Instant) -> bool {
+        self.deferred_credential_mutations()
+            .is_none_or(|mutations| mutations.all_unexpired(now))
+    }
+
+    #[inline]
+    pub(crate) fn apply_deferred_credentials(&self, request: &mut pingora_http::RequestHeader) -> Result<(), ()> {
+        self.deferred_credential_mutations()
+            .map_or(Ok(()), |mutations| mutations.apply(request))
+    }
+
+    #[inline]
+    pub(crate) fn remove_deferred_credential_mutation(&mut self, name: &str) {
+        if let Some(state) = self.plugin_state_mut() {
+            state.deferred_credential_mutations.remove(name);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn upsert_deferred_credential_mutation(
+        &mut self,
+        name: http::HeaderName,
+        value: Arc<http::HeaderValue>,
+        valid_until: Option<std::time::Instant>,
+    ) {
+        self.ensure_plugin_state()
+            .deferred_credential_mutations
+            .upsert(name, value, valid_until);
+    }
+
+    #[inline]
+    pub(crate) fn install_current_dye_plan(&mut self, plan: Option<Arc<crate::plugins::runtime::CompiledDyePlan>>) {
+        if plan.is_none() && self.plugin_state.is_none() {
+            return;
+        }
+        self.ensure_plugin_state().current_dye_plan = plan;
+    }
+
+    #[inline]
+    pub(crate) fn current_dye_plan(&self) -> Option<Arc<crate::plugins::runtime::CompiledDyePlan>> {
+        self.plugin_state()
+            .and_then(|state| state.current_dye_plan.as_ref().map(Arc::clone))
+    }
+
+    #[inline]
+    pub(crate) fn take_dye_handled_request_names(&mut self) -> Vec<String> {
+        self.plugin_state_mut()
+            .map_or_else(Vec::new, |state| std::mem::take(&mut state.dye_handled_request_names))
+    }
+
+    #[inline]
+    pub(crate) fn restore_dye_handled_request_names(&mut self, names: Vec<String>) {
+        if names.is_empty() && self.plugin_state.is_none() {
+            return;
+        }
+        self.ensure_plugin_state().dye_handled_request_names = names;
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn dye_handled_request_names(&self) -> &[String] {
+        self.plugin_state()
+            .map_or(&[], |state| state.dye_handled_request_names.as_slice())
+    }
+
+    #[inline]
+    pub(crate) fn has_mirror_state(&self) -> bool {
+        self.plugin_state().is_some_and(|state| state.mirror_state.is_some())
+    }
+
+    #[inline]
+    pub(crate) fn take_mirror_state(&mut self) -> Option<MirrorState> {
+        self.plugin_state_mut()?.mirror_state.take()
+    }
+
+    #[inline]
+    pub(crate) fn set_mirror_state(&mut self, state: MirrorState) {
+        self.ensure_plugin_state().mirror_state = Some(state);
+    }
+
+    #[inline]
+    pub(crate) fn install_resolved_global_plugins(&mut self, plugins: Vec<Arc<PluginRuntime>>) {
+        if !plugins.is_empty() {
+            self.ensure_plugin_state().resolved_global_plugins = Some(Arc::from(plugins));
+        }
+    }
+
+    #[inline]
+    pub(crate) fn resolved_global_plugins(&self) -> Option<Arc<[Arc<PluginRuntime>]>> {
+        self.plugin_state()
+            .and_then(|state| state.resolved_global_plugins.as_ref().map(Arc::clone))
+    }
+
+    #[inline]
+    pub(crate) fn install_resolved_gateway_plugins(&mut self, plugins: Vec<Arc<PluginRuntime>>) {
+        if !plugins.is_empty() {
+            self.ensure_plugin_state().resolved_gateway_plugins = Some(Arc::from(plugins));
+        }
+    }
+
+    #[inline]
+    pub(crate) fn resolved_gateway_plugins(&self) -> Option<Arc<[Arc<PluginRuntime>]>> {
+        self.plugin_state()
+            .and_then(|state| state.resolved_gateway_plugins.as_ref().map(Arc::clone))
+    }
+
+    #[inline]
+    pub(crate) fn install_resolved_route_ext_refs(&mut self, plugins: Vec<Option<Arc<PluginRuntime>>>) {
+        if !plugins.is_empty() {
+            self.ensure_plugin_state().resolved_route_ext_refs = Some(Arc::from(plugins));
+        }
+    }
+
+    #[inline]
+    pub(crate) fn resolved_route_ext_refs(&self) -> Option<Arc<[Option<Arc<PluginRuntime>>]>> {
+        self.plugin_state()
+            .and_then(|state| state.resolved_route_ext_refs.as_ref().map(Arc::clone))
+    }
+
+    #[inline]
+    pub(crate) fn resolved_route_ext_ref(&self, index: usize) -> Option<Arc<PluginRuntime>> {
+        self.plugin_state()?
+            .resolved_route_ext_refs
+            .as_ref()?
+            .get(index)?
+            .as_ref()
+            .map(Arc::clone)
+    }
+
+    pub(crate) fn pinned_backend_ext_ref(
+        &mut self,
+        key: &str,
+        resolve: impl FnOnce() -> Option<Arc<PluginRuntime>>,
+    ) -> Option<Arc<PluginRuntime>> {
+        let cache = &mut self.ensure_plugin_state().resolved_backend_ext_refs;
+        if let Some(runtime) = cache.get(key) {
+            return runtime.as_ref().map(Arc::clone);
+        }
+        let runtime = resolve();
+        cache.insert(key.to_string(), runtime.as_ref().map(Arc::clone));
+        runtime
+    }
+
     pub async fn replace_request_body_slice(
         &mut self,
         range: std::ops::Range<usize>,
@@ -2239,10 +2444,13 @@ impl EdgionHttpContext {
     ///
     /// Returns `true` only to the first caller.
     pub(crate) fn claim_json_schema_validation(&mut self) -> bool {
-        if self.json_schema_validation_claimed {
+        if self
+            .plugin_state()
+            .is_some_and(|state| state.json_schema_validation_claimed)
+        {
             false
         } else {
-            self.json_schema_validation_claimed = true;
+            self.ensure_plugin_state().json_schema_validation_claimed = true;
             true
         }
     }
@@ -2362,10 +2570,10 @@ impl EdgionHttpContext {
     /// from drain points: upstream-response stage and request-stage termination
     /// paths that build their own response (ErrResponse, gRPC errors).
     pub fn drain_pending_response_header_ops(&mut self, response_header: &mut ResponseHeader) {
-        if self.pending_response_header_ops.is_empty() {
+        let Some(state) = self.plugin_state_mut() else {
             return;
-        }
-        let ops = std::mem::take(&mut self.pending_response_header_ops);
+        };
+        let ops = std::mem::take(&mut state.pending_response_header_ops);
         for op in ops {
             op.apply(response_header);
         }
@@ -2383,7 +2591,7 @@ impl EdgionHttpContext {
     /// observe the merged headers (the semantic the former in-runner pre-drain
     /// provided).
     pub fn apply_pending_response_header_ops(&self, response_header: &mut ResponseHeader) {
-        for op in &self.pending_response_header_ops {
+        for op in self.pending_response_header_ops() {
             op.clone().apply(response_header);
         }
     }
@@ -2400,10 +2608,7 @@ impl EdgionHttpContext {
             selected_grpc_backend: None,
             is_grpc_route_matched: false,
             backend_context: None,
-            stage_logs: Vec::new(),
-            pending_edgion_plugins_logs: Vec::new(),
-            plugin_running_result: PluginRunningResult::Nothing,
-            current_plugin_entry: None,
+            plugin_state: None,
             waf: None,
             waf_selection_complete: false,
             try_cnt: 0,
@@ -2411,17 +2616,11 @@ impl EdgionHttpContext {
             peer_timeout_source: None,
             upstream_start_time: None,
             hash_key: None,
-            ctx_map: HashMap::new(),
             upstream_authority: None,
             path_params: None,
             cached_query_cell: std::sync::OnceLock::new(),
             jump: None,
             uri_finalized: false,
-            pending_response_header_ops: Vec::new(),
-            deferred_credential_mutations: DeferredCredentialMutations::default(),
-            current_dye_plan: None,
-            dye_handled_request_names: Vec::new(),
-            mirror_state: None,
             session_persistence: None,
             allow_loopback_upstream: false,
             request_body_config: crate::request_body::ResolvedRequestBodyConfig::default(),
@@ -2430,11 +2629,6 @@ impl EdgionHttpContext {
             request_body_stream: Vec::new(),
             request_body_stream_active: false,
             request_body_observers: None,
-            json_schema_validation_claimed: false,
-            resolved_global_plugins: None,
-            resolved_gateway_plugins: None,
-            resolved_route_ext_refs: None,
-            resolved_backend_ext_refs: HashMap::new(),
             ai_state: None,
             active_response_processor_slot: None,
             response_terminal_state: ResponseTerminalState::Open,
@@ -2882,17 +3076,17 @@ impl EdgionHttpContext {
 
     /// Get a context variable by key
     pub fn get_ctx_var(&self, key: &str) -> Option<&str> {
-        self.ctx_map.get(key).map(|s| s.as_str())
+        self.plugin_state()?.ctx_map.get(key).map(String::as_str)
     }
 
     /// Set a context variable (for plugins like KeySet)
     pub fn set_ctx_var(&mut self, key: String, value: String) {
-        self.ctx_map.insert(key, value);
+        self.ensure_plugin_state().ctx_map.insert(key, value);
     }
 
     /// Remove a context variable
     pub fn remove_ctx_var(&mut self, key: &str) -> Option<String> {
-        self.ctx_map.remove(key)
+        self.plugin_state_mut()?.ctx_map.remove(key)
     }
 
     // ===== URI/path canonical accessors =====
@@ -3700,6 +3894,90 @@ mod json_schema_validation_claim_tests {
 }
 
 #[cfg(test)]
+mod plugin_request_state_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_context_keeps_plugin_state_unallocated_on_reads() {
+        let mut ctx = EdgionHttpContext::new();
+        let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            assert!(!ctx.has_plugin_state());
+            assert!(ctx.stage_logs().is_empty());
+            assert!(!ctx.plugin_terminated());
+            assert!(ctx.get_ctx_var("missing").is_none());
+            assert!(!ctx.has_pending_response_header_ops());
+            assert!(ctx.pending_response_header_ops().is_empty());
+            assert!(ctx.current_dye_plan().is_none());
+            assert!(!ctx.has_mirror_state());
+            assert!(ctx.resolved_global_plugins().is_none());
+            assert!(ctx.resolved_gateway_plugins().is_none());
+            assert!(ctx.resolved_route_ext_refs().is_none());
+            assert!(ctx.take_mirror_state().is_none());
+        });
+
+        assert!(!ctx.has_plugin_state());
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
+    }
+
+    #[test]
+    fn first_plugin_write_allocates_one_state_box_and_later_scalar_writes_reuse_it() {
+        let mut ctx = EdgionHttpContext::new();
+        let (_, first) = crate::test_allocation_counter::count_allocation_stats(|| {
+            ctx.terminate_plugin_execution();
+        });
+        assert!(ctx.has_plugin_state());
+        assert!(ctx.plugin_terminated());
+        assert_eq!(first.calls, 1);
+
+        let (_, later) = crate::test_allocation_counter::count_allocation_stats(|| {
+            ctx.terminate_plugin_execution();
+            assert!(ctx.plugin_terminated());
+        });
+        assert_eq!(later.calls, 0);
+        assert_eq!(later.requested_bytes, 0);
+    }
+
+    #[test]
+    fn empty_runtime_snapshots_do_not_instantiate_plugin_state() {
+        let mut ctx = EdgionHttpContext::new();
+        let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            ctx.install_resolved_global_plugins(Vec::new());
+            ctx.install_resolved_gateway_plugins(Vec::new());
+            ctx.install_resolved_route_ext_refs(Vec::new());
+        });
+
+        assert!(!ctx.has_plugin_state());
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
+    }
+
+    #[test]
+    fn dangling_route_and_backend_refs_remain_request_pinned() {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.install_resolved_route_ext_refs(vec![None]);
+        assert!(ctx.has_plugin_state());
+        assert_eq!(ctx.resolved_route_ext_refs().unwrap().len(), 1);
+        assert!(ctx.resolved_route_ext_ref(0).is_none());
+
+        let mut resolve_calls = 0;
+        assert!(ctx
+            .pinned_backend_ext_ref("default/missing", || {
+                resolve_calls += 1;
+                None
+            })
+            .is_none());
+        assert!(ctx
+            .pinned_backend_ext_ref("default/missing", || {
+                resolve_calls += 1;
+                None
+            })
+            .is_none());
+        assert_eq!(resolve_calls, 1);
+    }
+}
+
+#[cfg(test)]
 mod session_persistence_context_tests {
     use super::*;
 
@@ -3775,7 +4053,7 @@ mod ai_context_claim_tests {
     #[test]
     fn ordinary_context_size_stays_within_budget() {
         assert!(
-            std::mem::size_of::<EdgionHttpContext>() <= 1640,
+            std::mem::size_of::<EdgionHttpContext>() <= 1248,
             "EdgionHttpContext grew beyond the ordinary-request hot-path size budget"
         );
     }
@@ -3785,7 +4063,7 @@ mod ai_context_claim_tests {
     fn ordinary_context_construction_is_allocation_free() {
         let (ctx, allocations) = crate::test_allocation_counter::count_allocation_stats(EdgionHttpContext::new);
 
-        assert_eq!(std::mem::size_of_val(&ctx), 1592);
+        assert_eq!(std::mem::size_of_val(&ctx), 1200);
         assert!(ctx.gateway_info.is_none());
         assert_eq!(allocations.calls, 0);
         assert_eq!(allocations.requested_bytes, 0);

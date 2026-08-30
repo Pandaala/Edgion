@@ -50,17 +50,16 @@ pub async fn upstream_request_filter(
 
     sync_body_framing_headers(upstream_request, ctx)?;
 
-    validate_deferred_credential_connection(upstream_request, &ctx.deferred_credential_mutations).map_err(|_| {
-        pingora_core::Error::explain(
-            pingora_core::ErrorType::InternalError,
-            "deferred credential target conflicts with Connection header",
-        )
-    })?;
+    if let Some(mutations) = ctx.deferred_credential_mutations() {
+        validate_deferred_credential_connection(upstream_request, mutations).map_err(|_| {
+            pingora_core::Error::explain(
+                pingora_core::ErrorType::InternalError,
+                "deferred credential target conflicts with Connection header",
+            )
+        })?;
+    }
 
-    if !ctx
-        .deferred_credential_mutations
-        .all_unexpired(std::time::Instant::now())
-    {
+    if !ctx.deferred_credentials_all_unexpired(std::time::Instant::now()) {
         ctx.record_error(edgion_resources::EdgionErrorCode::CredentialExpired);
         return Err(pingora_core::Error::explain(
             pingora_core::ErrorType::InternalError,
@@ -68,7 +67,7 @@ pub async fn upstream_request_filter(
         ));
     }
 
-    ctx.deferred_credential_mutations.apply(upstream_request).map_err(|_| {
+    ctx.apply_deferred_credentials(upstream_request).map_err(|_| {
         pingora_core::Error::explain(
             pingora_core::ErrorType::InternalError,
             "failed to apply deferred credential header",

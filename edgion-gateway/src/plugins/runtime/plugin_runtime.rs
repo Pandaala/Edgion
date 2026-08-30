@@ -25,7 +25,7 @@ use super::conditional_filter::{
     ConditionalRequestFilter, ConditionalUpstreamResponse, ConditionalUpstreamResponseBodyFilter,
     ConditionalUpstreamResponseFilter,
 };
-use super::log::{PluginLog, StageLogs};
+use super::log::PluginLog;
 use super::reject_filter::RejectFilter;
 use super::session_adapter::PingoraSessionAdapter;
 use super::traits::{
@@ -1922,11 +1922,7 @@ impl PluginRuntime {
             }
         }
 
-        ctx.stage_logs.push(StageLogs {
-            stage: "request_filters",
-            filters: filter_logs,
-            edgion_plugins: std::mem::take(&mut ctx.pending_edgion_plugins_logs),
-        });
+        ctx.finish_plugin_stage("request_filters", filter_logs);
     }
 
     /// Run upstream_response_filter stage filters (sync)
@@ -1970,11 +1966,7 @@ impl PluginRuntime {
             }
         }
 
-        ctx.stage_logs.push(StageLogs {
-            stage: "upstream_response_filters",
-            filters: filter_logs,
-            edgion_plugins: std::mem::take(&mut ctx.pending_edgion_plugins_logs),
-        });
+        ctx.finish_plugin_stage("upstream_response_filters", filter_logs);
     }
 
     /// Run upstream_response_body_filter stage filters (sync)
@@ -2074,11 +2066,7 @@ impl PluginRuntime {
             }
         }
 
-        ctx.stage_logs.push(StageLogs {
-            stage: "upstream_responses",
-            filters: filter_logs,
-            edgion_plugins: std::mem::take(&mut ctx.pending_edgion_plugins_logs),
-        });
+        ctx.finish_plugin_stage("upstream_responses", filter_logs);
     }
 }
 
@@ -2122,7 +2110,7 @@ pub(crate) fn check_response_stage_terminate(
                 // interim 1xx, or no header bound): the exchange cannot carry a
                 // replacement response, so arm the response-stage abort. Logging
                 // alone would forward the upstream response unmodified — the
-                // runners' `set_terminate` writes `ctx.plugin_running_result`,
+                // runners' `set_terminate` writes the request plugin marker,
                 // which has no response-stage reader. Only tag the gRPC marker
                 // for genuine gRPC routes so it does not mislabel 101/1xx.
                 plugin_log.push_fmt("deny response {}", la![status.to_string().as_str()]);

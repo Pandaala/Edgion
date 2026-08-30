@@ -137,7 +137,7 @@ pub async fn response_filter(
 
     // Gateway-level plugins (response onion: before GatewayClass-global).
     if !response_stage_settled(ctx) {
-        if let Some(plugins) = ctx.resolved_gateway_plugins.as_ref().map(std::sync::Arc::clone) {
+        if let Some(plugins) = ctx.resolved_gateway_plugins() {
             for runtime in plugins.iter() {
                 if response_stage_settled(ctx) {
                     break;
@@ -154,7 +154,7 @@ pub async fn response_filter(
 
     // Run global plugins last (onion: response stages go inner → outer).
     if !response_stage_settled(ctx) {
-        if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(std::sync::Arc::clone) {
+        if let Some(plugins) = ctx.resolved_global_plugins() {
             for runtime in plugins.iter() {
                 if response_stage_settled(ctx) {
                     break;

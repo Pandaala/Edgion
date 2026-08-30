@@ -8,7 +8,6 @@ use crate::routes::http::session_persistence::{sp_extract_token, sp_resolve_targ
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::EdgionHttpContext;
 use edgion_resources::err::EdError;
-use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::EdgionErrorCode;
 use pingora_proxy::Session;
 use std::sync::Arc;
@@ -147,7 +146,7 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     let backend_plugin_runtime = Arc::clone(&backend_ref.plugin_runtime);
     backend_plugin_runtime.run_request_plugins(session, ctx).await;
 
-    if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+    if ctx.plugin_terminated() {
         if !ctx.response_write_started() {
             ctx.record_error(EdgionErrorCode::PluginTerminateWithoutResponse);
         }

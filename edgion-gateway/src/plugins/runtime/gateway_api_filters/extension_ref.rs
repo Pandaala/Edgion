@@ -89,7 +89,7 @@ impl ExtensionRefFilter {
     /// This is the body-stage path: body filters run per chunk and do not
     /// surface PluginLog entries, so calling `start_edgion_plugins_log` here
     /// would push entries that no stage drains, leaking into
-    /// `EdgionHttpContext.pending_edgion_plugins_logs` for the entire request
+    /// the request's pending EdgionPlugins log queue for the entire request
     /// lifetime (one entry per chunk on long streams). This sibling helper
     /// returns just the runtime, with no log side-effects at all.
     fn resolve_runtime_silent(&self, session: &mut dyn PluginSession) -> Option<Arc<PluginRuntime>> {

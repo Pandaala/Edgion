@@ -26,7 +26,6 @@ use crate::{EdgionHttpContext, SessionPersistenceState, UpstreamJumpTarget};
 use bytes::Bytes;
 use edgion_common::dns::resolve;
 use edgion_resources::err::EdError;
-use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::path_normalization::get_path_normalization_config;
 use edgion_resources::EdgionErrorCode;
 use pingora_core::prelude::HttpPeer;
@@ -788,7 +787,7 @@ pub async fn select_http_backend(
 
     let backend_plugin_runtime = Arc::clone(&backend_ref.compiled().plugin_runtime);
     backend_plugin_runtime.run_request_plugins(session, ctx).await;
-    if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+    if ctx.plugin_terminated() {
         let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
         return Err(PingoraError::new(ErrorType::InternalError));
     }

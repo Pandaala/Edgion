@@ -167,7 +167,7 @@ mod tests {
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         let vary_origin_count = ctx
-            .pending_response_header_ops
+            .pending_response_header_ops()
             .iter()
             .filter(|op| {
                 matches!(

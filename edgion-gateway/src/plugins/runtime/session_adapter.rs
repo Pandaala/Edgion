@@ -20,6 +20,7 @@ use crate::request_body::{BodyOperationError, BodyScanResult};
 use crate::runtime::server::{http_to_grpc_status, send_grpc_trailers_only_frame};
 use crate::{EdgionHttpContext, MirrorState, PendingHeaderOp, ResponseStageDenial, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::common::{KeyGet, KeySet};
+#[cfg(test)]
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::sanitize_field_value;
 use edgion_resources::EdgionErrorCode;
@@ -162,24 +163,11 @@ pub(crate) fn strip_request_dye_once_core(
     }
 }
 
-fn pinned_backend_ext_ref_core(
-    cache: &mut std::collections::HashMap<String, Option<Arc<crate::plugins::runtime::PluginRuntime>>>,
-    key: &str,
-    lookup: impl FnOnce() -> Option<Arc<crate::plugins::runtime::PluginRuntime>>,
-) -> Option<Arc<crate::plugins::runtime::PluginRuntime>> {
-    if let Some(runtime) = cache.get(key) {
-        return runtime.as_ref().map(Arc::clone);
-    }
-    let runtime = lookup();
-    cache.insert(key.to_string(), runtime.as_ref().map(Arc::clone));
-    runtime
-}
-
 #[cfg(test)]
 mod backend_ext_ref_pin_tests {
-    use super::pinned_backend_ext_ref_core;
     use crate::plugins::http::{compile_plugins, PluginStore};
     use crate::plugins::runtime::PluginRuntime;
+    use crate::EdgionHttpContext;
     use edgion_resources::resources::EdgionPlugins;
     use std::collections::HashMap;
     use std::collections::HashSet;
@@ -187,17 +175,20 @@ mod backend_ext_ref_pin_tests {
 
     #[test]
     fn pins_present_and_missing_results() {
-        let mut cache = HashMap::new();
+        let mut ctx = EdgionHttpContext::new();
         let runtime = Arc::new(PluginRuntime::new());
-        let first = pinned_backend_ext_ref_core(&mut cache, "ns/present", || Some(Arc::clone(&runtime))).unwrap();
-        let second =
-            pinned_backend_ext_ref_core(&mut cache, "ns/present", || panic!("present entry was reloaded")).unwrap();
+        let first = ctx
+            .pinned_backend_ext_ref("ns/present", || Some(Arc::clone(&runtime)))
+            .unwrap();
+        let second = ctx
+            .pinned_backend_ext_ref("ns/present", || panic!("present entry was reloaded"))
+            .unwrap();
         assert!(Arc::ptr_eq(&first, &second));
 
-        assert!(pinned_backend_ext_ref_core(&mut cache, "ns/missing", || None).is_none());
-        assert!(
-            pinned_backend_ext_ref_core(&mut cache, "ns/missing", || panic!("missing entry was reloaded")).is_none()
-        );
+        assert!(ctx.pinned_backend_ext_ref("ns/missing", || None).is_none());
+        assert!(ctx
+            .pinned_backend_ext_ref("ns/missing", || panic!("missing entry was reloaded"))
+            .is_none());
     }
 
     #[test]
@@ -209,8 +200,10 @@ mod backend_ext_ref_pin_tests {
         initial.insert(key.to_string(), Arc::clone(&generation_a));
         store.update(initial, &HashSet::new());
 
-        let mut request_cache = HashMap::new();
-        let pinned_a = pinned_backend_ext_ref_core(&mut request_cache, key, || store.get_plugin_runtime(key)).unwrap();
+        let mut ctx = EdgionHttpContext::new();
+        let pinned_a = ctx
+            .pinned_backend_ext_ref(key, || store.get_plugin_runtime(key))
+            .unwrap();
         assert!(Arc::ptr_eq(&pinned_a, &generation_a.plugin_runtime));
 
         let generation_b = compile_plugins(&EdgionPlugins::new("credential-provider-b", Default::default()));
@@ -223,8 +216,9 @@ mod backend_ext_ref_pin_tests {
             &generation_b.plugin_runtime
         ));
 
-        let retry_runtime =
-            pinned_backend_ext_ref_core(&mut request_cache, key, || store.get_plugin_runtime(key)).unwrap();
+        let retry_runtime = ctx
+            .pinned_backend_ext_ref(key, || store.get_plugin_runtime(key))
+            .unwrap();
         assert!(Arc::ptr_eq(&retry_runtime, &generation_a.plugin_runtime));
         assert!(!Arc::ptr_eq(&retry_runtime, &generation_b.plugin_runtime));
     }
@@ -329,7 +323,7 @@ impl<'a> PingoraSessionAdapter<'a> {
 
     #[inline]
     pub fn set_terminate(&mut self) {
-        self.ctx.plugin_running_result = PluginRunningResult::ErrTerminateRequest;
+        self.ctx.terminate_plugin_execution();
     }
 
     async fn ensure_bodyless_request_replay_owner(&mut self) -> Result<(), BodyReadError> {
@@ -956,7 +950,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             return Ok(());
         }
         let mut resp = resp;
-        if !self.ctx.pending_response_header_ops.is_empty() {
+        if self.ctx.has_pending_response_header_ops() {
             // Unify: queued response-header ops (dye/record_outcome from
             // fail-close plugins that self-write their response via this
             // method) must land on the first response header that leaves the
@@ -997,7 +991,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             resp.insert_header(name.to_string(), value.to_string())
                 .map_err(|e| Box::new(e) as PluginSessionError)?;
         } else {
-            self.ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
+            self.ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
                 name: name.to_string(),
                 value: value.to_string(),
             });
@@ -1010,7 +1004,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             resp.append_header(name.to_string(), value.to_string())
                 .map_err(|e| Box::new(e) as PluginSessionError)?;
         } else {
-            self.ctx.pending_response_header_ops.push(PendingHeaderOp::Append {
+            self.ctx.queue_pending_response_header_op(PendingHeaderOp::Append {
                 name: name.to_string(),
                 value: value.to_string(),
             });
@@ -1023,8 +1017,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             resp.remove_header(name);
         } else {
             self.ctx
-                .pending_response_header_ops
-                .push(PendingHeaderOp::Remove { name: name.to_string() });
+                .queue_pending_response_header_op(PendingHeaderOp::Remove { name: name.to_string() });
         }
         Ok(())
     }
@@ -1095,7 +1088,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .req_header_mut()
             .insert_header(name.to_string(), value.to_string())
             .map_err(|e| Box::new(e) as PluginSessionError)?;
-        self.ctx.deferred_credential_mutations.remove(name);
+        self.ctx.remove_deferred_credential_mutation(name);
         Ok(())
     }
 
@@ -1106,13 +1099,13 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .req_header_mut()
             .append_header(name.to_string(), value.to_string())
             .map_err(|e| Box::new(e) as PluginSessionError)?;
-        self.ctx.deferred_credential_mutations.remove(name);
+        self.ctx.remove_deferred_credential_mutation(name);
         Ok(())
     }
 
     fn remove_request_header(&mut self, name: &str) -> PluginSessionResult<()> {
         self.inner.req_header_mut().remove_header(name);
-        self.ctx.deferred_credential_mutations.remove(name);
+        self.ctx.remove_deferred_credential_mutation(name);
         Ok(())
     }
 
@@ -1126,7 +1119,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         value: Arc<http::HeaderValue>,
         valid_until: Option<std::time::Instant>,
     ) -> PluginSessionResult<()> {
-        self.ctx.deferred_credential_mutations.upsert(name, value, valid_until);
+        self.ctx.upsert_deferred_credential_mutation(name, value, valid_until);
         Ok(())
     }
 
@@ -1719,34 +1712,25 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn resolved_route_ext_ref(&self, index: usize) -> Option<std::sync::Arc<crate::plugins::runtime::PluginRuntime>> {
-        self.ctx
-            .resolved_route_ext_refs
-            .as_ref()?
-            .get(index)?
-            .as_ref()
-            .map(std::sync::Arc::clone)
+        self.ctx.resolved_route_ext_ref(index)
     }
 
     fn pinned_backend_ext_ref(&mut self, key: &str) -> Option<std::sync::Arc<crate::plugins::runtime::PluginRuntime>> {
-        pinned_backend_ext_ref_core(&mut self.ctx.resolved_backend_ext_refs, key, || {
-            get_global_plugin_store().get_plugin_runtime(key)
-        })
+        self.ctx
+            .pinned_backend_ext_ref(key, || get_global_plugin_store().get_plugin_runtime(key))
     }
 
     fn push_edgion_plugins_log(&mut self, log: EdgionPluginsLog) {
-        self.ctx.pending_edgion_plugins_logs.push(log);
+        self.ctx.push_pending_edgion_plugins_log(log);
     }
 
     fn start_edgion_plugins_log(&mut self, name: String) -> EdgionPluginsLogToken {
-        let idx = self.ctx.pending_edgion_plugins_logs.len();
-        self.ctx
-            .pending_edgion_plugins_logs
-            .push(EdgionPluginsLog { name, logs: Vec::new() });
+        let idx = self.ctx.start_pending_edgion_plugins_log(name);
         EdgionPluginsLogToken::new(idx)
     }
 
     fn push_to_edgion_plugins_log(&mut self, token: &EdgionPluginsLogToken, log: PluginLog) {
-        if let Some(edgion_log) = self.ctx.pending_edgion_plugins_logs.get_mut(token.idx()) {
+        if let Some(edgion_log) = self.ctx.pending_edgion_plugins_log_mut(token.idx()) {
             edgion_log.logs.push(log);
         }
     }
@@ -1808,7 +1792,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_mirror_state(&mut self, state: MirrorState) {
-        self.ctx.mirror_state = Some(state);
+        self.ctx.set_mirror_state(state);
     }
 
     /// Install the dye plan of the plugin entry about to be invoked.
@@ -1819,7 +1803,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     /// iterating its rules while mutating `ctx`.
     #[inline]
     fn install_dye_plan(&mut self, plan: Option<Arc<CompiledDyePlan>>) {
-        self.ctx.current_dye_plan = plan;
+        self.ctx.install_current_dye_plan(plan);
     }
 
     /// Once-per-name anti-spoof strip: remove the client-supplied value of
@@ -1830,12 +1814,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     /// `strip_request_dye_once_core` so it is unit-testable without a full
     /// `Session`.
     fn strip_request_dye_once(&mut self) {
-        let Some(plan) = self.ctx.current_dye_plan.clone() else {
+        let Some(plan) = self.ctx.current_dye_plan() else {
             return;
         };
-        let mut handled = std::mem::take(&mut self.ctx.dye_handled_request_names);
+        let mut handled = self.ctx.take_dye_handled_request_names();
         strip_request_dye_once_core(self.inner.req_header_mut(), &plan, &mut handled);
-        self.ctx.dye_handled_request_names = handled;
+        self.ctx.restore_dye_handled_request_names(handled);
     }
 
     fn request_headers_end_stream(&mut self) -> Option<bool> {
@@ -1847,12 +1831,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn queue_local_reply_header_op(&mut self, op: PendingHeaderOp) -> PluginSessionResult<()> {
-        self.ctx.pending_response_header_ops.push(op);
+        self.ctx.queue_pending_response_header_op(op);
         Ok(())
     }
 
     fn current_dye_plan(&self) -> Option<Arc<CompiledDyePlan>> {
-        self.ctx.current_dye_plan.clone()
+        self.ctx.current_dye_plan()
     }
 
     #[allow(private_interfaces)]
@@ -1860,12 +1844,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         identity: Option<crate::ctx::CurrentPluginEntryIdentity>,
     ) -> Option<crate::ctx::CurrentPluginEntryIdentity> {
-        std::mem::replace(&mut self.ctx.current_plugin_entry, identity)
+        self.ctx.replace_plugin_entry_identity(identity)
     }
 
     #[allow(private_interfaces)]
     fn restore_plugin_entry_identity(&mut self, previous: Option<crate::ctx::CurrentPluginEntryIdentity>) {
-        self.ctx.current_plugin_entry = previous;
+        let _ = self.ctx.replace_plugin_entry_identity(previous);
     }
 
     #[allow(private_interfaces)]
@@ -1888,7 +1872,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         {
             return refuse(factory);
         }
-        let Some(identity) = self.ctx.current_plugin_entry else {
+        let Some(identity) = self.ctx.current_plugin_entry_identity() else {
             return refuse(factory);
         };
         if self
@@ -1945,7 +1929,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn record_outcome(&mut self, outcome: DyeOutcome, value: &str) {
-        let Some(plan) = self.ctx.current_dye_plan.clone() else {
+        let Some(plan) = self.ctx.current_dye_plan() else {
             return;
         };
         // Two explicit loops (request then response) rather than a chained
@@ -2047,11 +2031,11 @@ mod local_reply_tests {
     #[test]
     fn build_drains_queued_ops_then_reasserts_content_length() {
         let mut ctx = EdgionHttpContext::default();
-        ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
+        ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
             name: "content-type".to_string(),
             value: "application/json".to_string(),
         });
-        ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
+        ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
             name: "content-length".to_string(),
             value: "999".to_string(),
         });
@@ -2068,7 +2052,7 @@ mod local_reply_tests {
     #[test]
     fn apply_pending_ops_is_nondestructive_and_applies() {
         let mut ctx = EdgionHttpContext::default();
-        ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
+        ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
             name: "x-foo".to_string(),
             value: "bar".to_string(),
         });
@@ -2077,7 +2061,7 @@ mod local_reply_tests {
         // Applied onto the header...
         assert_eq!(hdr.headers.get("x-foo").unwrap().to_str().unwrap(), "bar");
         // ...but the queue is left intact (non-destructive) for a later local reply.
-        assert_eq!(ctx.pending_response_header_ops.len(), 1);
+        assert_eq!(ctx.pending_response_header_ops().len(), 1);
     }
 
     #[test]
@@ -2089,7 +2073,7 @@ mod local_reply_tests {
         // sync and async local-reply paths preserve the ops, since neither
         // pre-drains the queue.
         let mut ctx = EdgionHttpContext::default();
-        ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
+        ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
             name: "x-foo".to_string(),
             value: "bar".to_string(),
         });
@@ -2099,7 +2083,7 @@ mod local_reply_tests {
         let (reply, _) = ctx.take_pending_response_local_reply().unwrap();
         assert_eq!(reply.headers.get("x-foo").unwrap().to_str().unwrap(), "bar");
         // The builder's destructive drain consumed the queue.
-        assert!(ctx.pending_response_header_ops.is_empty());
+        assert!(!ctx.has_pending_response_header_ops());
     }
 }
 
@@ -2123,12 +2107,12 @@ mod dye_strip_tests {
     /// method runs through the pure `strip_request_dye_once_core` instead —
     /// this is the adapter method's body verbatim, minus the `Session` wrapper.
     fn strip_once(ctx: &mut EdgionHttpContext, req: &mut RequestHeader) {
-        let Some(plan) = ctx.current_dye_plan.clone() else {
+        let Some(plan) = ctx.current_dye_plan() else {
             return;
         };
-        let mut handled = std::mem::take(&mut ctx.dye_handled_request_names);
+        let mut handled = ctx.take_dye_handled_request_names();
         strip_request_dye_once_core(req, &plan, &mut handled);
-        ctx.dye_handled_request_names = handled;
+        ctx.restore_dye_handled_request_names(handled);
     }
 
     #[test]
@@ -2139,10 +2123,10 @@ mod dye_strip_tests {
 
         // Entry A declares X-T: strip removes the client-supplied value and
         // marks the name handled.
-        ctx.current_dye_plan = Some(plan_declaring("X-T"));
+        ctx.install_current_dye_plan(Some(plan_declaring("X-T")));
         strip_once(&mut ctx, &mut req);
         assert!(req.headers.get("X-T").is_none());
-        assert_eq!(ctx.dye_handled_request_names, vec!["X-T".to_string()]);
+        assert_eq!(ctx.dye_handled_request_names(), ["X-T"]);
 
         // Simulate entry A's own plugin rendering its dye value onto the
         // request between the two installs.
@@ -2150,10 +2134,10 @@ mod dye_strip_tests {
 
         // Entry B also declares X-T: no second strip — the gateway-rendered
         // value from entry A survives, and the handled list is not duplicated.
-        ctx.current_dye_plan = Some(plan_declaring("X-T"));
+        ctx.install_current_dye_plan(Some(plan_declaring("X-T")));
         strip_once(&mut ctx, &mut req);
         assert_eq!(req.headers.get("X-T").unwrap().to_str().unwrap(), "gateway-rendered");
-        assert_eq!(ctx.dye_handled_request_names, vec!["X-T".to_string()]);
+        assert_eq!(ctx.dye_handled_request_names(), ["X-T"]);
     }
 
     #[test]
@@ -2162,14 +2146,14 @@ mod dye_strip_tests {
         let mut req = RequestHeader::build("GET", b"/", None).unwrap();
         req.insert_header("x-t", "client-forged").unwrap();
 
-        ctx.current_dye_plan = Some(plan_declaring("X-T"));
+        ctx.install_current_dye_plan(Some(plan_declaring("X-T")));
         strip_once(&mut ctx, &mut req);
         assert!(req.headers.get("x-t").is_none());
 
         req.insert_header("X-T", "gateway-rendered").unwrap();
         // A later entry declaring a differently-cased spelling of the same
         // name still matches the already-handled record.
-        ctx.current_dye_plan = Some(plan_declaring("x-t"));
+        ctx.install_current_dye_plan(Some(plan_declaring("x-t")));
         strip_once(&mut ctx, &mut req);
         assert_eq!(req.headers.get("X-T").unwrap().to_str().unwrap(), "gateway-rendered");
     }
@@ -2183,7 +2167,7 @@ mod dye_strip_tests {
         // No plan installed (ctx.current_dye_plan is None): nothing stripped.
         strip_once(&mut ctx, &mut req);
         assert_eq!(req.headers.get("X-T").unwrap().to_str().unwrap(), "client-forged");
-        assert!(ctx.dye_handled_request_names.is_empty());
+        assert!(ctx.dye_handled_request_names().is_empty());
     }
 
     #[test]
@@ -2193,11 +2177,11 @@ mod dye_strip_tests {
         req.insert_header("X-O", "client-forged").unwrap();
 
         let suite: DyeSuite = serde_yaml::from_str("response:\n  - name: X-O\n").unwrap();
-        ctx.current_dye_plan = Some(CompiledDyePlan::compile(&suite, "canary").unwrap());
+        ctx.install_current_dye_plan(Some(CompiledDyePlan::compile(&suite, "canary").unwrap()));
         strip_once(&mut ctx, &mut req);
         // Response-direction rules never drive the request-side strip.
         assert_eq!(req.headers.get("X-O").unwrap().to_str().unwrap(), "client-forged");
-        assert!(ctx.dye_handled_request_names.is_empty());
+        assert!(ctx.dye_handled_request_names().is_empty());
     }
 }
 
@@ -2637,7 +2621,7 @@ mod record_outcome_tests {
         ));
         let (reply, _) = ctx.take_pending_response_local_reply().unwrap();
         assert_eq!(reply.headers.get("x-local").unwrap(), "reply");
-        assert!(ctx.pending_response_header_ops.is_empty());
+        assert!(!ctx.has_pending_response_header_ops());
     }
 
     /// Like `test_session`, but keeps the client half of the duplex pair
@@ -2761,7 +2745,7 @@ mod record_outcome_tests {
     }
 
     fn pending_ops(ctx: &EdgionHttpContext) -> &[PendingHeaderOp] {
-        &ctx.pending_response_header_ops
+        ctx.pending_response_header_ops()
     }
 
     /// `PendingHeaderOp` has no `PartialEq` (nothing else in the codebase
@@ -2791,10 +2775,10 @@ mod record_outcome_tests {
     async fn record_outcome_failure_appends_prefixed_value_to_queue() {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
-        ctx.current_dye_plan = Some(compile_plan(
+        ctx.install_current_dye_plan(Some(compile_plan(
             "response:\n  - name: X-O\n    on: [fail-open]\n",
             "rate_limit_redis",
-        ));
+        )));
 
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         adapter.record_outcome(DyeOutcome::FailOpen, "redis-unreachable");
@@ -2825,7 +2809,7 @@ mod record_outcome_tests {
         let mut ctx = EdgionHttpContext::default();
         // Omitted `on` defaults to [Success]; omitted `value` renders the
         // recorded value (no operator template, no provenance prefix).
-        ctx.current_dye_plan = Some(compile_plan("response:\n  - name: X-O\n", "canary"));
+        ctx.install_current_dye_plan(Some(compile_plan("response:\n  - name: X-O\n", "canary")));
 
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         adapter.record_outcome(DyeOutcome::Success, "app-v1");
@@ -3022,7 +3006,7 @@ mod record_outcome_tests {
         assert_eq!(
             adapter
                 .ctx
-                .current_plugin_entry
+                .current_plugin_entry_identity()
                 .as_ref()
                 .map(|identity| identity.name()),
             Some("ExtensionRef")
@@ -3030,13 +3014,13 @@ mod record_outcome_tests {
         assert_eq!(
             adapter
                 .ctx
-                .current_plugin_entry
+                .current_plugin_entry_identity()
                 .as_ref()
                 .and_then(|identity| identity.alias()),
             Some("outer")
         );
         adapter.restore_plugin_entry_identity(before_outer);
-        assert!(adapter.ctx.current_plugin_entry.is_none());
+        assert!(adapter.ctx.current_plugin_entry_identity().is_none());
     }
 
     #[tokio::test]
@@ -3055,7 +3039,7 @@ mod record_outcome_tests {
         let mut ctx = EdgionHttpContext::default();
         // Plan installed, but the only rule declares `on: [success]` while
         // the recorded outcome is a failure -- no rule matches.
-        ctx.current_dye_plan = Some(compile_plan("response:\n  - name: X-O\n", "canary"));
+        ctx.install_current_dye_plan(Some(compile_plan("response:\n  - name: X-O\n", "canary")));
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         adapter.record_outcome(DyeOutcome::FailOpen, "cause");
         assert!(pending_ops(&ctx).is_empty());
@@ -3065,10 +3049,10 @@ mod record_outcome_tests {
     async fn record_outcome_template_value_renders_and_sanitizes() {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
-        ctx.current_dye_plan = Some(compile_plan(
+        ctx.install_current_dye_plan(Some(compile_plan(
             "response:\n  - name: X-O\n    on: [fail-open]\n    value: 'v ${ctx:id}'\n",
             "canary",
-        ));
+        )));
 
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         // Control bytes on a rendered value can only arrive through a
@@ -3086,10 +3070,10 @@ mod record_outcome_tests {
     async fn record_outcome_bound_response_header_writes_directly() {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
-        ctx.current_dye_plan = Some(compile_plan(
+        ctx.install_current_dye_plan(Some(compile_plan(
             "response:\n  - name: X-O\n    on: [fail-open]\n",
             "canary",
-        ));
+        )));
         let mut response_header = ResponseHeader::build(200, None).unwrap();
 
         let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
@@ -3119,14 +3103,14 @@ mod record_outcome_tests {
     async fn self_written_response_drains_queue_with_framing_protected() {
         let (mut session, _client) = test_session_with_client().await;
         let mut ctx = EdgionHttpContext::default();
-        ctx.pending_response_header_ops.push(PendingHeaderOp::Append {
+        ctx.queue_pending_response_header_op(PendingHeaderOp::Append {
             name: "X-O".to_string(),
             value: "v1".to_string(),
         });
         // Hostile framing op: without protection this would clobber the
         // caller's real content-length and desync the wire from the body
         // the caller is about to write in a separate call.
-        ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
+        ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
             name: "content-length".to_string(),
             value: "999".to_string(),
         });
@@ -3216,7 +3200,7 @@ mod record_outcome_tests {
         let (mut session, _client) = test_session_with_client().await;
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.is_grpc_request = true;
-        ctx.pending_response_header_ops.push(PendingHeaderOp::Append {
+        ctx.queue_pending_response_header_op(PendingHeaderOp::Append {
             name: "X-O".to_string(),
             value: "v1".to_string(),
         });
@@ -3948,7 +3932,7 @@ mod record_outcome_tests {
     /// Keying the refusal on the request header let any client append
     /// `Upgrade: foo` and have the denial silently dropped — the response-stage
     /// runner only logs when this returns false, and nothing there consults
-    /// `ctx.plugin_running_result`.
+    /// the request-scoped plugin termination marker.
     #[tokio::test]
     async fn local_reply_replaces_response_for_unrecognized_upgrade_token() {
         let (applied, mut ctx) = apply_local_reply("GET /x HTTP/1.1\r\nHost: test\r\nUpgrade: foo\r\n\r\n", 200).await;
@@ -4022,7 +4006,7 @@ mod record_outcome_tests {
 
     /// The termination half of the same defect: a refused local reply must ARM
     /// the abort, not just log. Before this, the runner's `set_terminate` wrote
-    /// `ctx.plugin_running_result`, whose readers are all request-stage, so the
+    /// the plugin termination marker, whose readers are all request-stage, so the
     /// response-stage entry point forwarded the upstream response and the denial
     /// vanished. Driven on a real `101` — the case that stays unreplaceable even
     /// after the refusal predicate was narrowed to response-side facts.
