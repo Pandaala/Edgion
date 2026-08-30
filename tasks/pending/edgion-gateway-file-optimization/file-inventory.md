@@ -132,7 +132,7 @@
 | `plugins-root` | 1 | 0 | 0 | 0 | pending |
 | `plugins-runtime` | 33 | 0 | 0 | 0 | pending |
 | `plugins-stream` | 18 | 0 | 0 | 0 | pending |
-| `request-body` | 9 | 4 | 1 | 0 | pending |
+| `request-body` | 9 | 6 | 1 | 0 | pending |
 | `routes-shared` | 65 | 1 | 1 | 0 | pending |
 | `runtime` | 15 | 0 | 0 | 0 | pending |
 | `services` | 4 | 0 | 0 | 0 | pending |
@@ -562,8 +562,8 @@
 | `edgion-gateway/src/request_body/operation.rs` | `request-body` | source | pending | — |
 | `edgion-gateway/src/request_body/state.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd` |
 | `edgion-gateway/src/request_body/state/enabled.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd` |
-| `edgion-gateway/src/request_body/storage.rs` | `request-body` | source | pending | REQ-BODY-CORE-001: committed-generation and atomic modified-length helpers / `a408d7fd`; full storage audit pending |
-| `edgion-gateway/src/request_body/storage_io_tests.rs` | `request-body` | test | pending | — |
+| `edgion-gateway/src/request_body/storage.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd`; full audit REQ-BODY-STORAGE-001 / `ae283e46` |
+| `edgion-gateway/src/request_body/storage_io_tests.rs` | `request-body` | test | optimized | REQ-BODY-STORAGE-001 / `ae283e46` |
 | `edgion-gateway/src/routes/common.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/grpc/conf_handler_impl.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/grpc/grpc_timeout.rs` | `routes-shared` | source | pending | — |
