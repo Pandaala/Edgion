@@ -44,7 +44,7 @@
 | `api` | 2 | 0 | 0 | 0 | pending |
 | `backends-circuit-breaker` | 2 | 1 | 1 | 0 | complete |
 | `backends-core` | 8 | 3 | 2 | 0 | pending |
-| `backends-discovery-endpoints` | 4 | 0 | 0 | 0 | pending |
+| `backends-discovery-endpoints` | 4 | 1 | 1 | 2 | complete |
 | `backends-discovery-services` | 3 | 0 | 0 | 0 | pending |
 | `backends-discovery-shared` | 3 | 1 | 1 | 1 | complete |
 | `backends-health` | 6 | 0 | 0 | 0 | pending |
@@ -182,10 +182,10 @@
 | `edgion-gateway/src/backends/circuit_breaker/mod.rs` | `backends-circuit-breaker` | source | examined-no-change | `B0033`: minimal production RAII wrapper retained |
 | `edgion-gateway/src/backends/discovery/conf_handler_common.rs` | `backends-discovery-shared` | source | changed | `B0034`: first-occurrence address index makes removed-backend cleanup O(E+R) |
 | `edgion-gateway/src/backends/discovery/dns_cache.rs` | `backends-discovery-shared` | source | deferred | `B0035`: D0001 query identity and Service lifecycle design |
-| `edgion-gateway/src/backends/discovery/endpoint_slice/conf_handler_impl.rs` | `backends-discovery-endpoints` | source | pending | — |
-| `edgion-gateway/src/backends/discovery/endpoint_slice/discovery_impl.rs` | `backends-discovery-endpoints` | source | pending | — |
-| `edgion-gateway/src/backends/discovery/endpoint_slice/ep_slice_store.rs` | `backends-discovery-endpoints` | source | pending | — |
-| `edgion-gateway/src/backends/discovery/endpoint_slice/mod.rs` | `backends-discovery-endpoints` | source | pending | — |
+| `edgion-gateway/src/backends/discovery/endpoint_slice/conf_handler_impl.rs` | `backends-discovery-endpoints` | source | deferred | `B0037`: D0002 ownership-transition cleanup lifecycle |
+| `edgion-gateway/src/backends/discovery/endpoint_slice/discovery_impl.rs` | `backends-discovery-endpoints` | source | changed | `B0037`: removed request-path tracing from backend construction |
+| `edgion-gateway/src/backends/discovery/endpoint_slice/ep_slice_store.rs` | `backends-discovery-endpoints` | source | deferred | `B0037`: D0002 same-key upsert and reverse-index ownership |
+| `edgion-gateway/src/backends/discovery/endpoint_slice/mod.rs` | `backends-discovery-endpoints` | source | examined-no-change | `B0037`: minimal EndpointSlice module façade retained |
 | `edgion-gateway/src/backends/discovery/mod.rs` | `backends-discovery-shared` | source | examined-no-change | `B0036`: minimal discovery façade and public re-exports retained |
 | `edgion-gateway/src/backends/discovery/services/conf_handler_impl.rs` | `backends-discovery-services` | source | pending | — |
 | `edgion-gateway/src/backends/discovery/services/mod.rs` | `backends-discovery-services` | source | pending | — |

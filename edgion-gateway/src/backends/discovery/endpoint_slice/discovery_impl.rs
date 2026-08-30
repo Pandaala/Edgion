@@ -42,28 +42,8 @@ impl EndpointSliceExt for EndpointSlice {
                         ext: Default::default(),
                     };
                     backends.insert(backend);
-
-                    tracing::debug!(
-                        endpoint = %address,
-                        port = port,
-                        address_type = %self.address_type,
-                        "Built backend from EndpointSlice"
-                    );
                 }
             }
-        }
-
-        if backends.is_empty() {
-            tracing::warn!(
-                endpoint_slice = ?self.metadata.name,
-                "No ready backends found in EndpointSlice"
-            );
-        } else {
-            tracing::debug!(
-                endpoint_slice = ?self.metadata.name,
-                backend_count = backends.len(),
-                "Built backends from EndpointSlice"
-            );
         }
 
         backends
